@@ -8,7 +8,8 @@
  * of the stage's ground), [Model] scale scales it, [Camera] fov / near / far
  * / yshift set the perspective (40 degrees, 0.1, 10000, 0 by default). As in
  * Ikemen GO, the [Model] offset y moves the stage's zoffset onto the ground
- * of the model, and a stage with a model needs no [BG] element.
+ * of the model, and a stage with a model needs no [BG] element. [BGCtrl3D]
+ * groups switch the model's animations and nodes, on Ikemen GO's timing.
  *
  * The camera of Ikemen GO is mapped onto the original's: its position is the
  * one the players are drawn with (Player_UpdateDrawParams), in stage units;
@@ -61,6 +62,141 @@ static void Stage3D_ReadFloats(Ini *ini, const char *key, float *out, int n)
     }
 }
 
+/* Reads up to n comma separated ints of key; returns how many. */
+static int Stage3D_ReadInts(Ini *ini, const char *key, int *out, int n)
+{
+    const char *s = Ini_GetValue(ini, key);
+    int i;
+
+    if (s == NULL) {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        char *end;
+        double v;
+        while (*s == ' ' || *s == '\t') {
+            s++;
+        }
+        v = strtod(s, &end);
+        if (end == s) {
+            break;
+        }
+        out[i] = (int)v;
+        s = end;
+        while (*s == ' ' || *s == '\t') {
+            s++;
+        }
+        if (*s != ',') {
+            i++;
+            break;
+        }
+        s++;
+    }
+    return i;
+}
+
+/* Whether the first word of group header ("[Name rest]") is name, ignoring case. */
+static int Stage3D_IsGroup(const char *header, const char *name)
+{
+    size_t n = strlen(name);
+
+    return header != NULL && header[0] == '[' && _strnicmp(header + 1, name, n) == 0 &&
+           (header[1 + n] == ']' || header[1 + n] == ' ');
+}
+
+/*
+ * The [BGCtrl3D] groups of the stage (Ikemen GO's loadStage): type Anim or
+ * Visible on the nodes and animations whose "id" extra is in ctrlid, at
+ * time = start, end, loop, the loop defaulting to the looptime of the last
+ * [BGCtrlDef] before.
+ */
+static void Stage3D_LoadCtrls(Stage3D *s3, Ini *ini)
+{
+    Model *mdl = s3->model;
+    const char *header;
+    int count = 0;
+    int looptime = -1;
+
+    ini->group = -1;
+    while ((header = Ini_NextGroup(ini)) != NULL) {
+        if (Stage3D_IsGroup(header, "bgctrl3d")) {
+            count++;
+        }
+    }
+    if (count == 0) {
+        return;
+    }
+    s3->ctrls = calloc(count, sizeof(Stage3DCtrl));
+    if (s3->ctrls == NULL) {
+        return;
+    }
+    ini->group = -1;
+    while ((header = Ini_NextGroup(ini)) != NULL) {
+        Stage3DCtrl *c;
+        const char *type;
+        int ids[64];
+        int id_count, i, k;
+
+        if (Stage3D_IsGroup(header, "bgctrldef")) {
+            looptime = -1;
+            Ini_GetInt(ini, "looptime", &looptime);
+            continue;
+        }
+        if (!Stage3D_IsGroup(header, "bgctrl3d")) {
+            continue;
+        }
+        c = &s3->ctrls[s3->ctrl_count++];
+        type = Ini_GetValue(ini, "type");
+        if (type != NULL && _stricmp(type, "anim") == 0) {
+            c->type = S3D_CTRL_ANIM;
+        } else if (type != NULL && _stricmp(type, "visible") == 0) {
+            c->type = S3D_CTRL_VISIBLE;
+        } else {
+            c->type = S3D_CTRL_NULL;
+        }
+        c->start = 0;
+        c->loop = looptime;
+        Ini_GetInt(ini, "time", &c->start);
+        c->end = c->start;
+        {
+            int t[3] = { c->start, c->end, c->loop };
+            Stage3D_ReadInts(ini, "time", t, 3);
+            c->start = t[0];
+            c->end = t[1];
+            c->loop = t[2];
+        }
+        Stage3D_ReadInts(ini, "value", &c->value, 1);
+        id_count = Stage3D_ReadInts(ini, "ctrlid", ids, 64);
+        if (id_count == 0 || (id_count == 1 && ids[0] == -1)) {
+            continue;
+        }
+        c->nodes = malloc((mdl->node_count + 1) * sizeof(int));
+        c->anims = malloc((mdl->anim_count + 1) * sizeof(int));
+        if (c->nodes == NULL || c->anims == NULL) {
+            continue;
+        }
+        for (k = 0; k < id_count; k++) {
+            int seen = 0;
+            for (i = 0; i < k; i++) {
+                seen |= ids[i] == ids[k];
+            }
+            if (seen) {
+                continue;
+            }
+            for (i = 0; i < mdl->node_count; i++) {
+                if (mdl->nodes[i].id == ids[k]) {
+                    c->nodes[c->node_count++] = i;
+                }
+            }
+            for (i = 0; i < mdl->anim_count; i++) {
+                if (mdl->anims[i].id == ids[k]) {
+                    c->anims[c->anim_count++] = i;
+                }
+            }
+        }
+    }
+}
+
 /*
  * Reads the 3D part of a stage being loaded (Stage_Load, after [StageInfo]
  * zoffset): the [Camera] perspective, the [BGdef] model and the [Model]
@@ -107,25 +243,95 @@ void Stage3D_Load(Stage *st, Ini *ini, const char *path)
         st->zoffset = (int)(lc_h / 2.0f - s3->offset[1] / pos_mul - s3->yshift * lc_h / 2.0f);
         Stage3D_ReadFloats(ini, "scale", s3->scale, 3);
     }
+    if (s3->model != NULL) {
+        Stage3D_LoadCtrls(s3, ini);
+    }
     Ini_SelectGroupIndex(ini, group);
 }
 
-/* Frees the stage's model (Stage_Unload). */
+/* Frees the stage's model and controllers (Stage_Unload). */
 void Stage3D_Free(void)
 {
-    Model_Free(g_stage3d.model);
-    g_stage3d.model = NULL;
+    Stage3D *s3 = &g_stage3d;
+    int i;
+
+    for (i = 0; i < s3->ctrl_count; i++) {
+        free(s3->ctrls[i].nodes);
+        free(s3->ctrls[i].anims);
+    }
+    free(s3->ctrls);
+    s3->ctrls = NULL;
+    s3->ctrl_count = 0;
+    s3->time = 0;
+    Model_Free(s3->model);
+    s3->model = NULL;
 }
 
-/* One tick of the model's animations, when the stage backgrounds tick (Stage_UpdateBgCamera). */
+/*
+ * Runs the [BGCtrl3D] active at the stage time (Ikemen GO's bgCtrlAction):
+ * from start to end, or with a loop, from start for (end - start) ticks of
+ * every loop.
+ */
+static void Stage3D_RunCtrls(Stage3D *s3)
+{
+    int i, k;
+
+    for (i = 0; i < s3->ctrl_count; i++) {
+        Stage3DCtrl *c = &s3->ctrls[i];
+        int active = 0;
+
+        if (c->start < 0 || (c->loop >= 0 && c->start >= c->loop)) {
+            continue;
+        }
+        if (c->loop > 0 && c->end > c->loop) {
+            c->end = c->loop;
+        }
+        if (s3->time >= c->start) {
+            if (c->loop > 0) {
+                active = (s3->time - c->start) % c->loop <= c->end - c->start;
+            } else {
+                active = s3->time <= c->end;
+            }
+        }
+        if (!active) {
+            continue;
+        }
+        switch (c->type) {
+        case S3D_CTRL_ANIM:
+            for (k = 0; k < c->anim_count; k++) {
+                Model_EnableAnim(s3->model, c->anims[k], c->value != 0);
+            }
+            break;
+        case S3D_CTRL_VISIBLE:
+            for (k = 0; k < c->node_count; k++) {
+                s3->model->nodes[c->nodes[k]].visible = c->value != 0;
+            }
+            break;
+        }
+    }
+}
+
+/*
+ * One tick of the model, when the stage backgrounds tick (Stage_UpdateBgCamera):
+ * the controllers, the animations, then the stage time (Ikemen GO's Stage.action
+ * and Stage.tick).
+ */
 void Stage3D_Tick(void)
 {
-    Model_Step(g_stage3d.model);
+    Stage3D *s3 = &g_stage3d;
+
+    if (s3->model == NULL) {
+        return;
+    }
+    Stage3D_RunCtrls(s3);
+    Model_Step(s3->model);
+    s3->time++;
 }
 
 /* The model back at its start, with the stage backgrounds (Bg_Reset). */
 void Stage3D_Reset(void)
 {
+    g_stage3d.time = 0;
     Model_Reset(g_stage3d.model);
 }
 

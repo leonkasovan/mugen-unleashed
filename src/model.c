@@ -967,7 +967,7 @@ static void Model_LoadNode(ModelNode *node, const cgltf_data *data, const cgltf_
     }
     if (n->has_matrix) {
         node->has_matrix = 1;
-        memcpy(node->local, n->matrix, sizeof(node->local));
+        memcpy(node->matrix, n->matrix, sizeof(node->matrix));
     }
     node->changed = 1;
     node->mesh = n->mesh != NULL ? (int)(n->mesh - data->meshes) : -1;
@@ -1459,6 +1459,39 @@ void Model_Step(Model *mdl)
     }
 }
 
+/*
+ * Switches animation index on (from its start, every time) or off (the
+ * nodes it animated go back to their rest values), as Ikemen GO's
+ * GLTFAnimation.toggle.
+ */
+void Model_EnableAnim(Model *mdl, int index, int enabled)
+{
+    ModelAnim *a = &mdl->anims[index];
+    int i;
+
+    if (enabled) {
+        a->enabled = 1;
+        a->time = 0.0f;
+    } else if (a->enabled) {
+        a->enabled = 0;
+        for (i = 0; i < a->channel_count; i++) {
+            ModelNode *n = &mdl->nodes[a->channels[i].node];
+            switch (a->channels[i].path) {
+            case MODEL_PATH_TRANSLATION:
+                n->animated &= ~MODEL_ANIMATED_T;
+                break;
+            case MODEL_PATH_ROTATION:
+                n->animated &= ~MODEL_ANIMATED_R;
+                break;
+            case MODEL_PATH_SCALE:
+                n->animated &= ~MODEL_ANIMATED_S;
+                break;
+            }
+            n->changed = 1;
+        }
+    }
+}
+
 /* The animations back at their start, all nodes visible (Ikemen GO's Model.reset). */
 void Model_Reset(Model *mdl)
 {
@@ -1489,6 +1522,7 @@ static void Model_LocalTransform(ModelNode *n)
     }
     n->changed = 0;
     if (n->has_matrix && n->animated == 0) {
+        memcpy(n->local, n->matrix, sizeof(n->local));
         return;
     }
     t = (n->animated & MODEL_ANIMATED_T) ? n->anim_translation : n->translation;

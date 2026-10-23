@@ -423,6 +423,16 @@ int BgCtrl_Load(const char *name, Bg *bg, Ini *ini)
     len = (int)strlen(key_ctrl);
     n = Ini_CountGroups(ini, key_def);
     count = Ini_CountGroups(ini, key_ctrl) - n;
+    {
+        /*
+         * mugen-unleashed: the [<name>Ctrl3D] groups of 3D stages (stage3d.c)
+         * share the prefix; counted here, the loop below would run past the
+         * last group looking for them.
+         */
+        char key_3d[40];
+        sprintf(key_3d, "%sctrl3d", name);
+        count -= Ini_CountGroups(ini, key_3d);
+    }
     if (count == 0) {
         return 1;
     }

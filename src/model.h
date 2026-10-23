@@ -148,6 +148,7 @@ typedef struct ModelNode {
     unsigned int animated;      /* MODEL_ANIMATED_* */
     int changed;                /* the local transform needs computing */
     int has_matrix;             /* a "matrix" node (unless animated, local is that matrix) */
+    float matrix[16];           /* its matrix */
     float local[16];            /* column-major, as GL */
     float world[16];
     int mesh;                   /* -1 for none */
@@ -248,9 +249,32 @@ typedef struct ModelFx {
     int invertall;
 } ModelFx;
 
+/* Stage3DCtrl.type: what a [BGCtrl3D] does. */
+enum {
+    S3D_CTRL_NULL = 0,          /* any other type: nothing on 3D nodes */
+    S3D_CTRL_ANIM = 1,          /* value 0 switches the animations off, else on from their start */
+    S3D_CTRL_VISIBLE = 2        /* value 0 hides the nodes, else shows them */
+};
+
+/* A [BGCtrl3D] of the stage (Ikemen GO's bgCtrl with node and animation targets). */
+typedef struct Stage3DCtrl {
+    int type;                   /* S3D_CTRL_* */
+    int start;                  /* time = start, end, loop (stage ticks); loop from [BGCtrlDef] looptime */
+    int end;
+    int loop;
+    int value;
+    int *nodes;                 /* the nodes whose "id" extra is in ctrlid */
+    int node_count;
+    int *anims;                 /* the animations whose "id" extra is in ctrlid */
+    int anim_count;
+} Stage3DCtrl;
+
 /* The 3D model of the loaded stage and how it is placed (stage3d.c). */
 typedef struct Stage3D {
     Model *model;               /* [BGdef] model, NULL for a 2D stage */
+    Stage3DCtrl *ctrls;         /* [BGCtrl3D] */
+    int ctrl_count;
+    int time;                   /* ticks since the stage was reset, as Ikemen GO's stageTime */
     float offset[3];            /* [Model] offset */
     float scale[3];             /* [Model] scale */
     float fov;                  /* [Camera] fov, degrees (40) */
@@ -269,6 +293,7 @@ Model *Model_Load(const char *path);
 void Model_Free(Model *mdl);
 void Model_Step(Model *mdl);
 void Model_Reset(Model *mdl);
+void Model_EnableAnim(Model *mdl, int index, int enabled);
 void Model_DrawShadows(Model *mdl);
 void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float *proj, const float *view,
                 const ModelFx *fx);
