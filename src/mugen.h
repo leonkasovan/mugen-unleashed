@@ -72,6 +72,7 @@
 #include "result.h"
 #include "pngio.h"
 #include "spritecodec.h"
+#include "model.h"
 
 #include "symbols.h"
 

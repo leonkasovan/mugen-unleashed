@@ -154,6 +154,7 @@ void Stage_UpdateBgCamera(ScreenLoop *screen)
         (g->screen_kind != 6 && g->screen_kind != 7 && g->screen_kind != 8 &&
          (g->pause_kind == -1 || g->pauses[g->pause_kind][7] == 0) && g->defocus_paused == 0 && g->slow_counter == 0)) {
         Bg_Tick(bg);
+        Stage3D_Tick();     /* mugen-unleashed: the stage's 3D model ticks with its backgrounds */
     }
     k = g_gameCoord[0] / g->stage.unit;
     {

@@ -91,10 +91,15 @@ Bg *Bg_Load(const char *name, Ini *ini, const char *dir, SpriteSet *sprites, Ani
     count = Ini_CountGroups(ini, key_close);
     count += Ini_CountGroups(ini, key_space);
     if (count == 0) {
-        MatchLog_Printf(3, "Need at least one [%s] type bg\n", name);
-        return NULL;
+        /* mugen-unleashed: a stage with a 3D model ([<name>def] model) needs no element */
+        strcpy(group, name);
+        strcat(group, "def");
+        if (Ini_SelectGroup(ini, group) == -1 || Ini_GetValue(ini, "model") == NULL) {
+            MatchLog_Printf(3, "Need at least one [%s] type bg\n", name);
+            return NULL;
+        }
     }
-    bg = Bg_Create(count);
+    bg = Bg_Create(count > 0 ? count : 1);
     if (bg == NULL) {
         return NULL;
     }
@@ -819,6 +824,10 @@ void Bg_Draw(Bg *bg, int layer)
 
     if (bg->clear_cur[0] != -1 && layer == 0) {
         g_gfxClear(Video_MapRGB(bg->clear_cur[0], bg->clear_cur[1], bg->clear_cur[2]));
+    }
+    /* mugen-unleashed: the stage's 3D model, under the elements of its layer (stage3d.c) */
+    if (bg == g_game->stage_bg) {
+        Stage3D_Draw(layer);
     }
     for (e = KeyedArray_First(list); e != NULL; e = KeyedArray_Next(list)) {
         if (e->layer == layer) {

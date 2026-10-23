@@ -378,3 +378,99 @@ int Png_Decode(const void *data, int size, void *dest)
     Png_ReadStream(s, dest);
     return Stream_Close(s);
 }
+
+/* ---- mugen-unleashed: RGBA decoding for the textures of 3D models (model.c) ---- */
+
+/* Reading position in the PNG data of Png_DecodeRGBA. */
+typedef struct PngMemReader {
+    const unsigned char *data;
+    size_t size;
+    size_t pos;
+} PngMemReader;
+
+static void Png_ReadMem(png_structp png, png_bytep out, png_size_t length)
+{
+    PngMemReader *r = (PngMemReader *)png_get_io_ptr(png);
+
+    if (length > r->size - r->pos) {
+        png_error(png, "read past the end of the data");
+    }
+    memcpy(out, r->data + r->pos, length);
+    r->pos += length;
+}
+
+/*
+ * Decodes a PNG file in memory of any colour type and depth to 8-bit RGBA
+ * (straight alpha, top row first). Returns a malloc'd buffer of
+ * width * height * 4 bytes, or NULL when data is no valid PNG.
+ */
+unsigned char *Png_DecodeRGBA(const void *data, size_t size, int *width_out, int *height_out)
+{
+    PngMemReader reader;
+    png_structp png;
+    png_infop info;
+    png_uint_32 width, height;
+    int bit_depth, color_type;
+    unsigned char *volatile pixels = NULL;
+    png_bytepp volatile rows = NULL;
+    int i;
+
+    if (size < 8 || png_sig_cmp((png_bytep)data, 0, 8) != 0) {
+        return NULL;
+    }
+    png = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+    if (png == NULL) {
+        return NULL;
+    }
+    info = png_create_info_struct(png);
+    if (info == NULL) {
+        png_destroy_read_struct(&png, NULL, NULL);
+        return NULL;
+    }
+    if (setjmp(png_jmpbuf(png))) {
+        free(rows);
+        free(pixels);
+        png_destroy_read_struct(&png, &info, NULL);
+        return NULL;
+    }
+    reader.data = data;
+    reader.size = size;
+    reader.pos = 0;
+    png_set_read_fn(png, &reader, Png_ReadMem);
+    png_read_info(png, info);
+    png_get_IHDR(png, info, &width, &height, &bit_depth, &color_type, NULL, NULL, NULL);
+    if (bit_depth == 16) {
+        png_set_strip_16(png);
+    }
+    if (color_type == PNG_COLOR_TYPE_PALETTE) {
+        png_set_palette_to_rgb(png);
+    }
+    if (color_type == PNG_COLOR_TYPE_GRAY && bit_depth < 8) {
+        png_set_gray_1_2_4_to_8(png);
+    }
+    if (png_get_valid(png, info, PNG_INFO_tRNS)) {
+        png_set_tRNS_to_alpha(png);
+    }
+    if (color_type == PNG_COLOR_TYPE_GRAY || color_type == PNG_COLOR_TYPE_GRAY_ALPHA) {
+        png_set_gray_to_rgb(png);
+    }
+    if (!(color_type & PNG_COLOR_MASK_ALPHA) && !png_get_valid(png, info, PNG_INFO_tRNS)) {
+        png_set_filler(png, 0xFF, PNG_FILLER_AFTER);
+    }
+    png_read_update_info(png, info);
+    pixels = malloc((size_t)width * height * 4);
+    rows = malloc(height * sizeof(png_bytep));
+    if (pixels == NULL || rows == NULL) {
+        png_error(png, "out of memory");
+    }
+    for (i = 0; i < (int)height; i++) {
+        rows[i] = pixels + (size_t)i * width * 4;
+    }
+    png_read_image(png, rows);
+    png_read_end(png, NULL);
+    free(rows);
+    png_destroy_read_struct(&png, &info, NULL);
+    *width_out = (int)width;
+    *height_out = (int)height;
+    return pixels;
+}

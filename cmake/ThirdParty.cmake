@@ -35,3 +35,8 @@ add_library(minizip STATIC "${_tp}/minizip-0.15/unzip.c")
 target_include_directories(minizip PUBLIC "${_tp}/minizip-0.15")
 target_link_libraries(minizip PUBLIC mugen_sdk)
 mugen_third_party(minizip)
+
+# cgltf 1.14, the glTF 2.0 reader of the 3D models (mugen-unleashed addition, not in the original)
+add_library(cgltf STATIC "${_tp}/cgltf-1.14/cgltf.c")
+target_include_directories(cgltf PUBLIC "${_tp}/cgltf-1.14")
+mugen_third_party(cgltf)

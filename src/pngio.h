@@ -20,4 +20,7 @@ MUGEN_ASSERT_SIZE(GrowBuf, 0x0C);
 /* Size of the PNG data prefix of SFF v2 sprites: the decoded size (int). */
 #define PNG_SPRITE_PREFIX 4
 
+/* mugen-unleashed: any PNG to 8-bit RGBA (textures of 3D models). */
+unsigned char *Png_DecodeRGBA(const void *data, size_t size, int *width_out, int *height_out);
+
 #endif /* MUGEN_PNGIO_H */

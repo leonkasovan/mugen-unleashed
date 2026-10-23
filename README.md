@@ -67,6 +67,49 @@ SDL_gfx, zlib, libresample and pthreads. The executable's manifest finds those D
 the original's does. Like the original, it writes `stdout.txt` and `stderr.txt` next to itself
 and deletes them when they stay empty.
 
+## 3D stages
+
+This branch adds 3D stages to the engine, compatible with the ones made for
+[Ikemen GO](https://github.com/ikemen-engine/Ikemen-GO). This is new code, not part of the
+original. A stage gets a glTF 2.0 model (`.glb` or `.gltf`) through its `.def`:
+
+```ini
+[Camera]
+fov = 30                 ; vertical field of view in degrees (default 40)
+
+[BGdef]
+model = mystage.glb      ; relative to the stage's directory
+spr = mystage.sff        ; still used for the stage portrait
+
+[Model]
+offset = 0, -0.16, -0.7  ; x, y, z of the model in the view; z is the depth of the ground
+scale = 0.0575, 0.0575, 0.0575
+```
+
+As in Ikemen GO:
+- the `[Model] offset` y moves the stage's `zoffset` onto the ground of the model;
+- a stage with a model needs no `[BG]` element;
+- `[Camera] near`, `far` and `yshift` are read as well.
+
+The model follows the camera. It is drawn under the `[BG]` elements of the back layer. Nodes
+with a `layerNumber` extra of 1 are drawn in front of the players, together with the model's
+second scene.
+
+What is supported so far:
+- node hierarchies;
+- base colour textures (PNG) and vertex colours;
+- `alphaMode` and `doubleSided`;
+- `KHR_texture_transform`;
+- node animations (linear, step and cubic spline) and skins;
+- the Ikemen GO node extras `trans`, `disableZTest`, `disableZWrite` and `layerNumber`;
+- the animation extras `loopCount` and `enabled`.
+
+Models are drawn unlit, as Ikemen GO draws them without lights. Not supported yet: lights and
+shadows, environment maps, morph targets, `BGCtrl3D`. 3D stages need the OpenGL renderer.
+
+The code is in `src/model.c` (glTF models) and `src/stage3d.c` (the stage side). Where the
+original code calls into it, a `mugen-unleashed:` comment marks the change.
+
 ## Layout
 
 ```
