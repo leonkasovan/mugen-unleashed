@@ -976,6 +976,75 @@ static unsigned char *Model_ReadImage(const cgltf_image *img, const cgltf_option
     }
 }
 
+/* Position of the lowest set bit of a channel mask (0 for an empty one). */
+static int Model_LowestBit(unsigned int mask)
+{
+    int i;
+
+    for (i = 0; i < 32; i++) {
+        if (mask & (1u << i)) {
+            return i;
+        }
+    }
+    return 0;
+}
+
+/*
+ * Decodes a DDS image as Ikemen GO's decoder (lukegb/dds) does: only
+ * uncompressed images with RGB and alpha bit masks (no FourCC), their first
+ * level, rows in file order; each channel is masked and shifted down, not
+ * rescaled. Returns malloc'd RGBA, NULL for anything else.
+ */
+static unsigned char *Model_DecodeDds(const unsigned char *data, size_t size, int *w_out, int *h_out)
+{
+    enum { DDPF_ALPHAPIXELS = 0x1, DDPF_RGB = 0x40 };
+    unsigned int height, width, flags, bits, masks[4];
+    unsigned char *pixels;
+    size_t stride, pitch;
+    int shifts[4];
+    unsigned int x, y;
+    int c, k;
+
+    if (size < 128 || memcmp(data, "DDS ", 4) != 0) {
+        return NULL;
+    }
+    height = *(const unsigned int *)(data + 12);
+    width = *(const unsigned int *)(data + 16);
+    flags = *(const unsigned int *)(data + 80);
+    bits = *(const unsigned int *)(data + 88);
+    for (c = 0; c < 4; c++) {
+        masks[c] = *(const unsigned int *)(data + 92 + c * 4);
+        shifts[c] = Model_LowestBit(masks[c]);
+    }
+    if (flags != (DDPF_ALPHAPIXELS | DDPF_RGB) || bits == 0 || bits > 32 || width == 0 || height == 0) {
+        return NULL;
+    }
+    stride = (bits + 7) / 8;
+    pitch = ((size_t)width * bits + 7) / 8;
+    if (128 + pitch * height > size) {
+        return NULL;
+    }
+    pixels = malloc((size_t)width * height * 4);
+    if (pixels == NULL) {
+        return NULL;
+    }
+    for (y = 0; y < height; y++) {
+        for (x = 0; x < width; x++) {
+            const unsigned char *p = data + 128 + pitch * y + stride * x;
+            unsigned int v = 0;
+            for (k = 0; k < (int)stride; k++) {
+                v |= (unsigned int)p[k] << (8 * k);
+            }
+            for (c = 0; c < 4; c++) {
+                pixels[((size_t)y * width + x) * 4 + c] = (unsigned char)((v & masks[c]) >> shifts[c]);
+            }
+        }
+    }
+    *w_out = (int)width;
+    *h_out = (int)height;
+    return pixels;
+}
+
 /* Creates the GL texture of a glTF texture (Ikemen GO's sampling defaults: nearest, repeat without a sampler). */
 static GLuint Model_LoadTexture(const cgltf_texture *t, const cgltf_options *options, const char *dir)
 {
@@ -994,15 +1063,18 @@ static GLuint Model_LoadTexture(const cgltf_texture *t, const cgltf_options *opt
         Log_Printf("Model: can't read image %s\n", t->image->uri != NULL ? t->image->uri : "(embedded)");
         return 0;
     }
-    /* PNG through libpng, JPEG through stb_image (the formats Ikemen GO reads besides DDS) */
+    /* the formats Ikemen GO reads: PNG (libpng), JPEG (stb_image), uncompressed DDS */
     pixels = Png_DecodeRGBA(bytes, size, &w, &h);
+    if (pixels == NULL) {
+        pixels = Model_DecodeDds(bytes, size, &w, &h);
+    }
     if (pixels == NULL && size <= 0x7FFFFFFF) {
         int comps;
         pixels = stbi_load_from_memory(bytes, (int)size, &w, &h, &comps, 4);
     }
     free(bytes);
     if (pixels == NULL) {
-        Log_Printf("Model: unsupported image %s (PNG and JPEG are supported)\n",
+        Log_Printf("Model: unsupported image %s (PNG, JPEG and uncompressed RGBA DDS are supported)\n",
                    t->image->uri != NULL ? t->image->uri : "(embedded)");
         return 0;
     }

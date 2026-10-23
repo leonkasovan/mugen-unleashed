@@ -97,7 +97,8 @@ second scene.
 
 What is supported so far:
 - node hierarchies;
-- base colour textures (PNG and JPEG) and vertex colours;
+- base colour textures (PNG, JPEG and uncompressed RGBA DDS, the formats Ikemen GO reads) and
+  vertex colours;
 - `alphaMode` and `doubleSided`;
 - `KHR_texture_transform`;
 - node animations (linear, step and cubic spline), skins and morph targets (with weight
