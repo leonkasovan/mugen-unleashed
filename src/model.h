@@ -357,7 +357,18 @@ void Model_EnableAnim(Model *mdl, int index, int enabled);
 int Model_LoadEnvironment(Model *mdl, const char *path, float intensity);
 void Model_DrawShadows(Model *mdl);
 void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float *proj, const float *view,
-                const ModelFx *fx, float outline);
+                const ModelFx *fx, float outline, const float *camera);
+
+Model *Bg3D_LoadModel(const char *file, const char *dir);
+void Bg3D_SetModel(Model *mdl);
+void Bg3D_EndModel(void);
+void Bg3D_LoadMotifModel(Ini *ini);
+Model *Bg3D_MotifModel(void);
+void Bg3D_FreeMotifModel(void);
+void Bg3D_Attach(const Bg *bg, Ini *ini);
+void Bg3D_Detach(const Bg *bg);
+void Bg3D_Tick(const Bg *bg);
+void Bg3D_Draw(const Bg *bg, int layer);
 
 void Stage3D_Load(Stage *st, Ini *ini, const char *path);
 void Stage3D_Free(void);

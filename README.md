@@ -126,8 +126,24 @@ the OpenGL renderer. Shadows need float textures (OpenGL 3.0 or `ARB_texture_rg`
 `ARB_texture_float`), environment maps OpenGL 3.0. Problems with models are written to
 `mugen.log`.
 
-The code is in `src/model.c` (glTF models) and `src/stage3d.c` (the stage side). Where the
-original code calls into it, a `mugen-unleashed:` comment marks the change.
+Screens and storyboards can have a 3D background too, as in Ikemen GO. The motif (`[Files] model`)
+or the storyboard (`[SceneDef] model`) names the model. Each background group then picks a scene of
+it and places a fixed camera:
+
+```ini
+[TitleBGdef]
+scenenumber = 0          ; the glTF scene to draw (none without)
+fov = 40
+near = 0.1
+far = 1000
+modeloffset = 0, -1.5, -8
+modelrotate = 10, 20, 0  ; degrees
+modelscale = 0.015, 0.015, 0.015
+```
+
+The code is in `src/model.c` (glTF models), `src/stage3d.c` (stages) and `src/bg3d.c` (screen and
+storyboard backgrounds). Where the original code calls into it, a `mugen-unleashed:` comment marks
+the change.
 
 ## Layout
 

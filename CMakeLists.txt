@@ -23,6 +23,7 @@ set(MUGEN_SOURCES
   src/ai.c
   src/anim.c
   src/bg.c
+  src/bg3d.c
   src/bgm.c
   src/bgmplugins.c
   src/bgmstream.c

@@ -474,10 +474,10 @@ void Stage3D_Draw(int layer)
     outline = (float)(0.003 * tan(fov));
     if (layer == 0) {
         Model_DrawShadows(s3->model);
-        Model_Draw(s3->model, 0, -1, 0, proj, view, &fx, outline);
-        Model_Draw(s3->model, 0, 0, 0, proj, view, &fx, outline);
+        Model_Draw(s3->model, 0, -1, 0, proj, view, &fx, outline, NULL);
+        Model_Draw(s3->model, 0, 0, 0, proj, view, &fx, outline, NULL);
     } else if (layer == 1) {
-        Model_Draw(s3->model, 0, 1, 0, proj, view, &fx, outline);
-        Model_Draw(s3->model, 1, 1, 1, proj, view, &fx, outline);
+        Model_Draw(s3->model, 0, 1, 0, proj, view, &fx, outline, NULL);
+        Model_Draw(s3->model, 1, 1, 1, proj, view, &fx, outline, NULL);
     }
 }

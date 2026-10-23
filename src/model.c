@@ -3260,11 +3260,13 @@ static void Model_BindShadowMaps(const ShadowMaps *sm)
  * Draws the nodes of layer `layer` of scene `scene` (nodes without a
  * layerNumber are on default_layer) with the screen projection proj and the
  * view matrix view, over a cleared depth buffer (Ikemen GO's Model.draw).
- * The scene is lit by its lights; without any it is drawn unlit. Only with
- * the OpenGL renderer.
+ * The scene is lit by its lights; without any it is drawn unlit. outline
+ * scales the meshOutline extras; camera is the eye in model space for the
+ * lighting and outlines (NULL: where the view puts it). Only with the
+ * OpenGL renderer.
  */
 void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float *proj, const float *view,
-                const ModelFx *fx, float outline)
+                const ModelFx *fx, float outline, const float *camera)
 {
     const ModelProgram *prog = &g_modelProgram;
     const ModelScene *sc;
@@ -3322,8 +3324,12 @@ void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float
     glUniform1i(prog->emission_map, MODEL_UNIT_EMISSION);
     glUniformMatrix4fv(prog->projection, 1, GL_FALSE, p);
     glUniformMatrix4fv(prog->view, 1, GL_FALSE, view);
-    /* the camera in model space: where the view puts the eye */
-    glUniform3f(prog->camera_position, inv_view[12], inv_view[13], inv_view[14]);
+    if (camera != NULL) {
+        glUniform3fv(prog->camera_position, 1, camera);
+    } else {
+        /* the camera in model space: where the view puts the eye */
+        glUniform3f(prog->camera_position, inv_view[12], inv_view[13], inv_view[14]);
+    }
     glUniform3fv(prog->add, 1, fx->add);
     glUniform3fv(prog->mul, 1, fx->mul);
     glUniform1f(prog->colorbal, fx->colorbal);
