@@ -100,20 +100,23 @@ What is supported so far:
 - base colour textures (PNG) and vertex colours;
 - `alphaMode` and `doubleSided`;
 - `KHR_texture_transform`;
-- node animations (linear, step and cubic spline) and skins;
+- node animations (linear, step and cubic spline), skins and morph targets (with weight
+  animations);
 - punctual lights (`KHR_lights_punctual`: directional, point and spot, up to 4 per scene);
 - PBR materials (metallic-roughness, normal, occlusion and emission maps,
   `KHR_materials_unlit`);
 - shadow maps, with the light and node extras `shadowMapNear`, `shadowMapFar`,
   `shadowMapLeft`, `shadowMapRight`, `shadowMapBottom`, `shadowMapTop` and `shadowMapBias`.
   `[Video] EnableModelShadow = 0` in `mugen.cfg` turns them off;
-- the Ikemen GO node extras `trans`, `disableZTest`, `disableZWrite`, `castShadow` and
-  `layerNumber`;
-- the animation extras `loopCount` and `enabled`.
+- the Ikemen GO node extras `trans`, `disableZTest`, `disableZWrite`, `castShadow`,
+  `layerNumber`, `id` and `meshOutline` (with the `_OUTLINE_ATTRIBUTE` vertex attribute);
+- the animation extras `id`, `loopCount` and `enabled`;
+- `[BGCtrl3D]` groups of type `Anim` and `Visible`, aimed at the `id` extras of animations and
+  nodes by `ctrlid`, on Ikemen GO's timing.
 
 A model without lights is drawn unlit, as Ikemen GO does. Not supported yet: environment maps
-(image based lighting), morph targets, mesh outlines, `BGCtrl3D`. 3D stages need the OpenGL
-renderer. Shadows need float textures (OpenGL 3.0 or `ARB_texture_rg` / `ARB_texture_float`).
+(image based lighting). 3D stages need the OpenGL renderer. Shadows need float textures
+(OpenGL 3.0 or `ARB_texture_rg` / `ARB_texture_float`).
 
 The code is in `src/model.c` (glTF models) and `src/stage3d.c` (the stage side). Where the
 original code calls into it, a `mugen-unleashed:` comment marks the change.

@@ -392,7 +392,7 @@ void Stage3D_Draw(int layer)
     GameVars *g = g_game;
     float proj[16], persp[16], view[16];
     float k, gh, lc_h, zoff, scl, cam_x, cam_y, pos_x, pos_y;
-    float fov, pos_mul, scale_corr, syo, syo2, aspect_corr, ty;
+    float fov, pos_mul, scale_corr, syo, syo2, aspect_corr, ty, outline;
     ModelFx fx;
 
     if (s3->model == NULL || g_renderMode != RENDER_OPENGL || g_targetHeight <= 0) {
@@ -456,12 +456,14 @@ void Stage3D_Draw(int layer)
         fx.invertall = 0;
     }
 
+    /* mesh outlines are as wide as Ikemen GO's: meshOutline * 0.003 * tan(fov) */
+    outline = (float)(0.003 * tan(fov));
     if (layer == 0) {
         Model_DrawShadows(s3->model);
-        Model_Draw(s3->model, 0, -1, 0, proj, view, &fx);
-        Model_Draw(s3->model, 0, 0, 0, proj, view, &fx);
+        Model_Draw(s3->model, 0, -1, 0, proj, view, &fx, outline);
+        Model_Draw(s3->model, 0, 0, 0, proj, view, &fx, outline);
     } else if (layer == 1) {
-        Model_Draw(s3->model, 0, 1, 0, proj, view, &fx);
-        Model_Draw(s3->model, 1, 1, 1, proj, view, &fx);
+        Model_Draw(s3->model, 0, 1, 0, proj, view, &fx, outline);
+        Model_Draw(s3->model, 1, 1, 1, proj, view, &fx, outline);
     }
 }

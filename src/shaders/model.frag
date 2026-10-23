@@ -1,7 +1,7 @@
 #version 120
 /*
  * Fragment shader of the glTF models (model.c): Ikemen GO's model.frag.glsl
- * for OpenGL 2.1, without image based lighting and mesh outlines. The
+ * for OpenGL 2.1, without image based lighting (mesh outlines are black). The
  * texture colour is made linear (^2.2), lit by up to 4 punctual lights
  * (PBR, metallic-roughness; shadows from their shadow maps, with Ikemen GO's
  * desktop GL biases) unless unlit, premultiplied and brought back
@@ -25,7 +25,7 @@ struct Light {
 uniform sampler2D tex, normalMap, metallicRoughnessMap, ambientOcclusionMap, emissionMap;
 uniform mat3 texTransform, normalMapTransform, metallicRoughnessMapTransform, ambientOcclusionMapTransform,
     emissionMapTransform;
-uniform float alphaThreshold, ambientOcclusionStrength;
+uniform float alphaThreshold, ambientOcclusionStrength, meshOutline;
 uniform vec3 cameraPosition, emission;
 uniform vec4 baseColorFactor;
 uniform vec2 metallicRoughness;
@@ -297,7 +297,9 @@ void main()
     }
     color *= baseColorFactor;
     color *= vColor;
-    if (!unlit) {
+    if (meshOutline > 0.0) {
+        color.rgb = vec3(0.0);
+    } else if (!unlit) {
         vec3 normalF = normal;
         vec2 metallicRoughnessF = metallicRoughness;
         float ambientOcclusion = 1.0;

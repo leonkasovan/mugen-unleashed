@@ -41,7 +41,8 @@ enum {
 enum {
     MODEL_PATH_TRANSLATION = 0,
     MODEL_PATH_ROTATION = 1,
-    MODEL_PATH_SCALE = 2
+    MODEL_PATH_SCALE = 2,
+    MODEL_PATH_WEIGHTS = 3      /* morph target weights */
 };
 
 /* ModelPrim.attribs: the vertex attributes a primitive has. */
@@ -50,6 +51,13 @@ enum {
 #define MODEL_ATTR_SKIN     0x04
 #define MODEL_ATTR_NORMAL   0x08
 #define MODEL_ATTR_TANGENT  0x10
+#define MODEL_ATTR_OUTLINE  0x20    /* _OUTLINE_ATTRIBUTE: direction (xyz) and width (w) of the outline */
+
+/* Morph targets of a primitive at most at once (their position, normal, tangent, uv and colour count apart). */
+#define MODEL_MAX_MORPH_SLOTS 8
+
+/* Morph target weights of a mesh at most. */
+#define MODEL_MAX_WEIGHTS 64
 
 /* Lights a scene is lit by (the first ones of KHR_lights_punctual in it). */
 #define MODEL_MAX_LIGHTS 4
@@ -94,6 +102,7 @@ typedef struct ModelTexRef {
 #define MODEL_ANIMATED_T    0x01
 #define MODEL_ANIMATED_R    0x02
 #define MODEL_ANIMATED_S    0x04
+#define MODEL_ANIMATED_W    0x08
 
 /* A material: the base colour (texture and factor), the PBR parameters and how it is blended. */
 typedef struct ModelMaterial {
@@ -126,7 +135,27 @@ typedef struct ModelPrim {
     unsigned int index_offset;  /* byte offset of the indices */
     int material;               /* -1: not drawn (as Ikemen GO does) */
     unsigned int attribs;       /* MODEL_ATTR_* */
+    /*
+     * Morph targets: the vertex blocks of the primitive as loaded (base) and,
+     * per target and attribute, the deltas (NULL when the target lacks it);
+     * the blocks are morphed on the CPU when the weights change.
+     */
+    int target_count;
+    float *base;                /* the blocks from position to colour, as in the vertex buffer */
+    float **deltas;             /* [target * 5 + MODEL_MORPH_*] */
+    float applied[MODEL_MAX_WEIGHTS];   /* the weights the buffer holds */
+    int applied_count;          /* -1: the base */
 } ModelPrim;
+
+/* Morphed attributes, in the order Ikemen GO applies them. */
+enum {
+    MODEL_MORPH_POSITION = 0,
+    MODEL_MORPH_NORMAL,
+    MODEL_MORPH_TANGENT,
+    MODEL_MORPH_UV,
+    MODEL_MORPH_COLOR,
+    MODEL_MORPH_ATTRIBS
+};
 
 typedef struct ModelMesh {
     int first_prim;             /* Model.prims */
@@ -166,6 +195,10 @@ typedef struct ModelNode {
     float light_dir[3];         /* direction of the light: -z of the node's world rotation */
     float shadow[MODEL_SHADOW_PARAMS];  /* "shadowMapNear"... extras, over the light's */
     float normal_matrix[16];    /* inverse transpose of world (mesh nodes) */
+    float outline;              /* "meshOutline" extra: width of the mesh outline, 0 for none */
+    float *weights;             /* morph target weights (the node's, else the mesh's) */
+    float *anim_weights;        /* the weights an animation sets */
+    int weight_count;
 } ModelNode;
 
 typedef struct ModelSkin {
@@ -296,7 +329,7 @@ void Model_Reset(Model *mdl);
 void Model_EnableAnim(Model *mdl, int index, int enabled);
 void Model_DrawShadows(Model *mdl);
 void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float *proj, const float *view,
-                const ModelFx *fx);
+                const ModelFx *fx, float outline);
 
 void Stage3D_Load(Stage *st, Ini *ini, const char *path);
 void Stage3D_Free(void);

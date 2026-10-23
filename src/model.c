@@ -51,7 +51,8 @@ enum {
     MODEL_LOC_WEIGHTS = 4,
     MODEL_LOC_NORMAL = 5,
     MODEL_LOC_TANGENT = 6,
-    MODEL_LOC_COUNT = 7
+    MODEL_LOC_OUTLINE = 7,
+    MODEL_LOC_COUNT = 8
 };
 
 /* Texture units of the model program. */
@@ -83,6 +84,7 @@ typedef struct ModelProgram {
     ModelLightLocs lights[MODEL_MAX_LIGHTS];
     GLint light_matrices, use_shadow_map;
     GLint shadow_maps[MODEL_MAX_LIGHTS], shadow_cubes[MODEL_MAX_LIGHTS];
+    GLint mesh_outline;
 } ModelProgram;
 
 static ModelProgram g_modelProgram;
@@ -556,29 +558,93 @@ static int Model_AddVertexData(Model *mdl, unsigned int *capacity, const void *d
     return 1;
 }
 
-/* Appends the vertex attribute of accessor acc as `comps` floats per vertex (pad: the value of missing comps). */
-static int Model_AddAttribute(Model *mdl, unsigned int *capacity, const cgltf_accessor *acc, int count, int comps,
-                              float pad)
+/* The values of accessor acc as `comps` floats per element (pad: the value of missing comps), malloc'd. */
+static float *Model_ReadFloats(const cgltf_accessor *acc, int count, int comps, float pad)
 {
     int n = (int)cgltf_num_components(acc->type);
     float v[16];
     float *buf;
     int i, k;
 
-    buf = malloc((size_t)count * comps * sizeof(float));
+    buf = malloc((size_t)count * comps * sizeof(float) + 1);
     if (buf == NULL) {
-        return 0;
+        return NULL;
     }
     for (i = 0; i < count; i++) {
         memset(v, 0, sizeof(v));
-        cgltf_accessor_read_float(acc, i, v, n);
+        if (i < (int)acc->count) {
+            cgltf_accessor_read_float(acc, i, v, n);
+        }
         for (k = 0; k < comps; k++) {
             buf[i * comps + k] = k < n ? v[k] : pad;
         }
     }
-    k = Model_AddVertexData(mdl, capacity, buf, (unsigned int)(count * comps * sizeof(float)));
+    return buf;
+}
+
+/* Appends the vertex attribute of accessor acc as `comps` floats per vertex (pad: the value of missing comps). */
+static int Model_AddAttribute(Model *mdl, unsigned int *capacity, const cgltf_accessor *acc, int count, int comps,
+                              float pad)
+{
+    float *buf = Model_ReadFloats(acc, count, comps, pad);
+    int ok;
+
+    if (buf == NULL) {
+        return 0;
+    }
+    ok = Model_AddVertexData(mdl, capacity, buf, (unsigned int)(count * comps * sizeof(float)));
     free(buf);
-    return k;
+    return ok;
+}
+
+/* Floats per vertex of the blocks from position to colour of a primitive (what morph targets change). */
+static int Model_MorphStride(const ModelPrim *p)
+{
+    return 3 + ((p->attribs & MODEL_ATTR_UV) ? 2 : 0) + ((p->attribs & MODEL_ATTR_NORMAL) ? 3 : 0) +
+           ((p->attribs & MODEL_ATTR_TANGENT) ? 4 : 0) + ((p->attribs & MODEL_ATTR_COLOR) ? 4 : 0);
+}
+
+/*
+ * The morph targets of a primitive: a copy of its blocks from position to
+ * colour, and the deltas of each target (as Ikemen GO reads them: a VEC3
+ * colour delta gets an alpha of 1).
+ */
+static int Model_LoadTargets(Model *mdl, ModelPrim *prim, const cgltf_primitive *p)
+{
+    static const cgltf_attribute_type types[MODEL_MORPH_ATTRIBS] = {
+        cgltf_attribute_type_position, cgltf_attribute_type_normal, cgltf_attribute_type_tangent,
+        cgltf_attribute_type_texcoord, cgltf_attribute_type_color
+    };
+    static const int comps[MODEL_MORPH_ATTRIBS] = { 3, 3, 3, 2, 4 };
+    int n = prim->vertex_count;
+    cgltf_size t, i;
+    int a;
+
+    prim->applied_count = -1;
+    prim->target_count = (int)p->targets_count;
+    prim->base = malloc((size_t)n * Model_MorphStride(prim) * sizeof(float) + 1);
+    prim->deltas = calloc(p->targets_count * MODEL_MORPH_ATTRIBS, sizeof(float *));
+    if (prim->base == NULL || prim->deltas == NULL) {
+        return 0;
+    }
+    memcpy(prim->base, mdl->vertex_data + prim->vertex_offset, (size_t)n * Model_MorphStride(prim) * sizeof(float));
+    for (t = 0; t < p->targets_count; t++) {
+        const cgltf_morph_target *mt = &p->targets[t];
+        for (i = 0; i < mt->attributes_count; i++) {
+            const cgltf_attribute *at = &mt->attributes[i];
+            for (a = 0; a < MODEL_MORPH_ATTRIBS; a++) {
+                if (at->type == types[a] && at->index == 0) {
+                    float **d = &prim->deltas[t * MODEL_MORPH_ATTRIBS + a];
+                    free(*d);
+                    *d = Model_ReadFloats(at->data, n, comps[a], a == MODEL_MORPH_COLOR ? 1.0f : 0.0f);
+                    if (*d == NULL) {
+                        return 0;
+                    }
+                }
+            }
+        }
+    }
+    return 1;
 }
 
 static const cgltf_accessor *Model_FindAttribute(const cgltf_primitive *p, cgltf_attribute_type type, int index)
@@ -660,6 +726,9 @@ static int Model_LoadPrimitive(Model *mdl, ModelPrim *prim, const cgltf_data *da
             return 0;
         }
     }
+    if (p->targets_count > 0 && !Model_LoadTargets(mdl, prim, p)) {
+        return 0;
+    }
     acc = Model_FindAttribute(p, cgltf_attribute_type_joints, 0);
     if (acc != NULL) {
         const cgltf_accessor *w = Model_FindAttribute(p, cgltf_attribute_type_weights, 0);
@@ -673,8 +742,15 @@ static int Model_LoadPrimitive(Model *mdl, ModelPrim *prim, const cgltf_data *da
             return 0;
         }
     }
-    if (p->targets_count > 0) {
-        MatchLog_Printf(3, "Model: morph targets are not supported yet, ignored\n");
+    for (i = 0; i < p->attributes_count; i++) {
+        const cgltf_attribute *at = &p->attributes[i];
+        if (at->name != NULL && strcmp(at->name, "_OUTLINE_ATTRIBUTE") == 0) {
+            prim->attribs |= MODEL_ATTR_OUTLINE;
+            if (!Model_AddAttribute(mdl, vcap, at->data, prim->vertex_count, 4, 0.0f)) {
+                return 0;
+            }
+            break;
+        }
     }
 
     /* The indices, made up for a primitive without them. */
@@ -989,6 +1065,26 @@ static void Model_LoadNode(ModelNode *node, const cgltf_data *data, const cgltf_
     node->visible = 1;
     node->cast_shadow = 1;
     node->light = n->light != NULL ? (int)(n->light - data->lights) : -1;
+    {
+        /* the morph target weights: the node's, else its mesh's (as Ikemen GO) */
+        const cgltf_float *w = n->weights;
+        cgltf_size count = n->weights_count;
+        if (count == 0 && n->mesh != NULL) {
+            w = n->mesh->weights;
+            count = n->mesh->weights_count;
+        }
+        if (count > MODEL_MAX_WEIGHTS) {
+            count = MODEL_MAX_WEIGHTS;
+        }
+        if (count > 0) {
+            node->weights = malloc(count * sizeof(float));
+            node->anim_weights = calloc(count, sizeof(float));
+            if (node->weights != NULL && node->anim_weights != NULL) {
+                memcpy(node->weights, w, count * sizeof(float));
+                node->weight_count = (int)count;
+            }
+        }
+    }
     if (n->extras.data != NULL) {
         const char *json = n->extras.data;
         char cast[16];
@@ -997,6 +1093,9 @@ static void Model_LoadNode(ModelNode *node, const cgltf_data *data, const cgltf_
             node->cast_shadow = 0;
         }
         Model_ShadowExtras(json, node->shadow);
+        if (Model_ExtraNumber(json, "meshOutline", &v)) {
+            node->outline = (float)v;
+        }
         if (Model_GetExtra(json, "trans", trans, sizeof(trans), &is_string) && is_string) {
             if (strcmp(trans, "ADD") == 0) {
                 node->trans = MODEL_TRANS_ADD;
@@ -1021,7 +1120,7 @@ static void Model_LoadNode(ModelNode *node, const cgltf_data *data, const cgltf_
     }
 }
 
-static int Model_LoadAnim(ModelAnim *anim, const cgltf_data *data, const cgltf_animation *a)
+static int Model_LoadAnim(Model *mdl, ModelAnim *anim, const cgltf_data *data, const cgltf_animation *a)
 {
     double v;
     cgltf_size i;
@@ -1075,11 +1174,22 @@ static int Model_LoadAnim(ModelAnim *anim, const cgltf_data *data, const cgltf_a
         case cgltf_animation_path_type_scale:
             mc->path = MODEL_PATH_SCALE;
             break;
+        case cgltf_animation_path_type_weights:
+            mc->path = MODEL_PATH_WEIGHTS;
+            break;
         default:
             continue;
         }
         mc->node = (int)(c->target_node - data->nodes);
         mc->sampler = (int)(c->sampler - a->samplers);
+        if (mc->path == MODEL_PATH_WEIGHTS) {
+            /* a key holds a weight per target of the node */
+            int count = mdl->nodes[mc->node].weight_count;
+            if (count == 0) {
+                continue;
+            }
+            anim->samplers[mc->sampler].comps = count;
+        }
         k++;
     }
     anim->channel_count = k;
@@ -1236,7 +1346,7 @@ Model *Model_Load(const char *path)
         Model_LoadNode(&mdl->nodes[i], data, &data->nodes[i]);
     }
     for (i = 0; i < data->animations_count; i++) {
-        if (!Model_LoadAnim(&mdl->anims[i], data, &data->animations[i])) {
+        if (!Model_LoadAnim(mdl, &mdl->anims[i], data, &data->animations[i])) {
             goto fail;
         }
     }
@@ -1298,8 +1408,18 @@ void Model_Free(Model *mdl)
     free(mdl->textures);
     for (i = 0; mdl->nodes != NULL && i < mdl->node_count; i++) {
         free(mdl->nodes[i].children);
+        free(mdl->nodes[i].weights);
+        free(mdl->nodes[i].anim_weights);
     }
     free(mdl->nodes);
+    for (i = 0; mdl->prims != NULL && i < mdl->prim_count; i++) {
+        ModelPrim *p = &mdl->prims[i];
+        for (k = 0; p->deltas != NULL && k < p->target_count * MODEL_MORPH_ATTRIBS; k++) {
+            free(p->deltas[k]);
+        }
+        free(p->deltas);
+        free(p->base);
+    }
     for (i = 0; mdl->anims != NULL && i < mdl->anim_count; i++) {
         ModelAnim *a = &mdl->anims[i];
         for (k = 0; a->samplers != NULL && k < a->sampler_count; k++) {
@@ -1424,7 +1544,7 @@ void Model_Step(Model *mdl)
             const ModelChannel *c = &a->channels[k];
             const ModelSampler *s = &a->samplers[c->sampler];
             ModelNode *node = &mdl->nodes[c->node];
-            float v[4];
+            float v[MODEL_MAX_WEIGHTS];
             int prev = 0;
             int j;
 
@@ -1453,6 +1573,11 @@ void Model_Step(Model *mdl)
                 memcpy(node->anim_rotation, v, 4 * sizeof(float));
                 node->animated |= MODEL_ANIMATED_R;
                 break;
+            case MODEL_PATH_WEIGHTS:
+                Model_Sample(s, a->time, prev, 0, v);
+                memcpy(node->anim_weights, v, node->weight_count * sizeof(float));
+                node->animated |= MODEL_ANIMATED_W;
+                continue;
             }
             node->changed = 1;
         }
@@ -1485,6 +1610,9 @@ void Model_EnableAnim(Model *mdl, int index, int enabled)
                 break;
             case MODEL_PATH_SCALE:
                 n->animated &= ~MODEL_ANIMATED_S;
+                break;
+            case MODEL_PATH_WEIGHTS:
+                n->animated &= ~MODEL_ANIMATED_W;
                 break;
             }
             n->changed = 1;
@@ -1521,7 +1649,7 @@ static void Model_LocalTransform(ModelNode *n)
         return;
     }
     n->changed = 0;
-    if (n->has_matrix && n->animated == 0) {
+    if (n->has_matrix && (n->animated & (MODEL_ANIMATED_T | MODEL_ANIMATED_R | MODEL_ANIMATED_S)) == 0) {
         memcpy(n->local, n->matrix, sizeof(n->local));
         return;
     }
@@ -1606,7 +1734,7 @@ static GLint Model_Uniform(const char *name)
 static int Model_BuildProgram(void)
 {
     static const char *const attribs[MODEL_LOC_COUNT] = { "position",  "uv",       "vertColor", "joints_0",
-                                                          "weights_0", "normalIn", "tangentIn" };
+                                                          "weights_0", "normalIn", "tangentIn", "outlineAttributeIn" };
     static const char *const fields[] = { "direction",    "range",        "color", "intensity",  "position",
                                           "innerConeCos", "outerConeCos", "type",  "shadowBias", "shadowMapFar" };
     const char *src[2] = { g_shader_model_vert, g_shader_model_frag };
@@ -1686,6 +1814,7 @@ static int Model_BuildProgram(void)
     }
     p->light_matrices = Model_Uniform("lightMatrices");
     p->use_shadow_map = Model_Uniform("useShadowMap");
+    p->mesh_outline = Model_Uniform("meshOutline");
     return 1;
 }
 
@@ -1719,6 +1848,89 @@ static void Model_SetAttributes(const ModelPrim *p)
     Model_SetAttribute(MODEL_LOC_COLOR, (p->attribs & MODEL_ATTR_COLOR) != 0, 4, &offset, n, 1.0f, 1.0f, 1.0f, 1.0f);
     Model_SetAttribute(MODEL_LOC_JOINTS, skin, 4, &offset, n, 0.0f, 0.0f, 0.0f, 0.0f);
     Model_SetAttribute(MODEL_LOC_WEIGHTS, skin, 4, &offset, n, 0.0f, 0.0f, 0.0f, 0.0f);
+    Model_SetAttribute(MODEL_LOC_OUTLINE, (p->attribs & MODEL_ATTR_OUTLINE) != 0, 4, &offset, n, 0.0f, 0.0f, 0.0f,
+                       0.0f);
+}
+
+/*
+ * Morphs a primitive's vertex blocks for the weights of the node drawing it
+ * (Ikemen GO does it in the vertex shader): the targets with a weight, their
+ * positions, then normals, tangents, uvs and colours, the first
+ * MODEL_MAX_MORPH_SLOTS of those only. The buffer is written when the
+ * weights differ from the ones it holds. The vertex buffer must be bound.
+ */
+static void Model_Morph(ModelPrim *p, const ModelNode *n)
+{
+    static const int comps[MODEL_MORPH_ATTRIBS] = { 3, 3, 3, 2, 4 };
+    const float *weights;
+    int count, active[MODEL_MAX_WEIGHTS];
+    int stride, active_count = 0, slots = 0;
+    int offsets[MODEL_MORPH_ATTRIBS], strides[MODEL_MORPH_ATTRIBS];
+    int vn = p->vertex_count;
+    float *buf;
+    int a, i, k, v, c, off;
+
+    if (p->target_count == 0) {
+        return;
+    }
+    weights = (n->animated & MODEL_ANIMATED_W) ? n->anim_weights : n->weights;
+    count = n->weight_count < p->target_count ? n->weight_count : p->target_count;
+    if (p->applied_count == count && (count == 0 || memcmp(p->applied, weights, count * sizeof(float)) == 0)) {
+        return;
+    }
+    for (i = 0; i < count; i++) {
+        if (weights[i] != 0.0f) {
+            active[active_count++] = i;
+        }
+    }
+
+    /* where each morphed attribute is in the blocks (-1: the primitive lacks it) */
+    off = 3 * vn;
+    offsets[MODEL_MORPH_POSITION] = 0;
+    strides[MODEL_MORPH_POSITION] = 3;
+    offsets[MODEL_MORPH_UV] = (p->attribs & MODEL_ATTR_UV) ? off : -1;
+    strides[MODEL_MORPH_UV] = 2;
+    off += (p->attribs & MODEL_ATTR_UV) ? 2 * vn : 0;
+    offsets[MODEL_MORPH_NORMAL] = (p->attribs & MODEL_ATTR_NORMAL) ? off : -1;
+    strides[MODEL_MORPH_NORMAL] = 3;
+    off += (p->attribs & MODEL_ATTR_NORMAL) ? 3 * vn : 0;
+    offsets[MODEL_MORPH_TANGENT] = (p->attribs & MODEL_ATTR_TANGENT) ? off : -1;
+    strides[MODEL_MORPH_TANGENT] = 4;
+    off += (p->attribs & MODEL_ATTR_TANGENT) ? 4 * vn : 0;
+    offsets[MODEL_MORPH_COLOR] = (p->attribs & MODEL_ATTR_COLOR) ? off : -1;
+    strides[MODEL_MORPH_COLOR] = 4;
+
+    stride = Model_MorphStride(p);
+    buf = malloc((size_t)vn * stride * sizeof(float) + 1);
+    if (buf == NULL) {
+        return;
+    }
+    memcpy(buf, p->base, (size_t)vn * stride * sizeof(float));
+    for (a = 0; a < MODEL_MORPH_ATTRIBS; a++) {
+        for (k = 0; k < active_count; k++) {
+            const float *d = p->deltas[active[k] * MODEL_MORPH_ATTRIBS + a];
+            float w = weights[active[k]];
+            float *dst;
+            if (d == NULL) {
+                continue;
+            }
+            if (slots++ >= MODEL_MAX_MORPH_SLOTS || offsets[a] < 0) {
+                continue;
+            }
+            dst = buf + offsets[a];
+            for (v = 0; v < vn; v++) {
+                for (c = 0; c < comps[a]; c++) {
+                    dst[v * strides[a] + c] += w * d[v * comps[a] + c];
+                }
+            }
+        }
+    }
+    glBufferSubData(GL_ARRAY_BUFFER, p->vertex_offset, (GLsizeiptr)vn * stride * sizeof(float), buf);
+    free(buf);
+    if (count > 0) {
+        memcpy(p->applied, weights, count * sizeof(float));
+    }
+    p->applied_count = count;
 }
 
 /* The blending of a node (Ikemen GO's drawNode without PalFX inversion). */
@@ -1760,7 +1972,8 @@ static int Model_BindTexture(const Model *mdl, const ModelTexRef *ref, int unit,
  * Draws the meshes of node index and its children (children first) on layer
  * `layer`: the opaque ones (blended 0) or the blended and "trans" ones.
  */
-static void Model_DrawNode(Model *mdl, int index, int layer, int default_layer, int blended, int flipped, int unlit)
+static void Model_DrawNode(Model *mdl, int index, int layer, int default_layer, int blended, int flipped, int unlit,
+                           float outline)
 {
     const ModelProgram *prog = &g_modelProgram;
     ModelNode *n = &mdl->nodes[index];
@@ -1769,14 +1982,14 @@ static void Model_DrawNode(Model *mdl, int index, int layer, int default_layer, 
     int i;
 
     for (i = 0; i < n->child_count; i++) {
-        Model_DrawNode(mdl, n->children[i], layer, default_layer, blended, flipped, unlit);
+        Model_DrawNode(mdl, n->children[i], layer, default_layer, blended, flipped, unlit, outline);
     }
     if (n->mesh == -1 || !n->visible || node_layer != layer) {
         return;
     }
     mesh = &mdl->meshes[n->mesh];
     for (i = 0; i < mesh->prim_count; i++) {
-        const ModelPrim *p = &mdl->prims[mesh->first_prim + i];
+        ModelPrim *p = &mdl->prims[mesh->first_prim + i];
         const ModelMaterial *mat;
         int is_blended;
 
@@ -1803,6 +2016,7 @@ static void Model_DrawNode(Model *mdl, int index, int layer, int default_layer, 
             glCullFace(GL_BACK);
         }
         Model_SetBlend(n->trans);
+        Model_Morph(p, n);
         Model_SetAttributes(p);
         glUniformMatrix4fv(prog->model, 1, GL_FALSE, n->world);
         glUniformMatrix4fv(prog->normal_matrix, 1, GL_FALSE, n->normal_matrix);
@@ -1830,6 +2044,15 @@ static void Model_DrawNode(Model *mdl, int index, int layer, int default_layer, 
         glUniform1i(prog->use_emission_map,
                     Model_BindTexture(mdl, &mat->emissive, MODEL_UNIT_EMISSION, prog->emission_transform));
         glDrawElements(p->mode, p->index_count, GL_UNSIGNED_INT, (const void *)(size_t)p->index_offset);
+        if (n->outline > 0.0f) {
+            /* the outline: the mesh pushed out along its normals, back faces only, in black (Ikemen GO) */
+            glFrontFace(((Mat4_Det3(n->world) < 0) != flipped) ? GL_CCW : GL_CW);
+            glEnable(GL_DEPTH_TEST);
+            glDepthMask(GL_TRUE);
+            glUniform1f(prog->mesh_outline, n->outline * outline);
+            glDrawElements(p->mode, p->index_count, GL_UNSIGNED_INT, (const void *)(size_t)p->index_offset);
+            glUniform1f(prog->mesh_outline, 0.0f);
+        }
     }
 }
 
@@ -1947,7 +2170,7 @@ static int Model_SetLights(const Model *mdl, const ModelScene *sc)
 static int Model_BuildShadowProgram(void)
 {
     static const char *const attribs[MODEL_LOC_COUNT] = { "position",  "uv",       "vertColor", "joints_0",
-                                                          "weights_0", "normalIn", "tangentIn" };
+                                                          "weights_0", "normalIn", "tangentIn", "outlineAttributeIn" };
     const char *src[2] = { g_shader_shadow_vert, g_shader_shadow_frag };
     GLenum types[2] = { GL_VERTEX_SHADER, GL_FRAGMENT_SHADER };
     ShadowProgram *p = &g_shadowProgram;
@@ -2079,7 +2302,7 @@ static void Model_DrawNodeShadow(Model *mdl, int index, int blended)
     }
     mesh = &mdl->meshes[n->mesh];
     for (i = 0; i < mesh->prim_count; i++) {
-        const ModelPrim *p = &mdl->prims[mesh->first_prim + i];
+        ModelPrim *p = &mdl->prims[mesh->first_prim + i];
         const ModelMaterial *mat;
 
         if (p->material == -1 || p->index_count == 0) {
@@ -2092,6 +2315,7 @@ static void Model_DrawNodeShadow(Model *mdl, int index, int blended)
         if (mat->base_color[3] == 0.0f && mat->alpha_mode == MODEL_ALPHA_BLEND) {
             continue;
         }
+        Model_Morph(p, n);
         glFrontFace(Mat4_Det3(n->world) < 0 ? GL_CW : GL_CCW);
         if (mat->double_sided) {
             glDisable(GL_CULL_FACE);
@@ -2234,7 +2458,7 @@ static void Model_BindShadowMaps(const ShadowMaps *sm)
  * the OpenGL renderer.
  */
 void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float *proj, const float *view,
-                const ModelFx *fx)
+                const ModelFx *fx, float outline)
 {
     const ModelProgram *prog = &g_modelProgram;
     const ModelScene *sc;
@@ -2295,6 +2519,7 @@ void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float
         glUniform1i(prog->shadow_cubes[i], MODEL_UNIT_SHADOW_CUBE + i);
     }
     glUniform1i(prog->use_shadow_map, g_shadowMaps.drawn == mdl);
+    glUniform1f(prog->mesh_outline, 0.0f);
     if (g_shadowMaps.drawn == mdl) {
         Model_BindShadowMaps(&g_shadowMaps);
     }
@@ -2302,7 +2527,7 @@ void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mdl->ibo);
     for (pass = 0; pass < 2; pass++) {
         for (i = 0; i < sc->node_count; i++) {
-            Model_DrawNode(mdl, sc->nodes[i], layer, default_layer, pass, flipped, unlit);
+            Model_DrawNode(mdl, sc->nodes[i], layer, default_layer, pass, flipped, unlit, outline);
         }
     }
     for (i = 0; i < MODEL_LOC_COUNT; i++) {

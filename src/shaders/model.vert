@@ -1,8 +1,9 @@
 #version 120
 /*
  * Vertex shader of the glTF models (model.c): Ikemen GO's model.vert.glsl
- * for OpenGL 2.1, without morph targets and mesh outlines. The joint
- * matrices are uniforms (rows of their 3x4 part) instead of a texture.
+ * for OpenGL 2.1. Morph targets are applied to the vertex buffer on the CPU
+ * (model.c); the joint matrices are uniforms (rows of their 3x4 part)
+ * instead of a texture. meshOutline: the outline pass pushes the mesh out.
  * lightSpacePos: the position for the shadow map of each light.
  */
 
@@ -10,6 +11,8 @@ uniform mat4 projection, view, model, normalMatrix;
 uniform mat4 lightMatrices[4];
 uniform bool skinned;
 uniform vec4 joints[3 * 64];
+uniform float meshOutline;
+uniform vec3 cameraPosition;
 
 attribute vec3 position;
 attribute vec2 uv;
@@ -18,6 +21,7 @@ attribute vec4 joints_0;
 attribute vec4 weights_0;
 attribute vec3 normalIn;
 attribute vec4 tangentIn;
+attribute vec4 outlineAttributeIn;
 
 varying vec2 texcoord;
 varying vec4 vColor;
@@ -43,6 +47,19 @@ mat3 jointNormalMatrix(float index)
     return mat3(cross(c1, c2), cross(c2, c0), cross(c0, c1));
 }
 
+/*
+ * How far the outline pass pushes a vertex out: along _OUTLINE_ATTRIBUTE
+ * when it has a width, else along the normal, wider farther from the camera.
+ */
+vec3 outlineOffset(vec3 world)
+{
+    float d = meshOutline * length(cameraPosition - world);
+    if (outlineAttributeIn.w > 0.0) {
+        return normalize(mat3(normalMatrix) * outlineAttributeIn.xyz) * outlineAttributeIn.w * d;
+    }
+    return normal * d;
+}
+
 void main()
 {
     vec4 pos = vec4(position, 1.0);
@@ -60,6 +77,7 @@ void main()
                  weights_0.z * jointNormalMatrix(joints_0.z) + weights_0.w * jointNormalMatrix(joints_0.w);
         normal = mat3(normalMatrix) * n * normal;
         world = model * m * pos;
+        world.xyz += outlineOffset(world.xyz);
     } else {
         if (normal.x + normal.y + normal.z != 0.0) {
             normal = normalize(mat3(normalMatrix) * normal);
@@ -69,6 +87,9 @@ void main()
             bitangent = cross(normal, tangent) * tangentIn.w;
         }
         world = model * pos;
+        if (meshOutline != 0.0) {
+            world.xyz += outlineOffset(world.xyz);
+        }
     }
     worldSpacePos = vec3(world);
     for (int i = 0; i < 4; i++) {
