@@ -38,6 +38,7 @@
 #pragma warning(pop)
 
 #include <cgltf.h>
+#include <stb_image.h>
 #include <math.h>
 
 #define MODEL_PI 3.14159265358979323846
@@ -405,133 +406,164 @@ static void Quat_Slerp(float *out, const float *qa, const float *qb, float t)
     }
 }
 
-/* ---- extras ---- */
+/* ---- JSON (extras, and what cgltf does not keep) ---- */
+
+static const char *Json_Ws(const char *p)
+{
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    return p;
+}
+
+/* The end of the string starting at p (on its opening quote), after the closing one; NULL if unterminated. */
+static const char *Json_SkipString(const char *p)
+{
+    for (p++; *p != '\0' && *p != '"'; p++) {
+        if (*p == '\\' && p[1] != '\0') {
+            p++;
+        }
+    }
+    return *p == '"' ? p + 1 : NULL;
+}
+
+/* The end of the value starting at p; NULL on malformed JSON. */
+static const char *Json_Skip(const char *p)
+{
+    int depth = 0;
+
+    p = Json_Ws(p);
+    if (*p == '"') {
+        return Json_SkipString(p);
+    }
+    while (*p != '\0') {
+        if (*p == '"') {
+            p = Json_SkipString(p);
+            if (p == NULL) {
+                return NULL;
+            }
+            if (depth == 0) {
+                return p;
+            }
+            continue;
+        }
+        if (*p == '{' || *p == '[') {
+            depth++;
+        } else if (*p == '}' || *p == ']') {
+            if (depth == 0) {
+                return p;
+            }
+            if (--depth == 0) {
+                return p + 1;
+            }
+        } else if ((*p == ',' || *p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') && depth == 0) {
+            return p;
+        }
+        p++;
+    }
+    return depth == 0 ? p : NULL;
+}
+
+/* The value of member key of the object at p, or NULL. */
+static const char *Json_Member(const char *p, const char *key)
+{
+    size_t key_len = strlen(key);
+
+    if (p == NULL || *(p = Json_Ws(p)) != '{') {
+        return NULL;
+    }
+    p++;
+    for (;;) {
+        const char *k;
+        p = Json_Ws(p);
+        if (*p != '"') {
+            return NULL;
+        }
+        k = p + 1;
+        p = Json_SkipString(p);
+        if (p == NULL) {
+            return NULL;
+        }
+        p = Json_Ws(p);
+        if (*p != ':') {
+            return NULL;
+        }
+        p = Json_Ws(p + 1);
+        if ((size_t)(p - k) >= key_len + 1 && strncmp(k, key, key_len) == 0 && k[key_len] == '"') {
+            return p;
+        }
+        p = Json_Skip(p);
+        if (p == NULL || *(p = Json_Ws(p)) != ',') {
+            return NULL;
+        }
+        p++;
+    }
+}
+
+/* Element index of the array at p, or NULL. */
+static const char *Json_Element(const char *p, int index)
+{
+    int i;
+
+    if (p == NULL || *(p = Json_Ws(p)) != '[') {
+        return NULL;
+    }
+    p = Json_Ws(p + 1);
+    if (*p == ']') {
+        return NULL;
+    }
+    for (i = 0; i < index; i++) {
+        p = Json_Skip(p);
+        if (p == NULL || *(p = Json_Ws(p)) != ',') {
+            return NULL;
+        }
+        p = Json_Ws(p + 1);
+    }
+    return p;
+}
 
 /*
- * Looks up `key` in the JSON object of an extras block. On success the value
- * goes to out: a string unquoted (simple escapes only), anything else as its
- * JSON text; *is_string tells which.
+ * The value at p: a string unquoted (simple escapes only), anything else as
+ * its JSON text; *is_string tells which. Returns 0 for NULL.
  */
-static int Model_GetExtra(const char *json, const char *key, char *out, int size, int *is_string)
+static int Json_Value(const char *p, char *out, int size, int *is_string)
 {
-    const char *p = json;
-    size_t key_len = strlen(key);
+    const char *end;
+    int n = 0;
 
     if (p == NULL) {
         return 0;
     }
-    while (*p != '\0' && *p != '{') {
-        p++;
-    }
-    if (*p != '{') {
-        return 0;
-    }
-    p++;
-    for (;;) {
-        const char *k, *v;
-        size_t k_len;
-        int depth, n;
-
-        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n' || *p == ',') {
-            p++;
-        }
-        if (*p != '"') {
-            return 0;
-        }
-        k = ++p;
-        while (*p != '\0' && *p != '"') {
+    p = Json_Ws(p);
+    if (*p == '"') {
+        for (p++; *p != '"' && *p != '\0' && n < size - 1; p++) {
             if (*p == '\\' && p[1] != '\0') {
                 p++;
             }
-            p++;
+            out[n++] = *p;
         }
-        if (*p != '"') {
+        *is_string = 1;
+    } else {
+        end = Json_Skip(p);
+        if (end == NULL) {
             return 0;
         }
-        k_len = (size_t)(p - k);
-        p++;
-        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
-            p++;
+        n = (int)(end - p);
+        if (n > size - 1) {
+            n = size - 1;
         }
-        if (*p != ':') {
-            return 0;
-        }
-        p++;
-        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
-            p++;
-        }
-        v = p;
-        if (*p == '"') {
-            p++;
-            while (*p != '\0' && *p != '"') {
-                if (*p == '\\' && p[1] != '\0') {
-                    p++;
-                }
-                p++;
-            }
-            if (*p != '"') {
-                return 0;
-            }
-            p++;
-        } else {
-            depth = 0;
-            while (*p != '\0') {
-                if (*p == '{' || *p == '[') {
-                    depth++;
-                } else if (*p == '}' || *p == ']') {
-                    if (depth == 0) {
-                        break;
-                    }
-                    depth--;
-                } else if (*p == ',' && depth == 0) {
-                    break;
-                } else if (*p == '"') {
-                    p++;
-                    while (*p != '\0' && *p != '"') {
-                        if (*p == '\\' && p[1] != '\0') {
-                            p++;
-                        }
-                        p++;
-                    }
-                    if (*p == '\0') {
-                        return 0;
-                    }
-                }
-                p++;
-            }
-        }
-        if (k_len == key_len && strncmp(k, key, key_len) == 0) {
-            if (*v == '"') {
-                const char *s = v + 1;
-                n = 0;
-                while (*s != '"' && n < size - 1) {
-                    if (*s == '\\') {
-                        s++;
-                    }
-                    out[n++] = *s++;
-                }
-                out[n] = '\0';
-                *is_string = 1;
-            } else {
-                n = (int)(p - v);
-                while (n > 0 && (v[n - 1] == ' ' || v[n - 1] == '\t' || v[n - 1] == '\r' || v[n - 1] == '\n')) {
-                    n--;
-                }
-                if (n > size - 1) {
-                    n = size - 1;
-                }
-                memcpy(out, v, n);
-                out[n] = '\0';
-                *is_string = 0;
-            }
-            return 1;
-        }
-        if (*p != ',') {
-            return 0;
-        }
+        memcpy(out, p, n);
+        *is_string = 0;
     }
+    out[n] = '\0';
+    return 1;
 }
 
+/* Looks up `key` in the JSON object of an extras block (see Json_Value). */
+static int Model_GetExtra(const char *json, const char *key, char *out, int size, int *is_string)
+{
+    return json != NULL && Json_Value(Json_Member(json, key), out, size, is_string);
+}
 /*
  * An extra that switches something when present: Ikemen GO takes any value
  * but the strings "0" and "false" as set (a JSON false counts as set).
@@ -803,26 +835,37 @@ static int Model_LoadPrimitive(Model *mdl, ModelPrim *prim, const cgltf_data *da
     return 1;
 }
 
-/* A texture of a material and its KHR_texture_transform: translation * rotation (by -angle) * scale. */
+/* The matrix of a KHR_texture_transform: translation * rotation (by -angle) * scale. */
+static void Model_TexTransform(ModelTexRef *ref)
+{
+    float c = (float)cos(ref->rotation), s = (float)sin(ref->rotation);
+
+    memset(ref->transform, 0, sizeof(ref->transform));
+    ref->transform[0] = c * ref->scale[0];
+    ref->transform[1] = -s * ref->scale[0];
+    ref->transform[3] = s * ref->scale[1];
+    ref->transform[4] = c * ref->scale[1];
+    ref->transform[6] = ref->offset[0];
+    ref->transform[7] = ref->offset[1];
+    ref->transform[8] = 1.0f;
+}
+
+/* A texture of a material and its KHR_texture_transform. */
 static void Model_LoadTexRef(ModelTexRef *ref, const cgltf_data *data, const cgltf_texture_view *view)
 {
-    memset(ref->transform, 0, sizeof(ref->transform));
-    ref->transform[0] = ref->transform[4] = ref->transform[8] = 1.0f;
     ref->texture = -1;
-    if (view->texture == NULL) {
-        return;
+    ref->offset[0] = ref->offset[1] = 0.0f;
+    ref->rotation = 0.0f;
+    ref->scale[0] = ref->scale[1] = 1.0f;
+    if (view->texture != NULL) {
+        ref->texture = (int)(view->texture - data->textures);
+        if (view->has_transform) {
+            memcpy(ref->offset, view->transform.offset, sizeof(ref->offset));
+            ref->rotation = view->transform.rotation;
+            memcpy(ref->scale, view->transform.scale, sizeof(ref->scale));
+        }
     }
-    ref->texture = (int)(view->texture - data->textures);
-    if (view->has_transform) {
-        const cgltf_texture_transform *t = &view->transform;
-        float c = (float)cos(t->rotation), s = (float)sin(t->rotation);
-        ref->transform[0] = c * t->scale[0];
-        ref->transform[1] = -s * t->scale[0];
-        ref->transform[3] = s * t->scale[1];
-        ref->transform[4] = c * t->scale[1];
-        ref->transform[6] = t->offset[0];
-        ref->transform[7] = t->offset[1];
-    }
+    Model_TexTransform(ref);
 }
 
 static void Model_LoadMaterial(ModelMaterial *mat, const cgltf_data *data, const cgltf_material *m)
@@ -951,11 +994,16 @@ static GLuint Model_LoadTexture(const cgltf_texture *t, const cgltf_options *opt
         Log_Printf("Model: can't read image %s\n", t->image->uri != NULL ? t->image->uri : "(embedded)");
         return 0;
     }
+    /* PNG through libpng, JPEG through stb_image (the formats Ikemen GO reads besides DDS) */
     pixels = Png_DecodeRGBA(bytes, size, &w, &h);
+    if (pixels == NULL && size <= 0x7FFFFFFF) {
+        int comps;
+        pixels = stbi_load_from_memory(bytes, (int)size, &w, &h, &comps, 4);
+    }
     free(bytes);
     if (pixels == NULL) {
-        Log_Printf("Model: unsupported image %s (only PNG is supported)\n",
-                        t->image->uri != NULL ? t->image->uri : "(embedded)");
+        Log_Printf("Model: unsupported image %s (PNG and JPEG are supported)\n",
+                   t->image->uri != NULL ? t->image->uri : "(embedded)");
         return 0;
     }
     if (t->sampler != NULL) {
@@ -1098,6 +1146,7 @@ static void Model_LoadNode(ModelNode *node, const cgltf_data *data, const cgltf_
         if (count == 0 && n->mesh != NULL) {
             w = n->mesh->weights;
             count = n->mesh->weights_count;
+            node->mesh_weights = 1;
         }
         if (count > MODEL_MAX_WEIGHTS) {
             count = MODEL_MAX_WEIGHTS;
@@ -1146,7 +1195,157 @@ static void Model_LoadNode(ModelNode *node, const cgltf_data *data, const cgltf_
     }
 }
 
-static int Model_LoadAnim(Model *mdl, ModelAnim *anim, const cgltf_data *data, const cgltf_animation *a)
+/*
+ * The target of a KHR_animation_pointer (Ikemen GO's parseAnimationPointer):
+ * node translation / rotation / scale / weights (or one weight), mesh
+ * weights, material alphaCutoff, emissiveFactor, baseColorFactor,
+ * metallicFactor, roughnessFactor, occlusion strength, the
+ * KHR_texture_transform of the normal, emissive and occlusion textures and
+ * Ikemen GO's pbrMetallicRoughness/extensions/KHR_texture_transform (the
+ * metallic-roughness texture's), light color, intensity, range and spot
+ * cone angles. Returns 0 for any other (Ikemen GO then refuses the model).
+ */
+static int Model_ParsePointer(Model *mdl, const char *pointer, ModelChannel *mc)
+{
+    char buf[256];
+    char *parts[8];
+    int n = 0, index;
+    float *target = NULL;
+    int comps = 0;
+    ModelTexRef *tex = NULL;
+    const char *tex_field = NULL;
+    char *s;
+
+    strncpy(buf, pointer, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    for (s = strtok(buf, "/"); s != NULL && n < 8; s = strtok(NULL, "/")) {
+        parts[n++] = s;
+    }
+    if (n < 3) {
+        return 0;
+    }
+    index = atoi(parts[1]);
+    if (strcmp(parts[0], "nodes") == 0) {
+        if (index < 0 || index >= mdl->node_count) {
+            return 0;
+        }
+        mc->node = index;
+        if (strcmp(parts[2], "translation") == 0) {
+            mc->path = MODEL_PATH_TRANSLATION;
+        } else if (strcmp(parts[2], "rotation") == 0) {
+            mc->path = MODEL_PATH_ROTATION;
+        } else if (strcmp(parts[2], "scale") == 0) {
+            mc->path = MODEL_PATH_SCALE;
+        } else if (strcmp(parts[2], "weights") == 0) {
+            mc->path = MODEL_PATH_WEIGHTS;
+            mc->elem = n > 3 ? atoi(parts[3]) : -1;
+        } else {
+            return 0;
+        }
+        return 1;
+    }
+    if (strcmp(parts[0], "meshes") == 0) {
+        if (index < 0 || index >= mdl->mesh_count || strcmp(parts[2], "weights") != 0) {
+            return 0;
+        }
+        mc->path = MODEL_PATH_MESH_WEIGHTS;
+        mc->mesh = index;
+        mc->elem = n > 3 ? atoi(parts[3]) : -1;
+        return 1;
+    }
+    if (strcmp(parts[0], "materials") == 0) {
+        ModelMaterial *mat;
+        if (index < 0 || index >= mdl->material_count) {
+            return 0;
+        }
+        mat = &mdl->materials[index];
+        if (strcmp(parts[2], "alphaCutoff") == 0) {
+            target = &mat->alpha_cutoff;
+            comps = 1;
+        } else if (strcmp(parts[2], "emissiveFactor") == 0) {
+            target = mat->emission;
+            comps = 3;
+        } else if (strcmp(parts[2], "normalTexture") == 0) {
+            tex = &mat->normal;
+        } else if (strcmp(parts[2], "emissiveTexture") == 0) {
+            tex = &mat->emissive;
+        } else if (strcmp(parts[2], "occlusionTexture") == 0) {
+            if (n == 4 && strcmp(parts[3], "strength") == 0) {
+                target = &mat->occlusion_strength;
+                comps = 1;
+            } else {
+                tex = &mat->occlusion;
+            }
+        } else if (strcmp(parts[2], "pbrMetallicRoughness") == 0 && n >= 4) {
+            if (strcmp(parts[3], "baseColorFactor") == 0) {
+                target = mat->base_color;
+                comps = 4;
+            } else if (strcmp(parts[3], "metallicFactor") == 0) {
+                target = &mat->metallic;
+                comps = 1;
+            } else if (strcmp(parts[3], "roughnessFactor") == 0) {
+                target = &mat->roughness;
+                comps = 1;
+            } else if (n == 6 && strcmp(parts[3], "extensions") == 0 && strcmp(parts[4], "KHR_texture_transform") == 0) {
+                tex = &mat->metal_rough;
+                tex_field = parts[5];
+            }
+        }
+        if (tex != NULL && tex_field == NULL) {
+            if (n != 6 || strcmp(parts[3], "extensions") != 0 || strcmp(parts[4], "KHR_texture_transform") != 0) {
+                return 0;
+            }
+            tex_field = parts[5];
+        }
+        if (tex != NULL) {
+            if (strcmp(tex_field, "offset") == 0) {
+                target = tex->offset;
+                comps = 2;
+            } else if (strcmp(tex_field, "scale") == 0) {
+                target = tex->scale;
+                comps = 2;
+            } else if (strcmp(tex_field, "rotation") == 0) {
+                target = &tex->rotation;
+                comps = 1;
+            }
+        }
+    } else if (strcmp(parts[0], "extensions") == 0 && n >= 5 && strcmp(parts[1], "KHR_lights_punctual") == 0 &&
+               strcmp(parts[2], "lights") == 0) {
+        ModelLight *light;
+        index = atoi(parts[3]);
+        if (index < 0 || index >= mdl->light_count) {
+            return 0;
+        }
+        light = &mdl->lights[index];
+        if (strcmp(parts[4], "color") == 0) {
+            target = light->color;
+            comps = 3;
+        } else if (strcmp(parts[4], "intensity") == 0) {
+            target = &light->intensity;
+            comps = 1;
+        } else if (strcmp(parts[4], "range") == 0) {
+            target = &light->range;
+            comps = 1;
+        } else if (n == 6 && strcmp(parts[4], "spot") == 0 && strcmp(parts[5], "innerConeAngle") == 0) {
+            target = &light->inner_cone;
+            comps = 1;
+        } else if (n == 6 && strcmp(parts[4], "spot") == 0 && strcmp(parts[5], "outerConeAngle") == 0) {
+            target = &light->outer_cone;
+            comps = 1;
+        }
+    }
+    if (target == NULL) {
+        return 0;
+    }
+    mc->path = MODEL_PATH_FLOATS;
+    mc->target = target;
+    mc->comps = comps;
+    memcpy(mc->rest, target, comps * sizeof(float));
+    return 1;
+}
+
+static int Model_LoadAnim(Model *mdl, ModelAnim *anim, const cgltf_data *data, const cgltf_animation *a,
+                          const char *json, int anim_index)
 {
     double v;
     cgltf_size i;
@@ -1187,34 +1386,63 @@ static int Model_LoadAnim(Model *mdl, ModelAnim *anim, const cgltf_data *data, c
     for (i = 0; i < a->channels_count; i++) {
         const cgltf_animation_channel *c = &a->channels[i];
         ModelChannel *mc = &anim->channels[k];
-        if (c->target_node == NULL || c->sampler == NULL) {
+        ModelSampler *ms;
+        const char *ptr;
+        char pointer[256];
+        int is_string;
+
+        if (c->sampler == NULL) {
             continue;
         }
-        switch (c->target_path) {
-        case cgltf_animation_path_type_translation:
-            mc->path = MODEL_PATH_TRANSLATION;
-            break;
-        case cgltf_animation_path_type_rotation:
-            mc->path = MODEL_PATH_ROTATION;
-            break;
-        case cgltf_animation_path_type_scale:
-            mc->path = MODEL_PATH_SCALE;
-            break;
-        case cgltf_animation_path_type_weights:
-            mc->path = MODEL_PATH_WEIGHTS;
-            break;
-        default:
-            continue;
-        }
-        mc->node = (int)(c->target_node - data->nodes);
+        memset(mc, 0, sizeof(*mc));
         mc->sampler = (int)(c->sampler - a->samplers);
-        if (mc->path == MODEL_PATH_WEIGHTS) {
-            /* a key holds a weight per target of the node */
-            int count = mdl->nodes[mc->node].weight_count;
+        mc->elem = -1;
+        mc->mesh = -1;
+        ms = &anim->samplers[mc->sampler];
+        /* KHR_animation_pointer (cgltf does not keep it): its target goes before the path */
+        ptr = Json_Member(Json_Element(Json_Member(Json_Element(Json_Member(json, "animations"), anim_index), "channels"),
+                                       (int)i),
+                          "target");
+        ptr = Json_Member(Json_Member(Json_Member(ptr, "extensions"), "KHR_animation_pointer"), "pointer");
+        if (json != NULL && Json_Value(ptr, pointer, sizeof(pointer), &is_string) && is_string) {
+            if (!Model_ParsePointer(mdl, pointer, mc)) {
+                Log_Printf("Model: unsupported animation pointer %s, ignored\n", pointer);
+                continue;
+            }
+        } else {
+            if (c->target_node == NULL) {
+                continue;
+            }
+            switch (c->target_path) {
+            case cgltf_animation_path_type_translation:
+                mc->path = MODEL_PATH_TRANSLATION;
+                break;
+            case cgltf_animation_path_type_rotation:
+                mc->path = MODEL_PATH_ROTATION;
+                break;
+            case cgltf_animation_path_type_scale:
+                mc->path = MODEL_PATH_SCALE;
+                break;
+            case cgltf_animation_path_type_weights:
+                mc->path = MODEL_PATH_WEIGHTS;
+                break;
+            default:
+                continue;
+            }
+            mc->node = (int)(c->target_node - data->nodes);
+        }
+        if ((mc->path == MODEL_PATH_WEIGHTS || mc->path == MODEL_PATH_MESH_WEIGHTS) && mc->elem < 0) {
+            /* a key holds a weight per target of the node (mesh) */
+            int count = mc->path == MODEL_PATH_WEIGHTS ? mdl->nodes[mc->node].weight_count
+                                                       : mdl->meshes[mc->mesh].weight_count;
             if (count == 0) {
                 continue;
             }
-            anim->samplers[mc->sampler].comps = count;
+            ms->comps = count;
+        } else if (mc->path == MODEL_PATH_FLOATS && ms->comps != mc->comps) {
+            Log_Printf("Model: animation pointer %s has %i values per key, not %i, ignored\n", pointer, ms->comps,
+                       mc->comps);
+            continue;
         }
         k++;
     }
@@ -1307,6 +1535,7 @@ Model *Model_Load(const char *path)
     cgltf_result r;
     unsigned int vcap = 0, icap = 0;
     char dir[0x200];
+    char *json = NULL;
     Model *mdl;
     cgltf_size i, j;
 
@@ -1325,6 +1554,14 @@ Model *Model_Load(const char *path)
     if (mdl == NULL) {
         cgltf_free(data);
         return NULL;
+    }
+    /* the JSON, terminated, for what cgltf does not keep (KHR_animation_pointer) */
+    if (data->json != NULL) {
+        json = malloc(data->json_size + 1);
+        if (json != NULL) {
+            memcpy(json, data->json, data->json_size);
+            json[data->json_size] = '\0';
+        }
     }
 
     mdl->material_count = (int)data->materials_count;
@@ -1361,6 +1598,7 @@ Model *Model_Load(const char *path)
             const cgltf_mesh *m = &data->meshes[i];
             mdl->meshes[i].first_prim = k;
             mdl->meshes[i].prim_count = (int)m->primitives_count;
+            mdl->meshes[i].weight_count = m->weights_count < MODEL_MAX_WEIGHTS ? (int)m->weights_count : MODEL_MAX_WEIGHTS;
             for (j = 0; j < m->primitives_count; j++, k++) {
                 if (!Model_LoadPrimitive(mdl, &mdl->prims[k], data, &m->primitives[j], &vcap, &icap)) {
                     goto fail;
@@ -1372,7 +1610,7 @@ Model *Model_Load(const char *path)
         Model_LoadNode(&mdl->nodes[i], data, &data->nodes[i]);
     }
     for (i = 0; i < data->animations_count; i++) {
-        if (!Model_LoadAnim(mdl, &mdl->anims[i], data, &data->animations[i])) {
+        if (!Model_LoadAnim(mdl, &mdl->anims[i], data, &data->animations[i], json, (int)i)) {
             goto fail;
         }
     }
@@ -1403,11 +1641,13 @@ Model *Model_Load(const char *path)
     if (!Model_Upload(mdl, data, &options, dir)) {
         goto fail;
     }
+    free(json);
     cgltf_free(data);
     return mdl;
 
 fail:
     Log_Printf("Error loading model %s\n", path);
+    free(json);
     cgltf_free(data);
     Model_Free(mdl);
     return NULL;
@@ -1539,6 +1779,23 @@ static void Model_Sample(const ModelSampler *s, float t, int prev, int quat, flo
     }
 }
 
+/* The weights of an animation on a node: all of them, or weight elem (the others staying). */
+static void Model_AnimateWeights(ModelNode *node, int elem, const float *v)
+{
+    if (node->weight_count == 0) {
+        return;
+    }
+    if (elem < 0) {
+        memcpy(node->anim_weights, v, node->weight_count * sizeof(float));
+    } else if (elem < node->weight_count) {
+        if (!(node->animated & MODEL_ANIMATED_W)) {
+            memcpy(node->anim_weights, node->weights, node->weight_count * sizeof(float));
+        }
+        node->anim_weights[elem] = v[0];
+    }
+    node->animated |= MODEL_ANIMATED_W;
+}
+
 /* One tick (1/60 s) of the enabled animations (Ikemen GO's Model.step). */
 void Model_Step(Model *mdl)
 {
@@ -1604,8 +1861,19 @@ void Model_Step(Model *mdl)
                 break;
             case MODEL_PATH_WEIGHTS:
                 Model_Sample(s, a->time, prev, 0, v);
-                memcpy(node->anim_weights, v, node->weight_count * sizeof(float));
-                node->animated |= MODEL_ANIMATED_W;
+                Model_AnimateWeights(node, c->elem, v);
+                continue;
+            case MODEL_PATH_MESH_WEIGHTS:
+                Model_Sample(s, a->time, prev, 0, v);
+                for (j = 0; j < mdl->node_count; j++) {
+                    if (mdl->nodes[j].mesh == c->mesh && mdl->nodes[j].mesh_weights) {
+                        Model_AnimateWeights(&mdl->nodes[j], c->elem, v);
+                    }
+                }
+                continue;
+            case MODEL_PATH_FLOATS:
+                Model_Sample(s, a->time, prev, 0, v);
+                memcpy(c->target, v, c->comps * sizeof(float));
                 continue;
             }
             node->changed = 1;
@@ -1629,8 +1897,22 @@ void Model_EnableAnim(Model *mdl, int index, int enabled)
     } else if (a->enabled) {
         a->enabled = 0;
         for (i = 0; i < a->channel_count; i++) {
-            ModelNode *n = &mdl->nodes[a->channels[i].node];
-            switch (a->channels[i].path) {
+            const ModelChannel *c = &a->channels[i];
+            ModelNode *n = &mdl->nodes[c->node];
+            int j;
+            if (c->path == MODEL_PATH_FLOATS) {
+                memcpy(c->target, c->rest, c->comps * sizeof(float));
+                continue;
+            }
+            if (c->path == MODEL_PATH_MESH_WEIGHTS) {
+                for (j = 0; j < mdl->node_count; j++) {
+                    if (mdl->nodes[j].mesh == c->mesh && mdl->nodes[j].mesh_weights) {
+                        mdl->nodes[j].animated &= ~MODEL_ANIMATED_W;
+                    }
+                }
+                continue;
+            }
+            switch (c->path) {
             case MODEL_PATH_TRANSLATION:
                 n->animated &= ~MODEL_ANIMATED_T;
                 break;
@@ -2932,6 +3214,15 @@ void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float
     for (i = 0; i < sc->node_count; i++) {
         Model_WorldTransform(mdl, sc->nodes[i], ident);
         Model_SkinMatrices(mdl, sc->nodes[i]);
+    }
+    /* texture transforms may be animated (Ikemen GO's calculateTextureTransform) */
+    for (i = 0; i < mdl->material_count; i++) {
+        ModelMaterial *mat = &mdl->materials[i];
+        Model_TexTransform(&mat->base);
+        Model_TexTransform(&mat->normal);
+        Model_TexTransform(&mat->metal_rough);
+        Model_TexTransform(&mat->occlusion);
+        Model_TexTransform(&mat->emissive);
     }
 
     /* A framebuffer target is upside down (Gl_SetupView): flip y, and with it the winding. */

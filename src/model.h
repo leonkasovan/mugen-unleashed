@@ -42,7 +42,9 @@ enum {
     MODEL_PATH_TRANSLATION = 0,
     MODEL_PATH_ROTATION = 1,
     MODEL_PATH_SCALE = 2,
-    MODEL_PATH_WEIGHTS = 3      /* morph target weights */
+    MODEL_PATH_WEIGHTS = 3,     /* morph target weights of a node */
+    MODEL_PATH_MESH_WEIGHTS = 4,/* morph target weights of a mesh (KHR_animation_pointer) */
+    MODEL_PATH_FLOATS = 5       /* material or light values (KHR_animation_pointer) */
 };
 
 /* ModelPrim.attribs: the vertex attributes a primitive has. */
@@ -95,7 +97,10 @@ typedef struct ModelLight {
 /* A texture of a material and the KHR_texture_transform of its coordinates. */
 typedef struct ModelTexRef {
     int texture;                /* Model.textures, -1 for none */
-    float transform[9];         /* mat3, column-major */
+    float offset[2];            /* KHR_texture_transform (animatable) */
+    float rotation;
+    float scale[2];
+    float transform[9];         /* the three as a mat3, column-major */
 } ModelTexRef;
 
 /* ModelNode.animated: the properties an animation currently sets. */
@@ -160,6 +165,7 @@ enum {
 typedef struct ModelMesh {
     int first_prim;             /* Model.prims */
     int prim_count;
+    int weight_count;           /* its morph target weights */
 } ModelMesh;
 
 /*
@@ -199,6 +205,7 @@ typedef struct ModelNode {
     float *weights;             /* morph target weights (the node's, else the mesh's) */
     float *anim_weights;        /* the weights an animation sets */
     int weight_count;
+    int mesh_weights;           /* the weights are the mesh's (its weight animations apply) */
 } ModelNode;
 
 typedef struct ModelSkin {
@@ -220,6 +227,11 @@ typedef struct ModelChannel {
     int node;
     int path;                   /* MODEL_PATH_* */
     int sampler;                /* ModelAnim.samplers */
+    int elem;                   /* weights: the one weight animated, -1 for all */
+    int mesh;                   /* MODEL_PATH_MESH_WEIGHTS */
+    float *target;              /* MODEL_PATH_FLOATS: the values animated */
+    int comps;                  /* how many */
+    float rest[4];              /* their values without the animation */
 } ModelChannel;
 
 /*

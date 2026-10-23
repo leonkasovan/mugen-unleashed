@@ -11,6 +11,7 @@ its own license; the license files and notices are in the directories and header
 | `glew-1.5.4/` | GLEW 1.5.4 | Modified BSD / MIT (`LICENSE.txt`) |
 | `minizip-0.15/` | unzip 0.15 by Gilles Vollant (zlib 1.1.3 contrib) | zlib license (`unzip.h`) |
 | `cgltf-1.14/` | cgltf 1.14 by Johannes Kuhlmann, the glTF reader of 3D stages (a mugen-unleashed addition, not in the original) | MIT (`LICENSE`) |
+| `stb/` | stb_image 2.30 by Sean Barrett (nothings/stb commit 013ac3b), the JPEG decoder of 3D stage textures (a mugen-unleashed addition) | public domain or MIT (end of `stb_image.h`) |
 | `sdk/include/SDL/` | SDL 1.2.15 and SDL_mixer 1.2.11 headers | GNU LGPL 2.1 (headers) |
 | `sdk/include/SDL/SDL_ttf.h` | SDL_ttf 2.0.11 header | zlib license |
 | `sdk/include/zlib.h`, `zconf.h` | zlib 1.2.3 headers | zlib license |

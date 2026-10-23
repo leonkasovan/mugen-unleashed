@@ -97,11 +97,14 @@ second scene.
 
 What is supported so far:
 - node hierarchies;
-- base colour textures (PNG) and vertex colours;
+- base colour textures (PNG and JPEG) and vertex colours;
 - `alphaMode` and `doubleSided`;
 - `KHR_texture_transform`;
 - node animations (linear, step and cubic spline), skins and morph targets (with weight
   animations);
+- `KHR_animation_pointer` on the targets Ikemen GO animates: node transforms and weights, mesh
+  weights, material factors, alpha cutoff, occlusion strength and texture transforms, light
+  colour, intensity, range and cone angles;
 - punctual lights (`KHR_lights_punctual`: directional, point and spot, up to 4 per scene);
 - PBR materials (metallic-roughness, normal, occlusion and emission maps,
   `KHR_materials_unlit`);
@@ -116,7 +119,8 @@ What is supported so far:
 - `[BGCtrl3D]` groups of type `Anim` and `Visible`, aimed at the `id` extras of animations and
   nodes by `ctrlid`, on Ikemen GO's timing.
 
-A model without lights or an environment map is drawn unlit, as Ikemen GO does. 3D stages need
+A model without lights or an environment map is drawn unlit, as Ikemen GO does. Like Ikemen GO,
+the engine ignores a second set of joints (`JOINTS_1` / `WEIGHTS_1`). 3D stages need
 the OpenGL renderer. Shadows need float textures (OpenGL 3.0 or `ARB_texture_rg` /
 `ARB_texture_float`), environment maps OpenGL 3.0. Problems with models are written to
 `mugen.log`.
