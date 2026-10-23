@@ -1,0 +1,50 @@
+/*
+ * Resources of the standalone mugen.exe, as in the original: the window icon
+ * (group 101, System_Init), the error dialog (200, Error_ShowDialog; its
+ * text box is created by ErrorDialog_Proc) and the version information.
+ * mugen.ico is extracted from the original mugen.exe at build time
+ * when MUGEN_GAME_DIR is set (tools/extract_icon.py).
+ */
+#include <windows.h>
+
+#ifdef MUGEN_HAS_ICON
+101 ICON "mugen.ico"
+#endif
+
+200 DIALOG 0, 0, 480, 432
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "M.U.G.E.N"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    DEFPUSHBUTTON "OK", IDOK, 370, 395, 50, 14
+END
+
+1 VERSIONINFO
+FILEVERSION 1, 1, 0, 650
+PRODUCTVERSION 1, 1, 0, 650
+FILEFLAGSMASK VS_FF_DEBUG
+FILEFLAGS 0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE 0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904E4"
+        BEGIN
+            VALUE "CompanyName", "Elecbyte"
+            VALUE "FileDescription", "M.U.G.E.N Engine"
+            VALUE "FileVersion", "1.1.0 Beta 1 P1"
+            VALUE "InternalName", "mugen"
+            VALUE "LegalCopyright", "Copyright 1999-2013 Elecbyte"
+            VALUE "LegalTrademarks", "Elecbyte, M.U.G.E.N"
+            VALUE "OriginalFilename", "mugen.exe"
+            VALUE "ProductName", "M.U.G.E.N"
+            VALUE "ProductVersion", "1.1.0 Beta 1 P1"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 0x04E4
+    END
+END

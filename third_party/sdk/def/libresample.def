@@ -1,0 +1,12 @@
+LIBRARY libresample.dll
+EXPORTS
+    resample_close
+    resample_deinit
+    resample_dup
+    resample_get_filter_width
+    resample_get_inbuffer_size
+    resample_get_outbuffer_size
+    resample_init
+    resample_open
+    resample_process
+    resample_reset

@@ -1,0 +1,48 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']        # releases are tagged after the engine version, e.g. v1.1b1
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  release:
+    name: Release build (x86)
+    runs-on: windows-2022
+    permissions:
+      contents: write   # attaching the executable to a GitHub release on tags
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        shell: cmd
+        run: tools\msvc_env.bat cmake --preset x86-release
+
+      - name: Build
+        shell: cmd
+        run: tools\msvc_env.bat cmake --build --preset x86-release
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item build/x86-release/mugen.exe dist/
+          Copy-Item build/x86-release/mugen.pdb dist/ -ErrorAction SilentlyContinue
+          Copy-Item README.md dist/README.md
+          Copy-Item third_party/README.md dist/THIRD_PARTY.md
+          Compress-Archive -Path dist/* -DestinationPath mugen-unleashed-x86.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mugen-unleashed-x86
+          path: |
+            dist/mugen.exe
+            dist/mugen.pdb
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: mugen-unleashed-x86.zip

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Manifest of the standalone mugen.exe: the original's, minus the dependency on
+  Microsoft.VC90.CRT (this build links its C runtime statically). The game's
+  DLLs (SDL, SDL_mixer, SDL_ttf, SDL_gfx, zlib1, libresample, pthreadVC2...)
+  are found through the private assembly Elecbyte.MUGEN.libs next to the exe.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"></requestedExecutionLevel>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity type="win32" name="Elecbyte.MUGEN.libs" processorArchitecture="x86" version="1.0.0.0"></assemblyIdentity>
+    </dependentAssembly>
+  </dependency>
+</assembly>

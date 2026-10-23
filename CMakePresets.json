@@ -1,0 +1,30 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "x86-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "cl"
+      }
+    },
+    {
+      "name": "x86-debug",
+      "inherits": "x86-base",
+      "displayName": "MSVC x86 Debug",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "x86-release",
+      "inherits": "x86-base",
+      "displayName": "MSVC x86 Release",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "x86-debug", "configurePreset": "x86-debug" },
+    { "name": "x86-release", "configurePreset": "x86-release" }
+  ]
+}
