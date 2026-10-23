@@ -3,7 +3,8 @@
  * Fragment shader of the glTF models (model.c): Ikemen GO's model.frag.glsl
  * for OpenGL 2.1, without image based lighting and mesh outlines. The
  * texture colour is made linear (^2.2), lit by up to 4 punctual lights
- * (PBR, metallic-roughness) unless unlit, premultiplied and brought back
+ * (PBR, metallic-roughness; shadows from their shadow maps, with Ikemen GO's
+ * desktop GL biases) unless unlit, premultiplied and brought back
  * (^1/2.2). The PalFX is the original's (the sprite programs' palfx(): colour
  * balance, inversion, add, mul) on the un-premultiplied colour.
  */
@@ -31,6 +32,11 @@ uniform vec2 metallicRoughness;
 uniform bool unlit, useTexture, useNormalMap, useMetallicRoughnessMap, useEmissionMap, enableAlpha;
 uniform Light lights[4];
 
+/* Shadow maps of the lights: 2D for directional and spot lights, cube maps for point lights. */
+uniform bool useShadowMap;
+uniform sampler2D shadowMap0, shadowMap1, shadowMap2, shadowMap3;
+uniform samplerCube shadowCube0, shadowCube1, shadowCube2, shadowCube3;
+
 /* PalFX */
 uniform vec3 add;
 uniform vec3 mul;
@@ -40,6 +46,7 @@ uniform bool invertall;
 varying vec2 texcoord;
 varying vec4 vColor;
 varying vec3 normal, tangent, bitangent, worldSpacePos;
+varying vec4 lightSpacePos[4];
 
 const float PI = 3.14159265358979;
 const int LightType_Directional = 0;
@@ -167,10 +174,79 @@ vec3 BRDF_specularGGX(vec3 f0, vec3 f90, float alphaRoughness, float specularWei
     return specularWeight * F * Vis * D;
 }
 
-/* Shadow of light i on this fragment, 1 = lit (shadow maps are not drawn yet). */
+/* What shadow map i holds at xy / in direction d (samplers cannot be indexed here). */
+float shadowMapDepth(int i, vec2 xy)
+{
+    if (i == 0) {
+        return texture2D(shadowMap0, xy).r;
+    } else if (i == 1) {
+        return texture2D(shadowMap1, xy).r;
+    } else if (i == 2) {
+        return texture2D(shadowMap2, xy).r;
+    }
+    return texture2D(shadowMap3, xy).r;
+}
+
+float shadowCubeDepth(int i, vec3 d)
+{
+    if (i == 0) {
+        return textureCube(shadowCube0, d).r;
+    } else if (i == 1) {
+        return textureCube(shadowCube1, d).r;
+    } else if (i == 2) {
+        return textureCube(shadowCube2, d).r;
+    }
+    return textureCube(shadowCube3, d).r;
+}
+
+float DirectionalLightShadowCalculation(int index, vec4 lightSpacePos, float NdotL, float shadowBias)
+{
+    vec3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
+    projCoords = projCoords * 0.5 + 0.5;
+    float epsilon = 1.0 / 1024.0;
+    vec2 xy = vec2(clamp(projCoords.x, epsilon, 1.0 - epsilon), clamp(projCoords.y, epsilon, 1.0 - epsilon));
+    float closestDepth = shadowMapDepth(index, xy);
+    float currentDepth = projCoords.z;
+    float slope = sqrt(1.0 - (NdotL * NdotL)) / max(NdotL, 0.0001);
+    float bias = max(shadowBias, 0.0005) * clamp(slope, 0.0, 5.0);
+    return closestDepth - currentDepth > -bias ? 1.0 : 0.0;
+}
+
+/* As Ikemen GO: the map is read at the light space x, y without the perspective divide. */
+float SpotLightShadowCalculation(int index, vec3 pointToLight, vec4 lightSpacePos, float NdotL, float farPlane,
+                                 float shadowBias)
+{
+    float epsilon = 1.0 / 1024.0;
+    vec2 xy = vec2(clamp(lightSpacePos.x, epsilon, 1.0 - epsilon), clamp(lightSpacePos.y, epsilon, 1.0 - epsilon));
+    float closestDepth = shadowMapDepth(index, xy) * farPlane;
+    float currentDepth = length(pointToLight);
+    float slope = sqrt(1.0 - (NdotL * NdotL)) / max(NdotL, 0.0001);
+    float bias = shadowBias * clamp(slope, 0.0, 5.0);
+    return currentDepth - closestDepth < bias ? 1.0 : 0.0;
+}
+
+float PointLightShadowCalculation(int index, vec3 pointToLight, float NdotL, float farPlane, float shadowBias)
+{
+    float closestDepth = shadowCubeDepth(index, -pointToLight) * farPlane;
+    float currentDepth = length(pointToLight);
+    float slope = sqrt(1.0 - (NdotL * NdotL)) / max(NdotL, 0.0001);
+    float bias = shadowBias * clamp(slope, 0.0, 5.0);
+    return currentDepth - closestDepth < bias ? 1.0 : 0.0;
+}
+
+/* Shadow of light i on this fragment, 1 = lit. */
 float shadowFactor(int i, vec3 pointToLight, float NdotL)
 {
-    return 1.0;
+    if (!useShadowMap) {
+        return 1.0;
+    }
+    if (lights[i].type == LightType_Point) {
+        return PointLightShadowCalculation(i, pointToLight, NdotL, lights[i].shadowMapFar, lights[i].shadowBias);
+    } else if (lights[i].type == LightType_Directional) {
+        return DirectionalLightShadowCalculation(i, lightSpacePos[i], NdotL, lights[i].shadowBias);
+    }
+    return SpotLightShadowCalculation(i, pointToLight, lightSpacePos[i], NdotL, lights[i].shadowMapFar,
+                                      lights[i].shadowBias);
 }
 
 /* The lights on the fragment, in linear space. */

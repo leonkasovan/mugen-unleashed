@@ -262,10 +262,14 @@ typedef struct Stage3D {
 
 extern Stage3D g_stage3d;
 
+/* [Video] EnableModelShadow: the lights of models cast shadows (1, the default). */
+extern int g_modelShadows;
+
 Model *Model_Load(const char *path);
 void Model_Free(Model *mdl);
 void Model_Step(Model *mdl);
 void Model_Reset(Model *mdl);
+void Model_DrawShadows(Model *mdl);
 void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float *proj, const float *view,
                 const ModelFx *fx);
 

@@ -3,9 +3,11 @@
  * Vertex shader of the glTF models (model.c): Ikemen GO's model.vert.glsl
  * for OpenGL 2.1, without morph targets and mesh outlines. The joint
  * matrices are uniforms (rows of their 3x4 part) instead of a texture.
+ * lightSpacePos: the position for the shadow map of each light.
  */
 
 uniform mat4 projection, view, model, normalMatrix;
+uniform mat4 lightMatrices[4];
 uniform bool skinned;
 uniform vec4 joints[3 * 64];
 
@@ -20,6 +22,7 @@ attribute vec4 tangentIn;
 varying vec2 texcoord;
 varying vec4 vColor;
 varying vec3 normal, tangent, bitangent, worldSpacePos;
+varying vec4 lightSpacePos[4];
 
 mat4 jointMatrix(float index)
 {
@@ -68,5 +71,8 @@ void main()
         world = model * pos;
     }
     worldSpacePos = vec3(world);
+    for (int i = 0; i < 4; i++) {
+        lightSpacePos[i] = lightMatrices[i] * world;
+    }
     gl_Position = projection * view * world;
 }

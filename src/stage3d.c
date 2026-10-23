@@ -251,6 +251,7 @@ void Stage3D_Draw(int layer)
     }
 
     if (layer == 0) {
+        Model_DrawShadows(s3->model);
         Model_Draw(s3->model, 0, -1, 0, proj, view, &fx);
         Model_Draw(s3->model, 0, 0, 0, proj, view, &fx);
     } else if (layer == 1) {

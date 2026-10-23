@@ -40,6 +40,8 @@
 #include <cgltf.h>
 #include <math.h>
 
+#define MODEL_PI 3.14159265358979323846
+
 /* Vertex attribute locations of the model program. */
 enum {
     MODEL_LOC_POSITION = 0,
@@ -79,14 +81,53 @@ typedef struct ModelProgram {
     GLint enable_alpha, alpha_threshold;
     GLint add, mul, colorbal, invertall;
     ModelLightLocs lights[MODEL_MAX_LIGHTS];
+    GLint light_matrices, use_shadow_map;
+    GLint shadow_maps[MODEL_MAX_LIGHTS], shadow_cubes[MODEL_MAX_LIGHTS];
 } ModelProgram;
 
 static ModelProgram g_modelProgram;
 static int g_modelProgramState;     /* 0 not built yet, 1 built, -1 failed */
 
-/* src/shaders/model.vert and model.frag (CMakeLists.txt embeds them). */
+/* src/shaders (CMakeLists.txt embeds them). */
 #include "model.vert.h"
 #include "model.frag.h"
+#include "shadow.vert.h"
+#include "shadow.frag.h"
+
+/* First texture units of the shadow maps: 2D (directional, spot), cube maps (point). */
+#define MODEL_UNIT_SHADOW_2D    5
+#define MODEL_UNIT_SHADOW_CUBE  9
+
+/* Size of the shadow maps, as Ikemen GO's. */
+#define MODEL_SHADOW_SIZE 1024
+
+/* The shadow map program and its uniforms. */
+typedef struct ShadowProgram {
+    GLuint program;
+    GLint model, light_matrix, skinned, joints;
+    GLint tex, tex_transform, use_texture, enable_alpha, alpha_threshold, base_color;
+    GLint directional, light_position, shadow_map_far;
+} ShadowProgram;
+
+/*
+ * The shadow maps: one framebuffer with a depth renderbuffer, and per light
+ * slot a 2D map and a cube map of the stored depth (one float channel),
+ * created when first needed.
+ */
+typedef struct ShadowMaps {
+    int state;                          /* 0 not set up yet, 1 ready, -1 unavailable */
+    GLenum format;                      /* GL_R32F, or GL_LUMINANCE32F_ARB without ARB_texture_rg */
+    GLuint fbo;
+    GLuint depth;
+    GLuint map2d[MODEL_MAX_LIGHTS];
+    GLuint cube[MODEL_MAX_LIGHTS];
+    const Model *drawn;                 /* the model they were last drawn for */
+} ShadowMaps;
+
+int g_modelShadows = 1;
+
+static ShadowProgram g_shadowProgram;
+static ShadowMaps g_shadowMaps;
 
 /* ---- matrices (column-major, as GL) and quaternions (x, y, z, w) ---- */
 
@@ -214,6 +255,66 @@ static float Mat4_Det3(const float *m)
 {
     return m[0] * (m[5] * m[10] - m[9] * m[6]) - m[4] * (m[1] * m[10] - m[9] * m[2]) +
            m[8] * (m[1] * m[6] - m[5] * m[2]);
+}
+
+/* mathgl's Ortho. */
+static void Mat4_Ortho(float *m, float l, float r, float b, float t, float n, float f)
+{
+    memset(m, 0, 16 * sizeof(float));
+    m[0] = 2.0f / (r - l);
+    m[5] = 2.0f / (t - b);
+    m[10] = -2.0f / (f - n);
+    m[12] = -(r + l) / (r - l);
+    m[13] = -(t + b) / (t - b);
+    m[14] = -(f + n) / (f - n);
+    m[15] = 1.0f;
+}
+
+/* mathgl's Perspective, fovy in radians. */
+static void Mat4_Perspective(float *m, float fovy, float aspect, float n, float f)
+{
+    float g = (float)(1.0 / tan(fovy / 2.0));
+
+    memset(m, 0, 16 * sizeof(float));
+    m[0] = g / aspect;
+    m[5] = g;
+    m[10] = (n + f) / (n - f);
+    m[11] = -1.0f;
+    m[14] = 2.0f * f * n / (n - f);
+}
+
+/* mathgl's LookAtV: the view from eye towards center. */
+static void Mat4_LookAt(float *m, const float *eye, const float *center, const float *up)
+{
+    float f[3], s[3], u[3], len;
+    int i;
+
+    for (i = 0; i < 3; i++) {
+        f[i] = center[i] - eye[i];
+    }
+    len = (float)sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
+    for (i = 0; i < 3; i++) {
+        f[i] /= len;
+    }
+    s[0] = f[1] * up[2] - f[2] * up[1];
+    s[1] = f[2] * up[0] - f[0] * up[2];
+    s[2] = f[0] * up[1] - f[1] * up[0];
+    len = (float)sqrt(s[0] * s[0] + s[1] * s[1] + s[2] * s[2]);
+    for (i = 0; i < 3; i++) {
+        s[i] /= len;
+    }
+    u[0] = s[1] * f[2] - s[2] * f[1];
+    u[1] = s[2] * f[0] - s[0] * f[2];
+    u[2] = s[0] * f[1] - s[1] * f[0];
+    Mat4_Identity(m);
+    for (i = 0; i < 3; i++) {
+        m[i * 4 + 0] = s[i];
+        m[i * 4 + 1] = u[i];
+        m[i * 4 + 2] = -f[i];
+    }
+    m[12] = -(s[0] * eye[0] + s[1] * eye[1] + s[2] * eye[2]);
+    m[13] = -(u[0] * eye[0] + u[1] * eye[1] + u[2] * eye[2]);
+    m[14] = f[0] * eye[0] + f[1] * eye[1] + f[2] * eye[2];
 }
 
 static float Quat_Dot(const float *a, const float *b)
@@ -1544,7 +1645,13 @@ static int Model_BuildProgram(void)
             sprintf(name, "lights[%i].%s", i, fields[k]);
             locs[k] = Model_Uniform(name);
         }
+        sprintf(name, "shadowMap%i", i);
+        p->shadow_maps[i] = Model_Uniform(name);
+        sprintf(name, "shadowCube%i", i);
+        p->shadow_cubes[i] = Model_Uniform(name);
     }
+    p->light_matrices = Model_Uniform("lightMatrices");
+    p->use_shadow_map = Model_Uniform("useShadowMap");
     return 1;
 }
 
@@ -1692,33 +1799,97 @@ static void Model_DrawNode(Model *mdl, int index, int layer, int default_layer, 
     }
 }
 
+/*
+ * The shadow map parameters of a light node: Ikemen GO's defaults (near
+ * 0.1, -20 for a directional light, far 50, -20..20 wide and high, bias
+ * 0.02), overridden by the light's extras, then by the node's.
+ */
+static void Model_ShadowParams(const Model *mdl, const ModelNode *n, float *p)
+{
+    const ModelLight *l = &mdl->lights[n->light];
+    int i;
+
+    p[MODEL_SHADOW_NEAR] = l->type == MODEL_LIGHT_DIRECTIONAL ? -20.0f : 0.1f;
+    p[MODEL_SHADOW_FAR] = 50.0f;
+    p[MODEL_SHADOW_BOTTOM] = -20.0f;
+    p[MODEL_SHADOW_TOP] = 20.0f;
+    p[MODEL_SHADOW_LEFT] = -20.0f;
+    p[MODEL_SHADOW_RIGHT] = 20.0f;
+    p[MODEL_SHADOW_BIAS] = 0.02f;
+    for (i = 0; i < MODEL_SHADOW_PARAMS; i++) {
+        if (l->shadow[i] != 0.0f) {
+            p[i] = l->shadow[i];
+        }
+    }
+    for (i = 0; i < MODEL_SHADOW_PARAMS; i++) {
+        if (n->shadow[i] != 0.0f) {
+            p[i] = n->shadow[i];
+        }
+    }
+}
+
+/*
+ * The projection of a light's shadow map (face `face` of a point light's
+ * cube): as Ikemen GO, a directional or spot light looks from the node's
+ * local position along its direction, a point light from its world position
+ * along the 6 axes; directional lights are orthographic, the others have a
+ * 90 degree perspective.
+ */
+static void Model_LightMatrix(const Model *mdl, const ModelNode *n, const float *p, int face, float *out)
+{
+    static const float axes[6][3] = { { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 } };
+    static const float ups[6][3] = { { 0, -1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 }, { 0, -1, 0 }, { 0, -1, 0 } };
+    static const float up_y[3] = { 0.0f, 1.0f, 0.0f };
+    const ModelLight *l = &mdl->lights[n->light];
+    float proj[16], view[16], eye[3], center[3];
+    int i;
+
+    if (l->type == MODEL_LIGHT_POINT) {
+        for (i = 0; i < 3; i++) {
+            eye[i] = n->world[12 + i];
+            center[i] = eye[i] + axes[face][i];
+        }
+        Mat4_Perspective(proj, (float)(MODEL_PI / 2.0), 1.0f, p[MODEL_SHADOW_NEAR], p[MODEL_SHADOW_FAR]);
+        Mat4_LookAt(view, eye, center, ups[face]);
+    } else {
+        for (i = 0; i < 3; i++) {
+            eye[i] = n->local[12 + i];
+            center[i] = eye[i] + n->light_dir[i];
+        }
+        if (l->type == MODEL_LIGHT_DIRECTIONAL) {
+            Mat4_Ortho(proj, p[MODEL_SHADOW_LEFT], p[MODEL_SHADOW_RIGHT], p[MODEL_SHADOW_BOTTOM], p[MODEL_SHADOW_TOP],
+                       p[MODEL_SHADOW_NEAR], p[MODEL_SHADOW_FAR]);
+        } else {
+            Mat4_Perspective(proj, (float)(MODEL_PI / 2.0), 1.0f, p[MODEL_SHADOW_NEAR], p[MODEL_SHADOW_FAR]);
+        }
+        Mat4_LookAt(view, eye, center, up_y);
+    }
+    Mat4_Mul(out, proj, view);
+}
+
 /* The parameters of the lights of a scene (the first MODEL_MAX_LIGHTS); returns how many there are. */
 static int Model_SetLights(const Model *mdl, const ModelScene *sc)
 {
     const ModelProgram *prog = &g_modelProgram;
+    float matrices[MODEL_MAX_LIGHTS][16];
     int i;
 
     for (i = 0; i < MODEL_MAX_LIGHTS; i++) {
         glUniform3f(prog->lights[i].color, 0.0f, 0.0f, 0.0f);
+        Mat4_Identity(matrices[i]);
     }
     for (i = 0; i < sc->light_count && i < MODEL_MAX_LIGHTS; i++) {
         const ModelNode *n = &mdl->nodes[sc->light_nodes[i]];
         const ModelLight *l = &mdl->lights[n->light];
         const ModelLightLocs *loc = &prog->lights[i];
-        float far_z = 50.0f, bias = 0.02f;
+        float params[MODEL_SHADOW_PARAMS];
+        float far_z, bias;
 
-        /* the light's extras, then the node's, override the shadow map defaults */
-        if (l->shadow[MODEL_SHADOW_FAR] != 0.0f) {
-            far_z = l->shadow[MODEL_SHADOW_FAR];
-        }
-        if (l->shadow[MODEL_SHADOW_BIAS] != 0.0f) {
-            bias = l->shadow[MODEL_SHADOW_BIAS];
-        }
-        if (n->shadow[MODEL_SHADOW_FAR] != 0.0f) {
-            far_z = n->shadow[MODEL_SHADOW_FAR];
-        }
-        if (n->shadow[MODEL_SHADOW_BIAS] != 0.0f) {
-            bias = n->shadow[MODEL_SHADOW_BIAS];
+        Model_ShadowParams(mdl, n, params);
+        far_z = params[MODEL_SHADOW_FAR];
+        bias = params[MODEL_SHADOW_BIAS];
+        if (l->type != MODEL_LIGHT_POINT) {
+            Model_LightMatrix(mdl, n, params, 0, matrices[i]);
         }
         glUniform1i(loc->type, l->type);
         glUniform1f(loc->intensity, l->intensity);
@@ -1733,7 +1904,292 @@ static int Model_SetLights(const Model *mdl, const ModelScene *sc)
             glUniform3fv(loc->direction, 1, n->light_dir);
         }
     }
+    glUniformMatrix4fv(prog->light_matrices, MODEL_MAX_LIGHTS, GL_FALSE, matrices[0]);
     return sc->light_count;
+}
+
+/* ---- shadow maps ---- */
+
+static int Model_BuildShadowProgram(void)
+{
+    static const char *const attribs[MODEL_LOC_COUNT] = { "position",  "uv",       "vertColor", "joints_0",
+                                                          "weights_0", "normalIn", "tangentIn" };
+    const char *src[2] = { g_shader_shadow_vert, g_shader_shadow_frag };
+    GLenum types[2] = { GL_VERTEX_SHADER, GL_FRAGMENT_SHADER };
+    ShadowProgram *p = &g_shadowProgram;
+    char log[0x800];
+    GLuint shader;
+    GLint ok;
+    int i;
+
+    p->program = glCreateProgram();
+    for (i = 0; i < 2; i++) {
+        shader = glCreateShader(types[i]);
+        glShaderSource(shader, 1, &src[i], NULL);
+        glCompileShader(shader);
+        glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+        if (!ok) {
+            glGetShaderInfoLog(shader, sizeof(log), NULL, log);
+            MatchLog_Printf(3, "Model: shadow shader compile error:\n%s\n", log);
+            return 0;
+        }
+        glAttachShader(p->program, shader);
+    }
+    for (i = 0; i < MODEL_LOC_COUNT; i++) {
+        glBindAttribLocation(p->program, i, attribs[i]);
+    }
+    glLinkProgram(p->program);
+    glGetProgramiv(p->program, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        glGetProgramInfoLog(p->program, sizeof(log), NULL, log);
+        MatchLog_Printf(3, "Model: shadow shader link error:\n%s\n", log);
+        return 0;
+    }
+    p->model = glGetUniformLocation(p->program, "model");
+    p->light_matrix = glGetUniformLocation(p->program, "lightMatrix");
+    p->skinned = glGetUniformLocation(p->program, "skinned");
+    p->joints = glGetUniformLocation(p->program, "joints");
+    p->tex = glGetUniformLocation(p->program, "tex");
+    p->tex_transform = glGetUniformLocation(p->program, "texTransform");
+    p->use_texture = glGetUniformLocation(p->program, "useTexture");
+    p->enable_alpha = glGetUniformLocation(p->program, "enableAlpha");
+    p->alpha_threshold = glGetUniformLocation(p->program, "alphaThreshold");
+    p->base_color = glGetUniformLocation(p->program, "baseColorFactor");
+    p->directional = glGetUniformLocation(p->program, "directional");
+    p->light_position = glGetUniformLocation(p->program, "lightPosition");
+    p->shadow_map_far = glGetUniformLocation(p->program, "shadowMapFar");
+    return 1;
+}
+
+/* Sets up the shadow maps once: the framebuffer, its depth buffer and the program. Returns 0 without shadows. */
+static int Model_ShadowSetup(void)
+{
+    ShadowMaps *sm = &g_shadowMaps;
+
+    if (sm->state != 0) {
+        return sm->state == 1;
+    }
+    sm->state = -1;
+    if (!GLEW_EXT_framebuffer_object) {
+        MatchLog_Printf(3, "Model: no shadows (EXT_framebuffer_object missing)\n");
+        return 0;
+    }
+    if (GLEW_VERSION_3_0 || GLEW_ARB_texture_rg) {
+        sm->format = GL_R32F;
+    } else if (GLEW_ARB_texture_float) {
+        sm->format = GL_LUMINANCE32F_ARB;
+    } else {
+        MatchLog_Printf(3, "Model: no shadows (float textures are not supported)\n");
+        return 0;
+    }
+    if (!Model_BuildShadowProgram()) {
+        return 0;
+    }
+    glGenFramebuffersEXT(1, &sm->fbo);
+    glGenRenderbuffersEXT(1, &sm->depth);
+    glBindRenderbufferEXT(GL_RENDERBUFFER_EXT, sm->depth);
+    glRenderbufferStorageEXT(GL_RENDERBUFFER_EXT, GL_DEPTH_COMPONENT24, MODEL_SHADOW_SIZE, MODEL_SHADOW_SIZE);
+    glBindRenderbufferEXT(GL_RENDERBUFFER_EXT, 0);
+    sm->state = 1;
+    return 1;
+}
+
+/* A shadow map texture: GL_TEXTURE_2D or GL_TEXTURE_CUBE_MAP, one float channel, nearest, clamped. */
+static GLuint Model_ShadowTexture(GLenum target)
+{
+    GLenum format = g_shadowMaps.format == GL_R32F ? GL_RED : GL_LUMINANCE;
+    GLuint id;
+    int i;
+
+    glGenTextures(1, &id);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(target, id);
+    glTexParameteri(target, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    if (target == GL_TEXTURE_2D) {
+        glTexImage2D(GL_TEXTURE_2D, 0, g_shadowMaps.format, MODEL_SHADOW_SIZE, MODEL_SHADOW_SIZE, 0, format, GL_FLOAT,
+                     NULL);
+    } else {
+        glTexParameteri(target, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+        for (i = 0; i < 6; i++) {
+            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, g_shadowMaps.format, MODEL_SHADOW_SIZE,
+                         MODEL_SHADOW_SIZE, 0, format, GL_FLOAT, NULL);
+        }
+    }
+    glBindTexture(target, 0);
+    return id;
+}
+
+/*
+ * Draws the meshes of node index and its children into a shadow map (Ikemen
+ * GO's drawNodeShadow): not the "trans" nodes, the nodes without depth test
+ * or depth writes, nor those with a castShadow extra off.
+ */
+static void Model_DrawNodeShadow(Model *mdl, int index, int blended)
+{
+    const ShadowProgram *prog = &g_shadowProgram;
+    const ModelNode *n = &mdl->nodes[index];
+    const ModelMesh *mesh;
+    int i;
+
+    for (i = 0; i < n->child_count; i++) {
+        Model_DrawNodeShadow(mdl, n->children[i], blended);
+    }
+    if (n->mesh == -1 || !n->visible) {
+        return;
+    }
+    if (n->trans != MODEL_TRANS_NONE || !n->ztest || !n->zwrite || !n->cast_shadow) {
+        return;
+    }
+    mesh = &mdl->meshes[n->mesh];
+    for (i = 0; i < mesh->prim_count; i++) {
+        const ModelPrim *p = &mdl->prims[mesh->first_prim + i];
+        const ModelMaterial *mat;
+
+        if (p->material == -1 || p->index_count == 0) {
+            continue;
+        }
+        mat = &mdl->materials[p->material];
+        if ((mat->alpha_mode == MODEL_ALPHA_BLEND) != blended) {
+            continue;
+        }
+        if (mat->base_color[3] == 0.0f && mat->alpha_mode == MODEL_ALPHA_BLEND) {
+            continue;
+        }
+        glFrontFace(Mat4_Det3(n->world) < 0 ? GL_CW : GL_CCW);
+        if (mat->double_sided) {
+            glDisable(GL_CULL_FACE);
+        } else {
+            glEnable(GL_CULL_FACE);
+            glCullFace(GL_BACK);
+        }
+        Model_SetAttributes(p);
+        glUniformMatrix4fv(prog->model, 1, GL_FALSE, n->world);
+        if (n->skin != -1 && (p->attribs & MODEL_ATTR_SKIN)) {
+            const ModelSkin *skin = &mdl->skins[n->skin];
+            int count = skin->joint_count < MODEL_MAX_JOINTS ? skin->joint_count : MODEL_MAX_JOINTS;
+            glUniform1i(prog->skinned, 1);
+            glUniform4fv(prog->joints, count * 3, skin->matrices);
+        } else {
+            glUniform1i(prog->skinned, 0);
+        }
+        glUniform1i(prog->enable_alpha, mat->alpha_mode == MODEL_ALPHA_BLEND);
+        glUniform1f(prog->alpha_threshold, mat->alpha_cutoff);
+        glUniform4fv(prog->base_color, 1, mat->base_color);
+        glUniform1i(prog->use_texture, Model_BindTexture(mdl, &mat->base, MODEL_UNIT_BASE, prog->tex_transform));
+        glDrawElements(p->mode, p->index_count, GL_UNSIGNED_INT, (const void *)(size_t)p->index_offset);
+    }
+}
+
+/*
+ * Draws the shadow maps of the lights of the model's first scene (Ikemen
+ * GO's Model.drawShadow, done before its layer -1), cast by the nodes of
+ * that scene. Nothing with [Video] EnableModelShadow = 0, without lights or
+ * when the hardware cannot.
+ */
+void Model_DrawShadows(Model *mdl)
+{
+    ShadowMaps *sm = &g_shadowMaps;
+    const ShadowProgram *prog = &g_shadowProgram;
+    const ModelScene *sc;
+    float ident[16], params[MODEL_SHADOW_PARAMS], m[16];
+    GLint prev_fbo;
+    int i, face, pass, k;
+
+    sm->drawn = NULL;
+    if (!g_modelShadows || mdl == NULL || mdl->vbo == 0 || mdl->scene_count == 0 || g_renderMode != RENDER_OPENGL) {
+        return;
+    }
+    sc = &mdl->scenes[0];
+    if (sc->light_count == 0 || !Model_ShadowSetup()) {
+        return;
+    }
+    Mat4_Identity(ident);
+    for (i = 0; i < sc->node_count; i++) {
+        Model_WorldTransform(mdl, sc->nodes[i], ident);
+        Model_SkinMatrices(mdl, sc->nodes[i]);
+    }
+
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING_EXT, &prev_fbo);
+    glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_POLYGON_BIT | GL_SCISSOR_BIT |
+                 GL_VIEWPORT_BIT);
+    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, sm->fbo);
+    glFramebufferRenderbufferEXT(GL_FRAMEBUFFER_EXT, GL_DEPTH_ATTACHMENT_EXT, GL_RENDERBUFFER_EXT, sm->depth);
+    glViewport(0, 0, MODEL_SHADOW_SIZE, MODEL_SHADOW_SIZE);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_ALPHA_TEST);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_TRUE);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
+    glUseProgram(prog->program);
+    g_glCurrentProgram = prog->program;
+    glUniform1i(prog->tex, MODEL_UNIT_BASE);
+    glBindBuffer(GL_ARRAY_BUFFER, mdl->vbo);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mdl->ibo);
+    for (i = 0; i < sc->light_count && i < MODEL_MAX_LIGHTS && sm->state == 1; i++) {
+        const ModelNode *ln = &mdl->nodes[sc->light_nodes[i]];
+        const ModelLight *l = &mdl->lights[ln->light];
+        int point = l->type == MODEL_LIGHT_POINT;
+        GLuint *tex = point ? &sm->cube[i] : &sm->map2d[i];
+
+        if (*tex == 0) {
+            *tex = Model_ShadowTexture(point ? GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D);
+        }
+        Model_ShadowParams(mdl, ln, params);
+        glUniform1i(prog->directional, l->type == MODEL_LIGHT_DIRECTIONAL);
+        glUniform3f(prog->light_position, ln->world[12], ln->world[13], ln->world[14]);
+        glUniform1f(prog->shadow_map_far, params[MODEL_SHADOW_FAR]);
+        for (face = 0; face < (point ? 6 : 1); face++) {
+            glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT,
+                                      point ? GL_TEXTURE_CUBE_MAP_POSITIVE_X + face : GL_TEXTURE_2D, *tex, 0);
+            if (glCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT) != GL_FRAMEBUFFER_COMPLETE_EXT) {
+                MatchLog_Printf(3, "Model: shadow framebuffer incomplete, no shadows\n");
+                sm->state = -1;
+                break;
+            }
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            Model_LightMatrix(mdl, ln, params, face, m);
+            glUniformMatrix4fv(prog->light_matrix, 1, GL_FALSE, m);
+            for (pass = 0; pass < 2; pass++) {
+                for (k = 0; k < sc->node_count; k++) {
+                    Model_DrawNodeShadow(mdl, sc->nodes[k], pass);
+                }
+            }
+        }
+    }
+    glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT, GL_TEXTURE_2D, 0, 0);
+    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, (GLuint)prev_fbo);
+    for (i = 0; i < MODEL_LOC_COUNT; i++) {
+        glDisableVertexAttribArray(i);
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glUseProgram(0);
+    g_glCurrentProgram = 0;
+    glPopAttrib();
+    if (sm->state == 1) {
+        sm->drawn = mdl;
+    }
+}
+
+/* Binds (or unbinds, for NULL) the shadow maps to their units. */
+static void Model_BindShadowMaps(const ShadowMaps *sm)
+{
+    int i;
+
+    for (i = 0; i < MODEL_MAX_LIGHTS; i++) {
+        glActiveTexture(GL_TEXTURE0 + MODEL_UNIT_SHADOW_2D + i);
+        glBindTexture(GL_TEXTURE_2D, sm != NULL ? sm->map2d[i] : 0);
+        glActiveTexture(GL_TEXTURE0 + MODEL_UNIT_SHADOW_CUBE + i);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, sm != NULL ? sm->cube[i] : 0);
+    }
 }
 
 /*
@@ -1800,6 +2256,14 @@ void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float
     glUniform1f(prog->colorbal, fx->colorbal);
     glUniform1i(prog->invertall, fx->invertall != 0);
     unlit = Model_SetLights(mdl, sc) == 0;
+    for (i = 0; i < MODEL_MAX_LIGHTS; i++) {
+        glUniform1i(prog->shadow_maps[i], MODEL_UNIT_SHADOW_2D + i);
+        glUniform1i(prog->shadow_cubes[i], MODEL_UNIT_SHADOW_CUBE + i);
+    }
+    glUniform1i(prog->use_shadow_map, g_shadowMaps.drawn == mdl);
+    if (g_shadowMaps.drawn == mdl) {
+        Model_BindShadowMaps(&g_shadowMaps);
+    }
     glBindBuffer(GL_ARRAY_BUFFER, mdl->vbo);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mdl->ibo);
     for (pass = 0; pass < 2; pass++) {
@@ -1812,6 +2276,9 @@ void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float
     }
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    if (g_shadowMaps.drawn == mdl) {
+        Model_BindShadowMaps(NULL);
+    }
     for (i = MODEL_UNIT_EMISSION; i >= MODEL_UNIT_BASE; i--) {
         glActiveTexture(GL_TEXTURE0 + i);
         glBindTexture(GL_TEXTURE_2D, 0);

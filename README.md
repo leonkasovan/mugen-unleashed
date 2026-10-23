@@ -101,11 +101,19 @@ What is supported so far:
 - `alphaMode` and `doubleSided`;
 - `KHR_texture_transform`;
 - node animations (linear, step and cubic spline) and skins;
-- the Ikemen GO node extras `trans`, `disableZTest`, `disableZWrite` and `layerNumber`;
+- punctual lights (`KHR_lights_punctual`: directional, point and spot, up to 4 per scene);
+- PBR materials (metallic-roughness, normal, occlusion and emission maps,
+  `KHR_materials_unlit`);
+- shadow maps, with the light and node extras `shadowMapNear`, `shadowMapFar`,
+  `shadowMapLeft`, `shadowMapRight`, `shadowMapBottom`, `shadowMapTop` and `shadowMapBias`.
+  `[Video] EnableModelShadow = 0` in `mugen.cfg` turns them off;
+- the Ikemen GO node extras `trans`, `disableZTest`, `disableZWrite`, `castShadow` and
+  `layerNumber`;
 - the animation extras `loopCount` and `enabled`.
 
-Models are drawn unlit, as Ikemen GO draws them without lights. Not supported yet: lights and
-shadows, environment maps, morph targets, `BGCtrl3D`. 3D stages need the OpenGL renderer.
+A model without lights is drawn unlit, as Ikemen GO does. Not supported yet: environment maps
+(image based lighting), morph targets, mesh outlines, `BGCtrl3D`. 3D stages need the OpenGL
+renderer. Shadows need float textures (OpenGL 3.0 or `ARB_texture_rg` / `ARB_texture_float`).
 
 The code is in `src/model.c` (glTF models) and `src/stage3d.c` (the stage side). Where the
 original code calls into it, a `mugen-unleashed:` comment marks the change.
