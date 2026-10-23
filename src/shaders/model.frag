@@ -1,7 +1,8 @@
-#version 120
 /*
  * Fragment shader of the glTF models (model.c): Ikemen GO's model.frag.glsl
- * for OpenGL 2.1, without image based lighting (mesh outlines are black). The
+ * for OpenGL 2.1 (model.c puts the #version line first: with OpenGL 3.0 it
+ * is GLSL 1.30 with MODEL_IBL defined, for the image based lighting of an
+ * environment map, which needs textureLod). Mesh outlines are black. The
  * texture colour is made linear (^2.2), lit by up to 4 punctual lights
  * (PBR, metallic-roughness; shadows from their shadow maps, with Ikemen GO's
  * desktop GL biases) unless unlit, premultiplied and brought back
@@ -31,6 +32,13 @@ uniform vec4 baseColorFactor;
 uniform vec2 metallicRoughness;
 uniform bool unlit, useTexture, useNormalMap, useMetallicRoughnessMap, useEmissionMap, enableAlpha;
 uniform Light lights[4];
+
+/* The environment map (image based lighting): environmentIntensity 0 without one. */
+uniform float environmentIntensity;
+uniform int mipCount;
+uniform mat3 environmentRotation;
+uniform samplerCube lambertianEnvSampler, GGXEnvSampler;
+uniform sampler2D GGXLUT;
 
 /* Shadow maps of the lights: 2D for directional and spot lights, cube maps for point lights. */
 uniform bool useShadowMap;
@@ -249,7 +257,54 @@ float shadowFactor(int i, vec3 pointToLight, float NdotL)
                                       lights[i].shadowBias);
 }
 
-/* The lights on the fragment, in linear space. */
+#ifdef MODEL_IBL
+vec3 getDiffuseLight(vec3 n)
+{
+    return textureCube(lambertianEnvSampler, environmentRotation * n).rgb * environmentIntensity;
+}
+
+vec4 getSpecularSample(vec3 reflection, float lod)
+{
+    return textureLod(GGXEnvSampler, environmentRotation * reflection, lod) * environmentIntensity;
+}
+
+/* Roughness dependent fresnel (Fdez-Aguera), https://bruop.github.io/ibl/#single_scattering_results */
+vec3 getIBLGGXFresnel(vec3 n, vec3 v, float roughness, vec3 F0, float specularWeight)
+{
+    float NdotV = clampedDot(n, v);
+    vec2 brdfSamplePoint = clamp(vec2(NdotV, roughness), vec2(0.0, 0.0), vec2(1.0, 1.0));
+    vec2 f_ab = texture2D(GGXLUT, brdfSamplePoint).rg;
+    vec3 Fr = max(vec3(1.0 - roughness), F0) - F0;
+    vec3 k_S = F0 + Fr * pow(1.0 - NdotV, 5.0);
+    vec3 FssEss = specularWeight * (k_S * f_ab.x + f_ab.y);
+    float Ems = (1.0 - (f_ab.x + f_ab.y));
+    vec3 F_avg = specularWeight * (F0 + (1.0 - F0) / 21.0);
+    vec3 FmsEms = Ems * FssEss * F_avg / (1.0 - F_avg * Ems);
+    return FssEss + FmsEms;
+}
+
+vec3 getIBLRadianceGGX(vec3 n, vec3 v, float roughness)
+{
+    float lod = roughness * float(mipCount - 1);
+    vec3 reflection = normalize(reflect(-v, n));
+    return getSpecularSample(reflection, lod).rgb;
+}
+
+vec3 ibl(vec3 n, vec3 v, float metallic, float roughness, vec3 albedo)
+{
+    vec3 f_diffuse = getDiffuseLight(n) * albedo.rgb;
+    vec3 f_specular_metal = getIBLRadianceGGX(n, v, roughness);
+    vec3 f_specular_dielectric = f_specular_metal;
+    vec3 f_metal_fresnel_ibl = getIBLGGXFresnel(n, v, roughness, albedo.rgb, 1.0);
+    vec3 f_metal_brdf_ibl = f_metal_fresnel_ibl * f_specular_metal;
+    vec3 f_dielectric_fresnel_ibl = getIBLGGXFresnel(n, v, roughness, vec3(0.04), 1.0);
+    vec3 f_dielectric_brdf_ibl =
+        f_diffuse * (1.0 - f_dielectric_fresnel_ibl) + f_specular_dielectric * f_dielectric_fresnel_ibl;
+    return f_dielectric_brdf_ibl * (1.0 - metallic) + f_metal_brdf_ibl * metallic;
+}
+#endif
+
+/* The lights (and the environment) on the fragment, in linear space. */
 vec3 pbr(vec3 v, vec3 n, vec3 albedo, float metallic, float roughness, float ao)
 {
     vec3 f0 = vec3(0.04) + (albedo - vec3(0.04)) * metallic;
@@ -284,7 +339,13 @@ vec3 pbr(vec3 v, vec3 n, vec3 albedo, float metallic, float roughness, float ao)
             }
         }
     }
-    return f_diffuse + f_specular;
+    vec3 f_ibl = vec3(0.0);
+#ifdef MODEL_IBL
+    if (environmentIntensity > 0.0) {
+        f_ibl = ibl(n, v, metallic, roughness, albedo);
+    }
+#endif
+    return f_diffuse + f_specular + ao * f_ibl;
 }
 
 void main()

@@ -105,6 +105,8 @@ What is supported so far:
 - punctual lights (`KHR_lights_punctual`: directional, point and spot, up to 4 per scene);
 - PBR materials (metallic-roughness, normal, occlusion and emission maps,
   `KHR_materials_unlit`);
+- environment maps (image based lighting) from an equirectangular Radiance HDR panorama:
+  `[Model] environment = sky.hdr` and `environmentintensity` (1);
 - shadow maps, with the light and node extras `shadowMapNear`, `shadowMapFar`,
   `shadowMapLeft`, `shadowMapRight`, `shadowMapBottom`, `shadowMapTop` and `shadowMapBias`.
   `[Video] EnableModelShadow = 0` in `mugen.cfg` turns them off;
@@ -114,9 +116,10 @@ What is supported so far:
 - `[BGCtrl3D]` groups of type `Anim` and `Visible`, aimed at the `id` extras of animations and
   nodes by `ctrlid`, on Ikemen GO's timing.
 
-A model without lights is drawn unlit, as Ikemen GO does. Not supported yet: environment maps
-(image based lighting). 3D stages need the OpenGL renderer. Shadows need float textures
-(OpenGL 3.0 or `ARB_texture_rg` / `ARB_texture_float`).
+A model without lights or an environment map is drawn unlit, as Ikemen GO does. 3D stages need
+the OpenGL renderer. Shadows need float textures (OpenGL 3.0 or `ARB_texture_rg` /
+`ARB_texture_float`), environment maps OpenGL 3.0. Problems with models are written to
+`mugen.log`.
 
 The code is in `src/model.c` (glTF models) and `src/stage3d.c` (the stage side). Where the
 original code calls into it, a `mugen-unleashed:` comment marks the change.

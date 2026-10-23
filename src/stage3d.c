@@ -232,7 +232,7 @@ void Stage3D_Load(Stage *st, Ini *ini, const char *path)
             s3->model = Model_Load(file);
             Log_Printf(s3->model != NULL ? "OK\n" : "failed\n");
         } else {
-            MatchLog_Printf(3, "Can't find model %s\n", v);
+            Log_Printf("Can't find model %s\n", v);
         }
     }
     if (s3->model != NULL && Ini_SelectGroup(ini, "Model") != -1) {
@@ -242,6 +242,20 @@ void Stage3D_Load(Stage *st, Ini *ini, const char *path)
         pos_mul = (float)tan(s3->fov * S3D_PI / 180.0 / 2.0) * -s3->offset[2] / (lc_h / 2.0f);
         st->zoffset = (int)(lc_h / 2.0f - s3->offset[1] / pos_mul - s3->yshift * lc_h / 2.0f);
         Stage3D_ReadFloats(ini, "scale", s3->scale, 3);
+        v = Ini_GetValue(ini, "environment");
+        if (v != NULL) {
+            char dir[0x200];
+            char file[0x200];
+            float intensity = 1.0f;
+            Ini_GetFloat(ini, "environmentintensity", &intensity);
+            Path_Split(path, dir, NULL);
+            if (File_Find(v, file, NULL, dir)) {
+                Log_Printf("  Loading environment %s...", file);
+                Log_Printf(Model_LoadEnvironment(s3->model, file, intensity) ? "OK\n" : "failed\n");
+            } else {
+                Log_Printf("Can't find environment %s\n", v);
+            }
+        }
     }
     if (s3->model != NULL) {
         Stage3D_LoadCtrls(s3, ini);

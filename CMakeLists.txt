@@ -114,7 +114,7 @@ target_link_libraries(mugen PRIVATE mugen_sdk lua51 png12 glew_static minizip cg
 # (mugen-unleashed addition: the original loads its shaders from data/).
 set(_shader_dir "${CMAKE_CURRENT_BINARY_DIR}/shaders")
 set(_shader_headers)
-foreach(_shader model.vert model.frag shadow.vert shadow.frag)
+foreach(_shader model.vert model.frag shadow.vert shadow.frag env.vert env_panorama.frag env_filter.frag)
   string(REPLACE "." "_" _shader_var "g_shader_${_shader}")
   set(_shader_out "${_shader_dir}/${_shader}.h")
   add_custom_command(

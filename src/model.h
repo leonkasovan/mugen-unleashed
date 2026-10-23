@@ -247,7 +247,22 @@ typedef struct ModelScene {
     int light_count;
 } ModelScene;
 
+/*
+ * The environment map of a model (image based lighting): from an
+ * equirectangular Radiance HDR panorama, the Lambertian (diffuse) cube map,
+ * the GGX (specular) cube map with a mip level per roughness and the BRDF
+ * table, all prefiltered at load time as Ikemen GO does.
+ */
+typedef struct ModelEnv {
+    unsigned int lambertian;    /* GL cube map textures */
+    unsigned int ggx;
+    unsigned int lut;           /* GL 2D texture */
+    int mip_count;              /* mip levels of ggx that are filtered */
+    float intensity;            /* [Model] environmentintensity (1) */
+} ModelEnv;
+
 typedef struct Model {
+    ModelEnv *env;              /* [Model] environment, NULL for none */
     ModelScene *scenes;
     int scene_count;
     ModelNode *nodes;
@@ -327,6 +342,7 @@ void Model_Free(Model *mdl);
 void Model_Step(Model *mdl);
 void Model_Reset(Model *mdl);
 void Model_EnableAnim(Model *mdl, int index, int enabled);
+int Model_LoadEnvironment(Model *mdl, const char *path, float intensity);
 void Model_DrawShadows(Model *mdl);
 void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float *proj, const float *view,
                 const ModelFx *fx, float outline);

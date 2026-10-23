@@ -85,6 +85,7 @@ typedef struct ModelProgram {
     GLint light_matrices, use_shadow_map;
     GLint shadow_maps[MODEL_MAX_LIGHTS], shadow_cubes[MODEL_MAX_LIGHTS];
     GLint mesh_outline;
+    GLint env_lambertian, env_ggx, env_lut, env_intensity, env_mip_count, env_rotation;
 } ModelProgram;
 
 static ModelProgram g_modelProgram;
@@ -95,6 +96,31 @@ static int g_modelProgramState;     /* 0 not built yet, 1 built, -1 failed */
 #include "model.frag.h"
 #include "shadow.vert.h"
 #include "shadow.frag.h"
+#include "env.vert.h"
+#include "env_panorama.frag.h"
+#include "env_filter.frag.h"
+
+/* Texture units of the environment maps. */
+#define MODEL_UNIT_ENV_LAMBERTIAN   13
+#define MODEL_UNIT_ENV_GGX          14
+#define MODEL_UNIT_ENV_LUT          15
+
+/* Sizes and sample counts of the environment maps, as Ikemen GO's. */
+#define MODEL_ENV_SIZE              256
+#define MODEL_ENV_LOWEST_MIP        4
+#define MODEL_ENV_LUT_SIZE          1024
+#define MODEL_ENV_LAMBERTIAN_SAMPLES 2048
+#define MODEL_ENV_GGX_SAMPLES       1024
+#define MODEL_ENV_LUT_SAMPLES       512
+
+/* The model program is built with image based lighting (model.frag as GLSL 1.30). */
+static int g_modelIbl;
+
+/* Image based lighting needs GL 3.0: GLSL 1.30 (textureLod, the filtering shaders) and float textures. */
+static int Model_IblSupported(void)
+{
+    return g_renderMode == RENDER_OPENGL && GLEW_VERSION_3_0 && GLEW_EXT_framebuffer_object;
+}
 
 /* First texture units of the shadow maps: 2D (directional, spot), cube maps (point). */
 #define MODEL_UNIT_SHADOW_2D    5
@@ -733,7 +759,7 @@ static int Model_LoadPrimitive(Model *mdl, ModelPrim *prim, const cgltf_data *da
     if (acc != NULL) {
         const cgltf_accessor *w = Model_FindAttribute(p, cgltf_attribute_type_weights, 0);
         if (w == NULL) {
-            MatchLog_Printf(3, "Primitive attribute JOINTS_0 is specified but WEIGHTS_0 is not specified.\n");
+            Log_Printf("Primitive attribute JOINTS_0 is specified but WEIGHTS_0 is not specified.\n");
             return 0;
         }
         prim->attribs |= MODEL_ATTR_SKIN;
@@ -922,13 +948,13 @@ static GLuint Model_LoadTexture(const cgltf_texture *t, const cgltf_options *opt
     }
     bytes = Model_ReadImage(t->image, options, dir, &size);
     if (bytes == NULL) {
-        MatchLog_Printf(3, "Model: can't read image %s\n", t->image->uri != NULL ? t->image->uri : "(embedded)");
+        Log_Printf("Model: can't read image %s\n", t->image->uri != NULL ? t->image->uri : "(embedded)");
         return 0;
     }
     pixels = Png_DecodeRGBA(bytes, size, &w, &h);
     free(bytes);
     if (pixels == NULL) {
-        MatchLog_Printf(3, "Model: unsupported image %s (only PNG is supported)\n",
+        Log_Printf("Model: unsupported image %s (only PNG is supported)\n",
                         t->image->uri != NULL ? t->image->uri : "(embedded)");
         return 0;
     }
@@ -1219,7 +1245,7 @@ static int Model_LoadSkin(ModelSkin *skin, const cgltf_data *data, const cgltf_s
     memset(skin, 0, sizeof(*skin));
     skin->joint_count = (int)s->joints_count;
     if (skin->joint_count > MODEL_MAX_JOINTS) {
-        MatchLog_Printf(3, "Model: a skin has %i joints, only the first %i are used\n", skin->joint_count,
+        Log_Printf("Model: a skin has %i joints, only the first %i are used\n", skin->joint_count,
                         MODEL_MAX_JOINTS);
     }
     skin->joints = malloc((skin->joint_count + 1) * sizeof(int));
@@ -1290,7 +1316,7 @@ Model *Model_Load(const char *path)
         r = cgltf_load_buffers(&options, data, path);
     }
     if (r != cgltf_result_success) {
-        MatchLog_Printf(3, "Can't load model %s (cgltf error %i)\n", path, (int)r);
+        Log_Printf("Can't load model %s (cgltf error %i)\n", path, (int)r);
         cgltf_free(data);
         return NULL;
     }
@@ -1381,11 +1407,13 @@ Model *Model_Load(const char *path)
     return mdl;
 
 fail:
-    MatchLog_Printf(3, "Error loading model %s\n", path);
+    Log_Printf("Error loading model %s\n", path);
     cgltf_free(data);
     Model_Free(mdl);
     return NULL;
 }
+
+static void Model_FreeEnvironment(ModelEnv *env);
 
 void Model_Free(Model *mdl)
 {
@@ -1394,6 +1422,7 @@ void Model_Free(Model *mdl)
     if (mdl == NULL) {
         return;
     }
+    Model_FreeEnvironment(mdl->env);
     if (mdl->vbo != 0) {
         glDeleteBuffers(1, &mdl->vbo);
     }
@@ -1737,7 +1766,11 @@ static int Model_BuildProgram(void)
                                                           "weights_0", "normalIn", "tangentIn", "outlineAttributeIn" };
     static const char *const fields[] = { "direction",    "range",        "color", "intensity",  "position",
                                           "innerConeCos", "outerConeCos", "type",  "shadowBias", "shadowMapFar" };
-    const char *src[2] = { g_shader_model_vert, g_shader_model_frag };
+    /* model.frag has no #version line: it comes first, with what image based lighting needs */
+    static const char frag_head[] = "#version 120\n";
+    static const char frag_head_ibl[] = "#version 130\n#define MODEL_IBL\n";
+    const char *src[2][2];
+    GLsizei parts[2] = { 1, 2 };
     GLenum types[2] = { GL_VERTEX_SHADER, GL_FRAGMENT_SHADER };
     ModelProgram *p = &g_modelProgram;
     GLuint shaders[2];
@@ -1746,15 +1779,19 @@ static int Model_BuildProgram(void)
     GLint ok;
     int i, k;
 
+    g_modelIbl = Model_IblSupported();
+    src[0][0] = g_shader_model_vert;
+    src[1][0] = g_modelIbl ? frag_head_ibl : frag_head;
+    src[1][1] = g_shader_model_frag;
     p->program = glCreateProgram();
     for (i = 0; i < 2; i++) {
         shaders[i] = glCreateShader(types[i]);
-        glShaderSource(shaders[i], 1, &src[i], NULL);
+        glShaderSource(shaders[i], parts[i], src[i], NULL);
         glCompileShader(shaders[i]);
         glGetShaderiv(shaders[i], GL_COMPILE_STATUS, &ok);
         if (!ok) {
             glGetShaderInfoLog(shaders[i], sizeof(log), NULL, log);
-            MatchLog_Printf(3, "Model: shader compile error:\n%s\n", log);
+            Log_Printf("Model: shader compile error:\n%s\n", log);
             return 0;
         }
         glAttachShader(p->program, shaders[i]);
@@ -1766,7 +1803,7 @@ static int Model_BuildProgram(void)
     glGetProgramiv(p->program, GL_LINK_STATUS, &ok);
     if (!ok) {
         glGetProgramInfoLog(p->program, sizeof(log), NULL, log);
-        MatchLog_Printf(3, "Model: shader link error:\n%s\n", log);
+        Log_Printf("Model: shader link error:\n%s\n", log);
         return 0;
     }
     p->projection = Model_Uniform("projection");
@@ -1815,6 +1852,12 @@ static int Model_BuildProgram(void)
     p->light_matrices = Model_Uniform("lightMatrices");
     p->use_shadow_map = Model_Uniform("useShadowMap");
     p->mesh_outline = Model_Uniform("meshOutline");
+    p->env_lambertian = Model_Uniform("lambertianEnvSampler");
+    p->env_ggx = Model_Uniform("GGXEnvSampler");
+    p->env_lut = Model_Uniform("GGXLUT");
+    p->env_intensity = Model_Uniform("environmentIntensity");
+    p->env_mip_count = Model_Uniform("mipCount");
+    p->env_rotation = Model_Uniform("environmentRotation");
     return 1;
 }
 
@@ -2187,7 +2230,7 @@ static int Model_BuildShadowProgram(void)
         glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
         if (!ok) {
             glGetShaderInfoLog(shader, sizeof(log), NULL, log);
-            MatchLog_Printf(3, "Model: shadow shader compile error:\n%s\n", log);
+            Log_Printf("Model: shadow shader compile error:\n%s\n", log);
             return 0;
         }
         glAttachShader(p->program, shader);
@@ -2199,7 +2242,7 @@ static int Model_BuildShadowProgram(void)
     glGetProgramiv(p->program, GL_LINK_STATUS, &ok);
     if (!ok) {
         glGetProgramInfoLog(p->program, sizeof(log), NULL, log);
-        MatchLog_Printf(3, "Model: shadow shader link error:\n%s\n", log);
+        Log_Printf("Model: shadow shader link error:\n%s\n", log);
         return 0;
     }
     p->model = glGetUniformLocation(p->program, "model");
@@ -2228,7 +2271,7 @@ static int Model_ShadowSetup(void)
     }
     sm->state = -1;
     if (!GLEW_EXT_framebuffer_object) {
-        MatchLog_Printf(3, "Model: no shadows (EXT_framebuffer_object missing)\n");
+        Log_Printf("Model: no shadows (EXT_framebuffer_object missing)\n");
         return 0;
     }
     if (GLEW_VERSION_3_0 || GLEW_ARB_texture_rg) {
@@ -2236,7 +2279,7 @@ static int Model_ShadowSetup(void)
     } else if (GLEW_ARB_texture_float) {
         sm->format = GL_LUMINANCE32F_ARB;
     } else {
-        MatchLog_Printf(3, "Model: no shadows (float textures are not supported)\n");
+        Log_Printf("Model: no shadows (float textures are not supported)\n");
         return 0;
     }
     if (!Model_BuildShadowProgram()) {
@@ -2406,7 +2449,7 @@ void Model_DrawShadows(Model *mdl)
             glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT,
                                       point ? GL_TEXTURE_CUBE_MAP_POSITIVE_X + face : GL_TEXTURE_2D, *tex, 0);
             if (glCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT) != GL_FRAMEBUFFER_COMPLETE_EXT) {
-                MatchLog_Printf(3, "Model: shadow framebuffer incomplete, no shadows\n");
+                Log_Printf("Model: shadow framebuffer incomplete, no shadows\n");
                 sm->state = -1;
                 break;
             }
@@ -2435,6 +2478,415 @@ void Model_DrawShadows(Model *mdl)
     if (sm->state == 1) {
         sm->drawn = mdl;
     }
+}
+
+/* ---- environment maps (image based lighting) ---- */
+
+
+
+/* One RGBE pixel as floats (as Radiance and mdouchement/hdr decode it). */
+static void Model_Rgbe(const unsigned char *rgbe, float *out)
+{
+    if (rgbe[3] == 0) {
+        out[0] = out[1] = out[2] = 0.0f;
+    } else {
+        float f = (float)ldexp(1.0, rgbe[3] - (128 + 8));
+        out[0] = rgbe[0] * f;
+        out[1] = rgbe[1] * f;
+        out[2] = rgbe[2] * f;
+    }
+    out[3] = 1.0f;
+}
+
+/*
+ * Reads a Radiance HDR (.hdr) image ("-Y h +X w", flat or run length
+ * encoded scanlines) as RGBA floats, top row first. Returns NULL on errors.
+ */
+static float *Model_LoadHdr(const char *path, int *w_out, int *h_out)
+{
+    unsigned char *data, *p, *end, *line = NULL;
+    float *pixels = NULL;
+    FILE *fp;
+    long size;
+    int w, h, x, y, c;
+
+    fp = fopen(path, "rb");
+    if (fp == NULL) {
+        return NULL;
+    }
+    fseek(fp, 0, SEEK_END);
+    size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    data = size > 0 ? malloc((size_t)size + 1) : NULL;
+    if (data == NULL || fread(data, 1, (size_t)size, fp) != (size_t)size) {
+        free(data);
+        fclose(fp);
+        return NULL;
+    }
+    fclose(fp);
+    data[size] = '\0';
+    end = data + size;
+    if (size < 2 || data[0] != '#' || data[1] != '?') {
+        goto fail;
+    }
+    /* the header ends with an empty line, then comes the resolution line */
+    for (p = data; p + 1 < end && !(p[0] == '\n' && p[1] == '\n'); p++) {
+    }
+    p += 2;
+    if (p >= end || sscanf((const char *)p, "-Y %d +X %d", &h, &w) != 2 || w <= 0 || h <= 0) {
+        goto fail;
+    }
+    while (p < end && *p != '\n') {
+        p++;
+    }
+    p++;
+    pixels = malloc((size_t)w * h * 4 * sizeof(float));
+    line = malloc((size_t)w * 4);
+    if (pixels == NULL || line == NULL) {
+        goto fail;
+    }
+    for (y = 0; y < h; y++) {
+        if (w >= 8 && w < 0x8000 && p + 4 <= end && p[0] == 2 && p[1] == 2 && !(p[2] & 0x80)) {
+            /* run length encoded, each channel apart */
+            if (((p[2] << 8) | p[3]) != w) {
+                goto fail;
+            }
+            p += 4;
+            for (c = 0; c < 4; c++) {
+                x = 0;
+                while (x < w) {
+                    int count;
+                    if (p >= end) {
+                        goto fail;
+                    }
+                    count = *p++;
+                    if (count > 128) {
+                        count -= 128;
+                        if (p >= end || x + count > w) {
+                            goto fail;
+                        }
+                        while (count-- > 0) {
+                            line[(x++) * 4 + c] = *p;
+                        }
+                        p++;
+                    } else {
+                        if (count == 0 || p + count > end || x + count > w) {
+                            goto fail;
+                        }
+                        while (count-- > 0) {
+                            line[(x++) * 4 + c] = *p++;
+                        }
+                    }
+                }
+            }
+        } else {
+            if (p + (size_t)w * 4 > end) {
+                goto fail;
+            }
+            memcpy(line, p, (size_t)w * 4);
+            p += (size_t)w * 4;
+        }
+        for (x = 0; x < w; x++) {
+            Model_Rgbe(line + x * 4, pixels + ((size_t)y * w + x) * 4);
+        }
+    }
+    free(line);
+    free(data);
+    *w_out = w;
+    *h_out = h;
+    return pixels;
+
+fail:
+    free(line);
+    free(pixels);
+    free(data);
+    return NULL;
+}
+
+/* Compiles and links a program of the environment passes (attribute 0: VertCoord). */
+static GLuint Model_EnvProgram(const char *frag)
+{
+    const char *src[2] = { g_shader_env_vert, frag };
+    GLenum types[2] = { GL_VERTEX_SHADER, GL_FRAGMENT_SHADER };
+    char log[0x800];
+    GLuint program, shader;
+    GLint ok;
+    int i;
+
+    program = glCreateProgram();
+    for (i = 0; i < 2; i++) {
+        shader = glCreateShader(types[i]);
+        glShaderSource(shader, 1, &src[i], NULL);
+        glCompileShader(shader);
+        glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+        if (!ok) {
+            glGetShaderInfoLog(shader, sizeof(log), NULL, log);
+            Log_Printf("Model: environment shader compile error:\n%s\n", log);
+            glDeleteShader(shader);
+            glDeleteProgram(program);
+            return 0;
+        }
+        glAttachShader(program, shader);
+        glDeleteShader(shader);
+    }
+    glBindAttribLocation(program, 0, "VertCoord");
+    glLinkProgram(program);
+    glGetProgramiv(program, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        glGetProgramInfoLog(program, sizeof(log), NULL, log);
+        Log_Printf("Model: environment shader link error:\n%s\n", log);
+        glDeleteProgram(program);
+        return 0;
+    }
+    return program;
+}
+
+/* A float RGBA cube map of size x size, with a mip chain when mipmapped (Ikemen GO's newCubeMapTexture). */
+static GLuint Model_EnvCube(int size, int mipmapped)
+{
+    GLuint id;
+    int i;
+
+    glGenTextures(1, &id);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, id);
+    for (i = 0; i < 6; i++) {
+        glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGBA32F, size, size, 0, GL_RGBA, GL_FLOAT, NULL);
+    }
+    if (mipmapped) {
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glGenerateMipmapEXT(GL_TEXTURE_CUBE_MAP);
+    } else {
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    }
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    return id;
+}
+
+/* Sets the uniforms of a filtering pass (Ikemen GO's RenderFilteredCubeMap / RenderLUT). */
+static void Model_EnvFilterUniforms(GLuint prog, int distribution, int samples, int width, float roughness, int lut)
+{
+    glUniform1i(glGetUniformLocation(prog, "cubeMap"), 0);
+    glUniform1i(glGetUniformLocation(prog, "sampleCount"), samples);
+    glUniform1i(glGetUniformLocation(prog, "distribution"), distribution);
+    glUniform1i(glGetUniformLocation(prog, "width"), width);
+    glUniform1f(glGetUniformLocation(prog, "roughness"), roughness);
+    glUniform1f(glGetUniformLocation(prog, "intensityScale"), 1.0f);
+    glUniform1i(glGetUniformLocation(prog, "isLUT"), lut);
+}
+
+/* Draws the 6 faces of mip level `level` of cube map tex with the current program. */
+static void Model_EnvFaces(GLuint prog, GLuint tex, int level, int size)
+{
+    int i;
+
+    glViewport(0, 0, size, size);
+    for (i = 0; i < 6; i++) {
+        glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT, GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, tex,
+                                  level);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glUniform1i(glGetUniformLocation(prog, "currentFace"), i);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    }
+}
+
+/*
+ * Gives a model the environment map of Radiance HDR panorama path (Ikemen
+ * GO's loadEnvironment): the panorama goes to a 256 cube map, filtered
+ * into the Lambertian cube map, the GGX cube map (one mip level per
+ * roughness step) and the BRDF table. intensity scales its light. Returns 0
+ * (logged) when it cannot be loaded or the hardware cannot do it.
+ */
+int Model_LoadEnvironment(Model *mdl, const char *path, float intensity)
+{
+    static const float quad[8] = { -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f };
+    ModelEnv *env;
+    float *img, *flipped;
+    GLuint panorama, source, fbo, vbo, prog_pano, prog_filter;
+    GLint prev_fbo, align;
+    int w, h, i, n;
+
+    if (mdl == NULL || !Model_IblSupported()) {
+        Log_Printf("Model: environment maps need OpenGL 3.0\n");
+        return 0;
+    }
+    img = Model_LoadHdr(path, &w, &h);
+    if (img == NULL) {
+        Log_Printf("Model: can't read environment %s (only Radiance .hdr is supported)\n", path);
+        return 0;
+    }
+    /* as Ikemen GO, the pixels go up in reverse order: bottom row first, right to left */
+    n = w * h;
+    flipped = malloc((size_t)n * 4 * sizeof(float));
+    if (flipped == NULL) {
+        free(img);
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        memcpy(flipped + i * 4, img + (size_t)(n - 1 - i) * 4, 4 * sizeof(float));
+    }
+    free(img);
+    prog_pano = Model_EnvProgram(g_shader_env_panorama_frag);
+    prog_filter = Model_EnvProgram(g_shader_env_filter_frag);
+    env = calloc(1, sizeof(ModelEnv));
+    if (prog_pano == 0 || prog_filter == 0 || env == NULL) {
+        free(flipped);
+        free(env);
+        if (prog_pano != 0) {
+            glDeleteProgram(prog_pano);
+        }
+        if (prog_filter != 0) {
+            glDeleteProgram(prog_filter);
+        }
+        return 0;
+    }
+
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING_EXT, &prev_fbo);
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &align);
+    glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_POLYGON_BIT | GL_SCISSOR_BIT |
+                 GL_VIEWPORT_BIT);
+    glDisable(GL_BLEND);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_ALPHA_TEST);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glActiveTexture(GL_TEXTURE0);
+
+    /* the panorama (Ikemen GO's newHDRTexture) */
+    glGenTextures(1, &panorama);
+    glBindTexture(GL_TEXTURE_2D, panorama);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, w, h, 0, GL_RGBA, GL_FLOAT, flipped);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, align);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT);
+    free(flipped);
+
+    source = Model_EnvCube(MODEL_ENV_SIZE, 1);
+    env->lambertian = Model_EnvCube(MODEL_ENV_SIZE, 0);
+    env->ggx = Model_EnvCube(MODEL_ENV_SIZE, 1);
+    glGenTextures(1, &env->lut);
+    glBindTexture(GL_TEXTURE_2D, env->lut);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, MODEL_ENV_LUT_SIZE, MODEL_ENV_LUT_SIZE, 0, GL_RGBA, GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glGenFramebuffersEXT(1, &fbo);
+    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, fbo);
+    glGenBuffers(1, &vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, NULL);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+
+    /* the panorama on the cube, then its mip chain */
+    glUseProgram(prog_pano);
+    glUniform1i(glGetUniformLocation(prog_pano, "panorama"), 0);
+    glBindTexture(GL_TEXTURE_2D, panorama);
+    Model_EnvFaces(prog_pano, source, 0, MODEL_ENV_SIZE);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, source);
+    glGenerateMipmapEXT(GL_TEXTURE_CUBE_MAP);
+
+    /* the Lambertian cube map, the GGX levels (roughness 0 to 1), the BRDF table */
+    glUseProgram(prog_filter);
+    Model_EnvFilterUniforms(prog_filter, 0, MODEL_ENV_LAMBERTIAN_SAMPLES, MODEL_ENV_SIZE, 0.0f, 0);
+    Model_EnvFaces(prog_filter, env->lambertian, 0, MODEL_ENV_SIZE);
+    env->mip_count = (int)floor(log((double)MODEL_ENV_SIZE) / log(2.0)) + 1 - MODEL_ENV_LOWEST_MIP;
+    for (i = 0; i < env->mip_count; i++) {
+        Model_EnvFilterUniforms(prog_filter, 1, MODEL_ENV_GGX_SAMPLES, MODEL_ENV_SIZE,
+                                (float)i / (float)(env->mip_count - 1), 0);
+        Model_EnvFaces(prog_filter, env->ggx, i, MODEL_ENV_SIZE >> i);
+    }
+    Model_EnvFilterUniforms(prog_filter, 1, MODEL_ENV_LUT_SAMPLES, MODEL_ENV_LUT_SIZE, 0.0f, 1);
+    glUniform1i(glGetUniformLocation(prog_filter, "currentFace"), 0);
+    glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT, GL_TEXTURE_2D, env->lut, 0);
+    glViewport(0, 0, MODEL_ENV_LUT_SIZE, MODEL_ENV_LUT_SIZE);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+    glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT, GL_TEXTURE_2D, 0, 0);
+    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, (GLuint)prev_fbo);
+    glDeleteFramebuffersEXT(1, &fbo);
+    glDisableVertexAttribArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glDeleteBuffers(1, &vbo);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+    glDeleteTextures(1, &panorama);
+    glDeleteTextures(1, &source);
+    glUseProgram(0);
+    g_glCurrentProgram = 0;
+    glDeleteProgram(prog_pano);
+    glDeleteProgram(prog_filter);
+    glPopAttrib();
+
+    env->intensity = intensity;
+    mdl->env = env;
+    return 1;
+}
+
+/* Frees a model's environment map. */
+static void Model_FreeEnvironment(ModelEnv *env)
+{
+    if (env == NULL) {
+        return;
+    }
+    glDeleteTextures(1, &env->lambertian);
+    glDeleteTextures(1, &env->ggx);
+    glDeleteTextures(1, &env->lut);
+    free(env);
+}
+
+/* Binds a model's environment maps (or unbinds, for NULL) and sets their uniforms. */
+static void Model_BindEnvironment(const ModelEnv *env)
+{
+    const ModelProgram *prog = &g_modelProgram;
+    float rx[9], ry[9], rot[9];
+    int c, r;
+
+    if (!g_modelIbl) {
+        return;
+    }
+    glActiveTexture(GL_TEXTURE0 + MODEL_UNIT_ENV_LAMBERTIAN);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, env != NULL ? env->lambertian : 0);
+    glActiveTexture(GL_TEXTURE0 + MODEL_UNIT_ENV_GGX);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, env != NULL ? env->ggx : 0);
+    glActiveTexture(GL_TEXTURE0 + MODEL_UNIT_ENV_LUT);
+    glBindTexture(GL_TEXTURE_2D, env != NULL ? env->lut : 0);
+    if (env == NULL) {
+        return;
+    }
+    glUniform1i(prog->env_lambertian, MODEL_UNIT_ENV_LAMBERTIAN);
+    glUniform1i(prog->env_ggx, MODEL_UNIT_ENV_GGX);
+    glUniform1i(prog->env_lut, MODEL_UNIT_ENV_LUT);
+    glUniform1f(prog->env_intensity, env->intensity);
+    glUniform1i(prog->env_mip_count, env->mip_count);
+    /* mathgl's Rotate3DX(pi) * Rotate3DY(pi / 2), column-major */
+    memset(rx, 0, sizeof(rx));
+    rx[0] = 1.0f;
+    rx[4] = (float)cos(MODEL_PI);
+    rx[5] = (float)sin(MODEL_PI);
+    rx[7] = (float)-sin(MODEL_PI);
+    rx[8] = (float)cos(MODEL_PI);
+    memset(ry, 0, sizeof(ry));
+    ry[0] = (float)cos(MODEL_PI / 2);
+    ry[2] = (float)-sin(MODEL_PI / 2);
+    ry[4] = 1.0f;
+    ry[6] = (float)sin(MODEL_PI / 2);
+    ry[8] = (float)cos(MODEL_PI / 2);
+    for (c = 0; c < 3; c++) {
+        for (r = 0; r < 3; r++) {
+            rot[c * 3 + r] = rx[r] * ry[c * 3] + rx[3 + r] * ry[c * 3 + 1] + rx[6 + r] * ry[c * 3 + 2];
+        }
+    }
+    glUniformMatrix3fv(prog->env_rotation, 1, GL_FALSE, rot);
 }
 
 /* Binds (or unbinds, for NULL) the shadow maps to their units. */
@@ -2513,7 +2965,10 @@ void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float
     glUniform3fv(prog->mul, 1, fx->mul);
     glUniform1f(prog->colorbal, fx->colorbal);
     glUniform1i(prog->invertall, fx->invertall != 0);
-    unlit = Model_SetLights(mdl, sc) == 0;
+    /* unlit without lights and without an environment map, as Ikemen GO */
+    unlit = Model_SetLights(mdl, sc) == 0 && mdl->env == NULL;
+    glUniform1f(prog->env_intensity, 0.0f);
+    Model_BindEnvironment(mdl->env);
     for (i = 0; i < MODEL_MAX_LIGHTS; i++) {
         glUniform1i(prog->shadow_maps[i], MODEL_UNIT_SHADOW_2D + i);
         glUniform1i(prog->shadow_cubes[i], MODEL_UNIT_SHADOW_CUBE + i);
@@ -2537,6 +2992,9 @@ void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
     if (g_shadowMaps.drawn == mdl) {
         Model_BindShadowMaps(NULL);
+    }
+    if (mdl->env != NULL) {
+        Model_BindEnvironment(NULL);
     }
     for (i = MODEL_UNIT_EMISSION; i >= MODEL_UNIT_BASE; i--) {
         glActiveTexture(GL_TEXTURE0 + i);
