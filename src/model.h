@@ -48,19 +48,67 @@ enum {
 #define MODEL_ATTR_UV       0x01
 #define MODEL_ATTR_COLOR    0x02
 #define MODEL_ATTR_SKIN     0x04
+#define MODEL_ATTR_NORMAL   0x08
+#define MODEL_ATTR_TANGENT  0x10
+
+/* Lights a scene is lit by (the first ones of KHR_lights_punctual in it). */
+#define MODEL_MAX_LIGHTS 4
+
+/* ModelLight.type, as the shader numbers them. */
+enum {
+    MODEL_LIGHT_DIRECTIONAL = 0,
+    MODEL_LIGHT_POINT = 1,
+    MODEL_LIGHT_SPOT = 2
+};
+
+/* Shadow map parameters of a light or light node (extras); 0 keeps the default. */
+enum {
+    MODEL_SHADOW_NEAR = 0,
+    MODEL_SHADOW_FAR,
+    MODEL_SHADOW_BOTTOM,
+    MODEL_SHADOW_TOP,
+    MODEL_SHADOW_LEFT,
+    MODEL_SHADOW_RIGHT,
+    MODEL_SHADOW_BIAS,
+    MODEL_SHADOW_PARAMS
+};
+
+/* A KHR_lights_punctual light. */
+typedef struct ModelLight {
+    int type;                   /* MODEL_LIGHT_* */
+    float color[3];
+    float intensity;
+    float range;                /* not above 0: unlimited */
+    float inner_cone;           /* spot cone angles, radians */
+    float outer_cone;
+    float shadow[MODEL_SHADOW_PARAMS];  /* "shadowMapNear"... extras */
+} ModelLight;
+
+/* A texture of a material and the KHR_texture_transform of its coordinates. */
+typedef struct ModelTexRef {
+    int texture;                /* Model.textures, -1 for none */
+    float transform[9];         /* mat3, column-major */
+} ModelTexRef;
 
 /* ModelNode.animated: the properties an animation currently sets. */
 #define MODEL_ANIMATED_T    0x01
 #define MODEL_ANIMATED_R    0x02
 #define MODEL_ANIMATED_S    0x04
 
-/* A material: the base colour (texture and factor) and how it is blended. */
+/* A material: the base colour (texture and factor), the PBR parameters and how it is blended. */
 typedef struct ModelMaterial {
     int alpha_mode;             /* MODEL_ALPHA_* */
     float alpha_cutoff;         /* alphaCutoff with MASK (0.5 by default), else 0 */
-    int texture;                /* base colour texture (Model.textures), -1 for none */
-    float tex_transform[9];     /* KHR_texture_transform of the texture coordinates (mat3, column-major) */
+    ModelTexRef base;           /* base colour texture */
+    ModelTexRef normal;         /* normal map */
+    ModelTexRef metal_rough;    /* metallic (b) / roughness (g) map */
+    ModelTexRef occlusion;      /* ambient occlusion map (r) */
+    ModelTexRef emissive;       /* emission map */
     float base_color[4];        /* baseColorFactor */
+    float metallic;             /* metallicFactor */
+    float roughness;            /* roughnessFactor */
+    float occlusion_strength;   /* occlusionTexture strength, 0 without the texture */
+    float emission[3];          /* emissiveFactor */
     int double_sided;
     int unlit;                  /* KHR_materials_unlit */
 } ModelMaterial;
@@ -112,6 +160,11 @@ typedef struct ModelNode {
     int layer;                  /* "layerNumber" extra, MODEL_LAYER_DEFAULT when absent */
     int id;                     /* "id" extra (BGCtrl3D) */
     int visible;
+    int cast_shadow;            /* 0 with a "castShadow" extra of "0" or "false" */
+    int light;                  /* KHR_lights_punctual light (Model.lights), -1 for none */
+    float light_dir[3];         /* direction of the light: -z of the node's world rotation */
+    float shadow[MODEL_SHADOW_PARAMS];  /* "shadowMapNear"... extras, over the light's */
+    float normal_matrix[16];    /* inverse transpose of world (mesh nodes) */
 } ModelNode;
 
 typedef struct ModelSkin {
@@ -156,6 +209,8 @@ typedef struct ModelAnim {
 typedef struct ModelScene {
     int *nodes;                 /* the root nodes */
     int node_count;
+    int *light_nodes;           /* the nodes with a light, children before their parent */
+    int light_count;
 } ModelScene;
 
 typedef struct Model {
@@ -175,6 +230,8 @@ typedef struct Model {
     int anim_count;
     ModelSkin *skins;
     int skin_count;
+    ModelLight *lights;
+    int light_count;
     unsigned int vbo;           /* GL buffers, 0 without the OpenGL renderer */
     unsigned int ibo;
     unsigned char *vertex_data; /* the buffer contents until they are uploaded */

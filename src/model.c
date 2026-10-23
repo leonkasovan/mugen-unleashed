@@ -46,96 +46,47 @@ enum {
     MODEL_LOC_UV = 1,
     MODEL_LOC_COLOR = 2,
     MODEL_LOC_JOINTS = 3,
-    MODEL_LOC_WEIGHTS = 4
+    MODEL_LOC_WEIGHTS = 4,
+    MODEL_LOC_NORMAL = 5,
+    MODEL_LOC_TANGENT = 6,
+    MODEL_LOC_COUNT = 7
 };
+
+/* Texture units of the model program. */
+enum {
+    MODEL_UNIT_BASE = 0,
+    MODEL_UNIT_NORMAL = 1,
+    MODEL_UNIT_METAL_ROUGH = 2,
+    MODEL_UNIT_OCCLUSION = 3,
+    MODEL_UNIT_EMISSION = 4
+};
+
+/* Uniforms of a light (the shader's Light struct). */
+typedef struct ModelLightLocs {
+    GLint direction, range, color, intensity, position, inner_cone_cos, outer_cone_cos, type, shadow_bias,
+        shadow_map_far;
+} ModelLightLocs;
 
 /* The model program and its uniforms. */
 typedef struct ModelProgram {
     GLuint program;
-    GLint projection, view, model;
+    GLint projection, view, model, normal_matrix;
     GLint skinned, joints;
-    GLint tex, use_texture, tex_transform, base_color;
+    GLint tex, normal_map, metal_rough_map, occlusion_map, emission_map;
+    GLint tex_transform, normal_map_transform, metal_rough_transform, occlusion_transform, emission_transform;
+    GLint use_texture, use_normal_map, use_metal_rough_map, use_emission_map;
+    GLint base_color, metallic_roughness, occlusion_strength, emission, camera_position, unlit;
     GLint enable_alpha, alpha_threshold;
     GLint add, mul, colorbal, invertall;
+    ModelLightLocs lights[MODEL_MAX_LIGHTS];
 } ModelProgram;
 
 static ModelProgram g_modelProgram;
 static int g_modelProgramState;     /* 0 not built yet, 1 built, -1 failed */
 
-static const char g_modelVertSrc[] =
-    "#version 120\n"
-    "uniform mat4 projection, view, model;\n"
-    "uniform bool skinned;\n"
-    "uniform vec4 joints[3 * 64];\n"
-    "attribute vec3 position;\n"
-    "attribute vec2 uv;\n"
-    "attribute vec4 vertColor;\n"
-    "attribute vec4 joints_0;\n"
-    "attribute vec4 weights_0;\n"
-    "varying vec2 texcoord;\n"
-    "varying vec4 vColor;\n"
-    "mat4 jointMatrix(float index) {\n"
-    "    int k = int(index) * 3;\n"
-    "    return transpose(mat4(joints[k], joints[k + 1], joints[k + 2], vec4(0.0, 0.0, 0.0, 1.0)));\n"
-    "}\n"
-    "void main() {\n"
-    "    vec4 pos = vec4(position, 1.0);\n"
-    "    texcoord = uv;\n"
-    "    vColor = vertColor;\n"
-    "    if (skinned && weights_0.x + weights_0.y + weights_0.z + weights_0.w > 0.001) {\n"
-    "        mat4 m = weights_0.x * jointMatrix(joints_0.x) + weights_0.y * jointMatrix(joints_0.y) +\n"
-    "                 weights_0.z * jointMatrix(joints_0.z) + weights_0.w * jointMatrix(joints_0.w);\n"
-    "        pos = m * pos;\n"
-    "    }\n"
-    "    gl_Position = projection * view * model * pos;\n"
-    "}\n";
-
-static const char g_modelFragSrc[] =
-    "#version 120\n"
-    "uniform sampler2D tex;\n"
-    "uniform bool useTexture;\n"
-    "uniform mat3 texTransform;\n"
-    "uniform vec4 baseColorFactor;\n"
-    "uniform bool enableAlpha;\n"
-    "uniform float alphaThreshold;\n"
-    "uniform vec3 add;\n"
-    "uniform vec3 mul;\n"
-    "uniform float colorbal;\n"
-    "uniform bool invertall;\n"
-    "varying vec2 texcoord;\n"
-    "varying vec4 vColor;\n"
-    "void main() {\n"
-    "    vec4 color = vec4(1.0);\n"
-    "    if (useTexture) {\n"
-    "        color = texture2D(tex, (texTransform * vec3(texcoord, 1.0)).xy);\n"
-    "        color.rgb = pow(color.rgb, vec3(2.2));\n"
-    "    }\n"
-    "    color *= baseColorFactor;\n"
-    "    color *= vColor;\n"
-    "    color.rgb *= color.a;\n"
-    "    if (!enableAlpha) {\n"
-    "        if (color.a < alphaThreshold) {\n"
-    "            discard;\n"
-    "        }\n"
-    "        color.a = 1.0;\n"
-    "    } else if (color.a <= 0.0) {\n"
-    "        discard;\n"
-    "    }\n"
-    "    vec3 c = pow(color.rgb, vec3(1.0 / 2.2));\n"
-    "    float a = color.a;\n"
-    "    if (a > 0.0) {\n"
-    "        c = clamp(c / a, 0.0, 1.0);\n"
-    "    }\n"
-    "    if (colorbal != 1.0) {\n"
-    "        float grey = c.r * .3125 + c.g * .4375 + c.b * .25;\n"
-    "        c = mix(vec3(grey), c, colorbal);\n"
-    "    }\n"
-    "    if (invertall) {\n"
-    "        c = 1.0 - c;\n"
-    "    }\n"
-    "    c = clamp((c + add) * mul, 0.0, 1.0);\n"
-    "    gl_FragColor = vec4(c * a, a);\n"
-    "}\n";
+/* src/shaders/model.vert and model.frag (CMakeLists.txt embeds them). */
+#include "model.vert.h"
+#include "model.frag.h"
 
 /* ---- matrices (column-major, as GL) and quaternions (x, y, z, w) ---- */
 
@@ -587,6 +538,20 @@ static int Model_LoadPrimitive(Model *mdl, ModelPrim *prim, const cgltf_data *da
             return 0;
         }
     }
+    acc = Model_FindAttribute(p, cgltf_attribute_type_normal, 0);
+    if (acc != NULL) {
+        prim->attribs |= MODEL_ATTR_NORMAL;
+        if (!Model_AddAttribute(mdl, vcap, acc, prim->vertex_count, 3, 0.0f)) {
+            return 0;
+        }
+    }
+    acc = Model_FindAttribute(p, cgltf_attribute_type_tangent, 0);
+    if (acc != NULL) {
+        prim->attribs |= MODEL_ATTR_TANGENT;
+        if (!Model_AddAttribute(mdl, vcap, acc, prim->vertex_count, 4, 0.0f)) {
+            return 0;
+        }
+    }
     acc = Model_FindAttribute(p, cgltf_attribute_type_color, 0);
     if (acc != NULL) {
         prim->attribs |= MODEL_ATTR_COLOR;
@@ -635,31 +600,50 @@ static int Model_LoadPrimitive(Model *mdl, ModelPrim *prim, const cgltf_data *da
     return 1;
 }
 
+/* A texture of a material and its KHR_texture_transform: translation * rotation (by -angle) * scale. */
+static void Model_LoadTexRef(ModelTexRef *ref, const cgltf_data *data, const cgltf_texture_view *view)
+{
+    memset(ref->transform, 0, sizeof(ref->transform));
+    ref->transform[0] = ref->transform[4] = ref->transform[8] = 1.0f;
+    ref->texture = -1;
+    if (view->texture == NULL) {
+        return;
+    }
+    ref->texture = (int)(view->texture - data->textures);
+    if (view->has_transform) {
+        const cgltf_texture_transform *t = &view->transform;
+        float c = (float)cos(t->rotation), s = (float)sin(t->rotation);
+        ref->transform[0] = c * t->scale[0];
+        ref->transform[1] = -s * t->scale[0];
+        ref->transform[3] = s * t->scale[1];
+        ref->transform[4] = c * t->scale[1];
+        ref->transform[6] = t->offset[0];
+        ref->transform[7] = t->offset[1];
+    }
+}
+
 static void Model_LoadMaterial(ModelMaterial *mat, const cgltf_data *data, const cgltf_material *m)
 {
-    const cgltf_texture_view *view = &m->pbr_metallic_roughness.base_color_texture;
+    const cgltf_pbr_metallic_roughness *pbr = &m->pbr_metallic_roughness;
 
     memset(mat, 0, sizeof(*mat));
-    mat->texture = -1;
-    mat->tex_transform[0] = mat->tex_transform[4] = mat->tex_transform[8] = 1.0f;
-    memcpy(mat->base_color, m->pbr_metallic_roughness.base_color_factor, sizeof(mat->base_color));
-    if (!m->has_pbr_metallic_roughness) {
+    Model_LoadTexRef(&mat->base, data, &pbr->base_color_texture);
+    Model_LoadTexRef(&mat->normal, data, &m->normal_texture);
+    Model_LoadTexRef(&mat->metal_rough, data, &pbr->metallic_roughness_texture);
+    Model_LoadTexRef(&mat->occlusion, data, &m->occlusion_texture);
+    Model_LoadTexRef(&mat->emissive, data, &m->emissive_texture);
+    if (m->has_pbr_metallic_roughness) {
+        memcpy(mat->base_color, pbr->base_color_factor, sizeof(mat->base_color));
+        mat->metallic = pbr->metallic_factor;
+        mat->roughness = pbr->roughness_factor;
+    } else {
         mat->base_color[0] = mat->base_color[1] = mat->base_color[2] = mat->base_color[3] = 1.0f;
+        mat->metallic = 1.0f;
+        mat->roughness = 1.0f;
     }
-    if (view->texture != NULL) {
-        mat->texture = (int)(view->texture - data->textures);
-        if (view->has_transform) {
-            /* translation * rotation (by -angle, as the extension) * scale */
-            const cgltf_texture_transform *t = &view->transform;
-            float c = (float)cos(t->rotation), s = (float)sin(t->rotation);
-            mat->tex_transform[0] = c * t->scale[0];
-            mat->tex_transform[1] = -s * t->scale[0];
-            mat->tex_transform[3] = s * t->scale[1];
-            mat->tex_transform[4] = c * t->scale[1];
-            mat->tex_transform[6] = t->offset[0];
-            mat->tex_transform[7] = t->offset[1];
-        }
-    }
+    /* no strength without the texture, as Ikemen GO */
+    mat->occlusion_strength = mat->occlusion.texture != -1 ? m->occlusion_texture.scale : 0.0f;
+    memcpy(mat->emission, m->emissive_factor, sizeof(mat->emission));
     switch (m->alpha_mode) {
     case cgltf_alpha_mode_mask:
         mat->alpha_mode = MODEL_ALPHA_MASK;
@@ -806,6 +790,61 @@ static GLuint Model_LoadTexture(const cgltf_texture *t, const cgltf_options *opt
     return id;
 }
 
+/* The "shadowMapNear" ... "shadowMapBias" number extras of a light or node. */
+static void Model_ShadowExtras(const char *json, float *out)
+{
+    static const char *const keys[MODEL_SHADOW_PARAMS] = { "shadowMapNear", "shadowMapFar",  "shadowMapBottom",
+                                                           "shadowMapTop",  "shadowMapLeft", "shadowMapRight",
+                                                           "shadowMapBias" };
+    double v;
+    int i;
+
+    for (i = 0; i < MODEL_SHADOW_PARAMS; i++) {
+        if (Model_ExtraNumber(json, keys[i], &v)) {
+            out[i] = (float)v;
+        }
+    }
+}
+
+/* A KHR_lights_punctual light, with Ikemen GO's defaults. */
+static void Model_LoadLight(ModelLight *light, const cgltf_light *l)
+{
+    memset(light, 0, sizeof(*light));
+    switch (l->type) {
+    case cgltf_light_type_point:
+        light->type = MODEL_LIGHT_POINT;
+        break;
+    case cgltf_light_type_spot:
+        light->type = MODEL_LIGHT_SPOT;
+        break;
+    default:
+        light->type = MODEL_LIGHT_DIRECTIONAL;
+        break;
+    }
+    memcpy(light->color, l->color, sizeof(light->color));
+    light->intensity = l->intensity;
+    light->range = l->range;
+    light->inner_cone = l->spot_inner_cone_angle;
+    light->outer_cone = l->spot_outer_cone_angle;
+    if (l->extras.data != NULL) {
+        Model_ShadowExtras(l->extras.data, light->shadow);
+    }
+}
+
+/* Adds the light nodes under node index to a scene, children before their parent. */
+static void Model_AddSceneLights(Model *mdl, ModelScene *scene, int index)
+{
+    const ModelNode *n = &mdl->nodes[index];
+    int i;
+
+    for (i = 0; i < n->child_count; i++) {
+        Model_AddSceneLights(mdl, scene, n->children[i]);
+    }
+    if (n->light != -1 && scene->light_count < mdl->node_count) {
+        scene->light_nodes[scene->light_count++] = index;
+    }
+}
+
 static void Model_LoadNode(ModelNode *node, const cgltf_data *data, const cgltf_node *n)
 {
     double v;
@@ -847,8 +886,16 @@ static void Model_LoadNode(ModelNode *node, const cgltf_data *data, const cgltf_
     node->zwrite = 1;
     node->layer = MODEL_LAYER_DEFAULT;
     node->visible = 1;
+    node->cast_shadow = 1;
+    node->light = n->light != NULL ? (int)(n->light - data->lights) : -1;
     if (n->extras.data != NULL) {
         const char *json = n->extras.data;
+        char cast[16];
+        if (Model_GetExtra(json, "castShadow", cast, sizeof(cast), &is_string) && is_string &&
+            (strcmp(cast, "0") == 0 || strcmp(cast, "false") == 0)) {
+            node->cast_shadow = 0;
+        }
+        Model_ShadowExtras(json, node->shadow);
         if (Model_GetExtra(json, "trans", trans, sizeof(trans), &is_string) && is_string) {
             if (strcmp(trans, "ADD") == 0) {
                 node->trans = MODEL_TRANS_ADD;
@@ -1059,9 +1106,14 @@ Model *Model_Load(const char *path)
     mdl->skins = calloc(data->skins_count + 1, sizeof(ModelSkin));
     mdl->scene_count = (int)data->scenes_count;
     mdl->scenes = calloc(data->scenes_count + 1, sizeof(ModelScene));
+    mdl->light_count = (int)data->lights_count;
+    mdl->lights = calloc(data->lights_count + 1, sizeof(ModelLight));
     if (mdl->materials == NULL || mdl->meshes == NULL || mdl->prims == NULL || mdl->nodes == NULL ||
-        mdl->anims == NULL || mdl->skins == NULL || mdl->scenes == NULL) {
+        mdl->anims == NULL || mdl->skins == NULL || mdl->scenes == NULL || mdl->lights == NULL) {
         goto fail;
+    }
+    for (i = 0; i < data->lights_count; i++) {
+        Model_LoadLight(&mdl->lights[i], &data->lights[i]);
     }
     for (i = 0; i < data->materials_count; i++) {
         Model_LoadMaterial(&mdl->materials[i], data, &data->materials[i]);
@@ -1103,9 +1155,13 @@ Model *Model_Load(const char *path)
         for (j = 0; j < s->nodes_count; j++) {
             ms->nodes[j] = (int)(s->nodes[j] - data->nodes);
         }
-    }
-    if (data->lights_count > 0) {
-        MatchLog_Printf(3, "Model: lights are not supported yet, the model is drawn unlit\n");
+        ms->light_nodes = malloc((data->nodes_count + 1) * sizeof(int));
+        if (ms->light_nodes == NULL) {
+            goto fail;
+        }
+        for (j = 0; j < s->nodes_count; j++) {
+            Model_AddSceneLights(mdl, ms, ms->nodes[j]);
+        }
     }
     if (!Model_Upload(mdl, data, &options, dir)) {
         goto fail;
@@ -1161,11 +1217,13 @@ void Model_Free(Model *mdl)
     free(mdl->skins);
     for (i = 0; mdl->scenes != NULL && i < mdl->scene_count; i++) {
         free(mdl->scenes[i].nodes);
+        free(mdl->scenes[i].light_nodes);
     }
     free(mdl->scenes);
     free(mdl->meshes);
     free(mdl->prims);
     free(mdl->materials);
+    free(mdl->lights);
     free(mdl->vertex_data);
     free(mdl->index_data);
     free(mdl);
@@ -1342,6 +1400,11 @@ static void Model_LocalTransform(ModelNode *n)
     Mat4_Mul(n->local, n->local, m);
 }
 
+/*
+ * The world transforms of node index and its children; mesh nodes get their
+ * normal matrix, light nodes the direction of their light (-z of the
+ * rotation, as Ikemen GO's calculateWorldTransform).
+ */
 static void Model_WorldTransform(Model *mdl, int index, const float *parent)
 {
     ModelNode *n = &mdl->nodes[index];
@@ -1349,6 +1412,24 @@ static void Model_WorldTransform(Model *mdl, int index, const float *parent)
 
     Model_LocalTransform(n);
     Mat4_Mul(n->world, parent, n->local);
+    if (n->mesh != -1) {
+        float inv[16];
+        int r, c;
+        Mat4_Invert(inv, n->world);
+        for (c = 0; c < 4; c++) {
+            for (r = 0; r < 4; r++) {
+                n->normal_matrix[c * 4 + r] = inv[r * 4 + c];
+            }
+        }
+    }
+    if (n->light != -1) {
+        float len = (float)sqrt(n->world[8] * n->world[8] + n->world[9] * n->world[9] + n->world[10] * n->world[10]);
+        if (len != 0.0f) {
+            n->light_dir[0] = -n->world[8] / len;
+            n->light_dir[1] = -n->world[9] / len;
+            n->light_dir[2] = -n->world[10] / len;
+        }
+    }
     for (i = 0; i < n->child_count; i++) {
         Model_WorldTransform(mdl, n->children[i], n->world);
     }
@@ -1382,16 +1463,25 @@ static void Model_SkinMatrices(Model *mdl, int index)
     }
 }
 
+static GLint Model_Uniform(const char *name)
+{
+    return glGetUniformLocation(g_modelProgram.program, name);
+}
+
 static int Model_BuildProgram(void)
 {
-    static const char *const names[] = { "position", "uv", "vertColor", "joints_0", "weights_0" };
-    const char *src[2] = { g_modelVertSrc, g_modelFragSrc };
+    static const char *const attribs[MODEL_LOC_COUNT] = { "position",  "uv",       "vertColor", "joints_0",
+                                                          "weights_0", "normalIn", "tangentIn" };
+    static const char *const fields[] = { "direction",    "range",        "color", "intensity",  "position",
+                                          "innerConeCos", "outerConeCos", "type",  "shadowBias", "shadowMapFar" };
+    const char *src[2] = { g_shader_model_vert, g_shader_model_frag };
     GLenum types[2] = { GL_VERTEX_SHADER, GL_FRAGMENT_SHADER };
     ModelProgram *p = &g_modelProgram;
     GLuint shaders[2];
-    char log[0x400];
+    char log[0x800];
+    char name[64];
     GLint ok;
-    int i;
+    int i, k;
 
     p->program = glCreateProgram();
     for (i = 0; i < 2; i++) {
@@ -1406,8 +1496,8 @@ static int Model_BuildProgram(void)
         }
         glAttachShader(p->program, shaders[i]);
     }
-    for (i = 0; i < 5; i++) {
-        glBindAttribLocation(p->program, i, names[i]);
+    for (i = 0; i < MODEL_LOC_COUNT; i++) {
+        glBindAttribLocation(p->program, i, attribs[i]);
     }
     glLinkProgram(p->program);
     glGetProgramiv(p->program, GL_LINK_STATUS, &ok);
@@ -1416,61 +1506,78 @@ static int Model_BuildProgram(void)
         MatchLog_Printf(3, "Model: shader link error:\n%s\n", log);
         return 0;
     }
-    p->projection = glGetUniformLocation(p->program, "projection");
-    p->view = glGetUniformLocation(p->program, "view");
-    p->model = glGetUniformLocation(p->program, "model");
-    p->skinned = glGetUniformLocation(p->program, "skinned");
-    p->joints = glGetUniformLocation(p->program, "joints");
-    p->tex = glGetUniformLocation(p->program, "tex");
-    p->use_texture = glGetUniformLocation(p->program, "useTexture");
-    p->tex_transform = glGetUniformLocation(p->program, "texTransform");
-    p->base_color = glGetUniformLocation(p->program, "baseColorFactor");
-    p->enable_alpha = glGetUniformLocation(p->program, "enableAlpha");
-    p->alpha_threshold = glGetUniformLocation(p->program, "alphaThreshold");
-    p->add = glGetUniformLocation(p->program, "add");
-    p->mul = glGetUniformLocation(p->program, "mul");
-    p->colorbal = glGetUniformLocation(p->program, "colorbal");
-    p->invertall = glGetUniformLocation(p->program, "invertall");
+    p->projection = Model_Uniform("projection");
+    p->view = Model_Uniform("view");
+    p->model = Model_Uniform("model");
+    p->normal_matrix = Model_Uniform("normalMatrix");
+    p->skinned = Model_Uniform("skinned");
+    p->joints = Model_Uniform("joints");
+    p->tex = Model_Uniform("tex");
+    p->normal_map = Model_Uniform("normalMap");
+    p->metal_rough_map = Model_Uniform("metallicRoughnessMap");
+    p->occlusion_map = Model_Uniform("ambientOcclusionMap");
+    p->emission_map = Model_Uniform("emissionMap");
+    p->tex_transform = Model_Uniform("texTransform");
+    p->normal_map_transform = Model_Uniform("normalMapTransform");
+    p->metal_rough_transform = Model_Uniform("metallicRoughnessMapTransform");
+    p->occlusion_transform = Model_Uniform("ambientOcclusionMapTransform");
+    p->emission_transform = Model_Uniform("emissionMapTransform");
+    p->use_texture = Model_Uniform("useTexture");
+    p->use_normal_map = Model_Uniform("useNormalMap");
+    p->use_metal_rough_map = Model_Uniform("useMetallicRoughnessMap");
+    p->use_emission_map = Model_Uniform("useEmissionMap");
+    p->base_color = Model_Uniform("baseColorFactor");
+    p->metallic_roughness = Model_Uniform("metallicRoughness");
+    p->occlusion_strength = Model_Uniform("ambientOcclusionStrength");
+    p->emission = Model_Uniform("emission");
+    p->camera_position = Model_Uniform("cameraPosition");
+    p->unlit = Model_Uniform("unlit");
+    p->enable_alpha = Model_Uniform("enableAlpha");
+    p->alpha_threshold = Model_Uniform("alphaThreshold");
+    p->add = Model_Uniform("add");
+    p->mul = Model_Uniform("mul");
+    p->colorbal = Model_Uniform("colorbal");
+    p->invertall = Model_Uniform("invertall");
+    for (i = 0; i < MODEL_MAX_LIGHTS; i++) {
+        GLint *locs = &p->lights[i].direction;
+        for (k = 0; k < 10; k++) {
+            sprintf(name, "lights[%i].%s", i, fields[k]);
+            locs[k] = Model_Uniform(name);
+        }
+    }
     return 1;
 }
 
-/* Points the vertex attributes at a primitive's blocks; the missing ones get constant defaults. */
+/* Points an attribute at the next block of a primitive's vertex data, or gives it a constant value. */
+static void Model_SetAttribute(int loc, int present, int comps, unsigned int *offset, unsigned int n, float x, float y,
+                               float z, float w)
+{
+    if (present) {
+        glEnableVertexAttribArray(loc);
+        glVertexAttribPointer(loc, comps, GL_FLOAT, GL_FALSE, 0, (const void *)(size_t)*offset);
+        *offset += comps * 4 * n;
+    } else {
+        glDisableVertexAttribArray(loc);
+        glVertexAttrib4f(loc, x, y, z, w);
+    }
+}
+
+/* Points the vertex attributes at a primitive's blocks (in Model_LoadPrimitive's order). */
 static void Model_SetAttributes(const ModelPrim *p)
 {
     unsigned int offset = p->vertex_offset;
     unsigned int n = (unsigned int)p->vertex_count;
+    int skin = (p->attribs & MODEL_ATTR_SKIN) != 0;
 
-    glEnableVertexAttribArray(MODEL_LOC_POSITION);
-    glVertexAttribPointer(MODEL_LOC_POSITION, 3, GL_FLOAT, GL_FALSE, 0, (const void *)(size_t)offset);
-    offset += 12 * n;
-    if (p->attribs & MODEL_ATTR_UV) {
-        glEnableVertexAttribArray(MODEL_LOC_UV);
-        glVertexAttribPointer(MODEL_LOC_UV, 2, GL_FLOAT, GL_FALSE, 0, (const void *)(size_t)offset);
-        offset += 8 * n;
-    } else {
-        glDisableVertexAttribArray(MODEL_LOC_UV);
-        glVertexAttrib2f(MODEL_LOC_UV, 0.0f, 0.0f);
-    }
-    if (p->attribs & MODEL_ATTR_COLOR) {
-        glEnableVertexAttribArray(MODEL_LOC_COLOR);
-        glVertexAttribPointer(MODEL_LOC_COLOR, 4, GL_FLOAT, GL_FALSE, 0, (const void *)(size_t)offset);
-        offset += 16 * n;
-    } else {
-        glDisableVertexAttribArray(MODEL_LOC_COLOR);
-        glVertexAttrib4f(MODEL_LOC_COLOR, 1.0f, 1.0f, 1.0f, 1.0f);
-    }
-    if (p->attribs & MODEL_ATTR_SKIN) {
-        glEnableVertexAttribArray(MODEL_LOC_JOINTS);
-        glVertexAttribPointer(MODEL_LOC_JOINTS, 4, GL_FLOAT, GL_FALSE, 0, (const void *)(size_t)offset);
-        offset += 16 * n;
-        glEnableVertexAttribArray(MODEL_LOC_WEIGHTS);
-        glVertexAttribPointer(MODEL_LOC_WEIGHTS, 4, GL_FLOAT, GL_FALSE, 0, (const void *)(size_t)offset);
-    } else {
-        glDisableVertexAttribArray(MODEL_LOC_JOINTS);
-        glVertexAttrib4f(MODEL_LOC_JOINTS, 0.0f, 0.0f, 0.0f, 0.0f);
-        glDisableVertexAttribArray(MODEL_LOC_WEIGHTS);
-        glVertexAttrib4f(MODEL_LOC_WEIGHTS, 0.0f, 0.0f, 0.0f, 0.0f);
-    }
+    Model_SetAttribute(MODEL_LOC_POSITION, 1, 3, &offset, n, 0.0f, 0.0f, 0.0f, 1.0f);
+    Model_SetAttribute(MODEL_LOC_UV, (p->attribs & MODEL_ATTR_UV) != 0, 2, &offset, n, 0.0f, 0.0f, 0.0f, 1.0f);
+    Model_SetAttribute(MODEL_LOC_NORMAL, (p->attribs & MODEL_ATTR_NORMAL) != 0, 3, &offset, n, 0.0f, 0.0f, 0.0f,
+                       1.0f);
+    Model_SetAttribute(MODEL_LOC_TANGENT, (p->attribs & MODEL_ATTR_TANGENT) != 0, 4, &offset, n, 0.0f, 0.0f, 0.0f,
+                       0.0f);
+    Model_SetAttribute(MODEL_LOC_COLOR, (p->attribs & MODEL_ATTR_COLOR) != 0, 4, &offset, n, 1.0f, 1.0f, 1.0f, 1.0f);
+    Model_SetAttribute(MODEL_LOC_JOINTS, skin, 4, &offset, n, 0.0f, 0.0f, 0.0f, 0.0f);
+    Model_SetAttribute(MODEL_LOC_WEIGHTS, skin, 4, &offset, n, 0.0f, 0.0f, 0.0f, 0.0f);
 }
 
 /* The blending of a node (Ikemen GO's drawNode without PalFX inversion). */
@@ -1496,11 +1603,23 @@ static void Model_SetBlend(int trans)
     }
 }
 
+/* Binds a material texture to its unit; returns whether there is one. */
+static int Model_BindTexture(const Model *mdl, const ModelTexRef *ref, int unit, GLint transform_loc)
+{
+    glUniformMatrix3fv(transform_loc, 1, GL_FALSE, ref->transform);
+    if (ref->texture == -1 || mdl->textures[ref->texture] == 0) {
+        return 0;
+    }
+    glActiveTexture(GL_TEXTURE0 + unit);
+    glBindTexture(GL_TEXTURE_2D, mdl->textures[ref->texture]);
+    return 1;
+}
+
 /*
  * Draws the meshes of node index and its children (children first) on layer
  * `layer`: the opaque ones (blended 0) or the blended and "trans" ones.
  */
-static void Model_DrawNode(Model *mdl, int index, int layer, int default_layer, int blended, int flipped)
+static void Model_DrawNode(Model *mdl, int index, int layer, int default_layer, int blended, int flipped, int unlit)
 {
     const ModelProgram *prog = &g_modelProgram;
     ModelNode *n = &mdl->nodes[index];
@@ -1509,7 +1628,7 @@ static void Model_DrawNode(Model *mdl, int index, int layer, int default_layer, 
     int i;
 
     for (i = 0; i < n->child_count; i++) {
-        Model_DrawNode(mdl, n->children[i], layer, default_layer, blended, flipped);
+        Model_DrawNode(mdl, n->children[i], layer, default_layer, blended, flipped, unlit);
     }
     if (n->mesh == -1 || !n->visible || node_layer != layer) {
         return;
@@ -1545,6 +1664,7 @@ static void Model_DrawNode(Model *mdl, int index, int layer, int default_layer, 
         Model_SetBlend(n->trans);
         Model_SetAttributes(p);
         glUniformMatrix4fv(prog->model, 1, GL_FALSE, n->world);
+        glUniformMatrix4fv(prog->normal_matrix, 1, GL_FALSE, n->normal_matrix);
         if (n->skin != -1 && (p->attribs & MODEL_ATTR_SKIN)) {
             const ModelSkin *skin = &mdl->skins[n->skin];
             int count = skin->joint_count < MODEL_MAX_JOINTS ? skin->joint_count : MODEL_MAX_JOINTS;
@@ -1553,33 +1673,83 @@ static void Model_DrawNode(Model *mdl, int index, int layer, int default_layer, 
         } else {
             glUniform1i(prog->skinned, 0);
         }
-        glUniformMatrix3fv(prog->tex_transform, 1, GL_FALSE, mat->tex_transform);
         glUniform4fv(prog->base_color, 1, mat->base_color);
+        glUniform2f(prog->metallic_roughness, mat->metallic, mat->roughness);
+        glUniform1f(prog->occlusion_strength, mat->occlusion_strength);
+        glUniform3fv(prog->emission, 1, mat->emission);
+        glUniform1i(prog->unlit, unlit || mat->unlit);
         glUniform1i(prog->enable_alpha, mat->alpha_mode == MODEL_ALPHA_BLEND);
         glUniform1f(prog->alpha_threshold, mat->alpha_cutoff);
-        if (mat->texture != -1 && mdl->textures[mat->texture] != 0) {
-            glBindTexture(GL_TEXTURE_2D, mdl->textures[mat->texture]);
-            glUniform1i(prog->use_texture, 1);
-        } else {
-            glUniform1i(prog->use_texture, 0);
-        }
+        glUniform1i(prog->use_texture, Model_BindTexture(mdl, &mat->base, MODEL_UNIT_BASE, prog->tex_transform));
+        glUniform1i(prog->use_normal_map,
+                    Model_BindTexture(mdl, &mat->normal, MODEL_UNIT_NORMAL, prog->normal_map_transform));
+        glUniform1i(prog->use_metal_rough_map,
+                    Model_BindTexture(mdl, &mat->metal_rough, MODEL_UNIT_METAL_ROUGH, prog->metal_rough_transform));
+        Model_BindTexture(mdl, &mat->occlusion, MODEL_UNIT_OCCLUSION, prog->occlusion_transform);
+        glUniform1i(prog->use_emission_map,
+                    Model_BindTexture(mdl, &mat->emissive, MODEL_UNIT_EMISSION, prog->emission_transform));
         glDrawElements(p->mode, p->index_count, GL_UNSIGNED_INT, (const void *)(size_t)p->index_offset);
     }
+}
+
+/* The parameters of the lights of a scene (the first MODEL_MAX_LIGHTS); returns how many there are. */
+static int Model_SetLights(const Model *mdl, const ModelScene *sc)
+{
+    const ModelProgram *prog = &g_modelProgram;
+    int i;
+
+    for (i = 0; i < MODEL_MAX_LIGHTS; i++) {
+        glUniform3f(prog->lights[i].color, 0.0f, 0.0f, 0.0f);
+    }
+    for (i = 0; i < sc->light_count && i < MODEL_MAX_LIGHTS; i++) {
+        const ModelNode *n = &mdl->nodes[sc->light_nodes[i]];
+        const ModelLight *l = &mdl->lights[n->light];
+        const ModelLightLocs *loc = &prog->lights[i];
+        float far_z = 50.0f, bias = 0.02f;
+
+        /* the light's extras, then the node's, override the shadow map defaults */
+        if (l->shadow[MODEL_SHADOW_FAR] != 0.0f) {
+            far_z = l->shadow[MODEL_SHADOW_FAR];
+        }
+        if (l->shadow[MODEL_SHADOW_BIAS] != 0.0f) {
+            bias = l->shadow[MODEL_SHADOW_BIAS];
+        }
+        if (n->shadow[MODEL_SHADOW_FAR] != 0.0f) {
+            far_z = n->shadow[MODEL_SHADOW_FAR];
+        }
+        if (n->shadow[MODEL_SHADOW_BIAS] != 0.0f) {
+            bias = n->shadow[MODEL_SHADOW_BIAS];
+        }
+        glUniform1i(loc->type, l->type);
+        glUniform1f(loc->intensity, l->intensity);
+        glUniform1f(loc->inner_cone_cos, (float)cos(l->inner_cone));
+        glUniform1f(loc->outer_cone_cos, (float)cos(l->outer_cone));
+        glUniform1f(loc->range, l->range);
+        glUniform3fv(loc->color, 1, l->color);
+        glUniform3f(loc->position, n->world[12], n->world[13], n->world[14]);
+        glUniform1f(loc->shadow_map_far, far_z);
+        glUniform1f(loc->shadow_bias, bias);
+        if (l->type != MODEL_LIGHT_POINT) {
+            glUniform3fv(loc->direction, 1, n->light_dir);
+        }
+    }
+    return sc->light_count;
 }
 
 /*
  * Draws the nodes of layer `layer` of scene `scene` (nodes without a
  * layerNumber are on default_layer) with the screen projection proj and the
  * view matrix view, over a cleared depth buffer (Ikemen GO's Model.draw).
- * Only with the OpenGL renderer.
+ * The scene is lit by its lights; without any it is drawn unlit. Only with
+ * the OpenGL renderer.
  */
 void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float *proj, const float *view,
                 const ModelFx *fx)
 {
     const ModelProgram *prog = &g_modelProgram;
     const ModelScene *sc;
-    float ident[16], p[16], flip[16];
-    int flipped;
+    float ident[16], p[16], flip[16], inv_view[16];
+    int flipped, unlit;
     int i, pass;
 
     if (mdl == NULL || mdl->vbo == 0 || scene < 0 || scene >= mdl->scene_count || g_renderMode != RENDER_OPENGL) {
@@ -1605,6 +1775,7 @@ void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float
         Mat4_Scale(flip, 1.0f, -1.0f, 1.0f);
         Mat4_Mul(p, flip, p);
     }
+    Mat4_Invert(inv_view, view);
 
     glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_POLYGON_BIT | GL_SCISSOR_BIT);
     glDisable(GL_SCISSOR_TEST);
@@ -1615,27 +1786,36 @@ void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float
     glEnable(GL_BLEND);
     glUseProgram(prog->program);
     g_glCurrentProgram = prog->program;
-    glActiveTexture(GL_TEXTURE0);
-    glUniform1i(prog->tex, 0);
+    glUniform1i(prog->tex, MODEL_UNIT_BASE);
+    glUniform1i(prog->normal_map, MODEL_UNIT_NORMAL);
+    glUniform1i(prog->metal_rough_map, MODEL_UNIT_METAL_ROUGH);
+    glUniform1i(prog->occlusion_map, MODEL_UNIT_OCCLUSION);
+    glUniform1i(prog->emission_map, MODEL_UNIT_EMISSION);
     glUniformMatrix4fv(prog->projection, 1, GL_FALSE, p);
     glUniformMatrix4fv(prog->view, 1, GL_FALSE, view);
+    /* the camera in model space: where the view puts the eye */
+    glUniform3f(prog->camera_position, inv_view[12], inv_view[13], inv_view[14]);
     glUniform3fv(prog->add, 1, fx->add);
     glUniform3fv(prog->mul, 1, fx->mul);
     glUniform1f(prog->colorbal, fx->colorbal);
     glUniform1i(prog->invertall, fx->invertall != 0);
+    unlit = Model_SetLights(mdl, sc) == 0;
     glBindBuffer(GL_ARRAY_BUFFER, mdl->vbo);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mdl->ibo);
     for (pass = 0; pass < 2; pass++) {
         for (i = 0; i < sc->node_count; i++) {
-            Model_DrawNode(mdl, sc->nodes[i], layer, default_layer, pass, flipped);
+            Model_DrawNode(mdl, sc->nodes[i], layer, default_layer, pass, flipped, unlit);
         }
     }
-    for (i = 0; i <= MODEL_LOC_WEIGHTS; i++) {
+    for (i = 0; i < MODEL_LOC_COUNT; i++) {
         glDisableVertexAttribArray(i);
     }
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
-    glBindTexture(GL_TEXTURE_2D, 0);
+    for (i = MODEL_UNIT_EMISSION; i >= MODEL_UNIT_BASE; i--) {
+        glActiveTexture(GL_TEXTURE0 + i);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
     glUseProgram(0);
     g_glCurrentProgram = 0;
     glPopAttrib();

@@ -110,6 +110,25 @@ target_compile_options(mugen PRIVATE "$<$<COMPILE_LANGUAGE:C>:/W3;/wd4100;/utf-8
 target_link_libraries(mugen PRIVATE mugen_sdk lua51 png12 glew_static minizip cgltf
   opengl32 glu32 winmm shell32 user32 gdi32)
 
+# The GLSL programs of the 3D models (src/shaders), built into the executable as C strings
+# (mugen-unleashed addition: the original loads its shaders from data/).
+set(_shader_dir "${CMAKE_CURRENT_BINARY_DIR}/shaders")
+set(_shader_headers)
+foreach(_shader model.vert model.frag)
+  string(REPLACE "." "_" _shader_var "g_shader_${_shader}")
+  set(_shader_out "${_shader_dir}/${_shader}.h")
+  add_custom_command(
+    OUTPUT "${_shader_out}"
+    COMMAND "${CMAKE_COMMAND}" -DIN=${CMAKE_CURRENT_SOURCE_DIR}/src/shaders/${_shader} -DOUT=${_shader_out}
+            -DNAME=${_shader_var} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbedShader.cmake"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/shaders/${_shader}" "${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbedShader.cmake"
+    COMMENT "Embedding shader ${_shader}"
+    VERBATIM)
+  list(APPEND _shader_headers "${_shader_out}")
+endforeach()
+target_sources(mugen PRIVATE ${_shader_headers})
+target_include_directories(mugen PRIVATE "${_shader_dir}")
+
 # The window icon of the original, when its mugen.exe and Python 3 with pefile are available.
 find_package(Python3 COMPONENTS Interpreter)
 if(MUGEN_GAME_DIR AND EXISTS "${MUGEN_GAME_DIR}/mugen.exe" AND Python3_FOUND)
