@@ -56,6 +56,21 @@ To embed the original window icon, point the configure step at your M.U.G.E.N di
 tools\msvc_env.bat cmake --preset x86-release -DMUGEN_GAME_DIR=C:/path/to/mugen-1.1b1
 ```
 
+### With GNU Make and GCC
+
+A `Makefile` builds the same executable with GNU Make and a 32-bit MinGW-w64 GCC, from an
+MSYS2 bash.
+
+```sh
+make check-toolchain
+make -j8
+```
+
+The executable ends up in `build/mingw/mugen.exe`. `make DEBUG=1 BUILD=build/mingw-debug`
+builds it unoptimised, and `make MUGEN_GAME_DIR=C:/path/to/mugen-1.1b1` embeds the original's
+window icon. See [docs/BUILD-MINGW.md](docs/BUILD-MINGW.md) for the toolchain requirements and
+the dependency list.
+
 ## Running
 
 1. Copy `mugen.exe` into your M.U.G.E.N 1.1 Beta 1 directory, under another name if you want
@@ -79,6 +94,7 @@ src/            the engine, one .c file per module of the original (see docs/ANA
 third_party/    Lua, libpng, GLEW, minizip, headers and import definitions of the game's DLLs
 cmake/          build helpers
 tools/          msvc_env.bat (Visual Studio environment), extract_icon.py
+Makefile        GNU Make + GCC build (docs/BUILD-MINGW.md)
 docs/           notes on the original binary and how the code reproduces it
 ```
 
