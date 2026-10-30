@@ -200,28 +200,120 @@ int GlTex_Upload2D(int h, int bpp, GlTex *tex, const void *pixels, int w)
     return 0;
 }
 
-/* 0x00479F60: uploads w x h RGBA pixels to tex, premultiplied by their alpha (NULL: no data). */
+/*
+ * Scratch buffer for Gl_Premultiply (not in the original; see PLANS.md,
+ * rendering optimization step 3): the streaming path converts one sprite at a
+ * time, so a single buffer that grows as needed replaces a malloc and a free
+ * of up to 4 MB per sprite draw. Freed at exit by Glr_FreePremultiply.
+ */
+static unsigned char *g_premulScratch;
+static int g_premulScratchSize;
+
+static void Glr_FreePremultiply(void)
+{
+    free(g_premulScratch);
+    g_premulScratch = NULL;
+    g_premulScratchSize = 0;
+}
+
+/* bytes / 4 RGBA pixels with the colours multiplied by alpha, in the scratch buffer. */
+static unsigned char *Gl_PremultiplyScratch(int bytes, const unsigned char *src)
+{
+    unsigned char *dst;
+    int n;
+
+    if (bytes > g_premulScratchSize) {
+        unsigned char *bigger = realloc(g_premulScratch, (size_t)bytes);
+        if (bigger == NULL) {
+            return NULL;
+        }
+        g_premulScratch = bigger;
+        g_premulScratchSize = bytes;
+    }
+    dst = g_premulScratch;
+    for (n = bytes / 4; n > 0; n--) {
+        unsigned int a = src[3];
+        dst[0] = (unsigned char)(src[0] * a / 255);
+        dst[1] = (unsigned char)(src[1] * a / 255);
+        dst[2] = (unsigned char)(src[2] * a / 255);
+        dst[3] = (unsigned char)a;
+        src += 4;
+        dst += 4;
+    }
+    return g_premulScratch;
+}
+
+/*
+ * 0x00479F60: uploads w x h RGBA pixels to tex, premultiplied by their alpha (NULL: no data).
+ *
+ * The original took a malloc'ed premultiplied copy; the scratch buffer keeps the
+ * same pixels without the per-draw allocation.
+ */
 int GlTex_UploadRGBA(int h, int w, GlTex *tex, const void *pixels)
 {
-    unsigned char *premul = NULL;
+    const unsigned char *upload = pixels;
     int ok;
 
     if (pixels != NULL) {
-        premul = Gl_Premultiply(w * h * 4, pixels);
-        if (premul == NULL) {
+        upload = Gl_PremultiplyScratch(w * h * 4, pixels);
+        if (upload == NULL) {
             return 0;
         }
     }
     glPixelStorei(GL_PACK_ALIGNMENT, 4);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-    ok = GlTex_Upload(tex, h, GL_RGBA, w, GL_RGBA, premul != NULL ? premul : pixels);
-    free(premul);
+    ok = GlTex_Upload(tex, h, GL_RGBA, w, GL_RGBA, upload);
     return ok;
 }
 
-/* 0x00479FE0: binds tex and uploads w x h pixels (nearest filtering, clamped). */
+/*
+ * The internal format last uploaded to each texture, so GlTex_Upload can tell
+ * whether a reallocation can be replaced by a plain write. There is one system
+ * texture per role and they are re-created by GlTex_Create, so remembering the
+ * formats of the ones in use is enough; a fresh texture reports 0.
+ */
+#define GLR_FORMAT_SLOTS 4
+static const GlTex *g_texFormatTex[GLR_FORMAT_SLOTS];
+static int g_texFormat[GLR_FORMAT_SLOTS];
+
+static int *Glr_FormatSlot(const GlTex *tex)
+{
+    int i;
+
+    for (i = 0; i < GLR_FORMAT_SLOTS; i++) {
+        if (g_texFormatTex[i] == tex) {
+            return &g_texFormat[i];
+        }
+    }
+    for (i = 0; i < GLR_FORMAT_SLOTS; i++) {
+        if (g_texFormatTex[i] == NULL) {
+            g_texFormatTex[i] = tex;
+            g_texFormat[i] = 0;
+            return &g_texFormat[i];
+        }
+    }
+    /* Table full: forget slot 0 and take it. A forgotten format only costs a
+     * reallocation on that texture's next upload. */
+    g_texFormatTex[0] = tex;
+    g_texFormat[0] = 0;
+    return &g_texFormat[0];
+}
+
+/*
+ * 0x00479FE0: binds tex and uploads w x h pixels (nearest filtering, clamped).
+ *
+ * When tex already holds w x h texels of the same internal format (the usual
+ * case for the streamed sprite and palette textures) the pixels are written
+ * with glTexSubImage2D instead of reallocating the texture with glTexImage2D.
+ * tex->w/h and the video memory accounting are kept exactly as the original
+ * had them (Glr_AddMemory is still called, over-counting and all: it is what
+ * mugen.log's "Max used tex mem" reports), so only the redundant reallocation
+ * is skipped (PLANS.md, rendering optimization step 3).
+ */
 int GlTex_Upload(GlTex *tex, int h, int internal_format, int w, int format, const void *pixels)
 {
+    int *stored = Glr_FormatSlot(tex);
+    int reuse = tex->w == w && tex->h == h && *stored == internal_format;
     GLenum err;
 
     Glr_ClearErrors();
@@ -230,7 +322,12 @@ int GlTex_Upload(GlTex *tex, int h, int internal_format, int w, int format, cons
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
-    glTexImage2D(GL_TEXTURE_2D, 0, internal_format, w, h, 0, format, GL_UNSIGNED_BYTE, pixels);
+    if (reuse) {
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, format, GL_UNSIGNED_BYTE, pixels);
+    } else {
+        glTexImage2D(GL_TEXTURE_2D, 0, internal_format, w, h, 0, format, GL_UNSIGNED_BYTE, pixels);
+        *stored = internal_format;
+    }
     err = Glr_LastError();
     if (err == GL_NO_ERROR) {
         Glr_AddMemory(tex, Gl_TexBytes((unsigned int)(w * h), internal_format));
@@ -535,6 +632,7 @@ int Gl_Deinit(void)
         Glr_FreeSysTex(g_glSysTex[0]);
         g_glInitialized = 0;
     }
+    Glr_FreePremultiply();
     MatchLog_Printf(7,
                     "GL draw statistics:\nSprite Texture: %llu\nSprite Stream : %llu\nPal Texture   : %llu\nPal "
                     "Stream    : %llu\nTex compress  : %llu\nMax used tex mem: %lluk\n",
