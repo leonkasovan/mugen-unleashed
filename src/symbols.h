@@ -769,6 +769,12 @@ extern ExprValue g_exprStackValue[128]; /* 0x00505500 */
 /* 0x00426710 */ int __cdecl Con_CmdToggleLifebars(CmdTable *ctx, char *name, char *args);
 /* 0x00426780 */ int __cdecl Con_CmdShowClsn(CmdTable *ctx, char *name, char *args);
 /* 0x00426800 */ int __cdecl Con_CmdFps(CmdTable *ctx, char *name, char *args);
+/* not in the original: dumps the renderer and sprite cache counters (console.c) */
+int __cdecl Con_CmdStats(CmdTable *ctx, char *name, char *args);
+/* "lmode" / "lexec": the console's Lua entry points (console.c). The original
+ * registers both; the functions are reconstructed here. */
+int __cdecl Con_CmdLuaMode(CmdTable *ctx, char *name, char *args);
+int __cdecl Con_CmdLuaExec(CmdTable *ctx, char *name, char *args);
 /* 0x00426850 */ int __cdecl Con_CmdSetLife(CmdTable *ctx, char *name, char *args);
 /* 0x004268f0 */ int __cdecl Con_CmdToggleAi(CmdTable *ctx, char *name, char *args);
 /* 0x00426970 */ int __cdecl Con_CmdTogglePlayer(CmdTable *ctx, char *name, char *args);

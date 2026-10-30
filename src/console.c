@@ -10,6 +10,13 @@
 
 #include "mugen.h"
 
+/* Lua constants of the API used here (as luaapi.c, luabind.c and luautil.c
+ * define their own; symbols.h declares the functions only). */
+#define LUA_GLOBALSINDEX    (-10002)
+#define LUA_TNIL            0
+#define LUA_TFUNCTION       6
+#define LUA_TSTRING         4
+
 /* ------------------------------------------------------------------ helpers */
 
 /* strdup with the CRT's malloc (inlined by the original). */
@@ -1339,6 +1346,104 @@ int Con_CmdShowClsn(CmdTable *ctx, char *name, char *args)
     return 0;
 }
 
+/*
+ * The string form of the Lua value at idx, using the global tostring
+ * (Lua 5.1 has no luaL_tolstring). Pushed on the stack by the caller's
+ * cleanup; NULL when tostring is missing or fails.
+ *
+ * Only the Lua entry points that symbols.h declares are used: the original
+ * binary did not import lua_tostring / luaL_loadstring / lua_pop.
+ */
+static const char *Con_LuaToString(struct lua_State *L, int idx)
+{
+    int top = lua_gettop(L);
+    const char *s = NULL;
+
+    if (idx < 0) {
+        idx = top + idx + 1;
+    }
+    lua_getfield(L, LUA_GLOBALSINDEX, "tostring");
+    if (lua_type(L, -1) == LUA_TFUNCTION) {
+        lua_pushvalue(L, idx);
+        if (lua_pcall(L, 1, 1, 0) == 0 && lua_type(L, -1) == LUA_TSTRING) {
+            s = lua_tolstring(L, -1, NULL);
+        }
+    }
+    lua_settop(L, top);
+    return s;
+}
+
+/*
+ * "lmode": toggles the console between the command prompt and the Lua
+ * prompt (Console.lua_mode, 0x14). In the original this is one of the two
+ * commands that Console_QueueCommand always passes through instead of
+ * rewriting to "lexec ".
+ */
+int Con_CmdLuaMode(CmdTable *ctx, char *name, char *args)
+{
+    int r = Con_NoArgs(args);
+
+    if (r != 0) {
+        return r;
+    }
+    g_console->lua_mode = g_console->lua_mode == 0;
+    return 0;
+}
+
+/*
+ * "lexec <lua>": runs a line of Lua in g_luaState and prints what it returns
+ * when it returns a value. Console_QueueCommand puts "lexec " in front of
+ * every line typed in Lua mode, so this is the console's Lua entry point; it
+ * is also usable from the command prompt directly.
+ *
+ * The line is first tried as an expression ("return <line>") so that typing
+ * a bare value prints it, then as a statement. Errors are printed rather than
+ * raised, so the state stays usable.
+ */
+int Con_CmdLuaExec(CmdTable *ctx, char *name, char *args)
+{
+    struct lua_State *L = g_luaState;
+    char *src;
+    int r;
+
+    if (L == NULL) {
+        Console_Printf("Lua is not initialized.\n");
+        return -1;
+    }
+    if (args == NULL || *args == '\0') {
+        Console_Printf("Missing argument.\n");
+        return -1;
+    }
+    src = malloc(strlen(args) + 8);
+    if (src == NULL) {
+        return -1;
+    }
+    sprintf(src, "return %s", args);
+    r = luaL_loadbuffer(L, src, strlen(src), "=lexec");
+    if (r != 0) {
+        /* Not an expression (a statement such as "i1.velset{x=1}"): run as is. */
+        lua_settop(L, 0);
+        r = luaL_loadbuffer(L, args, strlen(args), "=lexec");
+    }
+    free(src);
+    if (r == 0) {
+        r = lua_pcall(L, 0, 1, 0);
+    }
+    if (r != 0) {
+        Console_Printf("%s\n", luaL_checklstring(L, -1, NULL));
+        lua_settop(L, 0);
+        return -1;
+    }
+    if (lua_type(L, -1) != LUA_TNIL) {
+        const char *s = Con_LuaToString(L, -1);
+        if (s != NULL) {
+            Console_Printf("%s\n", s);
+        }
+    }
+    lua_settop(L, 0);
+    return 0;
+}
+
 /* 0x00426800: "fps". */
 int Con_CmdFps(CmdTable *ctx, char *name, char *args)
 {
@@ -1348,6 +1453,34 @@ int Con_CmdFps(CmdTable *ctx, char *name, char *args)
         return r;
     }
     g_game->show_fps = g_game->show_fps == 0;
+    return 0;
+}
+
+/*
+ * "stats": dumps the renderer's counters (not in the original: the original
+ * counts them and never shows them). Read-only, so it changes nothing.
+ */
+int Con_CmdStats(CmdTable *ctx, char *name, char *args)
+{
+    DecompBuffer *buf = g_spriteDecompBuffer;
+    int r = Con_NoArgs(args);
+
+    if (r != 0) {
+        return r;
+    }
+    Console_Printf("render mode %i, %ix%i@%i\n", g_renderMode, g_videoWidth, g_videoHeight, g_videoDepth);
+    Console_Printf("GL textures: %llu KiB (peak %llu KiB)\n", g_glTexMemory >> 10, g_glTexMemoryPeak >> 10);
+    Console_Printf("sprites: %llu texture, %llu streamed\n", g_glStatSpriteTexture, g_glStatSpriteStream);
+    Console_Printf("palettes: %llu texture, %llu streamed, %i converted\n", g_glStatPalTexture, g_glStatPalStream,
+                   g_palConvertCount);
+    Console_Printf("texture compressions: %llu\n", g_glStatTexCompress);
+    if (buf != NULL) {
+        Console_Printf("sprite cache: %i KiB, %i hits, %i misses, %i evictions (%i used, %i free)\n",
+                       (int)(buf->size >> 10), buf->hits, buf->misses, buf->evictions, buf->used_count,
+                       buf->free_count);
+    } else {
+        Console_Printf("sprite cache: none\n");
+    }
     return 0;
 }
 
@@ -1605,6 +1738,9 @@ int Console_Create(void)
     CmdTable_Add("togglelifebars", Con_CmdToggleLifebars, "Toggles display of lifebars", t);
     CmdTable_Add("showclsn", Con_CmdShowClsn, "Cycles through display of collision boxes", t);
     CmdTable_Add("fps", Con_CmdFps, "Shows/Hides FPS counter.", t);
+    CmdTable_Add("stats", Con_CmdStats, "Shows renderer statistics.", t);
+    CmdTable_Add("lmode", Con_CmdLuaMode, "Toggles the console between command and Lua mode", t);
+    CmdTable_Add("lexec", Con_CmdLuaExec, "Executes a line of Lua code", t);
     CmdTable_Add("toggleai", Con_CmdToggleAi, "Turns player AI on or off", t);
     CmdTable_Add("toggleplayer", Con_CmdTogglePlayer, "Enables/Disables a specific player", t);
     CmdTable_Add("forcestand", Con_CmdForceStand, "Forces players into stand state", t);
