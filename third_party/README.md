@@ -14,7 +14,8 @@ its own license; the license files and notices are in the directories and header
 | `sdk/include/SDL/SDL_ttf.h` | SDL_ttf 2.0.11 header | zlib license |
 | `sdk/include/zlib.h`, `zconf.h` | zlib 1.2.3 headers | zlib license |
 | `sdk/include/pthread.h`, `sched.h` | pthreads-win32 2.8.0 headers | GNU LGPL 2.1 |
-| `sdk/include/libresample.h` | declarations for the game's `libresample.dll` (libresample 0.1.3), written for this project from the calls in `mugen.exe` | — |
+| `sdk/include/libresample.h` | declarations for the game's `libresample.dll` (libresample 0.1.3), written for this project from the calls in `mugen.exe`. DLL build only; the static build uses `libresample/include` | — |
+| `libresample/` | libresample 0.1.3 by Dominic Mazzoni, vendored and ported to multi-channel to match Elecbyte's ABI. See `libresample/VENDORED.md` | BSD / LGPL |
 | `sdk/def/*.def` | export lists of the game's DLLs, from which the build makes import libraries | — |
 
 The DLLs themselves are not included. At run time the executable uses the copies in the game's
