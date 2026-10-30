@@ -10,6 +10,61 @@
  */
 #include "mugen.h"
 
+/*
+ * Cache of Pal_Convert results (not in the original; see PLANS.md, rendering
+ * optimization step 2).
+ *
+ * Pal_Convert recomputes all 256 RGB565 colours through the applied PalFX and
+ * is called on every paletted sprite draw, so the same palette is converted
+ * again and again with the same PalFX. The result is stored in the Palette
+ * itself (pal->rgb565), so the only thing needed is to know that it is still
+ * current: a key of the palette's identity plus the applied PalFX values.
+ *
+ * The key cannot use g_palFxApplied.serial: that field overlaps color (see the
+ * comment at the top of this file), so the values themselves are compared.
+ *
+ * Soundness: pal->data is never written in place; only Pal_Init and Pal_Free
+ * change a palette's identity, and both drop its entry (pal_cache_drop). A
+ * collision only costs a recompute.
+ */
+#define PAL_CACHE_SIZE 64
+
+typedef struct PalCacheEntry {
+    const Palette *pal;
+    const void *data;
+    int count;
+    int color;
+    int add[3];
+    int mul[3];
+    int invertall;
+} PalCacheEntry;
+
+static PalCacheEntry pal_cache[PAL_CACHE_SIZE];
+
+static unsigned int pal_cache_slot(const Palette *pal)
+{
+    return ((unsigned int)(uintptr_t)pal >> 4) & (PAL_CACHE_SIZE - 1);
+}
+
+/* Forgets pal's entry: the next Pal_Convert converts. */
+static void pal_cache_drop(const Palette *pal)
+{
+    PalCacheEntry *e = &pal_cache[pal_cache_slot(pal)];
+
+    if (e->pal == pal) {
+        e->pal = NULL;
+    }
+}
+
+/* 1 when e still describes pal converted with the applied PalFX. */
+static int pal_cache_matches(const PalCacheEntry *e, const Palette *pal, const PalFx *fx)
+{
+    return e->pal == pal && e->data == pal->data && e->count == pal->count && e->color == fx->color &&
+           e->add[0] == fx->add[0] && e->add[1] == fx->add[1] && e->add[2] == fx->add[2] &&
+           e->mul[0] == fx->mul[0] && e->mul[1] == fx->mul[1] && e->mul[2] == fx->mul[2] &&
+           e->invertall == fx->invertall;
+}
+
 /* Packs clamped 8-bit components as RGB565, exactly as the original. */
 static unsigned short pal_pack565(int r, int g, int b)
 {
@@ -40,6 +95,7 @@ int Pal_Init(Palette *pal, int count, void *colors, int flags)
         gl = 1;
     }
     take = (unsigned int)flags >> 1 & 1;
+    pal_cache_drop(pal);
     memset(pal, 0, sizeof(Palette));
     pal->count = count;
     if (colors == NULL || count == 0) {
@@ -88,6 +144,9 @@ int Pal_Init(Palette *pal, int count, void *colors, int flags)
     }
     if (!gl && !pal->is_texture) {
         Pal_ToRGB565(pal->data, pal->count - 1, pal->rgb565);
+        /* rgb565 is filled here, but not through the applied PalFX: keep the
+         * conversion cache from crediting it (see pal_cache). */
+        pal_cache_drop(pal);
     }
     return 1;
 }
@@ -95,6 +154,7 @@ int Pal_Init(Palette *pal, int count, void *colors, int flags)
 /* 0x00461AB0 */
 void Pal_Free(Palette *pal)
 {
+    pal_cache_drop(pal);
     if (pal->owns) {
         if (pal->is_texture == 1 && pal->data != NULL) {
             /* A texture that is still in use is not released (nor freed). */
@@ -177,12 +237,30 @@ PalFx *PalFx_GetApplied(void)
 /* 0x00461BC0: refreshes the RGB565 colours of a software palette with the applied PalFX. */
 void Pal_Convert(Palette *pal)
 {
+    PalFx *fx;
+    PalCacheEntry *e;
+
     if (pal->is_texture != 0) {
         return;
     }
-    PalFx_GetApplied();
+    fx = PalFx_GetApplied();
+    e = &pal_cache[pal_cache_slot(pal)];
+    if (pal_cache_matches(e, pal, fx)) {
+        return; /* already converted with these values */
+    }
     PalFx_ToRGB565(&g_palFxApplied, pal->count - 1, pal->is_texture == 0 ? pal->data : NULL, pal->rgb565);
     g_palConvertCount++;
+    e->pal = pal;
+    e->data = pal->data;
+    e->count = pal->count;
+    e->color = fx->color;
+    e->add[0] = fx->add[0];
+    e->add[1] = fx->add[1];
+    e->add[2] = fx->add[2];
+    e->mul[0] = fx->mul[0];
+    e->mul[1] = fx->mul[1];
+    e->mul[2] = fx->mul[2];
+    e->invertall = fx->invertall;
 }
 
 /*
