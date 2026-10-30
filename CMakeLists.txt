@@ -100,6 +100,15 @@ set(MUGEN_SOURCES
 )
 
 add_executable(mugen WIN32 ${MUGEN_SOURCES} src/mugen.rc src/mugen.manifest)
+# A single PDB for the target. Without this CMake sets TARGET_COMPILE_PDB to the
+# target's object directory, so every cl.exe writes vc140.pdb into the same
+# directory and parallel builds fail with C1041 ("cannot open program database
+# ... if multiple CL.EXE write to the same .PDB file, please use /FS"): /FS is
+# already passed, but an unnamed PDB cannot be shared that way.
+set_target_properties(mugen PROPERTIES
+  OUTPUT_NAME mugen_unleashed
+  COMPILE_PDB_NAME mugen_unleashed
+  COMPILE_PDB_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 target_include_directories(mugen PRIVATE src)
 target_compile_definitions(mugen PRIVATE _CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_DEPRECATE)
 # /wd4100 unreferenced parameter: the reconstructed functions keep every original parameter.

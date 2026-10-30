@@ -48,7 +48,7 @@ tools\msvc_env.bat cmake --build --preset x86-release
 ```
 
 The `x86-debug` preset builds an unoptimised executable instead. The executable ends up in
-`build\<preset>\mugen.exe`.
+`build\<preset>\mugen_unleashed.exe` (with `mugen_unleashed.pdb` next to it).
 
 To embed the original window icon, point the configure step at your M.U.G.E.N directory:
 
@@ -73,8 +73,8 @@ the dependency list.
 
 ## Running
 
-1. Copy `mugen.exe` into your M.U.G.E.N 1.1 Beta 1 directory, under another name if you want
-   to keep the original (for example `mugen_unleashed.exe`).
+1. Copy `mugen_unleashed.exe` into your M.U.G.E.N 1.1 Beta 1 directory. It does not shadow the
+   original `mugen.exe`, so both can stay side by side.
 2. Run it from there.
 
 It needs the `Elecbyte.MUGEN.libs` folder of the game, which holds SDL, SDL_mixer, SDL_ttf,

@@ -9,7 +9,7 @@
 # i686-w64-mingw32 toolchain (x86_64-w64-mingw32 will not do: the engine is a
 # 32-bit binary reconstruction, its struct layouts and pointers are 4 bytes).
 #
-#   make              build $(BUILD)/mugen.exe
+#   make              build $(BUILD)/mugen_unleashed.exe
 #   make -j8          parallel build
 #   make V=1          show the full command lines
 #   make clean        remove the object files of $(BUILD)
@@ -58,7 +58,7 @@ OBJ_DIR   := $(BUILD)/obj
 LIB_DIR   := $(BUILD)/lib
 IMPLIB_DIR:= $(BUILD)/implib
 ICON_DIR  := $(BUILD)/icon
-TARGET    := $(BUILD)/mugen.exe
+TARGET    := $(BUILD)/mugen_unleashed.exe
 
 # ------------------------------------------------------------- compile flags
 
