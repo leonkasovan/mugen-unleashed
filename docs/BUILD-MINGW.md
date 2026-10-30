@@ -1,8 +1,12 @@
-# Building with GNU Make and GCC (MinGW-w64)
+# Building the static executable with GNU Make and GCC
 
-`Makefile` builds `mugen.exe` with GNU Make and GCC as an alternative to the
-CMake projects (`CMakeLists.txt`, `CMakePresets.json`) used with MSVC. Both
-build the same executable from the same sources.
+`Makefile` builds **`mugen-static.exe`**: a single self-contained 32-bit Windows
+executable with no DLL dependencies besides the Windows system ones. GNU Make +
+GCC, as an alternative to the CMake/MSVC build (`CMakeLists.txt`,
+`CMakePresets.json`), which links the game's original DLLs instead.
+
+Everything third-party is either compiled from source in `third_party/` or
+linked statically from `C:\x86devkit`.
 
 The instructions below are for the environment this project was verified in:
 
@@ -10,13 +14,16 @@ The instructions below are for the environment this project was verified in:
 |---|---|
 | Compiler | `gcc` (GCC) 16.1.0, target `i686-w64-mingw32` |
 | Make | GNU Make 4.4.1 |
-| Binutils | `i686-w64-mingw32-{ar,windres,dlltool}` from the same kit |
+| Binutils | `i686-w64-mingw32-{ar,windres,strip}` from the same kit |
+| `pkg-config` | finds `sdl.pc`, `SDL_gfx.pc`, `SDL_mixer.pc`, `SDL_ttf.pc` |
 | Shell | MSYS2 bash (or `sh` from the same kit) |
 | Python | any working `python3` / `python` / `py -3` — only for the optional icon |
 
 ```sh
-make check-toolchain     # verifies the toolchain before anything else
-make -j8                 # build/mingw/mugen.exe
+make check-toolchain     # verifies the 32-bit toolchain and that the static
+                         # archives (not just .pc files) are present
+make -j8                 # build/mingw/mugen-static.exe
+make install             # strip it and copy it into install/
 ```
 
 Targets and variables:
@@ -54,53 +61,79 @@ Two other MSVC behaviours are reproduced with flags:
 
 ## Dependencies
 
-`mugen.exe` has two kinds of dependencies: the libraries reconstructed from
-their source, compiled into the executable, and the DLLs that ship with the
-game and are imported at run time.
+Every dependency is resolved at build time. The executable needs **no** DLL
+from the game.
 
-### Built from source, linked statically
+### Linked statically
 
-| Directory | Version | Built as | Makefile rule |
-|---|---|---|---|
-| `third_party/lua-5.1.4/src` | Lua 5.1.4 | `build/mingw/lib/liblua.a` (27 files) | `$(LUA_SRCS)` |
-| `third_party/libpng-1.2.38` | libpng 1.2.38 | `build/mingw/lib/libpng.a` (`png*.c` minus `pngtest.c`, 17 files) | `$(PNG_SRCS)` |
-| `third_party/glew-1.5.4/src/glew.c` | GLEW 1.5.4 | `glew.o`, compiled with `-DGLEW_STATIC` | `$(GLEW_OBJ)` |
-| `third_party/minizip-0.15/unzip.c` | unzip 0.15 | `unzip.o` (reading characters from `.zip`) | `$(MINIZIP_OBJ)` |
-| `src/*.c` | the engine | 78 objects, one per module | `$(ENGINE_SRCS)` |
-| `src/lookup3.c` | Bob Jenkins lookup3 | part of the engine | — |
-| `src/sdlmain.c` | SDL 1.2.15 `SDLmain` | part of the engine (the `WinMain` entry) | — |
+| Library | Version | How it gets in |
+|---|---|---|
+| **SDL** | 1.2.15 | `libSDL.a` from the kit, via `sdl.pc` |
+| **SDL_gfx** | — | `libSDL_gfx.a` via `SDL_gfx.pc` (`zoomSurface`) |
+| **SDL_mixer** | — | `libSDL_mixer.a` via `SDL_mixer.pc`, plus its own static deps |
+| **SDL_ttf** | — | `libSDL_ttf.a` via `SDL_ttf.pc` + freetype, bz2 |
+| **zlib** | — | `libz.a`, pulled in through `SDL_image`/`SDL_ttf`'s `.pc` |
+| **pthreads-win32** | — | `libpthread.a` (the kit's static build) |
+| **mpg123** | — | `libmpg123.a`, via `SDL_mixer.pc` |
+| Lua | 5.1.4 | built from `third_party/lua-5.1.4/src` → `liblua.a` |
+| libpng | 1.2.38 | built from `third_party/libpng-1.2.38` → `libpng.a` |
+| GLEW | 1.5.4 | `third_party/glew-1.5.4/src/glew.c` with `-DGLEW_STATIC` |
+| minizip | 0.15 | `third_party/minizip-0.15/unzip.c` |
+| **libresample** | 0.1.3 | vendored in `third_party/libresample`, ported to multi-channel |
 
-`pnggccrd.c` and `pngvcrd.c` compile to nothing unless libpng is configured for
-its hand-written MMX/SSE2 paths, so libpng is built on its portable C path, as
-in the CMake build.
+The kit libraries are not hand-listed: the Makefile asks pkg-config for
+`--libs --static` on `sdl SDL_gfx SDL_mixer SDL_ttf`, which expands to the whole
+transitive set (freetype, bz2, ogg, vorbis, opus, FLAC, wavpack, gme, mpg123,
+zlib, pthread, stdc++). Hand-writing `-lSDL_mixer -lSDL_ttf` would miss about a
+dozen archives and fail at link.
 
-### DLLs, resolved at run time
+Two headers need a define to stop declaring `dllimport`:
 
-The original links dynamically against the DLLs of the private assembly
-`Elecbyte.MUGEN.libs` next to the executable. This project does not ship those
-DLLs, only the *export lists* (`third_party/sdk/def/*.def`) of the exact
-versions the game used. `dlltool -d <def> -l lib<name>.a` turns each list into
-an import library (`build/mingw/implib/`), so the executable imports exactly
-the same symbols in the same order as the original. The headers in
-`third_party/sdk/include/` are the matching import-time headers.
+| Define | Header | Why |
+|---|---|---|
+| `PTW32_STATIC_LIB` | `third_party/sdk/include/pthread.h` | its own `PTW32_DLLPORT` logic already honours it |
+| `LIBRESAMPLE_STATIC` | `third_party/libresample/include/libresample.h` | our vendored header |
 
-| Import library | DLL | Version | Used for |
-|---|---|---|---|
-| `libSDL.a` | `SDL.dll` | 1.2.15 | window, events, keyboard, joysticks, audio |
-| `libSDL_mixer.a` | `SDL_mixer.dll` | 1.2.11 | sound effects, MIDI/tracker music |
-| `libSDL_ttf.a` | `SDL_ttf.dll` | 2.0.11 | TrueType fonts |
-| `libSDL_gfx.a` | `SDL_gfx.dll` | — | `zoomSurface` |
-| `libzlib1.a` | `zlib1.dll` | 1.2.3 | inflate/deflate (SFF v2, PNG) — **not** the MinGW `-lz` |
-| `liblibresample.a` | `libresample.dll` | 0.1.3 | audio resampling |
-| `libpthreadVC2.a` | `pthreadVC2.dll` | 2.8.0 | the BGM thread |
+`third_party/sdk/include/libresample.h` (the original DLL's header) declares
+`dllimport` unconditionally, so `third_party/libresample/include` **must come
+first** on the include path. That is why `CPPFLAGS` orders it before
+`$(SDK_DIR)/include`.
 
-At run time `libmpg123-0.dll` is also needed by the built-in `mpg123` BGM
-plugin, but it is loaded with `LoadLibrary`, so it is not an import of the
-executable.
+### libresample is vendored, not upstream
 
-To run the executable you need a M.U.G.E.N 1.1 game directory containing those
-DLLs (they are in the original game's `Elecbyte.MUGEN.libs`), with this
-`mugen.exe` copied over the original.
+Elecbyte's `libresample.dll` is a private multi-channel fork: its
+`resample_open` takes a channel count and its buffers are interleaved frames,
+neither of which upstream 0.1.3 supports. `third_party/libresample` is upstream
+with the channel parameter restored. `third_party/libresample/VENDORED.md`
+documents every change; `tools/check_libresample.c` verifies that one channel is
+bit-identical to upstream and that N channels equal N independent mono runs.
+
+### Mix_QuerySpecEx
+
+`src/sound.c` calls `Mix_QuerySpecEx`, an Elecbyte addition to SDL_mixer that
+stock SDL_mixer 1.2 does not have (it has `Mix_QuerySpec`, without the chunk
+size). The static build therefore compiles `src/sdlmixercompat.c`, which wraps
+`Mix_QuerySpec` and reports the chunk size the engine requested. The CMake/MSVC
+build does not compile that file — it links the game's real `SDL_mixer.dll`.
+
+### What the executable still imports
+
+```
+ADVAPI32.dll  GDI32.dll  GLU32.DLL  KERNEL32.dll  OPENGL32.DLL
+SHELL32.dll   SHLWAPI.dll  USER32.dll  WINMM.DLL  msvcrt.dll
+```
+
+Windows system DLLs only, plus `msvcrt.dll` (MinGW's CRT, present on every
+Windows since XP). Verified with:
+
+```sh
+objdump -p build/mingw/mugen-static.exe | grep "DLL Name"
+```
+
+Note the executable *exports* a few hundred SDL/Mixer/TTF names. Those come
+from `.drectve` sections inside `libSDL.a` and cannot be removed with a command
+line `--exclude-all-symbols`. Only library names are exported, never engine
+symbols, so it is harmless.
 
 ### Windows system libraries
 
@@ -112,42 +145,76 @@ DLLs (they are in the original game's `Elecbyte.MUGEN.libs`), with this
 | Tool | Used for | Optional |
 |---|---|---|
 | `gcc` (`i686-w64-mingw32`) | compiling, linking | no |
-| `ar` | `liblua.a`, `libpng.a` | no |
-| `dlltool` | import libraries from the `.def` files | no |
+| `ar` | `liblua.a`, `libpng.a`, `libresample.a` | no |
+| `pkg-config` | locating the static SDL stack and its dependencies | no |
 | `windres` | `src/mugen.rc` + the assembly manifest into a `.res` object | no |
+| `strip` | `make install` | no |
 | `python3` / `python` / `py -3` | `tools/extract_icon.py`, only with `MUGEN_GAME_DIR` (needs `pefile`) | yes |
 
 `python3` on Windows is very often the Microsoft Store alias, which exists but
 does nothing; the Makefile therefore runs each candidate once and uses the
 first that works.
 
+## Icon and manifest
+
+`src/mugen.rc` includes icon 101 only when `MUGEN_HAS_ICON` is defined, which
+the Makefile sets when `MUGEN_GAME_DIR` holds a `mugen.exe` the extraction
+script can read. The assembly manifest is embedded as resource `1 24`
+(RT_MANIFEST); it still names `Elecbyte.MUGEN.libs`, which is harmless now that
+nothing loads from it.
+
 ## What the build does, in order
 
-1. Compile the 78 engine modules into `build/mingw/obj/src/`.
-2. Compile Lua, libpng, GLEW, minizip into `build/mingw/obj/` and archive the
-   two libraries into `build/mingw/lib/`.
-3. Generate the import libraries of the game's DLLs with `dlltool` from
-   `third_party/sdk/def/`.
-4. Generate `build/mingw/obj/res/mugen_all.rc` — a copy of `src/mugen.rc` with
-   the assembly manifest appended as resource `1 24` (RT_MANIFEST) — and compile
-   it with `windres`. `src/mugen.rc` itself is left untouched, so the CMake
-   build keeps adding `src/mugen.manifest` to the linker directly.
-5. Link `build/mingw/mugen.exe` with `-mwindows` (GUI subsystem, `WinMain`
-   from `src/sdlmain.c`).
+1. Compile the engine modules in `src/` into `build/mingw/obj/src/`
+   (78 original modules plus `src/sdlmixercompat.c`).
+2. Compile Lua, libpng, libresample, GLEW, minizip into `build/mingw/obj/` and
+   archive the three libraries into `build/mingw/lib/`.
+3. Generate `build/mingw/obj/res/mugen_all.rc` — a copy of `src/mugen.rc` with
+   the assembly manifest appended as resource `1 24` — and compile it with
+   `windres`. `src/mugen.rc` itself is left untouched, so the CMake build keeps
+   adding `src/mugen.manifest` to the linker directly.
+4. Link `build/mingw/mugen-static.exe` with `-mwindows` (GUI subsystem,
+   `WinMain` from `src/sdlmain.c`) and `-Wl,--gc-sections` so unreferenced
+   archive members are dropped.
+5. `make install` strips a copy and puts it in `install/`.
 
-Nothing in `src/` or `third_party/` is modified by the build.
+Nothing in `third_party/` is modified by the build. `src/sdlmixercompat.c` is
+new and static-build only; it is not an original module and is not in the CMake
+build.
 
 ## Portability notes
 
-* Header include order matters for libpng and minizip: they are compiled with
-  `third_party/sdk/include` (the original zlib 1.2.3 headers) ahead of anything
-  else, so they see the same zlib API they were written against. Do not add
-  `-I` paths that shadow `zlib.h`/`zconf.h`.
-* The engine is compiled with the SDL 1.2 / pthreads-win32 headers from
-  `third_party/sdk/include`, *not* with SDL2/SDL3 or a system pthread, which
-  are ABI-incompatible with the DLLs the game loads.
+* **SDL headers now come from the kit**, not `third_party/sdk/include/SDL`.
+  The kit's are the same 1.2.15 API and match the archives we link. The
+  `third_party/sdk/include/SDL` copy stays for the MSVC build, which still uses
+  the game's DLLs.
+* **Include order is load-bearing.** `third_party/libresample/include` must
+  precede `third_party/sdk/include`, because the latter's `libresample.h`
+  declares `dllimport` unconditionally. Likewise `third_party/sdk/include`
+  stays ahead of anything that would shadow `zlib.h`/`zconf.h` for libpng and
+  minizip.
+* An `i686-w64-mingw32` toolchain is mandatory. `x86_64-w64-mingw32` will
+  compile `-m32` objects but cannot link them (no 32-bit CRT).
 * GCC 14 and later make `-Wincompatible-pointer-types` an error; the Makefile
   turns that specific diagnostic back into a warning (`src/globals.c` has one,
   from the original's BGM subsystem table).
 * `-fno-strict-aliasing` is deliberate: the reconstruction aliases the way the
   original machine code did.
+* The static link is **large** (~10 MB unstripped). `make install` strips it;
+  expect roughly 3-4 MB after stripping.
+
+## Validating the build
+
+Behaviour is checked by running both binaries on the same scenario and diffing
+`mugen.log` — see `AGENTS.md`, "Testing", and `tools/compare_logs.py`.
+
+The static build was verified this way against the original `mugen.exe`:
+
+| Scenario | Result |
+|---|---|
+| startup, mode select | `mugen.log` identical after numeric normalisation |
+| quick VS (`-p1 kfm -p2 kfm`) | `mugen.log` identical |
+
+Both binaries must be given the **same timeout**: the original runs until
+closed, so a shorter run on one side truncates its log and produces a
+difference that is an artefact of the test, not the build.

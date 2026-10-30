@@ -76,17 +76,26 @@ directly without it — the environment will be missing.
 
 Details: `docs/BUILD-MSVC.md`.
 
-### GNU Make + MinGW (alternative)
+### GNU Make + MinGW (alternative, fully static)
 
 ```sh
 export PATH=/c/x86devkit/bin:$PATH      # the 32-bit kit, not w64devkit
 make check-toolchain
 make -j8
+make install                            # strips and copies into install/
 ```
 
-→ `build/mingw/mugen_unleashed.exe`
+→ `build/mingw/mugen-static.exe`, and `install/mugen-static.exe` after
+`make install`.
 
-`make check-toolchain` refuses a non-`i686-w64-mingw32` compiler. `make DEBUG=1
+This build links **everything statically** (SDL 1.2, SDL_gfx, SDL_mixer,
+SDL_ttf, zlib, pthread, mpg123 from the kit; Lua, libpng, GLEW, minizip,
+libresample from source). The result needs no `Elecbyte.MUGEN.libs` — only
+Windows system DLLs and `msvcrt.dll`. The CMake/MSVC build still links the
+game's DLLs; the two are not the same link step.
+
+`make check-toolchain` refuses a non-`i686-w64-mingw32` compiler and checks the
+static archives exist (not just `.pc` files). `make DEBUG=1
 BUILD=build/mingw-debug` for an unoptimised build. Details:
 `docs/BUILD-MINGW.md`.
 
@@ -171,13 +180,17 @@ The project has no unit tests. Behaviour is validated by **running both binaries
 on the same scenario and diffing `mugen.log`** (`docs/ANALYSIS.md`,
 "Validation").
 
-`install/` holds a real M.U.G.E.N 1.1b1 tree, so tests can be run end to end:
+`install/` holds a real M.U.G.E.N 1.1b1 tree, so tests can be run end to end.
+`make install` puts the static executable there for you:
 
 ```sh
+make install
 cd install
-cp ../build/x86-release/mugen_unleashed.exe .   # must sit next to the game data
-./mugen_unleashed.exe -nosound                  # startup/mode select
+./mugen-static.exe -nosound          # startup/mode select
 ```
+
+For the MSVC build, copy `build/x86-release/mugen_unleashed.exe` into `install/`
+by hand; it needs the `Elecbyte.MUGEN.libs` folder, the static one does not.
 
 Copy the original `mugen.exe` log out of the way first, then compare:
 
@@ -193,7 +206,7 @@ Scenarios worth running (all with `-nosound` for reproducibility):
 
 | Scenario | Command |
 |---|---|
-| startup → mode select | `./mugen_unleashed.exe -nosound` |
+| startup → mode select | `./mugen-static.exe -nosound` |
 | quick VS, one character per side | `-nosound -p1 kfm -p2 kfm` |
 | AI vs AI, two rounds | `-nosound -rounds 2 -p1.ai 1 -p2.ai 1` |
 
@@ -207,6 +220,12 @@ Known test-environment quirks:
   cannot be exercised headlessly.
 - `mugen.log` is written to the working directory. Delete it between runs or you
   will compare stale logs.
+- **Give both binaries the same timeout.** The original runs until closed; if
+  one side is killed earlier its log is simply shorter, and
+  `compare_logs.py` reports that as hundreds of differences. Every "mismatch"
+  chased during this project that came from a short timeout looked exactly like
+  a regression. Use a self-terminating scenario (`-p1 kfm -p2 kfm`) where you
+  can.
 
 Clean up afterwards: remove the copied executable and any logs from `install/`.
 That directory is the pristine game tree; leave it as you found it.
