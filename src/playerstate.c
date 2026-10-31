@@ -875,7 +875,31 @@ void Player_ClampToStage(Player *p)
 /* The HitDef (or ReversalDef) of a player. */
 
 /* -FLT_MAX: HitDef velocities that keep the current one. */
-#define PS_NEG_FLT_MAX      (-3.402823466e+38F)
+/*
+ * FIX (reconstruction bug, not an original quirk).
+ *
+ * This was (-3.402823466e+38F). The original MSVC build rounds that literal to
+ * float, giving exactly -FLT_MAX, and its "is this value unset?" comparisons
+ * worked. GCC here is built with -fexcess-precision=standard (x87,
+ * FLT_EVAL_METHOD 2), which keeps a float literal in extended precision: the
+ * constant stays -3.4028234660000002e+38 while a value loaded from a float
+ * field is rounded to -FLT_MAX = -3.4028234663852886e+38. The two are NOT
+ * equal, so every == / != test against this sentinel silently failed --
+ * verifiable with a two-line program on both the MinGW and the Linux builds:
+ *     float s = -3.402823466e+38F;
+ *     s == (-3.402823466e+38F)  ->  0
+ *     s == (-FLT_MAX)           ->  1
+ *
+ * What that broke: a HitDef without an explicit yaccel left the sentinel in
+ * Player.gethit_yaccel, and SCTRL_HITFALLVEL's "!= -FLT_MAX" guard then passed,
+ * assigning the sentinel to vel.y. From there pos.y accumulates to -FLT_MAX and
+ * the player is drawn tens of millions of units off screen -- the launched
+ * opponent cropping to a sliver, and a character vanishing entirely.
+ *
+ * -FLT_MAX is the same value MSVC produced, so this restores the original
+ * behaviour rather than changing it.
+ */
+#define PS_NEG_FLT_MAX      (-FLT_MAX)
 
 /* HitDef.mindist / maxdist "not given". */
 #define HITDEF_NO_DIST      (-1025)
