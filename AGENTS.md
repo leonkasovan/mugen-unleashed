@@ -45,7 +45,7 @@ src/            78 .c + 47 .h — the engine, one file per original module
   globals.c     the globals, with their initial values from the original .data
   sdlmain.c     SDL 1.2's SDLmain (WinMain), rebuilt
   mugen.rc      error dialog (200), version info, optional icon
-third_party/    Lua 5.1.4, libpng 1.2.38, GLEW 1.5.4, minizip 0.15, sdk headers+defs
+third_party/    Lua 5.1.4, libpng 1.2.38, glad 2.1, minizip 0.15, sdk, libresample
 cmake/          build helpers (MugenSdk.cmake, ThirdParty.cmake)
 tools/          msvc_env.bat, extract_icon.py, compare_logs.py
 docs/           ANALYSIS.md, BUILD-MSVC.md, BUILD-MINGW.md, BUILD-LINUX.md, LUA.md
@@ -103,7 +103,7 @@ make install                            # strips and copies into install/
 `make install`.
 
 This build links **everything statically** (SDL 1.2, SDL_gfx, SDL_mixer,
-SDL_ttf, zlib, pthread, mpg123 from the kit; Lua, libpng, GLEW, minizip,
+SDL_ttf, zlib, pthread, mpg123 from the kit; Lua, libpng, glad, minizip,
 libresample from source). The result needs no `Elecbyte.MUGEN.libs` — only
 Windows system DLLs and `msvcrt.dll`. The CMake/MSVC build still links the
 game's DLLs; the two are not the same link step.
@@ -165,7 +165,7 @@ symbol. `get_code_snippet` needs the **fully qualified** name
 - **`--file-pattern` does not filter `search_graph`.** Passed `src/` and still got
   `third_party/` results. Use `--name-pattern`/`--qn-pattern` for narrowing, or
   `get_file_outline` when you know the file.
-- **`full` mode indexes all of `third_party/`** (Lua, libpng, GLEW, minizip),
+- **`full` mode indexes all of `third_party/`** (Lua, libpng, glad, minizip),
   which outweighs `src/` in the 21k nodes. Unfiltered searches get buried in
   vendored code — a search for "lua state" returned only `third_party/lua-5.1.4`
   hits. Qualify symbols, or filter after the fact.
@@ -251,13 +251,18 @@ That directory is the pristine game tree; leave it as you found it.
 2. Keep the address comments (`/* 0x0042E390: ... */`) and the
    `/* 0x... */` prototype comments in `symbols.h` in sync with any change.
 3. Do not add new dependencies. The dependency set is fixed by what the original
-   binary imported (see `docs/ANALYSIS.md`).
-4. Prefer the existing helpers: `Ftol`/`Trunc64` for float→int (`src/ftol.h`),
+   binary imported (see `docs/ANALYSIS.md`). One deliberate exception is
+   recorded in `PLANS.md`: GLEW 1.5.4 was replaced by glad 2.1 as the OpenGL
+   loader, which is smaller and generates exactly what the engine needs.
+4. Never put `<SDL.h>` or `<GL/gl.h>` above `#include "mugen.h"` in a source
+   file: glad must see the GL headers first or it refuses to load.
+   `<GL/glu.h>` goes after `mugen.h`.
+5. Prefer the existing helpers: `Ftol`/`Trunc64` for float→int (`src/ftol.h`),
    `Mem_Calloc`/`Mem_Malloc` for allocation, `Log_Printf`/`MatchLog_Printf` for
    output.
-5. Build with both toolchains if you touched anything shared; MSVC is the
+6. Build with all three toolchains if you touched anything shared; MSVC is the
    reference.
-6. If you change behaviour on purpose, add a comment saying so. If you fix an
+7. If you change behaviour on purpose, add a comment saying so. If you fix an
    original bug, mark it as a fix — silently diverging is the one thing this
    project does not accept.
 

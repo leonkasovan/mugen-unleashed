@@ -72,7 +72,7 @@ Linked statically (built from source in `third_party/`, not reconstructed):
 |---|---|---|
 | Lua | 5.1.4 | `third_party/lua-5.1.4` |
 | libpng | 1.2.38 | `third_party/libpng-1.2.38` |
-| GLEW | 1.5.4 | `third_party/glew-1.5.4` |
+| GLEW | 1.5.4 | statically linked in the original (0x4B68F0–0x4C4DCF). **The reconstruction uses glad 2.1 instead** (`third_party/glad-2.1`); `glew-1.5.4/` is kept for reference only |
 | minizip (unzip) | 0.15 | `third_party/minizip-0.15` (characters in .zip files) |
 | lookup3 (Bob Jenkins) | 2006 | `src/lookup3.c`: `hashlittle` with the initial value 0x1337B47E folded in |
 | SDLmain | 1.2.15 | `src/sdlmain.c`, rebuilt from the binary |
@@ -207,8 +207,10 @@ comments of each function ("Quirks kept from the original").
   address comments point to the original functions.
 - **Initialised globals.** 54 globals have non-zero initial values in the original's `.data`
   / `.rdata`: renderer function tables, the BGM plugin tables, trigger and key name tables,
-  shaders, error messages. `src/globals.c` has them. GLEW's function pointers are GLEW's own
-  variables.
+  shaders, error messages. `src/globals.c` has them. GLEW's function pointers were GLEW's own
+  variables at 0x00500f70–0x00502b68; the reconstruction gets them from glad instead, and
+  `src/symbols.h` keeps those addresses as comments so the mapping to the original is still
+  recorded.
 - **Resources.** `src/mugen.rc` rebuilds the original's error dialog (200) and its version
   information. The window icon (101) is taken from the original executable at build time when
   it is available.

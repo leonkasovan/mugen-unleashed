@@ -125,7 +125,7 @@ subtly wrong binary.
 | `/utf-8` | sources contain non-ASCII in comments and strings |
 | `_CRT_SECURE_NO_WARNINGS`, `_CRT_NONSTDC_NO_DEPRECATE` | the code uses the classic CRT names deliberately |
 | `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded` (`/MT`) | static CRT, so no `MSVCR90.dll` / VC redistributable is needed |
-| third-party targets: `/W0` | Lua/libpng/GLEW/minizip warnings are not ours to fix |
+| third-party targets: `/W0` | Lua/libpng/glad/minizip warnings are not ours to fix |
 
 `/std:c11` comes from `CMAKE_C_STANDARD 11`.
 
@@ -137,7 +137,7 @@ subtly wrong binary.
    `lib /def: ... /machine:x86`. The exports then match the DLLs the game
    ships, exactly as the original imported them.
 2. **Static libraries** from source (`cmake/ThirdParty.cmake`): `lua51`,
-   `png12`, `glew_static`, `minizip`.
+   `png12`, `glad`, `minizip`.
 3. **The engine**: one object per module in `src/`, plus `src/mugen.rc` and
    `src/mugen.manifest` as resources.
 4. **Link** with `/SUBSYSTEM:WINDOWS`, so entry is `WinMain` from

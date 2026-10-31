@@ -77,7 +77,7 @@ from the game.
 | **mpg123** | — | `libmpg123.a`, via `SDL_mixer.pc` |
 | Lua | 5.1.4 | built from `third_party/lua-5.1.4/src` → `liblua.a` |
 | libpng | 1.2.38 | built from `third_party/libpng-1.2.38` → `libpng.a` |
-| GLEW | 1.5.4 | `third_party/glew-1.5.4/src/glew.c` with `-DGLEW_STATIC` |
+| **glad** | 2.1 | `third_party/glad-2.1/glad.c`, generated for this engine (GL 2.1 compatibility profile + 4 extensions). Replaced GLEW 1.5.4 |
 | minizip | 0.15 | `third_party/minizip-0.15/unzip.c` |
 | **libresample** | 0.1.3 | vendored in `third_party/libresample`, ported to multi-channel |
 
@@ -167,7 +167,7 @@ nothing loads from it.
 
 1. Compile the engine modules in `src/` into `build/mingw/obj/src/`
    (78 original modules plus `src/sdlmixercompat.c`).
-2. Compile Lua, libpng, libresample, GLEW, minizip into `build/mingw/obj/` and
+2. Compile Lua, libpng, libresample, glad, minizip into `build/mingw/obj/` and
    archive the three libraries into `build/mingw/lib/`.
 3. Generate `build/mingw/obj/res/mugen_all.rc` — a copy of `src/mugen.rc` with
    the assembly manifest appended as resource `1 24` — and compile it with

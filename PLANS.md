@@ -14,6 +14,7 @@ lands; keep the research sections true to the findings they were based on.
 | libresample | **vendored and ported** to multi-channel; `third_party/libresample/VENDORED.md` |
 | Lua | **done** — `lmode`/`lexec` implemented, full API documented in `docs/LUA.md` |
 | Renderer optimization | steps 1–3 **done and runtime-verified**; 4–6 pending |
+| OpenGL loader | **GLEW 1.5.4 → glad 2.1 done** — smaller, faster to build, exactly generated |
 | Modern GL (3.3/4.6) / Vulkan | researched, **not recommended** — reasons below |
 | Linux port | **linux-x64 done and verified** — builds and runs, `mugen.log` identical to the Windows build; `docs/BUILD-LINUX.md`. arm64 selected but untested |
 
@@ -169,6 +170,76 @@ like project bugs and are not:
   library list rather than failing. Symptom: a link error about a symbol that
   clearly exists, e.g. `undefined reference to inflateInit2_`. When a link
   fails oddly, run `pkg-config --libs --static $STATIC_PKGS` on its own first.
+
+## GLEW → glad (done)
+
+The OpenGL loader is now **glad 2.1**, generated for exactly this engine:
+`--profile=compatibility --api=gl=2.1` plus `GL_ARB_fragment_program`,
+`GL_ARB_texture_non_power_of_two`, `GL_EXT_blend_logic_op` and
+`GL_EXT_framebuffer_object`. `third_party/glew-1.5.4` is no longer built.
+
+| | GLEW 1.5.4 | glad 2.1 |
+|---|---|---|
+| Vendored source | 1.6 MB | **236 KB** |
+| Object file | 379,804 B | **57,493 B** |
+| Compile time (`-O2`, i686) | 5838 ms | **716 ms** |
+| Windows exe | 10,367,680 B | **9,676,001 B** |
+| Linux exe | 6,166,648 B | **5,351,952 B** |
+
+### Why it was not a drop-in
+
+The first copies of `glad-2.1` in the tree could not be used, and each reason is
+worth recording because the failure modes were quiet:
+
+1. **Generated with `--profile="core"`.** Core deletes the fixed-function
+   pipeline, which is all this renderer uses (`glBegin`/`glEnd` in 13 places,
+   `glVertex2f` 34, `glMatrixMode`, `glOrtho`, `glTexCoord2f`, `glColor3f`,
+   `glLoadIdentity`). Compiling a six-line sample failed on `glBegin`.
+2. **Generated with `--extensions=""`.** Not one `GLAD_GL_ARB_*`/`GLAD_GL_EXT_*`
+   symbol, so none of the capability flags `Gl_Init` requires existed. The
+   renderer would have fallen back to software rendering rather than crashing —
+   the dangerous kind of failure.
+3. **A fifth extension was needed that the plan had missed.** `src/prim.c`
+   gates `Gfx_GlInvertPixel` on `EXT_blend_logic_op`. The "four requirements"
+   quoted from `Gl_Init` were not the complete list.
+
+All three are now correct, verified by compiling `glrender.c`, `prim.c` and
+`gldetect.c` against the generated header and by checking that every one of the
+74 GL functions and all 5 capability flags the engine references exist.
+
+### What changed
+
+| Area | Change |
+|---|---|
+| `src/symbols.h` | the 38 `g_glew*` macros now point at glad's symbols (`glActiveTexture`, `GLAD_GL_VERSION_2_0`, …) instead of GLEW's `__glew*`/`__GLEW_*`. The original's `.data` addresses and pointer typedefs are kept as trailing comments |
+| `src/mugen.h` | `#include <glad.h>` **before** `<SDL.h>` |
+| `src/glrender.c` | `glewInit()` → `gladLoadGL()` |
+| `src/gfx.c`, `gldetect.c`, `glrender.c`, `prim.c` | dropped their own `<GL/gl.h>`; `video.c` keeps `<GL/glu.h>` but includes it *after* `mugen.h` |
+| 11 other `src/*.c` | dropped their own `<SDL.h>`; `mugen.h` supplies it |
+| `Makefile`, `cmake/ThirdParty.cmake`, `CMakeLists.txt` | `glew_static` → `glad`, `-DGLEW_STATIC` gone |
+
+### The include-order trap, and why the SDL includes had to go
+
+`glad.h` hard-errors if a GL header was included first (it checks `__gl_h_`), and
+`SDL_opengl.h` includes `<GL/gl.h>`. So glad must be first, and it works by
+defining `__gl_h_` itself so the system header then self-suppresses. That is
+fine inside `mugen.h`, but **not** if a source file includes `<SDL.h>` or
+`<GL/gl.h>` on its own beforehand — which twelve files did. Those includes are
+now removed; `<GL/glu.h>` (still needed for `gluOrtho2D`) is included after
+`mugen.h` for the same reason.
+
+This is a real constraint for future edits: do not add a `<SDL.h>` or GL include
+above `#include "mugen.h"` in a source file.
+
+### Fidelity note
+
+The original linked GLEW 1.5.4 **statically** — it does not import
+`glew32.dll`, and the copy shipped in `Elecbyte.MUGEN.libs` was never used. So
+this is a deliberate, marked departure from how the original was built, not a
+behavioural change. Verified: `mugen.log` is still identical to the original on
+Windows, and identical between the Windows and Linux builds, with
+`render mode 2_20 … success` in all three toolchains — i.e. `Gl_Init(1)` passed,
+which requires every capability flag to be set correctly.
 
 ## Goal
 

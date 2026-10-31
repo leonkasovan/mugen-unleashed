@@ -55,7 +55,7 @@ Verified versions on a stock 22.04:
 | `libmpg123-dev` | 1.29.3 | BGM plugin |
 | `libgl1-mesa-dev`, `libglu1-mesa-dev` | 23.2.1 / 9.0.2 | `<GL/gl.h>`, `gluOrtho2D` |
 
-Lua 5.1.4, GLEW 1.5.4, minizip 0.15 and libresample are built from
+Lua 5.1.4, glad 2.1, minizip 0.15 and libresample are built from
 `third_party/`, so no distro Lua is needed (and 5.1 is often unavailable).
 
 Unlike the Windows build, Linux links the distro's **shared** SDL. That is the
