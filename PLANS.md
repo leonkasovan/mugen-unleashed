@@ -15,6 +15,7 @@ lands; keep the research sections true to the findings they were based on.
 | Lua | **done** — `lmode`/`lexec` implemented, full API documented in `docs/LUA.md` |
 | Renderer optimization | steps 1–3 **done and runtime-verified**; 4–6 pending |
 | OpenGL loader | **GLEW 1.5.4 → glad 2.1 done** — smaller, faster to build, exactly generated |
+| Linux rendering | primitives **fixed** (constant blend factors dead on Mesa); sprite blending **outstanding** |
 | Modern GL (3.3/4.6) / Vulkan | researched, **not recommended** — reasons below |
 | Linux port | **linux-x64 done and verified** — builds and runs, `mugen.log` identical to the Windows build; `docs/BUILD-LINUX.md`. arm64 selected but untested |
 
@@ -240,6 +241,96 @@ behavioural change. Verified: `mugen.log` is still identical to the original on
 Windows, and identical between the Windows and Linux builds, with
 `render mode 2_20 … success` in all three toolchains — i.e. `Gl_Init(1)` passed,
 which requires every capability flag to be set correctly.
+
+## Linux rendering fixes (done)
+
+Two visual glitches appeared only on Linux: the main-menu box cursor drew as a
+solid black bar, and a character launched by an uppercut cropped to a sliver or
+vanished. Neither was a rounding or float-size problem; they are two unrelated
+defects, both found by measurement.
+
+### 1. Constant blend factors do nothing on Mesa
+
+The menu cursor is a primitive (`g_gfxFillRectColor`), and the GL primitive path
+blended with constant factors:
+
+```c
+glBlendFunc(GL_CONSTANT_COLOR, GL_CONSTANT_ALPHA);
+glBlendColor(src, src, src, dst);
+```
+
+**On this Mesa build (WSLg) `glBlendColor` never reaches the blend unit.** It
+writes the state -- `glGetFloatv(GL_BLEND_COLOR)` reads back the value that was
+set -- but the rasteriser ignores it and uses the default `(0,0,0,0)`, so both
+factors evaluate to zero. Verified on screen, not just through a readback:
+
+| Probe (same draw, identical blend state on both platforms) | Result pixel |
+|---|---|
+| `GL_ONE, GL_ONE` (plain additive) | `#FF9CA9` — correct |
+| blending disabled | the primitive's own colour |
+| `GL_ONE, GL_CONSTANT_ALPHA`, `blendColor(alpha=0.5)`, over `#9296A6` | `#FF0000` — destination dropped (should be `#FF4953`) |
+| `GL_CONSTANT_COLOR, GL_CONSTANT_ALPHA` | `(0,0,0,0)` — black |
+
+**Fix** (`src/prim.c`): both constant factors are gone. The source factor is
+applied to the vertex colour in software and the destination factor becomes the
+vertex alpha, so the blend is plain `glBlendFunc(GL_ONE, GL_SRC_ALPHA)`. The
+arithmetic is unchanged (`frag*src + dst*Ca`), and `src`/`dst` are 1.0 for every
+caller that does not pass them, so the Windows result is unaffected.
+
+### 2. `-FLT_MAX` sentinel comparisons always failed
+
+`PS_NEG_FLT_MAX` was `(-3.402823466e+38F)`. GCC with
+`-fexcess-precision=standard` (x87, `FLT_EVAL_METHOD` 2) keeps that literal in
+extended precision, so the constant is `-3.4028234660000002e+38` while a value
+loaded from a float field is rounded to `-FLT_MAX = -3.4028234663852886e+38`.
+The two are **not equal**, so every `==` / `!=` test against the sentinel
+silently failed:
+
+```c
+float s = -3.402823466e+38F;
+s == (-3.402823466e+38F)   ->  0     /* on MinGW *and* Linux */
+s == (-FLT_MAX)            ->  1
+```
+
+MSVC (the original) rounds the literal to float, so this is a **reconstruction
+artifact**, not an original quirk. Effect: a HitDef without an explicit `yaccel`
+left the sentinel in `Player.gethit_yaccel`; `SCTRL_HITFALLVEL`'s
+`!= -FLT_MAX` guard then passed and assigned the sentinel to `vel.y`, and
+`pos.y` accumulated to `-FLT_MAX`, putting the player tens of millions of units
+off screen.
+
+**Fix** (`src/playerstate.c`): the sentinel is `(-FLT_MAX)`, the exact value
+MSVC produced. Verified: the comparison reports equal for all 54 sentinel cases
+in an AI-vs-AI match, and a guard on `|pos| > 100000` logs **zero** occurrences
+(previously thousands).
+
+### 3. Outstanding: blended *sprites* (hitsparks, afterimages, shadows)
+
+Same root cause as (1) but a different code path, and **not yet fixed**.
+`Gl_DrawSprite` blends `blended` sprites with `glBlendFunc(GL_ONE,
+GLR_CONSTANT_ALPHA)` + `g_glewBlendColor`, so the destination term is lost on
+Mesa too. Measured over one match:
+
+| Draws | blend | alpha_src | alpha_dst | Path | State on Linux |
+|---|---|---|---|---|---|
+| 82,204 | ADD | 1.0 | 0.5 | constant | **broken** |
+| 6,654 | ADD | 0.375 | 0.625 | `ONE_MINUS_SRC_ALPHA` | fine |
+| 2,319 | ADD | 1.0 | 1.0 | constant | **broken** |
+
+The primitive workaround does not transfer: the fragment colour comes from a
+GLSL program rather than `glColor`, and `PREMUL` is always defined
+(`glrender.c:1418`), so the shader scales RGB *and* alpha by the same uniform
+`src_alphamul` -- there is no way to make `1 - fragment_alpha` a constant.
+
+The fix needs a shader change: add `dst_alphamul` / `dst_blend` uniforms, change
+`color *= src_alphamul;` to
+`color.a = mix(color.a * src_alphamul, 1.0 - dst_alphamul, dst_blend);`, set
+them from `dp->alpha_dst`, and blend every `blended` sprite with
+`GL_ONE, GL_ONE_MINUS_SRC_ALPHA`. Two constraints: `GlProgram` is size-asserted
+at `0x30`, so the new uniform locations must live in a separate array rather
+than as struct fields; and the shader text comes from `data/rgba.frag` /
+`data/indexed.frag` in the game installation, so the substitution has to happen
+in memory only.
 
 ## Goal
 
