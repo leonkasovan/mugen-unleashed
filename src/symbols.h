@@ -1868,27 +1868,32 @@ int __cdecl Con_CmdLuaExec(CmdTable *ctx, char *name, char *args);
 /* 0x0049c140 */ unsigned int __cdecl Bgm_StreamRead(void *dst, int *status);
 
 /* ---- functions of the statically linked libraries (third_party/) ---- */
-/* 0x0049c3c0 */ png_uint_32 __cdecl png_get_IHDR(png_structp png_ptr, png_infop info_ptr, png_uint_32 *width, png_uint_32 *height, int *bit_depth, int *color_type, int *interlace_method, int *compression_method, int *filter_method);
-/* 0x0049c520 */ png_structp __cdecl png_create_read_struct(png_const_charp user_png_ver, png_voidp error_ptr, png_error_ptr error_fn, png_error_ptr warn_fn);
-/* 0x0049c8c0 */ void __cdecl png_read_info(png_structp png_ptr, png_infop info_ptr);
-/* 0x0049d110 */ void __cdecl png_read_update_info(png_structp png_ptr, png_infop info_ptr);
-/* 0x0049d8e0 */ void __cdecl png_read_image(png_structp png_ptr, png_bytepp image);
-/* 0x0049d980 */ void __cdecl png_destroy_read_struct(png_structpp png_ptr_ptr, png_infopp info_ptr_ptr, png_infopp end_info_ptr_ptr);
-/* 0x0049e170 */ void __cdecl png_write_info(png_structp png_ptr, png_infop info_ptr);
-/* 0x0049e620 */ void __cdecl png_write_end(png_structp png_ptr, png_infop info_ptr);
-/* 0x0049e880 */ png_structp __cdecl png_create_write_struct(png_const_charp user_png_ver, png_voidp error_ptr, png_error_ptr error_fn, png_error_ptr warn_fn);
-/* 0x0049eb40 */ void __cdecl png_write_image(png_structp png_ptr, png_bytepp image);
-/* 0x0049f0e0 */ void __cdecl png_destroy_write_struct(png_structpp png_ptr_ptr, png_infopp info_ptr_ptr);
-/* 0x0049f880 */ void __cdecl png_set_write_fn(png_structp png_ptr, png_voidp io_ptr, png_rw_ptr write_data_fn, png_flush_ptr output_flush_fn);
-/* 0x0049f910 */ void __cdecl png_set_packing(png_structp png_ptr);
-/* 0x004a0310 */ void __cdecl png_set_sig_bytes(png_structp png_ptr, int num_bytes);
-/* 0x004a0350 */ int __cdecl png_sig_cmp(png_bytep sig, png_size_t start, png_size_t num_to_check);
-/* 0x004a0530 */ png_infop __cdecl png_create_info_struct(png_structp png_ptr);
-/* 0x004a0c80 */ png_voidp __cdecl png_get_io_ptr(png_structp png_ptr);
-/* 0x004a0ca0 */ void __cdecl png_init_io(png_structp png_ptr, png_FILE_p fp);
-/* 0x004a1080 */ void __cdecl png_set_read_fn(png_structp png_ptr, png_voidp io_ptr, png_rw_ptr read_data_fn);
-/* 0x004a1660 */ void __cdecl png_set_IHDR(png_structp png_ptr, png_infop info_ptr, png_uint_32 width, png_uint_32 height, int bit_depth, int color_type, int interlace_method, int compression_method, int filter_method);
-/* 0x004a1c60 */ void __cdecl png_set_PLTE(png_structp png_ptr, png_infop info_ptr, png_colorp palette, int num_palette);
+/*
+ * libpng. These were originally written out as prototypes here. They are not
+ * needed -- mugen.h includes <png.h>, which declares all of them -- and they
+ * actively break any libpng newer than 1.2: libpng 1.2.38 left png_struct and
+ * png_info opaque and used non-const png_byte *, so the declarations below
+ * happened to agree with its header, while libpng 1.6 exposes the structs and
+ * takes png_const_bytep for png_sig_cmp, which made every one of them a
+ * "conflicting types" error. The original addresses are kept as a comment.
+ *
+ * The MSVC/CMake build still links the vendored libpng 1.2.38; the static
+ * GNU Make build links the kit's libpng16. Both work, because the header is
+ * the single source of truth for the prototypes and only PNG_LIBPNG_VER_STRING
+ * (a macro) ties src/pngio.c to the version it was compiled against.
+ *
+ *   0x0049c3c0 png_get_IHDR            0x0049e880 png_create_write_struct
+ *   0x0049c520 png_create_read_struct  0x0049eb40 png_write_image
+ *   0x0049c8c0 png_read_info           0x0049f0e0 png_destroy_write_struct
+ *   0x0049d110 png_read_update_info    0x0049f880 png_set_write_fn
+ *   0x0049d8e0 png_read_image          0x0049f910 png_set_packing
+ *   0x0049d980 png_destroy_read_struct 0x004a0310 png_set_sig_bytes
+ *   0x0049e170 png_write_info          0x004a0350 png_sig_cmp
+ *   0x0049e620 png_write_end           0x004a0530 png_create_info_struct
+ *   0x004a0c80 png_get_io_ptr          0x004a0ca0 png_init_io
+ *   0x004a1080 png_set_read_fn         0x004a1660 png_set_IHDR
+ *   0x004a1c60 png_set_PLTE
+ */
 /* 0x004c4dc0 */ unsigned int __cdecl glewInit(void);
 /* 0x004c4f70 */ LuaCFunction __cdecl lua_atpanic(struct lua_State *L, LuaCFunction panicf);
 /* 0x004c4fd0 */ int __cdecl lua_gettop(struct lua_State *L);

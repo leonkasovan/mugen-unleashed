@@ -69,7 +69,12 @@ TARGET    := $(BUILD)/mugen-static.exe
 # FLAC, opus, wavpack, gme, mpg123, zlib, pthread, stdc++ ...). Asking
 # pkg-config for --libs --static is what makes this link close: hand-listing
 # -lSDL_mixer -lSDL_ttf would miss a dozen transitive archives.
-STATIC_PKGS := sdl SDL_gfx SDL_mixer SDL_ttf
+# SDL_image is deliberately absent: the engine loads PNG itself (src/pngio.c
+# via <png.h> in mugen.h) and never calls IMG_*, so nothing needs it. It was
+# only ever there because SDL_image.pc happens to list libpng16, which used to
+# collide with the vendored libpng 1.2.38. zlib and libpng16 are now asked for
+# directly instead of arriving as someone else's transitive dependency.
+STATIC_PKGS := sdl SDL_gfx SDL_mixer SDL_ttf zlib libpng16
 # -mwindows is stripped from the pkg-config output and added once at the end of
 # the link line rather than repeated per package.
 #
@@ -131,7 +136,6 @@ CPPFLAGS += -I$(SRC_DIR) \
             -I$(TP_DIR)/libresample/include \
             -I$(SDK_DIR)/include \
             -I$(TP_DIR)/lua-5.1.4/src \
-            -I$(TP_DIR)/libpng-1.2.38 \
             -I$(TP_DIR)/glew-1.5.4/include \
             -I$(TP_DIR)/minizip-0.15 \
             $(PKG_CFLAGS)
@@ -169,22 +173,19 @@ ENGINE_OBJS := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/src/%.o,$(ENGINE_SRCS))
 # Third-party libraries, built from source exactly as CMakeLists.txt and
 # cmake/ThirdParty.cmake build them.
 LUA_SRCS := $(wildcard $(TP_DIR)/lua-5.1.4/src/*.c)
-PNG_SRCS := $(filter-out %/pngtest.c,$(wildcard $(TP_DIR)/libpng-1.2.38/png*.c))
 
 # libresample 0.1.3, vendored and ported to multi-channel to match the ABI of
 # the shipped libresample.dll (see third_party/libresample/VENDORED.md).
 LRS_SRCS := $(wildcard $(TP_DIR)/libresample/src/*.c)
 
 LUA_OBJS := $(patsubst $(TP_DIR)/lua-5.1.4/src/%.c,$(OBJ_DIR)/lua/%.o,$(LUA_SRCS))
-PNG_OBJS := $(patsubst $(TP_DIR)/libpng-1.2.38/%.c,$(OBJ_DIR)/libpng/%.o,$(PNG_SRCS))
 LRS_OBJS := $(patsubst $(TP_DIR)/libresample/src/%.c,$(OBJ_DIR)/libresample/%.o,$(LRS_SRCS))
 GLEW_OBJ := $(OBJ_DIR)/glew/glew.o
 MINIZIP_OBJ := $(OBJ_DIR)/minizip/unzip.o
 
 LUA_LIB := $(LIB_DIR)/liblua.a
-PNG_LIB := $(LIB_DIR)/libpng.a
 LRS_LIB := $(LIB_DIR)/libresample.a
-TP_LIBS := $(LUA_LIB) $(PNG_LIB) $(LRS_LIB) $(GLEW_OBJ) $(MINIZIP_OBJ)
+TP_LIBS := $(LUA_LIB) $(LRS_LIB) $(GLEW_OBJ) $(MINIZIP_OBJ)
 
 # Resources: the error dialog (200) and version info from mugen.rc, plus the
 # assembly manifest that points at Elecbyte.MUGEN.libs (the original embeds it
@@ -212,7 +213,7 @@ $(TARGET): $(ENGINE_OBJS) $(RC_OBJ) $(TP_LIBS)
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(CC) -m32 -mwindows -o $@ $(ENGINE_OBJS) $(RC_OBJ) \
 	    -Wl,--gc-sections \
-	    -L$(LIB_DIR) -llua -lpng -lresample \
+	    -L$(LIB_DIR) -llua -lresample \
 	    $(GLEW_OBJ) $(MINIZIP_OBJ) \
 	    $(PKG_LIBS) $(SYS_LIBS) \
 	    -mwindows
@@ -232,20 +233,6 @@ $(OBJ_DIR)/lua/%.o: $(TP_DIR)/lua-5.1.4/src/%.c
 	$(Q)$(CC) $(TP_CFLAGS) -I$(TP_DIR)/lua-5.1.4/src -c $< -o $@
 
 $(LUA_LIB): $(LUA_OBJS)
-	@echo "  AR      $@"
-	$(Q)mkdir -p $(dir $@)
-	$(Q)$(AR) rcs $@ $^
-
-# --- libpng 1.2.38 ----------------------------------------------------------
-# pnggccrd.c and pngvcrd.c compile to nothing unless PNG_USE_PNGGCCRD /
-# PNG_USE_PNGVCRD is defined, i.e. libpng picks its portable C path.
-
-$(OBJ_DIR)/libpng/%.o: $(TP_DIR)/libpng-1.2.38/%.c
-	@echo "  CC      $<"
-	$(Q)mkdir -p $(dir $@)
-	$(Q)$(CC) $(TP_CFLAGS) -I$(TP_DIR)/libpng-1.2.38 -I$(SDK_DIR)/include -c $< -o $@
-
-$(PNG_LIB): $(PNG_OBJS)
 	@echo "  AR      $@"
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(AR) rcs $@ $^
