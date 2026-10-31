@@ -10,11 +10,12 @@ lands; keep the research sections true to the findings they were based on.
 | Area | State |
 |---|---|
 | Windows build (MSVC/CMake) | **done, verified** — outputs `mugen_unleashed.exe`; `docs/BUILD-MSVC.md` |
-| Windows build (GNU Make + MinGW-x86) | **done** — `Makefile`, `docs/BUILD-MINGW.md` |
-| Linux port | **not started** — research done, 6 steps planned below |
+| Windows static build (GNU Make + MinGW-x86) | **done, verified** — outputs `mugen-static.exe`, no game DLLs needed; `docs/BUILD-MINGW.md` |
+| libresample | **vendored and ported** to multi-channel; `third_party/libresample/VENDORED.md` |
 | Lua | **done** — `lmode`/`lexec` implemented, full API documented in `docs/LUA.md` |
 | Renderer optimization | steps 1–3 **done and runtime-verified**; 4–6 pending |
 | Modern GL (3.3/4.6) / Vulkan | researched, **not recommended** — reasons below |
+| Linux port | **not started** — `Makefile` is Windows-only, research updated below |
 
 ## Codebase knowledge graph (codebase-memory-mcp)
 
@@ -86,6 +87,88 @@ This is the same 32-bit constraint that makes the Linux port's `-m32` vs 64-bit
 decision matter (see "The two portability landmines" below): on Windows there
 is no choice, the target is i386 only.
 
+## Static build (done)
+
+`make` on the `static` branch produces **`mugen-static.exe`**: one
+self-contained 32-bit Windows executable. Its entire import table is
+
+```
+ADVAPI32  GDI32  GLU32  KERNEL32  OPENGL32  SHELL32  SHLWAPI  USER32  WINMM  msvcrt
+```
+
+i.e. Windows system DLLs plus MinGW's CRT. **No `Elecbyte.MUGEN.libs`.** SDL
+1.2, SDL_gfx, SDL_mixer, SDL_ttf, zlib, pthread and mpg123 come from
+`C:\x86devkit` as archives via `pkg-config --libs --static`; Lua, GLEW and
+minizip are built from `third_party/`; libresample is vendored.
+
+Verified against the original `mugen.exe` by log diff: startup/mode-select and
+quick VS both produce an identical `mugen.log` after numeric normalisation.
+Stripped size ~3.5 MB. `make install` strips and copies it to `install/`.
+
+### Two ABI gaps the static link exposed
+
+Both were Elecbyte-private forks, not upstream libraries:
+
+| Symbol | Problem | Resolution |
+|---|---|---|
+| `resample_*` | Elecbyte's `libresample.dll` is multi-channel; upstream 0.1.3 is mono. `resample_open` has 4 args, not 3, and buffers are interleaved frames. | Vendored upstream and ported: `third_party/libresample`, documented in `VENDORED.md`, verified by `tools/check_libresample.c` |
+| `Mix_QuerySpecEx` | Only exists in Elecbyte's SDL_mixer; stock 1.2 has `Mix_QuerySpec` without the chunk size. | `src/sdlmixercompat.c`, static build only |
+
+The libresample port turned up a real bug worth recording, because it would
+have been inaudible and permanent: `lrsFilterUp`/`lrsFilterUD` tested
+**`Inc == 1`** to mean "right wing", valid only while the step was always one
+sample. With interleaving the right-wing step is the channel count, so the test
+silently failed and dropped the phase-zero coefficient skip — about 1e-4 of
+error on every frame whose phase was exactly zero (for ratio 0.75, every third
+frame). Both now test `Inc > 0`. The check program asserts **bit-exact**
+per-channel equality across ratios covering both `SrcUp` and `SrcUD`.
+
+### libpng: vendored 1.2.38 → system libpng16 (GNU Make build only)
+
+The static build originally compiled `third_party/libpng-1.2.38`, which
+collided with the kit's `libpng16` (`multiple definition of png_set_mem_fn`,
+pulled in transitively). Resolution:
+
+* `STATIC_PKGS := sdl SDL_gfx SDL_mixer SDL_ttf zlib libpng16` — libpng and
+  zlib are now asked for explicitly instead of arriving as somebody else's
+  transitive dependency.
+* **`SDL_image` is deliberately not in the list.** The engine loads PNG itself
+  (`src/pngio.c`) and never calls `IMG_*`; SDL_image was only there because
+  your original list named it, and `SDL_image.pc` is what dragged in the
+  conflicting `libpng16`.
+* `src/symbols.h` no longer re-declares the libpng functions. They were always
+  redundant (`mugen.h` includes `<png.h>`) and only compiled because 1.2.38
+  left `png_struct`/`png_info` opaque and used non-const `png_byte *`. libpng
+  1.6 exposes the structs and takes `png_const_bytep`, which made all 21
+  declarations "conflicting types". The original's addresses are preserved as a
+  comment block so nothing is lost.
+
+The engine only uses stable 1.x API (`png_create_read_struct`,
+`png_set_read_fn`, `png_read_image`, `png_read_update_info`, `png_set_IHDR`,
+`png_write_image`, …) and passes `PNG_LIBPNG_VER_STRING` — a macro from
+whichever header it compiles against — so it is version-agnostic.
+
+**The MSVC/CMake build still links the vendored 1.2.38**; only the GNU Make
+static build switched. That keeps the reference build unchanged.
+
+### SDL export fix (from the kit side)
+
+Rebuilding SDL 1.2 without `.drectve` export directives removed the ~612
+exported SDL/Mixer/TTF names the static exe used to carry — the executable now
+exports **nothing**, which is what a game exe should do. This was the one
+cosmetic wart of the static link and it is gone.
+
+Kit-side notes encountered while doing this, worth knowing because they look
+like project bugs and are not:
+
+* `libbz2.a` shipped without an archive index (`archive has no index; run
+  ranlib`). Fixed in the kit.
+* A partially-installed SDL 1.2 (archives present, `.pc` files or the archives
+  missing at different times) makes `pkg-config` silently return an **empty**
+  library list rather than failing. Symptom: a link error about a symbol that
+  clearly exists, e.g. `undefined reference to inflateInit2_`. When a link
+  fails oddly, run `pkg-config --libs --static $STATIC_PKGS` on its own first.
+
 ## Goal
 
 Build `mugen` on Linux with GCC and a standard Makefile, with every library the
@@ -105,13 +188,15 @@ Two build targets are in scope:
 
 ### How much Windows is actually in `src/`
 
-11 files include `windows.h`, but the real Win32 surface is small. Grep for
-types and APIs, not includes:
+10 files include `windows.h` (verified: `error.c`, `gfx.c`, `gldetect.c`,
+`glrender.c`, `matchload.c`, `mugen.h`, `prim.c`, `system.c`, `timer.c`,
+`video.c`), but the real Win32 surface is small. Grep for types and APIs, not
+includes:
 
 | File | Real Win32 usage | Linux replacement |
 |---|---|---|
-| `gfx.c`, `prim.c`, `glrender.c`, `gldetect.c`, `matchload.c`, `mugen.h` | none — the include only pulls in `GL/gl.h` transitively | delete `#include <windows.h>`, include `<GL/gl.h>` (Mesa) |
-| `timer.c` | `timeGetTime`, `QueryPerformanceCounter`, `timeBeginPeriod` | `clock_gettime(CLOCK_MONOTONIC)` shim |
+| `gfx.c`, `prim.c`, `glrender.c`, `gldetect.c`, `mugen.h` | none — the include only pulls in `GL/gl.h` transitively | delete `#include <windows.h>`, include `<GL/gl.h>` (Mesa) |
+| `timer.c`, `matchload.c` | `timeGetTime`, `QueryPerformanceCounter` (`timer.c` also `timeBeginPeriod`); `matchload.c` reads the timer at lines 28-31 and 1189-1192 | `clock_gettime(CLOCK_MONOTONIC)` shim |
 | `video.c` | `Video_SetFullscreen` pokes `HWND` styles via `SDL_SysWMinfo` | `SDL_WM_ToggleFullScreen`, or an X11 path |
 | `system.c` | window icon (`LoadIconA` + resource 101), `SHGetFolderPathA(CSIDL_FONTS)` | icon as SDL surface; fonts dir `/usr/share/fonts` |
 | `error.c` | RichEdit error dialog (`Riched20.dll`, `DialogBoxParam`, the .rc dialog 200) | SDL message box or terminal output |
@@ -155,6 +240,40 @@ Each built by the Makefile like lua/libpng, or satisfied by distro packages
 `zlib1g-dev`, `libmpg123-dev`) — both routes legitimate; distro packages are
 less work and apt-pinned, vendoring is self-contained and version-pinned.
 
+### Can the current Makefile be used on Linux?
+
+**No — not as it stands.** It is a Windows build despite being GNU Make. The
+blockers, in the order they would bite:
+
+| Blocker | Where | What Linux needs |
+|---|---|---|
+| `-mwindows`, and the `-mwindows` stripping from pkg-config output | link line, `PKG_LIBS` | not needed; Linux has no subsystem concept |
+| `windres` on `src/mugen.rc` + the manifest | `$(RC_OBJ)` | drop resources entirely; icon/version info have no Linux equivalent |
+| `pkg-config --libs --static sdl SDL_gfx SDL_mixer SDL_ttf` | `STATIC_PKGS` | different package names (`sdl`, `SDL_gfx`, `SDL_mixer`, `SDL_ttf` exist on Debian/Ubuntu but the kit's copies do not); paths come from the distro |
+| `-I$(SDK_DIR)/include` with MSVC/`__declspec` headers | `CPPFLAGS` | unusable: `third_party/sdk/include` is a Windows SDK tree |
+| `-m32` with a `i686-w64-mingw32` compiler | `COMMONFLAGS`, `check-toolchain` | `-m32` on glibc needs gcc-multilib; the target triple check must go |
+| `-lSDLmain` / `src/sdlmain.c` `WinMain` | link, source | plain `main()`; SDLmain does not exist on Linux |
+| `_CRT_SECURE_NO_WARNINGS`, `PTW32_STATIC_LIB`, `-D_CRT_NONSTDC_NO_DEPRECATE` | `ENGINE_DEFS` | meaningless; replace with the CRT shim header |
+| `$(TARGET)` named `.exe`, `install` copying into `install/` | target, install rule | binary name and install path differ |
+
+Beyond the Makefile, `src/` itself needs the Win32 work listed in the previous
+section (`windows.h` in `mugen.h`, 8 files with real Win32 calls, ~150 CRT
+rename sites). So the Makefile is roughly **20% of the Linux job**; the rest is
+source portability.
+
+The honest answer is that a Linux build wants **its own Makefile** (or a
+`UNAME`-switched conditional block), sharing only the source lists. The
+dependencies would also change shape: the Windows static build compiles its own
+Lua/GLEW/minizip and links a kit's SDL; on Linux most of those come from the
+distro (`libsdl1.2-dev`, `libsdl-mixer1.2-dev`, `libsdl-ttf2.0-dev`,
+`libsdl-gfx1.2-dev`, `libpng-dev`, `zlib1g-dev`, `libmpg123-dev`) and only Lua
+5.1.4 stays vendored, because distros no longer ship 5.1.
+
+Also note `SDL1.2` is itself the portability risk on Linux: modern distros ship
+SDL2 only in many cases, and SDL 1.2 support varies. That is the same
+`SDL_SetVideoMode` question that made the Windows static build possible only
+because you rebuilt SDL 1.2 for the kit.
+
 ### The two portability landmines
 
 **Struct layouts.** 205 `MUGEN_ASSERT_SIZE` checks pin field offsets
@@ -178,13 +297,25 @@ Ordered; each step leaves the tree buildable on Windows (the existing MSVC and
 MinGW builds must keep working — nothing in `src/` or `third_party/` existing
 today is modified incompatibly).
 
+Two things the static Windows build already settled for the Linux port:
+
+* **libresample is no longer a DLL to replace** — it is vendored source with a
+  known, tested API (step 2, partly done).
+* **The "vendor every library" strategy is proven workable**, but it is not the
+  cheapest route on Linux: there, most of these are one `apt install` away and
+  only Lua 5.1.4 needs vendoring, because no distro ships 5.1 any more.
+* The static build also produced the dependency list Linux has to satisfy, and
+  demonstrated that the engine tolerates a **newer libpng** (1.6 instead of
+  1.2.38) and a differently-packaged SDL without behaviour change — which
+  makes "use distro libraries" a much smaller risk than it looked.
+
 | # | Step | What it involves | Status |
 |---|---|---|---|
 | 1 | Compat shim layer | `src/compat_linux.h` / `compat_linux.c`: CRT shims, `dlopen` typedefs for `HMODULE`/`GetProcAddress`, monotonic clock. Included from `crt.h`/`mugen.h` behind a platform check. Unblocks ~10 files with zero game-logic edits | pending |
-| 2 | Vendor zlib + libresample | smallest risk first; removes the two oddest DLLs; wire into Makefile like lua/libpng; patch libresample to the multichannel API of `third_party/sdk/include/libresample.h` | pending |
-| 3 | Remove pure-`windows.h` includes | `gfx.c`, `prim.c`, `glrender.c`, `gldetect.c`, `matchload.c`, `mugen.h` — mechanical; include `<GL/gl.h>` directly | pending |
+| 2 | Vendor libresample | **done for Windows** — `third_party/libresample` is upstream 0.1.3 ported to the multi-channel ABI; see "Static build" above. zlib still comes from the kit on Windows and from the distro on Linux | resample **done** |
+| 3 | Remove pure-`windows.h` includes | `gfx.c`, `prim.c`, `glrender.c`, `gldetect.c`, `mugen.h` — mechanical; include `<GL/gl.h>` directly. Note `matchload.c` is **not** in this group: it calls `QueryPerformanceCounter`/`timeGetTime` | pending |
 | 4 | Port the 4 real Win32 spots | timer (monotonic clock), fullscreen (SDL), window icon + fonts dir, error dialog (SDL message box). ~200 lines total | pending |
-| 5 | SDL stack | vendor `SDL-1.2.15` + `SDL_mixer` + `SDL_ttf` + `freetype` + `SDL_gfx`, or use distro packages; `sdlmain.c` gets a plain `main()` path on Linux; `mugen.rc`/manifest skipped (not a PE) | pending |
+| 5 | SDL stack | use distro packages where they exist (`libsdl1.2-dev`, `libsdl-mixer1.2-dev`, `libsdl-ttf2.0-dev`, `libsdl-gfx1.2-dev`) — SDL 1.2 availability is the risk on modern distros; `sdlmain.c` gets a plain `main()` path on Linux; `mugen.rc`/manifest skipped (not a PE) | pending |
 | 6 | Layout + float audit | attempt the 64-bit build, let the `MUGEN_ASSERT_SIZE` asserts enumerate the layouts to fix; decide `-m32` vs 64-bit target policy; diff-test `mugen.log` against the original's scenarios | pending |
 
 Effort estimate: steps 1–3 about a day (mechanical); step 4 another day or two
