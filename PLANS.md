@@ -15,7 +15,7 @@ lands; keep the research sections true to the findings they were based on.
 | Lua | **done** — `lmode`/`lexec` implemented, full API documented in `docs/LUA.md` |
 | Renderer optimization | steps 1–3 **done and runtime-verified**; 4–6 pending |
 | Modern GL (3.3/4.6) / Vulkan | researched, **not recommended** — reasons below |
-| Linux port | **not started** — `Makefile` is Windows-only, research updated below |
+| Linux port (x64 / arm64) | **planned, not started** — one `Makefile`, `uname`+GCC detection; 9-step plan below. x64 expected fidelity, arm64 functional-only |
 
 ## Codebase knowledge graph (codebase-memory-mcp)
 
@@ -83,9 +83,10 @@ export PATH=/c/x86devkit/bin:$PATH   # 32-bit kit first
 make check-toolchain && make -j8
 ```
 
-This is the same 32-bit constraint that makes the Linux port's `-m32` vs 64-bit
-decision matter (see "The two portability landmines" below): on Windows there
-is no choice, the target is i386 only.
+On Windows there is no choice: the target is i386 only. On Linux the 32-bit
+build is optional, and the plan targets **x86-64 and arm64 natively** instead —
+which is where the struct-layout guard and the float-precision question come
+from (see "Goal" and "Float precision per architecture").
 
 ## Static build (done)
 
@@ -171,18 +172,151 @@ like project bugs and are not:
 
 ## Goal
 
-Build `mugen` on Linux with GCC and a standard Makefile, with every library the
-game links either vendored as source under `third_party/` (built by the
-Makefile, like lua and libpng already are) or coming from distro packages.
-Replace the Windows DLL mechanism entirely: no import libraries, no
-`Elecbyte.MUGEN.libs`, no manifests.
+**One `Makefile` that builds the same source tree for Windows and Linux, on
+x86-64 and arm64**, selected automatically from `uname` and the compiler's own
+target triple. No second build system, no per-platform fork of the source.
 
-Two build targets are in scope:
+Three targets, all from the existing `Makefile`:
 
-| Target | Toolchain | Fidelity |
+| Target | Detection | Output | Fidelity |
+|---|---|---|---|
+| Windows i686 | `uname -s` = `Windows_NT`/`MINGW*`/`MSYS*` **and** triple `i686-w64-mingw32` | `mugen-static.exe` | **reference**: layouts and x87 bit-identical to the original |
+| Linux x86-64 | `uname -s` = `Linux`, triple `x86_64-*-linux-gnu` | `mugen-linux-x64` | **faithful**: x87 reproducible via `-mfpmath=387` (verified, see below) |
+| Linux arm64 | `uname -s` = `Linux`, triple `aarch64-*-linux-gnu` | `mugen-linux-arm64` | **functional**: no x87 exists, float drift accepted and log-diffed |
+
+The Windows build stays the reference and must keep working unchanged. Linux is
+additive: same sources, same `Makefile`, different flags.
+
+### Platform detection: `uname` for the OS, GCC for the target
+
+Both are needed, and the division of labour is not arbitrary:
+
+```make
+UNAME_S := $(shell uname -s 2>/dev/null)   # decides the OS family
+TRIPLE  := $(shell $(CC) -dumpmachine 2>/dev/null)   # decides CPU + ABI
+UNAME_M := $(shell uname -m 2>/dev/null)   # reported by check-toolchain only
+```
+
+**`uname -m` must not decide the architecture.** Inside MSYS on this machine
+`uname -m` reports `x86_64` — the *host* — while the compiler being used is
+`i686-w64-mingw32`. Trusting `uname -m` there would select the 64-bit flag set
+and produce a binary the project cannot build. Verified:
+
+```
+$ uname -m            → x86_64
+$ gcc -dumpmachine    → i686-w64-mingw32      (x86 kit)
+$ gcc -dumpmachine    → x86_64-w64-mingw32    (x64 kit, cannot link the target)
+```
+
+So: `uname -s` picks the OS family, `$(CC) -dumpmachine` picks the CPU and the
+ABI, and the compiler wins on any disagreement. The selection:
+
+| `uname -s` | `-dumpmachine` | Target |
 |---|---|---|
-| linux-32 | `gcc -m32` on a multilib distro | faithful: struct layouts and x87 float semantics preserved |
-| linux-64 | `gcc` (default x86-64) | functional: layout fixes accepted, float drift accepted and tested |
+| `Windows_NT`, `MINGW*`, `MSYS*`, `CYGWIN*` | `i686-w64-mingw32` | win32 (default on Windows) |
+| `Linux` | `x86_64-*-linux-gnu` | linux-x64 |
+| `Linux` | `aarch64-*-linux-gnu` | linux-arm64 |
+| anything else | — | **error**, naming the triple found and the supported list |
+
+`check-toolchain` gains the same logic, so an unsupported combination fails with
+a message instead of a wall of link errors. Every detection is overridable
+(`MUGEN_TARGET=linux-arm64`) for cross-compiling, where `-dumpmachine` describes
+the target anyway.
+
+### What each target changes in the Makefile
+
+Only these differ; the file lists and the engine are shared.
+
+| Variable | win32 | linux-x64 | linux-arm64 |
+|---|---|---|---|
+| `TARGET` | `mugen-static.exe` | `mugen-linux-x64` | `mugen-linux-arm64` |
+| `-m32` / `-m64` | `-m32` | none (native) | none (native) |
+| float flags | `-mfpmath=387 -fexcess-precision=standard` | **same** — x87 still exists on x86-64 | **none** — no x87; SSE/NEON gives `FLT_EVAL_METHOD == 0` |
+| `-mwindows` | yes | no | no |
+| resources | `windres` on `mugen.rc` + manifest | skipped | skipped |
+| SDL stack | kit archives via `pkg-config --libs --static` | distro `pkg-config` | distro `pkg-config` |
+| `PTW32_STATIC_LIB` | yes (pthreadVC2 header) | no — glibc pthread | no |
+| `__int64` / `__cdecl` | provided by MinGW headers | **shim needed** | **shim needed** (`__cdecl` does not exist on arm64 at all) |
+| `MUGEN_LAYOUT_32BIT` | 1 | 0 | 0 |
+
+`MUGEN_LAYOUT_32BIT` is new and is what makes the 64-bit build possible at all;
+see "The struct layout question" below.
+
+### The struct layout question, measured
+
+The 32-bit build is checked by **205 `MUGEN_ASSERT_SIZE` and 669
+`MUGEN_ASSERT_OFFSET`** `_Static_assert`s. On 64-bit, pointers double and every
+assertion downstream of one fails. Measured across `src/*.h`:
+
+| | Count |
+|---|---|
+| Structs with a size assertion | 200 |
+| …**containing at least one pointer**  → break on 64-bit | **105** |
+| …containing no pointers → survive untouched | 95 |
+| Pointer members in all headers | 184 |
+| `Player` / `GameVars` pointers (sizes `0x2490` / `0x13108`) | 25 / 33 |
+
+So this is not "fix a handful of layouts" — slightly more than half the asserted
+structs move. The saving grace is **how** the code reads them:
+
+| Check | Result |
+|---|---|
+| Raw byte-offset arithmetic into structs (`(char *)p + 0x…`) | **0 occurrences** |
+| Access is by named member everywhere | yes |
+| `memcpy`/`memset` with `sizeof(Type)` (scales automatically) | 116 |
+| `int`↔pointer casts that would truncate | **0** |
+
+Because nothing indexes structs by absolute offset, a 64-bit relayout is
+**functionally safe**: the structs get bigger, offsets shift, and the code —
+which only ever uses member names — does not care. The offsets exist for
+fidelity diff-testing against the original, not for correctness.
+
+Therefore: wrap the assertions in `#if MUGEN_LAYOUT_32BIT` (defined when
+`sizeof(void *) == 4`). They stay fully active on the reference build, where
+they are the guard that keeps the reconstruction honest, and become no-ops on
+64-bit, where the original's offsets are meaningless by definition. Nothing else
+in the structs changes.
+
+One serialized format exists — the `.ai` character AI files (`src/ai.c`,
+`fread`/`fwrite` on `AiFileHeader`, `AiMove`, `AiMoveStep`, `AiStat`). All of
+those are plain data with **no pointers**, and carry a signature + version
+header, so a 64-bit build reads the same files a 32-bit build wrote. No format
+fork.
+
+### Float precision per architecture
+
+The engine reproduces x87 semantics: intermediates in `double`, stores rounded
+to `float`. Both Windows builds pin `-mfpmath=387
+-fexcess-precision=standard`.
+
+**x86-64 can do the same.** x87 still exists in 64-bit mode; GCC just prefers
+SSE by default. Forcing it back gives the identical `FLT_EVAL_METHOD`. Verified
+on this machine, same source:
+
+| Build | `FLT_EVAL_METHOD` |
+|---|---|
+| `i686` + `-mfpmath=387 -fexcess-precision=standard` (shipping) | **2** |
+| `x86_64` default (SSE) | 0 |
+| `x86_64` + `-mfpmath=387 -fexcess-precision=standard` | **2** |
+
+So **linux-x64 is a fidelity target, not a functional compromise** — same flags
+as the reference build. Expect it to be slower on float-heavy code (x87 is
+serial), which is an acceptable and measurable trade.
+
+**arm64 cannot reproduce it at all.** AArch64 has no x87; scalar float/double go
+through NEON/FP registers with `FLT_EVAL_METHOD == 0` and no excess precision.
+There is no compiler flag that changes this. Consequences:
+
+- Trigger maths, sprite scaling, parallax and `Ftol` conversions can differ by an
+  ULP from the reference.
+- `mugen.log` will **not** be identical to the original's; the target is
+  "same behaviour, values within tolerance", audited by hand on the numeric
+  lines rather than by exact diff.
+- Anything that depends on exact truncation at a boundary (a state change on
+  `time >= 10`, a sub-pixel sprite offset) is the place to look when arm64
+  misbehaves. This is the one target where the fidelity rule has to be relaxed,
+  and the relaxation must be written down in the code that needs it.
+
 
 ## Research findings
 
@@ -240,56 +374,43 @@ Each built by the Makefile like lua/libpng, or satisfied by distro packages
 `zlib1g-dev`, `libmpg123-dev`) — both routes legitimate; distro packages are
 less work and apt-pinned, vendoring is self-contained and version-pinned.
 
-### Can the current Makefile be used on Linux?
+### What has to change in the current Makefile
 
-**No — not as it stands.** It is a Windows build despite being GNU Make. The
-blockers, in the order they would bite:
+As it stands today it is a Windows build despite being GNU Make. Every blocker
+has a conditional answer, which is why the plan is one Makefile rather than two:
 
-| Blocker | Where | What Linux needs |
+| Blocker | Where | Conditional answer |
 |---|---|---|
-| `-mwindows`, and the `-mwindows` stripping from pkg-config output | link line, `PKG_LIBS` | not needed; Linux has no subsystem concept |
-| `windres` on `src/mugen.rc` + the manifest | `$(RC_OBJ)` | drop resources entirely; icon/version info have no Linux equivalent |
-| `pkg-config --libs --static sdl SDL_gfx SDL_mixer SDL_ttf` | `STATIC_PKGS` | different package names (`sdl`, `SDL_gfx`, `SDL_mixer`, `SDL_ttf` exist on Debian/Ubuntu but the kit's copies do not); paths come from the distro |
-| `-I$(SDK_DIR)/include` with MSVC/`__declspec` headers | `CPPFLAGS` | unusable: `third_party/sdk/include` is a Windows SDK tree |
-| `-m32` with a `i686-w64-mingw32` compiler | `COMMONFLAGS`, `check-toolchain` | `-m32` on glibc needs gcc-multilib; the target triple check must go |
-| `-lSDLmain` / `src/sdlmain.c` `WinMain` | link, source | plain `main()`; SDLmain does not exist on Linux |
-| `_CRT_SECURE_NO_WARNINGS`, `PTW32_STATIC_LIB`, `-D_CRT_NONSTDC_NO_DEPRECATE` | `ENGINE_DEFS` | meaningless; replace with the CRT shim header |
-| `$(TARGET)` named `.exe`, `install` copying into `install/` | target, install rule | binary name and install path differ |
+| `-mwindows` + the `-mwindows` stripping from `PKG_LIBS` | link line | Windows only; defined as an empty variable on Linux |
+| `windres` on `src/mugen.rc` + the manifest | `$(RC_OBJ)` | Linux sets `RC_OBJ` empty and drops it from the link |
+| `-I$(SDK_DIR)/include` (an MSVC/`__declspec` tree) | `CPPFLAGS` | Windows only; Linux excludes it |
+| `-m32` with an `i686-w64-mingw32` compiler | `COMMONFLAGS`, `check-toolchain` | `-m32` is Windows-only; Linux is native |
+| `-lSDLmain` / `src/sdlmain.c` `WinMain` | link, source | Linux compiles a `main()` path and does not link SDLmain |
+| `_CRT_SECURE_NO_WARNINGS`, `PTW32_STATIC_LIB`, `-D_CRT_NONSTDC_NO_DEPRECATE` | `ENGINE_DEFS` | Windows only; Linux gets the compat header instead |
+| `$(TARGET)` = `.exe`, `install` → `install/` | target, install | per-target name; Linux installs to `$(PREFIX)/bin` |
+| kit `pkg-config` archives | `STATIC_PKGS` | same package names, resolved from the distro instead |
 
-Beyond the Makefile, `src/` itself needs the Win32 work listed in the previous
-section (`windows.h` in `mugen.h`, 8 files with real Win32 calls, ~150 CRT
-rename sites). So the Makefile is roughly **20% of the Linux job**; the rest is
-source portability.
+So the Makefile becomes: detection block → per-target variable block → shared
+sources and rules. That is roughly **20% of the Linux job**; the other 80% is
+source portability, which is where the plan below spends its steps.
 
-The honest answer is that a Linux build wants **its own Makefile** (or a
-`UNAME`-switched conditional block), sharing only the source lists. The
-dependencies would also change shape: the Windows static build compiles its own
-Lua/GLEW/minizip and links a kit's SDL; on Linux most of those come from the
-distro (`libsdl1.2-dev`, `libsdl-mixer1.2-dev`, `libsdl-ttf2.0-dev`,
-`libsdl-gfx1.2-dev`, `libpng-dev`, `zlib1g-dev`, `libmpg123-dev`) and only Lua
-5.1.4 stays vendored, because distros no longer ship 5.1.
+Dependencies also change shape. Windows compiles Lua/GLEW/minizip from
+`third_party/` and links a kit's SDL; on Linux most come from the distro —
+`libsdl1.2-dev`, `libsdl-mixer1.2-dev`, `libsdl-ttf2.0-dev`,
+`libsdl-gfx1.2-dev`, `libpng-dev`, `zlib1g-dev`, `libmpg123-dev`,
+`libgl1-mesa-dev` — and only **Lua 5.1.4 stays vendored**, because distros no
+longer ship 5.1. GLEW 1.5.4 and minizip 0.15 can stay vendored or come from the
+distro; vendored is safer, since `src/symbols.h` pins their symbols.
 
-Also note `SDL1.2` is itself the portability risk on Linux: modern distros ship
-SDL2 only in many cases, and SDL 1.2 support varies. That is the same
-`SDL_SetVideoMode` question that made the Windows static build possible only
-because you rebuilt SDL 1.2 for the kit.
+**SDL 1.2 availability is the real risk.** Several modern distros ship SDL2
+only. This is the same `SDL_SetVideoMode` question that the Windows static build
+only survived because SDL 1.2 was rebuilt for the kit: if the target distro has
+no `libsdl1.2-dev`, that has to be answered before anything else in the plan
+matters. Check first:
 
-### The two portability landmines
-
-**Struct layouts.** 205 `MUGEN_ASSERT_SIZE` checks pin field offsets
-(`src/mugen.h`). On LP64, `long` (in `bgm.h` callback typedefs) and pointers
-grow to 8 bytes; some asserts will fail. Options:
-- build `-m32` (faithful, needs multilib dev packages), or
-- fix the affected layouts with `int32_t` / explicit padding and accept a
-  64-bit build that is functionally equivalent but not binary-faithful.
-The asserts identify exactly which structs fight back; no guessing.
-
-**x87 float semantics.** The engine assumes `FLT_EVAL_METHOD == 2`
-(x87 53-bit intermediates, rounding on every store) — the Win build pins
-`-mfpmath=387 -fexcess-precision=standard` for this. On x86-64, SSE2 math gives
-`FLT_EVAL_METHOD == 0`; trigger maths, sprite scaling and parallax will drift.
-`-m32` sidesteps it; a 64-bit build must accept the drift and diff-test against
-the original (`mugen.log` scenarios in README) rather than expect bit equality.
+```sh
+pkg-config --exists sdl && pkg-config --modversion sdl   # want 1.2.15
+```
 
 ## Port work plan
 
@@ -297,7 +418,7 @@ Ordered; each step leaves the tree buildable on Windows (the existing MSVC and
 MinGW builds must keep working — nothing in `src/` or `third_party/` existing
 today is modified incompatibly).
 
-Two things the static Windows build already settled for the Linux port:
+Three things the static Windows build already settled for the Linux port:
 
 * **libresample is no longer a DLL to replace** — it is vendored source with a
   known, tested API (step 2, partly done).
@@ -316,10 +437,33 @@ Two things the static Windows build already settled for the Linux port:
 | 3 | Remove pure-`windows.h` includes | `gfx.c`, `prim.c`, `glrender.c`, `gldetect.c`, `mugen.h` — mechanical; include `<GL/gl.h>` directly. Note `matchload.c` is **not** in this group: it calls `QueryPerformanceCounter`/`timeGetTime` | pending |
 | 4 | Port the 4 real Win32 spots | timer (monotonic clock), fullscreen (SDL), window icon + fonts dir, error dialog (SDL message box). ~200 lines total | pending |
 | 5 | SDL stack | use distro packages where they exist (`libsdl1.2-dev`, `libsdl-mixer1.2-dev`, `libsdl-ttf2.0-dev`, `libsdl-gfx1.2-dev`) — SDL 1.2 availability is the risk on modern distros; `sdlmain.c` gets a plain `main()` path on Linux; `mugen.rc`/manifest skipped (not a PE) | pending |
-| 6 | Layout + float audit | attempt the 64-bit build, let the `MUGEN_ASSERT_SIZE` asserts enumerate the layouts to fix; decide `-m32` vs 64-bit target policy; diff-test `mugen.log` against the original's scenarios | pending |
+| 6 | **Platform detection in the Makefile** | `UNAME_S`/`UNAME_M`/`$(CC) -dumpmachine` selection block, per-target variable blocks (`TARGET`, float flags, `-mwindows`, `RC_OBJ`, `STATIC_PKGS`, `ENGINE_DEFS`), `check-toolchain` reporting the detected target, `MUGEN_TARGET=` override for cross-compiles. Linux output names and `$(PREFIX)/bin` install. **Unsupported triple = hard error** naming what was found | pending — design in "Platform detection" above |
+| 7 | **`MUGEN_LAYOUT_32BIT` assertion guard** | Wrap the 205 `MUGEN_ASSERT_SIZE` + 669 `MUGEN_ASSERT_OFFSET` in `#if MUGEN_LAYOUT_32BIT` (defined when `sizeof(void *) == 4`). Active on the reference build, no-ops on 64-bit. No struct changes: 0 raw-offset accesses means relayout is functionally safe (measured above) | pending |
+| 8 | 64-bit correctness pass | Build x64, fix what the compiler finds: `__int64` (MinGW defines it, glibc does not) and `__cdecl` (an x86-only keyword; **absent on arm64**), plus any `long`-width assumptions | pending |
+| 9 | arm64 build | native compile on AArch64; expect `FLT_EVAL_METHOD == 0` and accept float drift. Audit the numeric lines of `mugen.log` by hand rather than by exact diff | pending |
 
-Effort estimate: steps 1–3 about a day (mechanical); step 4 another day or two
-(behavioural); step 6 is where the real time goes for a 64-bit build.
+Order rationale: steps 1–5 make **one** Linux target build; 6 makes the
+`Makefile` choose between them; 7–8 turn the third target on; 9 is the fourth.
+Steps 6 and 7 are independent of each other and of the source port, so they can
+land first if a Linux target is not yet available to test against.
+
+Effort estimate: steps 1, 3, 6, 7 are mechanical (~2–3 days total); 4 is
+behavioural (~1–2 days); 5 depends on distro SDL 1.2 availability; 8 is
+unknown-but-bounded by the compiler's error list; **9 has no fixed end**, because
+float drift on arm64 is a per-symptom investigation, not a checklist.
+
+### What "done" means per target
+
+| Target | Done when |
+|---|---|
+| win32 | `mugen.log` identical to the original (already true) |
+| linux-x64 | `mugen.log` identical to the original **on the numeric lines** — the x87 flags make bit equality the expectation, not a hope |
+| linux-arm64 | runs a full match without crashing; numeric differences enumerated and explained. Exact equality is **not** a goal here |
+
+If linux-x64 turns out *not* to match bit-for-bit despite the x87 flags, that is
+a finding worth recording rather than tuning away — it would mean something
+other than the FPU (libm rounding, `long double` width, or `printf` formatting)
+differs, and the log diff will point at which.
 
 ---
 
