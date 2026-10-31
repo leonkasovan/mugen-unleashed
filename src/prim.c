@@ -901,27 +901,61 @@ void Gfx_SoftFillRectSub(int x1, int y1, int x2, int y2, unsigned int color)
 
 /* ---- OpenGL renderer ---- */
 
-#define PRIM_GL_CONSTANT_COLOR          0x8001
-#define PRIM_GL_CONSTANT_ALPHA          0x8003
+/* PRIM_GL_CONSTANT_COLOR / _ALPHA are gone: see Prim_GlColor. */
 #define PRIM_GL_FUNC_ADD                0x8006
 #define PRIM_GL_FUNC_REVERSE_SUBTRACT   0x800B
 
-/* glColor3f of a 0xBBGGRR colour. */
-static void Prim_GlColor(unsigned int color)
+/*
+ * Sets the vertex colour: a 0xBBGGRR colour, RGB scaled by `scale`, with
+ * `alpha` as the vertex alpha.
+ *
+ * PORTABILITY FIX. The original blends its primitives with
+ *     glBlendFunc(GL_CONSTANT_COLOR, GL_CONSTANT_ALPHA);
+ *     glBlendColor(src, src, src, dst);
+ * i.e. result = frag*src + dst*dst. That works on Windows' GL but not on Mesa:
+ * there neither constant factor contributes, so every primitive came out
+ * wrong. Measured on the same draw, with otherwise identical blend state:
+ *     CONSTANT_COLOR / CONSTANT_ALPHA -> pixel (0,0,0,0)      (black)
+ *     ONE           / CONSTANT_ALPHA -> pixel (255,0,0,255)  (dst contributed 0)
+ * From the menu this showed as the box cursor being a solid black bar instead
+ * of a translucent highlight.
+ *
+ * So both constant factors are gone: `src` is applied to the RGB here and `dst`
+ * becomes the vertex alpha, and Prim_GlBlend uses glBlendFunc(GL_ONE,
+ * GL_SRC_ALPHA). The arithmetic is unchanged (frag*src + dst*dst), and since
+ * src and dst are 1.0 for every caller that does not pass them explicitly, the
+ * Windows result is the same as before.
+ */
+static void Prim_GlColor(unsigned int color, float scale, float alpha)
 {
-    float b = (float)((color >> 16 & 0xFF) / 255.0);
-    float g = (float)((color >> 8 & 0xFF) / 255.0);
-    float r = (float)((color & 0xFF) / 255.0);
+    float b = (float)((color >> 16 & 0xFF) / 255.0) * scale;
+    float g = (float)((color >> 8 & 0xFF) / 255.0) * scale;
+    float r = (float)((color & 0xFF) / 255.0) * scale;
 
-    glColor3f(r, g, b);
+    if (r > 1.0f) r = 1.0f;
+    if (g > 1.0f) g = 1.0f;
+    if (b > 1.0f) b = 1.0f;
+    if (r < 0.0f) r = 0.0f;
+    if (g < 0.0f) g = 0.0f;
+    if (b < 0.0f) b = 0.0f;
+    if (alpha > 1.0f) alpha = 1.0f;
+    if (alpha < 0.0f) alpha = 0.0f;
+    glColor4f(r, g, b, alpha);
 }
 
-/* Additive blending by constant factors (the colour times 1, plus the target times alpha_dst). */
-static void Prim_GlBlend(float src, float dst, unsigned int equation)
+/*
+ * Blending: frag*src + dst*Ca, with src carried by the vertex colour's RGB and
+ * Ca by its alpha. Neither factor is a GL constant factor, which is the point:
+ * see Prim_GlColor for why GL_CONSTANT_COLOR / GL_CONSTANT_ALPHA cannot be used
+ * here. glBlendFunc(GL_ONE, GL_SRC_ALPHA) is plain GL 1.0 state and gives
+ * exactly the same arithmetic as the original's constant-factor version:
+ *   original: result = frag*Cc + dst*Ca  with Cc = blendColor.rgb = src
+ *   here:     result = frag*1  + dst*Ca  with frag already scaled by src
+ */
+static void Prim_GlBlend(unsigned int equation)
 {
     glEnable(GL_BLEND);
-    glBlendFunc(PRIM_GL_CONSTANT_COLOR, PRIM_GL_CONSTANT_ALPHA);
-    g_glewBlendColor(src, src, src, dst);
+    glBlendFunc(GL_ONE, GL_SRC_ALPHA);
     g_glewBlendEquation(equation);
 }
 
@@ -981,7 +1015,7 @@ void Gfx_GlClear(unsigned int color)
 void Gfx_GlPutPixel(int x, int y, unsigned int color)
 {
     Gl_ResetModelview();
-    Prim_GlColor(color);
+    Prim_GlColor(color, 1.0f, 1.0f);
     glBegin(GL_POINTS);
     glVertex2f((float)x, (float)y);
     glEnd();
@@ -991,8 +1025,8 @@ void Gfx_GlPutPixel(int x, int y, unsigned int color)
 void Gfx_GlAddPixel(int x, int y, unsigned int color)
 {
     Gl_ResetModelview();
-    Prim_GlColor(color);
-    Prim_GlBlend(1.0f, 1.0f, PRIM_GL_FUNC_ADD);
+    Prim_GlColor(color, 1.0f, 1.0f);
+    Prim_GlBlend(PRIM_GL_FUNC_ADD);
     glBegin(GL_POINTS);
     glVertex2f((float)x, (float)y);
     glEnd();
@@ -1006,8 +1040,8 @@ void Gfx_GlInvertPixel(int x, int y)
         return;
     }
     Gl_ResetModelview();
-    glColor3f(1.0f, 1.0f, 1.0f);
-    Prim_GlBlend(1.0f, 1.0f, GL_LOGIC_OP);
+    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+    Prim_GlBlend(GL_LOGIC_OP);
     glLogicOp(GL_XOR);
     glBegin(GL_POINTS);
     glVertex2f((float)x, (float)y);
@@ -1019,7 +1053,7 @@ void Gfx_GlInvertPixel(int x, int y)
 void Gfx_GlDrawLine(float x1, float y1, float x2, float y2, unsigned int color)
 {
     Gl_ResetModelview();
-    Prim_GlColor(color);
+    Prim_GlColor(color, 1.0f, 1.0f);
     glBegin(GL_LINES);
     glVertex2f(x1, y1);
     glVertex2f(x2, y2);
@@ -1030,8 +1064,8 @@ void Gfx_GlDrawLine(float x1, float y1, float x2, float y2, unsigned int color)
 void Gfx_GlDrawLineAdd(float x1, float y1, float x2, float y2, unsigned int color)
 {
     Gl_ResetModelview();
-    Prim_GlColor(color);
-    Prim_GlBlend(1.0f, 1.0f, PRIM_GL_FUNC_ADD);
+    Prim_GlColor(color, 1.0f, 1.0f);
+    Prim_GlBlend(PRIM_GL_FUNC_ADD);
     glBegin(GL_LINES);
     glVertex2f(x1, y1);
     glVertex2f(x2, y2);
@@ -1063,8 +1097,8 @@ void Gfx_GlDrawRectBlend(int x1, int y1, int x2, int y2, unsigned int color, int
 
     Prim_GlRect(x1, y1, x2, y2, &fx1, &fy1, &fx2, &fy2);
     Gl_ResetModelview();
-    Prim_GlColor(color);
-    Prim_GlBlend(src, dst, PRIM_GL_FUNC_ADD);
+    Prim_GlColor(color, src, dst);
+    Prim_GlBlend(PRIM_GL_FUNC_ADD);
     glBegin(GL_LINE_LOOP);
     glVertex2f(fx1, fy1);
     glVertex2f(fx2, fy1);
@@ -1081,8 +1115,8 @@ void Gfx_GlDrawRectSub(int x1, int y1, int x2, int y2, unsigned int color)
 
     Prim_GlRect(x1, y1, x2, y2, &fx1, &fy1, &fx2, &fy2);
     Gl_ResetModelview();
-    Prim_GlColor(color);
-    Prim_GlBlend(1.0f, 1.0f, PRIM_GL_FUNC_REVERSE_SUBTRACT);
+    Prim_GlColor(color, 1.0f, 1.0f);
+    Prim_GlBlend(PRIM_GL_FUNC_REVERSE_SUBTRACT);
     glBegin(GL_LINE_LOOP);
     glVertex2f(fx1, fy1);
     glVertex2f(fx2, fy1);
@@ -1113,8 +1147,8 @@ void Gfx_GlBlendRect(int x1, int y1, int x2, int y2, unsigned int color, int alp
 
     Prim_GlRect(x1, y1, x2, y2, &fx1, &fy1, &fx2, &fy2);
     Gl_ResetModelview();
-    Prim_GlColor(color);
-    Prim_GlBlend(src, dst, PRIM_GL_FUNC_ADD);
+    Prim_GlColor(color, src, dst);
+    Prim_GlBlend(PRIM_GL_FUNC_ADD);
     glBegin(GL_TRIANGLE_STRIP);
     glVertex2f(fx1, fy1);
     glVertex2f(fx2, fy1);
@@ -1131,8 +1165,8 @@ void Gfx_GlFillRectSub(int x1, int y1, int x2, int y2, unsigned int color)
 
     Prim_GlRect(x1, y1, x2, y2, &fx1, &fy1, &fx2, &fy2);
     Gl_ResetModelview();
-    Prim_GlColor(color);
-    Prim_GlBlend(1.0f, 1.0f, PRIM_GL_FUNC_REVERSE_SUBTRACT);
+    Prim_GlColor(color, 1.0f, 1.0f);
+    Prim_GlBlend(PRIM_GL_FUNC_REVERSE_SUBTRACT);
     glBegin(GL_TRIANGLE_STRIP);
     glVertex2f(fx1, fy1);
     glVertex2f(fx2, fy1);
