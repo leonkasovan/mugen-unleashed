@@ -15,7 +15,7 @@ lands; keep the research sections true to the findings they were based on.
 | Lua | **done** — `lmode`/`lexec` implemented, full API documented in `docs/LUA.md` |
 | Renderer optimization | steps 1–3 **done and runtime-verified**; 4–6 pending |
 | Modern GL (3.3/4.6) / Vulkan | researched, **not recommended** — reasons below |
-| Linux port (x64 / arm64) | **planned, not started** — one `Makefile`, `uname`+GCC detection; 9-step plan below. x64 expected fidelity, arm64 functional-only |
+| Linux port (x64 / arm64) | **planned, not started.** Design + detection verified on WSL2/Ubuntu 22.04: all deps packaged, x87 confirmed, both compile blockers confirmed. 9-step plan below |
 
 ## Codebase knowledge graph (codebase-memory-mcp)
 
@@ -236,11 +236,90 @@ Only these differ; the file lists and the engine are shared.
 | resources | `windres` on `mugen.rc` + manifest | skipped | skipped |
 | SDL stack | kit archives via `pkg-config --libs --static` | distro `pkg-config` | distro `pkg-config` |
 | `PTW32_STATIC_LIB` | yes (pthreadVC2 header) | no — glibc pthread | no |
-| `__int64` / `__cdecl` | provided by MinGW headers | **shim needed** | **shim needed** (`__cdecl` does not exist on arm64 at all) |
+| `__int64` / `__cdecl` | provided by MinGW `_mingw.h` | **shim needed** (both) | **shim needed** (both) |
 | `MUGEN_LAYOUT_32BIT` | 1 | 0 | 0 |
 
 `MUGEN_LAYOUT_32BIT` is new and is what makes the 64-bit build possible at all;
 see "The struct layout question" below.
+
+### Verified on WSL2 / Ubuntu 22.04
+
+WSL2 is available on this machine (`Ubuntu-22.04`, `Linux 6.6 x86_64`), so the
+claims below were **executed, not assumed**. Toolchain: gcc 11.4.0, GNU Make
+4.3, pkg-config 0.29.2.
+
+**Every dependency is one `apt install` away — including SDL 1.2.** `apt-cache
+policy` on a stock Ubuntu 22.04:
+
+| Package | Candidate |
+|---|---|
+| `libsdl1.2-dev` | **1.2.15**+dfsg2-6 — the exact version the engine targets |
+| `libsdl-mixer1.2-dev` | 1.2.12 |
+| `libsdl-ttf2.0-dev` | 2.0.11 |
+| `libsdl-gfx1.2-dev` | 2.0.25 |
+| `libpng-dev` | 1.6.37 (matches the 1.6 the Windows static build now uses) |
+| `zlib1g-dev` | 1.2.11 |
+| `libmpg123-dev` | 1.29.3 |
+| `libgl1-mesa-dev` | 23.2.1 |
+| `liblua5.1-0-dev` | **5.1.5** |
+| `libfreetype-dev`, `libbz2-dev` | present |
+
+This **retires the biggest risk in the plan**. The earlier worry was that modern
+distros ship SDL2 only; Ubuntu 22.04 carries 1.2.15, so no `sdl12-compat`
+shim and no vendoring is needed. Lua 5.1.5 is also packaged, so even Lua need
+not be vendored there (`third_party/lua-5.1.4` stays as the fallback for distros
+that dropped 5.1, and to keep the Windows build self-contained).
+
+**The two known compile blockers, confirmed by compiling:**
+
+```
+$ gcc -c portcheck.c
+error: unknown type name '__int64'; did you mean '__int64_t'?
+error: expected '=', ',', ';', 'asm' or '__attribute__' before 'fn'   ← __cdecl
+```
+
+`__cdecl` failing on **x86-64 Linux** is a correction to the earlier research,
+which implied it was only absent on arm64. It is a MinGW/Windows attribute, and
+Linux GCC rejects it on every architecture. Both are fixed by two `#define`s:
+
+```c
+#define __int64 long long
+#define __cdecl
+```
+
+after which the same file compiles clean.
+
+**`-mfpmath=387` confirmed on Linux GCC, not just MinGW.** A `_Static_assert`
+on `__FLT_EVAL_METHOD__` fails under default (SSE) flags and passes with
+`-mfpmath=387 -fexcess-precision=standard`. So the claim that **linux-x64 is a
+fidelity target** holds on real Linux GCC 11.4, the compiler Ubuntu 22.04 ships.
+Worth re-checking on the distro actually used, since the flag's effect is a
+back-end property.
+
+**Struct growth matches the prediction.** A representative
+`{ int x; void *p; int y; }` is 12 bytes at 32-bit and **24 bytes** at 64-bit,
+with `p` moving from 4 to 8 and `y` from 8 to 16 — exactly the cascade the
+`MUGEN_LAYOUT_32BIT` guard is designed to absorb.
+
+**The detection block was prototyped and verified on all four paths**, with the
+prototype kept out of the build tree:
+
+| Input | Result |
+|---|---|
+| MSYS + `i686-w64-mingw32` | `win32` |
+| MSYS + `x86_64-w64-mingw32` | **error**: "cannot link this 32-bit target; use the i686 kit" |
+| Linux + `x86_64-linux-gnu` | `linux-x64` |
+| Linux + `aarch64-linux-gnu` (stub compiler) | `linux-arm64` |
+| anything else | **error**, naming the triple found |
+
+The Windows/x64-kit case is the one that matters most in practice: it turns the
+current confusing `skipping incompatible libkernel32.a` link failure into one
+sentence naming the fix.
+
+**Not done:** a full Linux build. `apt install` needs `sudo`, which needs a
+password this session does not have. Everything above is compiler-level
+verification; the first real build will still surface the Win32/CRT source work
+in steps 1–5.
 
 ### The struct layout question, measured
 
@@ -402,11 +481,13 @@ Dependencies also change shape. Windows compiles Lua/GLEW/minizip from
 longer ship 5.1. GLEW 1.5.4 and minizip 0.15 can stay vendored or come from the
 distro; vendored is safer, since `src/symbols.h` pins their symbols.
 
-**SDL 1.2 availability is the real risk.** Several modern distros ship SDL2
-only. This is the same `SDL_SetVideoMode` question that the Windows static build
-only survived because SDL 1.2 was rebuilt for the kit: if the target distro has
-no `libsdl1.2-dev`, that has to be answered before anything else in the plan
-matters. Check first:
+**SDL 1.2 availability: resolved for Ubuntu 22.04, still worth checking per
+distro.** This was the plan's biggest risk — several newer distros ship SDL2
+only, and the engine is written against `SDL_SetVideoMode`. Ubuntu 22.04 carries
+`libsdl1.2-dev 1.2.15` (verified, see "Verified on WSL2"), so no shim and no
+vendoring is needed there. On a distro that has dropped 1.2, the answer is
+`sdl12-compat` over SDL2 — which is a real porting cost, not a drop-in — so
+confirm before starting:
 
 ```sh
 pkg-config --exists sdl && pkg-config --modversion sdl   # want 1.2.15
@@ -436,10 +517,10 @@ Three things the static Windows build already settled for the Linux port:
 | 2 | Vendor libresample | **done for Windows** — `third_party/libresample` is upstream 0.1.3 ported to the multi-channel ABI; see "Static build" above. zlib still comes from the kit on Windows and from the distro on Linux | resample **done** |
 | 3 | Remove pure-`windows.h` includes | `gfx.c`, `prim.c`, `glrender.c`, `gldetect.c`, `mugen.h` — mechanical; include `<GL/gl.h>` directly. Note `matchload.c` is **not** in this group: it calls `QueryPerformanceCounter`/`timeGetTime` | pending |
 | 4 | Port the 4 real Win32 spots | timer (monotonic clock), fullscreen (SDL), window icon + fonts dir, error dialog (SDL message box). ~200 lines total | pending |
-| 5 | SDL stack | use distro packages where they exist (`libsdl1.2-dev`, `libsdl-mixer1.2-dev`, `libsdl-ttf2.0-dev`, `libsdl-gfx1.2-dev`) — SDL 1.2 availability is the risk on modern distros; `sdlmain.c` gets a plain `main()` path on Linux; `mugen.rc`/manifest skipped (not a PE) | pending |
+| 5 | SDL stack | distro packages: `libsdl1.2-dev` (1.2.15 confirmed on Ubuntu 22.04), `libsdl-mixer1.2-dev`, `libsdl-ttf2.0-dev`, `libsdl-gfx1.2-dev`; `sdlmain.c` gets a plain `main()` path on Linux; `mugen.rc`/manifest skipped (not a PE) | pending — dependency availability **verified** |
 | 6 | **Platform detection in the Makefile** | `UNAME_S`/`UNAME_M`/`$(CC) -dumpmachine` selection block, per-target variable blocks (`TARGET`, float flags, `-mwindows`, `RC_OBJ`, `STATIC_PKGS`, `ENGINE_DEFS`), `check-toolchain` reporting the detected target, `MUGEN_TARGET=` override for cross-compiles. Linux output names and `$(PREFIX)/bin` install. **Unsupported triple = hard error** naming what was found | pending — design in "Platform detection" above |
 | 7 | **`MUGEN_LAYOUT_32BIT` assertion guard** | Wrap the 205 `MUGEN_ASSERT_SIZE` + 669 `MUGEN_ASSERT_OFFSET` in `#if MUGEN_LAYOUT_32BIT` (defined when `sizeof(void *) == 4`). Active on the reference build, no-ops on 64-bit. No struct changes: 0 raw-offset accesses means relayout is functionally safe (measured above) | pending |
-| 8 | 64-bit correctness pass | Build x64, fix what the compiler finds: `__int64` (MinGW defines it, glibc does not) and `__cdecl` (an x86-only keyword; **absent on arm64**), plus any `long`-width assumptions | pending |
+| 8 | 64-bit correctness pass | Build x64, fix what the compiler finds. Two are already confirmed by compiling on WSL Linux: **`__int64`** (MinGW defines it in `_mingw.h`, glibc does not — `unknown type name`) and **`__cdecl`** (a MinGW/Windows attribute, **rejected by Linux GCC on x86-64 as well as arm64**) — 36 and 1607 uses respectively, so both are one `#define` in the compat header. Then whatever `long`-width assumptions remain | pending; the two known ones are verified |
 | 9 | arm64 build | native compile on AArch64; expect `FLT_EVAL_METHOD == 0` and accept float drift. Audit the numeric lines of `mugen.log` by hand rather than by exact diff | pending |
 
 Order rationale: steps 1–5 make **one** Linux target build; 6 makes the
@@ -448,7 +529,7 @@ Steps 6 and 7 are independent of each other and of the source port, so they can
 land first if a Linux target is not yet available to test against.
 
 Effort estimate: steps 1, 3, 6, 7 are mechanical (~2–3 days total); 4 is
-behavioural (~1–2 days); 5 depends on distro SDL 1.2 availability; 8 is
+behavioural (~1–2 days); 5 is unblocked on Ubuntu 22.04 (SDL 1.2.15 packaged); 8 is
 unknown-but-bounded by the compiler's error list; **9 has no fixed end**, because
 float drift on arm64 is a per-symptom investigation, not a checklist.
 
