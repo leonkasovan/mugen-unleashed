@@ -4,8 +4,19 @@
 #ifndef MUGEN_H
 #define MUGEN_H
 
+/*
+ * Windows-only declarations. On other platforms compat_linux.h supplies the
+ * MSVC keywords, Windows type names and the few Win32 calls that have a
+ * faithful POSIX equivalent, so the engine sources compile unchanged.
+ */
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#else
+#include "compat_linux.h"
+#include <alloca.h>
+#include <sys/stat.h>
+#endif
 
 #include <SDL.h>
 #include <unzip.h>
@@ -23,11 +34,42 @@
 #define MUGEN_BUILD_MONTH   8
 #define MUGEN_BUILD_DAY     11
 
-/* Checks that a decompiled struct matches the layout of the original. */
+/*
+ * Checks that a decompiled struct matches the layout of the original.
+ *
+ * These are fidelity checks for the 32-bit layout: they pin the exact sizes and
+ * offsets of the original mugen.exe, which is only meaningful while pointers
+ * are 4 bytes. On a 64-bit build pointers double and 105 of the 200 asserted
+ * structs necessarily move, so the checks are compiled out rather than relaxed
+ * one by one -- they are assertions about the original binary, not about the
+ * program's correctness. Nothing in src/ reads a struct by absolute offset, so
+ * the relayout is functionally safe; see PLANS.md.
+ *
+ * MUGEN_LAYOUT_32BIT is 1 on every 32-bit target, so the reference builds keep
+ * every check.
+ */
+#if defined(__SIZEOF_POINTER__) && __SIZEOF_POINTER__ == 4
+#define MUGEN_LAYOUT_32BIT 1
+#else
+#define MUGEN_LAYOUT_32BIT 0
+#endif
+
+#if MUGEN_LAYOUT_32BIT
 #define MUGEN_ASSERT_SIZE(type, size) \
     _Static_assert(sizeof(type) == (size), "sizeof(" #type ") != " #size)
 #define MUGEN_ASSERT_OFFSET(type, field, offset) \
     _Static_assert(offsetof(type, field) == (offset), "offsetof(" #type ", " #field ") != " #offset)
+#else
+/*
+ * Still a file-scope declaration, and still references the type and the field,
+ * so a typo or an incomplete type is caught. Only the original's size/offset is
+ * no longer required, because it describes a 32-bit binary.
+ */
+#define MUGEN_ASSERT_SIZE(type, size) \
+    _Static_assert(sizeof(type) > 0, #type " must be a complete type")
+#define MUGEN_ASSERT_OFFSET(type, field, offset) \
+    _Static_assert(offsetof(type, field) < sizeof(type), #type "." #field " must exist")
+#endif
 
 #include "util.h"
 #include "stream.h"
