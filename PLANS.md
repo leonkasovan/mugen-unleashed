@@ -15,7 +15,7 @@ lands; keep the research sections true to the findings they were based on.
 | Lua | **done** — `lmode`/`lexec` implemented, full API documented in `docs/LUA.md` |
 | Renderer optimization | steps 1–3 **done and runtime-verified**; 4–6 pending |
 | Modern GL (3.3/4.6) / Vulkan | researched, **not recommended** — reasons below |
-| Linux port (x64 / arm64) | **planned, not started.** Design + detection verified on WSL2/Ubuntu 22.04: all deps packaged, x87 confirmed, both compile blockers confirmed. 9-step plan below |
+| Linux port | **linux-x64 done and verified** — builds and runs, `mugen.log` identical to the Windows build; `docs/BUILD-LINUX.md`. arm64 selected but untested |
 
 ## Codebase knowledge graph (codebase-memory-mcp)
 

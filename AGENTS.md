@@ -48,7 +48,7 @@ src/            78 .c + 47 .h — the engine, one file per original module
 third_party/    Lua 5.1.4, libpng 1.2.38, GLEW 1.5.4, minizip 0.15, sdk headers+defs
 cmake/          build helpers (MugenSdk.cmake, ThirdParty.cmake)
 tools/          msvc_env.bat, extract_icon.py, compare_logs.py
-docs/           ANALYSIS.md, BUILD-MSVC.md, BUILD-MINGW.md, LUA.md
+docs/           ANALYSIS.md, BUILD-MSVC.md, BUILD-MINGW.md, BUILD-LINUX.md, LUA.md
 install/        a real M.U.G.E.N 1.1b1 installation (untracked, for testing)
 build/          all build output (git-ignored)
 ```
@@ -76,7 +76,21 @@ directly without it — the environment will be missing.
 
 Details: `docs/BUILD-MSVC.md`.
 
-### GNU Make + MinGW (alternative, fully static)
+### Linux (same Makefile, auto-detected)
+
+The `Makefile` also builds Linux targets, chosen from `uname` + the compiler's
+triple. See `docs/BUILD-LINUX.md` for the dependency list.
+
+```sh
+make -j8              # build/linux-x64/mugen-linux-x64
+make install
+```
+
+`mugen.log` from the Linux build is identical to the Windows build's, so the
+same validation method works. Windows stays the reference build; the Linux
+target is additive and must not disturb it.
+
+### GNU Make + MinGW (Windows, fully static)
 
 ```sh
 export PATH=/c/x86devkit/bin:$PATH      # the 32-bit kit, not w64devkit
@@ -206,7 +220,7 @@ Scenarios worth running (all with `-nosound` for reproducibility):
 
 | Scenario | Command |
 |---|---|
-| startup → mode select | `./mugen-static.exe -nosound` |
+| startup → mode select | `./mugen-static.exe -nosound` (or `mugen-linux-x64` under Linux) |
 | quick VS, one character per side | `-nosound -p1 kfm -p2 kfm` |
 | AI vs AI, two rounds | `-nosound -rounds 2 -p1.ai 1 -p2.ai 1` |
 

@@ -41,10 +41,59 @@ PKG_CONFIG ?= pkg-config
 # its absence is not an error.
 PYTHON3 ?= $(firstword $(foreach p,python3 python py,$(if $(shell $(p) -c "pass" 2>/dev/null && echo ok),$(p))))
 
-BUILD    ?= build/mingw
 DEBUG    ?=
 
 MUGEN_GAME_DIR ?=
+
+# ------------------------------------------------------- platform detection
+#
+# uname -s decides the OS family; the compiler's own target triple decides the
+# CPU and ABI. uname -m must NOT decide the architecture: inside MSYS it reports
+# the host (x86_64 here) while the compiler targets i686-w64-mingw32, so
+# trusting it would select 64-bit flags for a binary this project cannot link.
+# The compiler wins on any disagreement.
+#
+# Override for cross-compiling:  make MUGEN_TARGET=linux-arm64
+
+UNAME_S := $(shell uname -s 2>/dev/null)
+TRIPLE  := $(shell $(CC) -dumpmachine 2>/dev/null)
+
+ifeq ($(origin MUGEN_TARGET),undefined)
+  ifneq (,$(filter Windows_NT MINGW% MSYS% CYGWIN% NT,$(UNAME_S)))
+    ifneq (,$(findstring i686-w64-mingw32,$(TRIPLE)))
+      MUGEN_TARGET := win32
+    else ifneq (,$(findstring x86_64-w64-mingw32,$(TRIPLE)))
+      $(error $(TRIPLE) cannot link this 32-bit target (no 32-bit CRT in that kit); use the i686 kit)
+    else
+      $(error unsupported Windows toolchain "$(TRIPLE)"; expected i686-w64-mingw32)
+    endif
+  else ifeq (Linux,$(UNAME_S))
+    ifneq (,$(findstring x86_64-,$(TRIPLE)))
+      MUGEN_TARGET := linux-x64
+    else ifneq (,$(findstring aarch64-,$(TRIPLE)))
+      MUGEN_TARGET := linux-arm64
+    else ifneq (,$(findstring i686-,$(TRIPLE)))
+      MUGEN_TARGET := linux-x86
+    else
+      $(error unsupported Linux triple "$(TRIPLE)"; supported: x86_64-, i686-, aarch64-)
+    endif
+  else ifeq (Darwin,$(UNAME_S))
+    $(error macOS is not supported; the Makefile targets Windows and Linux)
+  else
+    $(error unsupported OS "$(UNAME_S)"; set MUGEN_TARGET explicitly to override)
+  endif
+endif
+
+# One family per target: win32 / linux.
+ifeq ($(MUGEN_TARGET),win32)
+  MUGEN_FAMILY := win32
+  BUILD    ?= build/mingw
+  TARGET   := $(BUILD)/mugen-static.exe
+else
+  MUGEN_FAMILY := linux
+  BUILD    ?= build/$(MUGEN_TARGET)
+  TARGET   := $(BUILD)/mugen-$(MUGEN_TARGET)
+endif
 
 V        ?= 0
 
@@ -62,7 +111,7 @@ SDK_DIR   := $(TP_DIR)/sdk
 OBJ_DIR   := $(BUILD)/obj
 LIB_DIR   := $(BUILD)/lib
 ICON_DIR  := $(BUILD)/icon
-TARGET    := $(BUILD)/mugen-static.exe
+# TARGET is set per platform in the detection block above.
 
 # The static SDL stack comes from the x86devkit through pkg-config, which also
 # pulls each library's own static dependencies (freetype, bz2, ogg, vorbis,
@@ -91,28 +140,26 @@ SDK_LIB_DIR ?= $(shell $(PKG_CONFIG) --variable=libdir sdl 2>/dev/null)
 # ------------------------------------------------------------- compile flags
 
 # The engine was reconstructed from a 32-bit MSVC 2008 binary that runs the
-# x87 FPU at 53-bit precision with /arch:IA32. -mfpmath=387 (the default for
-# i686) keeps float arithmetic on the x87, and -fexcess-precision=standard
-# rounds on every assignment to a float, which is what the code in src/
-# assumes (see src/ftol.h and docs/ANALYSIS.md, "Peculiarities of the binary").
+# x87 FPU at 53-bit precision with /arch:IA32. -mfpmath=387 keeps float
+# arithmetic on the x87 and -fexcess-precision=standard rounds on every
+# assignment to a float, which is what the code in src/ assumes.
+#
+# On x86-64 the x87 still exists, so the same flags restore FLT_EVAL_METHOD == 2
+# and the build stays bit-faithful to the reference (verified on GCC 11.4 with a
+# _Static_assert on __FLT_EVAL_METHOD__). arm64 has no x87 at all, so there the
+# flags are dropped and float results are allowed to drift.
 #
 # -fno-strict-aliasing: the reconstruction aliases through unions/pointers the
 # way the original machine code did; do not let GCC exploit TBAA.
 #
 # -Wno-error=incompatible-pointer-types: src/globals.c stores an `int (void)`
-# function in a `void (void)` slot of the BGM subsystem table (the original
-# only ever calls it for its side effects). MSVC accepts it as a warning,
-# GCC 14+ rejects it as an error by default.
+# function in a `void (void)` slot of the BGM subsystem table (the original only
+# ever calls it for its side effects). MSVC accepts it as a warning, GCC 14+
+# rejects it as an error by default.
 #
 # -Wno-stringop-truncation: the reconstruction copies into fixed-size fields
 # with strncpy/strncat exactly as the original did (the original relies on the
 # zero-filled struct, not on NUL termination).
-# PTW32_STATIC_LIB: third_party/sdk/include/pthread.h declares the pthread
-# functions __declspec(dllimport) unless this is set. We link pthreadVC2 as a
-# static archive (see the header's own note at PTW32_DLLPORT), so it must be set.
-# LIBRESAMPLE_STATIC does the same job for libresample.h.
-ENGINE_DEFS := -D_CRT_SECURE_NO_WARNINGS -D_CRT_NONSTDC_NO_DEPRECATE \
-               -DPTW32_STATIC_LIB -DLIBRESAMPLE_STATIC
 
 ENGINE_WARN := -Wall -Wno-unused-parameter -Wno-unused-result \
                -Wno-stringop-truncation \
@@ -126,28 +173,82 @@ else
   BUILD_DEFS :=
 endif
 
-# SDL 1.2 headers come from the kit (pkg-config), not third_party/sdk/include/
-# SDL: they are the same 1.2.15 API and the kit's copy matches the libraries we
-# now link. third_party/sdk/include/SDL is left in place for the MSVC build.
-# $(TP_DIR)/libresample/include MUST come before $(SDK_DIR)/include:
-# third_party/sdk/include/libresample.h declares the functions
-# __declspec(dllimport) for the game's DLL, which is wrong for a static link.
+LRS_DEFS := -DLIBRESAMPLE_STATIC
+
+ifeq ($(MUGEN_FAMILY),win32)
+  ARCHFLAGS := -m32
+  FPUFLAGS  := -mfpmath=387 -fexcess-precision=standard
+  # PTW32_STATIC_LIB: third_party/sdk/include/pthread.h declares the pthread
+  # functions __declspec(dllimport) unless this is set; we link pthreadVC2 as a
+  # static archive. LIBRESAMPLE_STATIC does the same for libresample.h.
+  ENGINE_DEFS := -D_CRT_SECURE_NO_WARNINGS -D_CRT_NONSTDC_NO_DEPRECATE \
+                 -DPTW32_STATIC_LIB $(LRS_DEFS)
+  LINK_MODE   := -mwindows
+  STATIC_PKGS := sdl SDL_gfx SDL_mixer SDL_ttf zlib libpng16
+  PKG_LIBS    := $(filter-out -mwindows,$(shell $(PKG_CONFIG) --libs --static $(STATIC_PKGS) 2>/dev/null))
+  PKG_CFLAGS  := $(shell $(PKG_CONFIG) --cflags $(STATIC_PKGS) 2>/dev/null)
+  SDL_CFLAGS  :=
+  SYS_LIBS    := -lopengl32 -lglu32 -lwinmm -lshell32 -luser32 -lgdi32
+  # Windows paths: the MSVC SDK tree is part of the build, and the compat layer
+  # is not used at all.
+  PLAT_CPPFLAGS := -I$(SDK_DIR)/include
+  FORCE_INCLUDE :=
+  PLAT_LDFLAGS  :=
+else
+  ARCHFLAGS :=
+  ifeq ($(MUGEN_TARGET),linux-arm64)
+    FPUFLAGS :=
+  else
+    FPUFLAGS := -mfpmath=387 -fexcess-precision=standard
+  endif
+  ENGINE_DEFS := -D_CRT_SECURE_NO_WARNINGS $(LRS_DEFS)
+  LINK_MODE   :=
+  # No --static on Linux: the distro's shared SDL is the normal thing to link
+  # against, and SDL_mixer.so already carries its own codec dependencies.
+  STATIC_PKGS := sdl SDL_gfx SDL_mixer SDL_ttf zlib libpng
+  PKG_LIBS    := $(shell $(PKG_CONFIG) --libs $(STATIC_PKGS) 2>/dev/null) -lGL -lGLU -ldl -lm
+  PKG_CFLAGS  := $(shell $(PKG_CONFIG) --cflags $(STATIC_PKGS) 2>/dev/null)
+  # SDL 1.2 headers live in /usr/include/SDL for the distro package.
+  SDL_CFLAGS  := $(shell $(PKG_CONFIG) --cflags sdl 2>/dev/null)
+  SYS_LIBS    := -lpthread
+  # The MSVC SDK headers are Windows-only and must not be on this path.
+  PLAT_CPPFLAGS :=
+  # compat_linux.h is force-included: several sources include <SDL.h> or
+  # <libresample.h> before mugen.h, so __int64/__cdecl and the CRT renames must
+  # be in place regardless of include order.
+  FORCE_INCLUDE := -include $(SRC_DIR)/compat_linux.h
+  # _GNU_SOURCE: strcasecmp/alloca and the POSIX extensions used here.
+  PLAT_LDFLAGS  := -Wl,--gc-sections
+  ENGINE_DEFS += -D_GNU_SOURCE
+endif
+
+# SANITIZE=address (or undefined,thread) instruments the engine and links the
+# runtime. Used while bringing up a new platform; not for shipping builds.
+ifneq ($(SANITIZE),)
+  OPT += -fsanitize=$(SANITIZE) -fno-omit-frame-pointer
+  SYS_LIBS += -fsanitize=$(SANITIZE)
+endif
+
 CPPFLAGS += -I$(SRC_DIR) \
             -I$(TP_DIR)/libresample/include \
-            -I$(SDK_DIR)/include \
+            $(PLAT_CPPFLAGS) \
             -I$(TP_DIR)/lua-5.1.4/src \
             -I$(TP_DIR)/glew-1.5.4/include \
             -I$(TP_DIR)/minizip-0.15 \
-            $(PKG_CFLAGS)
+            $(PKG_CFLAGS) $(SDL_CFLAGS)
 
-COMMONFLAGS := -m32 -std=gnu11 -mfpmath=387 -fexcess-precision=standard \
+# FORCE_INCLUDE stays out of COMMONFLAGS: it supplies Windows type names
+# (BOOL, WORD, ...) that clash with the same names in X11 headers, which
+# third-party code such as GLEW pulls in. Only the engine needs it.
+COMMONFLAGS := $(ARCHFLAGS) -std=gnu11 $(FPUFLAGS) \
                -fno-strict-aliasing -MMD -MP $(OPT)
 
-ENGINE_CFLAGS := $(COMMONFLAGS) $(ENGINE_WARN) $(ENGINE_DEFS) $(BUILD_DEFS)
+ENGINE_CFLAGS := $(COMMONFLAGS) $(FORCE_INCLUDE) $(ENGINE_WARN) $(ENGINE_DEFS) $(BUILD_DEFS)
 # Old third-party code: its warnings are not ours to fix, as /W0 in CMake.
 TP_CFLAGS     := $(COMMONFLAGS) -w $(ENGINE_DEFS)
 
-# The window icon of the original, when it is available.
+# --- the window icon of the original, only meaningful on Windows --------------
+ifeq ($(MUGEN_FAMILY),win32)
 ifneq ($(MUGEN_GAME_DIR),)
   ifneq ($(wildcard $(MUGEN_GAME_DIR)/mugen.exe),)
     ifeq ($(strip $(PYTHON3)),)
@@ -157,9 +258,7 @@ ifneq ($(MUGEN_GAME_DIR),)
     ENGINE_CFLAGS += -DMUGEN_HAS_ICON -I$(ICON_DIR)
   endif
 endif
-
-# Windows system libraries that SDL's own .pc files do not list.
-SYS_LIBS   := -lopengl32 -lglu32 -lwinmm -lshell32 -luser32 -lgdi32
+endif
 
 # ------------------------------------------------------------------- sources
 
@@ -192,8 +291,15 @@ TP_LIBS := $(LUA_LIB) $(LRS_LIB) $(GLEW_OBJ) $(MINIZIP_OBJ)
 # the same way, as RT_MANIFEST 1). windres takes a single .rc, so the manifest
 # is appended to a copy of mugen.rc instead of being compiled separately --
 # keeping it one .rc is what makes this build independent of cvtres /merge.
+ifeq ($(MUGEN_FAMILY),win32)
 RC_OBJ  := $(OBJ_DIR)/res/mugen_all.res.o
 ALL_RC  := $(OBJ_DIR)/res/mugen_all.rc
+else
+# mugen.rc is a PE resource script (dialog 200, version info, manifest). An ELF
+# executable has no equivalent, so there is nothing to compile.
+RC_OBJ  :=
+ALL_RC  :=
+endif
 
 # --------------------------------------------------------------------- rules
 
@@ -211,12 +317,12 @@ all: $(TARGET)
 $(TARGET): $(ENGINE_OBJS) $(RC_OBJ) $(TP_LIBS)
 	@echo "  LD      $@"
 	$(Q)mkdir -p $(dir $@)
-	$(Q)$(CC) -m32 -mwindows -o $@ $(ENGINE_OBJS) $(RC_OBJ) \
-	    -Wl,--gc-sections \
+	$(Q)$(CC) $(ARCHFLAGS) -o $@ $(ENGINE_OBJS) $(RC_OBJ) \
+	    $(PLAT_LDFLAGS) \
 	    -L$(LIB_DIR) -llua -lresample \
 	    $(GLEW_OBJ) $(MINIZIP_OBJ) \
 	    $(PKG_LIBS) $(SYS_LIBS) \
-	    -mwindows
+	    $(LINK_MODE)
 
 # --- the engine -------------------------------------------------------------
 
