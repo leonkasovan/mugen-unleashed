@@ -27,6 +27,16 @@ extern "C" {
 #endif
 
 /*
+ * __cdecl is a Windows calling convention and meaningless on System V
+ * AMD64/AArch64, where it is not even accepted as a keyword. Define it away so
+ * this header can be included by code that does not already have the Win32
+ * shims in scope (the vendored library itself, for one).
+ */
+#if !defined(_WIN32) && !defined(__cdecl)
+#define __cdecl
+#endif
+
+/*
  * Builds the shared filter tables before the first resample_open.
  * Kept for ABI compatibility with the shipped libresample.dll; the vendored
  * implementation computes its tables per handle and ignores these.
