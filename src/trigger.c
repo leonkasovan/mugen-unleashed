@@ -590,7 +590,20 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
             break;
         }
     }
-    for (i = 0; g_triggersV11[i] != -1; i++) {
+    /*
+     * PORTABILITY FIX (out-of-bounds read). g_triggersV11 is the one table in
+     * the original that has no -1 terminator: 9 entries at 0x004f1a70, then
+     * four bytes of padding, then g_sctrlsV10 at 0x004f1a98, whose -1 is what
+     * actually stopped this loop. Bounding it by the array's own length keeps
+     * the data layout (and every documented address) unchanged while removing
+     * the read past the end.
+     *
+     * Behavioural note: in the original the loop also examined those adjacent
+     * words, so trigger id 140 (0x8C, i.e. g_sctrlsV10[0]) was accidentally
+     * accepted as a 1.1-only trigger. That is not reproduced here; it depends
+     * on the .data layout of the original binary.
+     */
+    for (i = 0; i < (int)(sizeof(g_triggersV11) / sizeof(g_triggersV11[0])); i++) {
         if (id == g_triggersV11[i]) {
             need = 0x01010000;
             break;

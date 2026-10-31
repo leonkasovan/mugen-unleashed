@@ -5,12 +5,24 @@
  * tables, the fight.def loader and the window focus handlers.
  */
 #define WIN32_LEAN_AND_MEAN
+#ifdef _WIN32
 #include <windows.h>
+#endif
+#ifdef _WIN32
 #include <mmsystem.h>
+#endif
+#ifdef _WIN32
 #include <shlobj.h>
+#endif
 #include <SDL.h>
 #include <SDL_mixer.h>
+/* SDL_syswm.h gives access to the native window handle, used only by the
+ * Win32 code paths. On Linux it pulls in <X11/Xlib.h>, which defines
+ * "typedef XID Font" -- colliding with the engine's own Font typedef in
+ * src/font.h. Not needed there, so not included. */
+#ifdef _WIN32
 #include <SDL_syswm.h>
+#endif
 #include <SDL_ttf.h>
 #define HAVE_STRUCT_TIMESPEC 1      /* the CRT's time.h already has it */
 #include <pthread.h>
@@ -22,6 +34,7 @@
 /* 0x0041A500: gives the SDL window the program icon. */
 void System_SetWindowIcon(void)
 {
+#ifdef _WIN32
     HMODULE module = GetModuleHandleA(NULL);
     SDL_SysWMinfo info;
     HWND window;
@@ -33,6 +46,17 @@ void System_SetWindowIcon(void)
     if (icon != NULL) {
         SetClassLongA(window, GCL_HICON, (LONG)icon);
     }
+#else
+    /*
+     * The icon comes from resource 101 of mugen.exe, which a Linux build does
+     * not have. SDL 1.2 has SDL_WM_SetIcon, which needs an SDL_Surface built
+     * from the icon's pixels; there is no portable way to read a PE resource
+     * here, so the window simply keeps the default icon. The original's
+     * behaviour is "set the icon if the resource exists", so having none is the
+     * same path its code already takes on failure.
+     */
+    (void)WINDOW_ICON_ID;
+#endif
 }
 
 /* 0x0041E260: g_onActivate callback. */
@@ -256,10 +280,24 @@ void System_Init(void)
         Log_Printf("failed. ");
         Error_Exit();
     }
+#ifdef _WIN32
     if (SHGetFolderPathA(NULL, CSIDL_FONTS, NULL, 0, fonts) == S_OK) {
         strncpy(g_systemFontDir, fonts, 0x1FF);
         g_systemFontDirPtr = g_systemFontDir;
     }
+#else
+    /*
+     * POSIX: the equivalent is the XDG font directory. Compat_FontsDir returns
+     * the first that exists, so the system font search below has a real path.
+     */
+    {
+        const char *fdir = Compat_FontsDir();
+        if (fdir != NULL) {
+            strncpy(g_systemFontDir, fdir, 0x1FF);
+            g_systemFontDirPtr = g_systemFontDir;
+        }
+    }
+#endif
     Log_Printf("OK\n");
 
     Log_Printf("Initializing game variables...");
@@ -1180,7 +1218,13 @@ void Fight_Free(void)
 int GameVars_Init(void)
 {
     GameVars *g = g_game;
+#ifdef _WIN32
     __time64_t now;
+#else
+    /* POSIX has no __time64_t. time_t is 64-bit on every supported Linux
+     * target, which is what the original gets from _time64(). */
+    time_t now;
+#endif
     FILE *fp;
     void *palgroups;
 
@@ -1234,7 +1278,11 @@ int GameVars_Init(void)
         Error_Printf("Can't init afterimages.\n");
         return 0;
     }
-    palgroups = calloc(1, 0xC);
+    /* PORTABILITY FIX (64-bit): the original's 0xC is sizeof(PalGroups) while
+     * a pointer is 4 bytes. On LP64 the struct is 16 bytes, so the hardcoded
+     * size made Match_FreeAssets write past the allocation. sizeof() gives the
+     * same 0xC on every 32-bit target. */
+    palgroups = calloc(1, sizeof(PalGroups));
     if (palgroups == NULL) {
         g_outOfMemory = 1;
     }

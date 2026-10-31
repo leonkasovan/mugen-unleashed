@@ -170,7 +170,9 @@ Ini *Ini_Parse(Stream *s, int mode)
         }
         if (keep_raw) {
             src->src_cap = 0x100;
-            src->src_lines = Mem_Calloc(1, 0x400);
+            /* PORTABILITY FIX (64-bit): 0x400 is 0x100 pointers at 4 bytes
+             * each. Written via sizeof, 32-bit is unchanged. */
+            src->src_lines = Mem_Calloc(src->src_cap, sizeof(char *));
             if (src->src_lines == NULL) {
                 Ini_Free(ini);
                 return NULL;
@@ -218,7 +220,14 @@ Ini *Ini_Parse(Stream *s, int mode)
         goto done;
     }
     groups_bytes = 0x200;
-    lines_bytes = 0x800;
+    /*
+     * PORTABILITY FIX (64-bit). The original hardcodes 0x800 here and adds
+     * 0x400 per 0x100 new entries, i.e. 4 bytes per char* -- correct while a
+     * pointer is 4 bytes, half of what LP64 needs. Written as
+     * capacity * sizeof(char *) the 32-bit values are unchanged (0x800 and
+     * 0x400 exactly) and 64-bit gets the right amount.
+     */
+    lines_bytes = (lines_cap + 0x100) * (int)sizeof(char *);
     do {
         int len, first, i;
         char *line;
@@ -226,7 +235,10 @@ Ini *Ini_Parse(Stream *s, int mode)
         if (keep_raw) {
             char *raw;
             if (src->src_count + 1 >= src->src_cap) {
-                char **grown = realloc(src->src_lines, src->src_cap * sizeof(char *) + 0x400);
+                /* Grows to the NEW capacity. The original adds 0x400 bytes,
+                 * which is 0x100 pointers only while a pointer is 4 bytes. */
+                char **grown = realloc(src->src_lines,
+                                       (src->src_cap + 0x100) * sizeof(char *));
                 if (grown == NULL) {
                     goto fail;
                 }
@@ -288,14 +300,16 @@ Ini *Ini_Parse(Stream *s, int mode)
                 }
                 ini->lines = grown;
                 if (keep_src) {
-                    int *map = realloc(src->line_map, lines_bytes);
+                    /* line_map holds int, not char*, so it must not share
+                     * lines_bytes on a 64-bit build: 4 bytes per entry. */
+                    int *map = realloc(src->line_map, (lines_cap + 0x100) * (int)sizeof(int));
                     if (map == NULL) {
                         goto fail;
                     }
                     src->line_map = map;
                 }
                 lines_cap += 0x100;
-                lines_bytes += 0x400;
+                lines_bytes += 0x100 * (int)sizeof(char *);
             }
             if (*line == '[' && buf[len - 1] == ']') {
                 ini->group_lines[ini->group_count] = ini->line_count - 1;
