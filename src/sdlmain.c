@@ -19,6 +19,20 @@
  */
 #include "mugen.h"
 
+/*
+ * SDL 1.2's SDLmain is a Windows-only helper: it exists to provide WinMain,
+ * split lpCmdLine into argv, redirect stdout/stderr to files beside the
+ * executable and pre-load DDRAW.DLL. None of that applies on other platforms,
+ * where the C runtime passes argv to main() directly and src/main.c is the
+ * entry point (SDL 1.2's SDL_main.h only renames main on Windows).
+ *
+ * The whole implementation is therefore compiled only for Windows. Under
+ * --gc-sections a Linux link happened to drop it, but that is luck rather than
+ * design: the section references GetCommandLineA and SDL_main, which do not
+ * exist here, and any build that keeps the section alive fails to link.
+ */
+#ifdef _WIN32
+
 static char g_stdoutPath[MAX_PATH];     /* 0x00503178 */
 static char g_stderrPath[MAX_PATH];     /* 0x00503280 */
 static int g_stdioRedirected;           /* 0x00503384 */
@@ -268,3 +282,4 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR szCmdLine, int sw)
     return 0;
 }
 
+#endif /* _WIN32 */

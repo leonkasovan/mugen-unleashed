@@ -10,8 +10,14 @@
  * stay in double and are rounded to float where the original stores a float.
  */
 #define WIN32_LEAN_AND_MEAN
+#ifdef _WIN32
 #include <windows.h>
+#endif
+/* mmsystem.h is the Windows header for timeGetTime/QueryPerformanceCounter.
+ * On other platforms compat_linux.h declares the same calls. */
+#ifdef _WIN32
 #include <mmsystem.h>
+#endif
 #include <SDL_mixer.h>
 #define HAVE_STRUCT_TIMESPEC 1      /* the CRT's time.h already has it */
 #include <pthread.h>

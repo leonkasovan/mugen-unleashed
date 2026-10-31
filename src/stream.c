@@ -176,8 +176,14 @@ void Stream_FreeBuffer(Stream *s)
     }
     if (s->buf_alloc == STREAM_ALLOC_MALLOC) {
         free(s->begin);
+#ifdef _WIN32
     } else if (s->buf_alloc == STREAM_ALLOC_VIRTUAL) {
+        /* Kept as in the original. Note this decommits with size 0 instead of
+         * releasing, so it does not free anything -- and no code path ever sets
+         * STREAM_ALLOC_VIRTUAL, so the branch is unreachable. Preserved rather
+         * than "fixed"; there is no VirtualAlloc equivalent on POSIX. */
         VirtualFree(s->begin, 0, MEM_DECOMMIT);
+#endif
     }
     s->end = NULL;
     s->begin = NULL;

@@ -139,7 +139,13 @@ int Config_Load(void)
     Ini_ReadString(ini, "language", 0x100, text);
     if (text[0] == '\0') {
         const char *lang;
+#ifdef _WIN32
         if (GetLocaleInfoA(LOCALE_USER_DEFAULT, LOCALE_SISO639LANGNAME, g_systemLanguage, 3) != 0) {
+#else
+        /* POSIX has no locale-info call of this shape; the LANG/LC_ALL
+         * environment variables are the equivalent source of a language code. */
+        if (Compat_GetSystemLanguage(g_systemLanguage, 3)) {
+#endif
             Log_Printf("Autodetected system language. ");
             lang = g_systemLanguage;
         } else {

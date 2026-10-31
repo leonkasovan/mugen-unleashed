@@ -11,9 +11,17 @@
  * renderer, where the game is scaled to the window.
  */
 #define WIN32_LEAN_AND_MEAN
+#ifdef _WIN32
 #include <windows.h>
+#endif
 #include <SDL.h>
+/* SDL_syswm.h gives access to the native window handle, used only by the
+ * Win32 code paths. On Linux it pulls in <X11/Xlib.h>, which defines
+ * "typedef XID Font" -- colliding with the engine's own Font typedef in
+ * src/font.h. Not needed there, so not included. */
+#ifdef _WIN32
 #include <SDL_syswm.h>
+#endif
 #include <GL/gl.h>
 #include <GL/glu.h>
 
@@ -313,6 +321,7 @@ void Video_HandleFullscreenKey(int *key)
  */
 int Video_SetFullscreen(int fullscreen)
 {
+#ifdef _WIN32
     SDL_SysWMinfo info;
     HWND hwnd;
     HWND after;
@@ -362,6 +371,32 @@ int Video_SetFullscreen(int fullscreen)
     SetWindowPos(hwnd, after, x, y, w, h, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
     g_videoFullscreen = fullscreen;
     return 1;
+#else
+    /*
+     * POSIX: the original reaches into the Win32 window and sets WS_POPUP
+     * styles by hand to get a borderless full-screen window on the primary
+     * monitor. SDL 1.2 already provides exactly that on X11/Wayland, so the
+     * call is delegated to SDL_WM_ToggleFullScreen. The saved-window
+     * bookkeeping (g_savedWindowRect etc.) is Windows-only and is left at its
+     * initial values, since nothing reads it on this platform.
+     *
+     * Difference from the original, recorded in PLANS.md: the original ignores
+     * the monitor layout and uses the primary monitor's rectangle; SDL asks the
+     * window manager. Both end up borderless at full screen on the default
+     * output.
+     */
+    if (g_screenSurface == NULL) {
+        return 0;
+    }
+    if (g_videoFullscreen == fullscreen) {
+        return 1;
+    }
+    if (!SDL_WM_ToggleFullScreen(g_screenSurface)) {
+        return 0;
+    }
+    g_videoFullscreen = fullscreen;
+    return 1;
+#endif
 }
 
 /* Sprite slot `index` of a sprite set, as the original computes it (no bounds check). */

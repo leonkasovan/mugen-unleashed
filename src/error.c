@@ -7,10 +7,20 @@
  * debug clipboard.
  */
 #define WIN32_LEAN_AND_MEAN
+#ifdef _WIN32
 #include <windows.h>
+#endif
+#ifdef _WIN32
 #include <richedit.h>
+#endif
 #include <SDL.h>
+/* SDL_syswm.h gives access to the native window handle, used only by the
+ * Win32 code paths. On Linux it pulls in <X11/Xlib.h>, which defines
+ * "typedef XID Font" -- colliding with the engine's own Font typedef in
+ * src/font.h. Not needed there, so not included. */
+#ifdef _WIN32
 #include <SDL_syswm.h>
+#endif
 
 #include "mugen.h"
 
@@ -138,6 +148,7 @@ void Error_Exit(void)
     exit(1);
 }
 
+#ifdef _WIN32
 /* 0x0040C4C0: read-only rich edit with the text, sized to the dialog, above the OK button. */
 static INT_PTR CALLBACK ErrorDialog_Proc(HWND dlg, UINT msg, WPARAM wparam, LPARAM lparam)
 {
@@ -203,10 +214,20 @@ static INT_PTR CALLBACK ErrorDialog_Proc(HWND dlg, UINT msg, WPARAM wparam, LPAR
     }
     return FALSE;
 }
+#else
+/*
+ * The dialog procedure above builds a RichEdit control from resource 200 of
+ * mugen.exe and lays it out with GetSystemMetrics/MoveWindow. None of that
+ * exists on Linux, and Error_ShowDialog below writes to stderr instead, so the
+ * procedure is not compiled. Kept verbatim inside the #ifdef so the Windows
+ * build is unchanged.
+ */
+#endif
 
 /* 0x0040C770: modal, owned by the game window when there is one. */
 int Error_ShowDialog(const char *text, const char *title)
 {
+#ifdef _WIN32
     SDL_SysWMinfo info;
     ErrorDialogText data;
     HWND parent;
@@ -218,6 +239,21 @@ int Error_ShowDialog(const char *text, const char *title)
     DialogBoxParamA(GetModuleHandleA(NULL), MAKEINTRESOURCEA(ERROR_DIALOG_ID), parent, ErrorDialog_Proc,
                     (LPARAM)&data);
     return 0;
+#else
+    /*
+     * The original shows a modal RichEdit dialog built from resource 200 of
+     * mugen.exe. There is no such resource on Linux (mugen.rc is a PE
+     * resource script), so the message goes to stderr, which is where a Linux
+     * program is expected to put diagnostics. Behavioural difference, recorded
+     * in PLANS.md: the text is the same, the presentation is not.
+     */
+    if (title != NULL && title[0] != '\0') {
+        fprintf(stderr, "%s: %s\n", title, (text != NULL) ? text : "");
+    } else if (text != NULL) {
+        fprintf(stderr, "%s\n", text);
+    }
+    return 0;
+#endif
 }
 
 #define PLAYER_WARNING "%-4i: Warning: Player %s (%i) in state %i: %s\n"

@@ -10,8 +10,14 @@
  * these functions, so the globals are part of the interface.
  */
 #define WIN32_LEAN_AND_MEAN
+#ifdef _WIN32
 #include <windows.h>
+#endif
+/* mmsystem.h is the Windows header for timeGetTime/QueryPerformanceCounter.
+ * On other platforms compat_linux.h declares the same calls. */
+#ifdef _WIN32
 #include <mmsystem.h>
+#endif
 
 #include "mugen.h"
 
