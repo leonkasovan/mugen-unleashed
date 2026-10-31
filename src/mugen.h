@@ -18,6 +18,15 @@
 #include <sys/stat.h>
 #endif
 
+/*
+ * glad must come before <SDL.h>. SDL_opengl.h includes <GL/gl.h>, which defines
+ * __gl_h_ -- and glad.h refuses to load if that happened first. Including glad
+ * here defines __gl_h_ itself, so the system GL header then self-suppresses and
+ * glad becomes the single source of GL declarations, fixed-function pipeline
+ * included (it is generated with the compatibility profile).
+ */
+#include <glad.h>
+
 #include <SDL.h>
 #include <unzip.h>
 #include <png.h>

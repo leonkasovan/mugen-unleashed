@@ -15,7 +15,7 @@
  * thread and changed under SDL_LockAudio, the ring's space and fill
  * counters with Interlocked operations, as in the original.
  */
-#include <SDL.h>
+/* <SDL.h> comes from mugen.h, which pulls it in after glad.h. */
 #include <SDL_mixer.h>
 #define HAVE_STRUCT_TIMESPEC 1      /* the CRT's time.h already has it */
 #include <pthread.h>

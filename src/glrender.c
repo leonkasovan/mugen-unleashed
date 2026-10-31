@@ -8,7 +8,7 @@
  * from data/<name>.vert/.frag with #defines inserted at a marker).
  *
  * GL 1.1 entry points come from opengl32; newer ones through mugen.exe's own
- * GLEW copy (the g_glew* globals), which glewInit fills.
+ * GLEW copy (the g_glew* globals), which the GL loader fills.
  *
  * Floating point follows the x87 code of the original: values the original
  * keeps on the FPU stack are doubles here, values it stores are floats.
@@ -27,7 +27,11 @@
 #ifdef _WIN32
 #include <windows.h>
 #endif
-#include <GL/gl.h>
+/*
+ * No <GL/gl.h> here: glad.h (from mugen.h) provides the whole GL API including
+ * the fixed-function entry points this file uses, and glad.h refuses to load if
+ * a GL header came first.
+ */
 
 #include "mugen.h"
 
@@ -538,7 +542,7 @@ unsigned char *Gl_Premultiply(int bytes, const unsigned char *src)
 /* ---- set-up ---- */
 
 /*
- * 0x0047A6D0: starts the renderer once (glewInit, driver strings in the
+ * 0x0047A6D0: starts the renderer once (GL loader, driver strings in the
  * match log, the system textures). framebuffers: the OpenGL renderer, which
  * needs GL 2.0, NPOT textures, framebuffer objects and fragment programs,
  * detects the sprite offsets and loads the shaders. Returns 0 on failure.
@@ -552,7 +556,14 @@ int Gl_Init(int framebuffers)
     if (g_glInitialized) {
         return 1;
     }
-    glewInit();
+    /*
+     * Loads the GL entry points and fills the capability flags. The original
+     * called glewInit() here; glad's loader does the same job. A NULL return
+     * means no usable context, which the glGetString checks below would report
+     * anyway, so the value is not treated as fatal -- same as the original,
+     * which ignored glewInit's status.
+     */
+    gladLoadGL();
     if ((s = glGetString(GL_VERSION)) != NULL) {
         MatchLog_Printf(7, "Version: %s\n", s);
     }

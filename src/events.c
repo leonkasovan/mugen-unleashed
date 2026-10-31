@@ -6,7 +6,7 @@
  * g_inputState and queue the changes in g_keyQueue for menus and key
  * configuration (Input_CodePending, Input_Translate*).
  */
-#include <SDL.h>
+/* <SDL.h> comes from mugen.h, which pulls it in after glad.h. */
 
 #include "mugen.h"
 

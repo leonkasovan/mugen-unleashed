@@ -24,11 +24,13 @@ target_link_libraries(png12 PUBLIC mugen_sdk)
 mugen_third_party(png12)
 
 # GLEW 1.5.4
-add_library(glew_static STATIC "${_tp}/glew-1.5.4/src/glew.c")
-target_include_directories(glew_static PUBLIC "${_tp}/glew-1.5.4/include")
-target_compile_definitions(glew_static PUBLIC GLEW_STATIC)
-target_link_libraries(glew_static PUBLIC opengl32)
-mugen_third_party(glew_static)
+# glad 2.1: GL 2.1 compatibility profile + ARB_fragment_program,
+# ARB_texture_non_power_of_two, EXT_blend_logic_op, EXT_framebuffer_object.
+# Replaces GLEW 1.5.4, which the original linked statically.
+add_library(glad STATIC "${_tp}/glad-2.1/glad.c")
+target_include_directories(glad PUBLIC "${_tp}/glad-2.1")
+target_link_libraries(glad PUBLIC opengl32)
+mugen_third_party(glad)
 
 # minizip "unzip 0.15" (zlib 1.1.3 contrib), used for zipped characters
 add_library(minizip STATIC "${_tp}/minizip-0.15/unzip.c")

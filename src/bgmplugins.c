@@ -14,7 +14,7 @@
  * Plugin settings are read with BgmSettings_Get directly (not through the
  * accessor given to init).
  */
-#include <SDL.h>
+/* <SDL.h> comes from mugen.h, which pulls it in after glad.h. */
 #include <SDL_mixer.h>
 
 #include "mugen.h"

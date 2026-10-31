@@ -8,7 +8,7 @@
  * Also here: Input_FindKey, the menu lookup of an input code in the
  * players' key maps.
  */
-#include <SDL.h>
+/* <SDL.h> comes from mugen.h, which pulls it in after glad.h. */
 
 #include "mugen.h"
 

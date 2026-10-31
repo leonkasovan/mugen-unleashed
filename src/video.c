@@ -14,7 +14,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #endif
-#include <SDL.h>
+/* <SDL.h> comes from mugen.h, which pulls it in after glad.h. */
 /* SDL_syswm.h gives access to the native window handle, used only by the
  * Win32 code paths. On Linux it pulls in <X11/Xlib.h>, which defines
  * "typedef XID Font" -- colliding with the engine's own Font typedef in
@@ -22,10 +22,15 @@
 #ifdef _WIN32
 #include <SDL_syswm.h>
 #endif
-#include <GL/gl.h>
-#include <GL/glu.h>
+/*
+ * <GL/gl.h> is not included: glad.h (from mugen.h) provides it. <GL/glu.h> must
+ * come after mugen.h because it includes <GL/gl.h>, which glad.h has already
+ * claimed by defining __gl_h_.
+ */
 
 #include "mugen.h"
+
+#include <GL/glu.h>
 
 /* ---- coordinates ---- */
 

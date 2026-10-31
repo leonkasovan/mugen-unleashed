@@ -233,13 +233,13 @@ CPPFLAGS += -I$(SRC_DIR) \
             -I$(TP_DIR)/libresample/include \
             $(PLAT_CPPFLAGS) \
             -I$(TP_DIR)/lua-5.1.4/src \
-            -I$(TP_DIR)/glew-1.5.4/include \
+            -I$(TP_DIR)/glad-2.1 \
             -I$(TP_DIR)/minizip-0.15 \
             $(PKG_CFLAGS) $(SDL_CFLAGS)
 
 # FORCE_INCLUDE stays out of COMMONFLAGS: it supplies Windows type names
-# (BOOL, WORD, ...) that clash with the same names in X11 headers, which
-# third-party code such as GLEW pulls in. Only the engine needs it.
+# (BOOL, WORD, ...) that clash with the same names in the X11 headers a
+# third-party GL library can pull in. Only the engine needs it.
 COMMONFLAGS := $(ARCHFLAGS) -std=gnu11 $(FPUFLAGS) \
                -fno-strict-aliasing -MMD -MP $(OPT)
 
@@ -279,12 +279,12 @@ LRS_SRCS := $(wildcard $(TP_DIR)/libresample/src/*.c)
 
 LUA_OBJS := $(patsubst $(TP_DIR)/lua-5.1.4/src/%.c,$(OBJ_DIR)/lua/%.o,$(LUA_SRCS))
 LRS_OBJS := $(patsubst $(TP_DIR)/libresample/src/%.c,$(OBJ_DIR)/libresample/%.o,$(LRS_SRCS))
-GLEW_OBJ := $(OBJ_DIR)/glew/glew.o
+GLAD_OBJ := $(OBJ_DIR)/glad/glad.o
 MINIZIP_OBJ := $(OBJ_DIR)/minizip/unzip.o
 
 LUA_LIB := $(LIB_DIR)/liblua.a
 LRS_LIB := $(LIB_DIR)/libresample.a
-TP_LIBS := $(LUA_LIB) $(LRS_LIB) $(GLEW_OBJ) $(MINIZIP_OBJ)
+TP_LIBS := $(LUA_LIB) $(LRS_LIB) $(GLAD_OBJ) $(MINIZIP_OBJ)
 
 # Resources: the error dialog (200) and version info from mugen.rc, plus the
 # assembly manifest that points at Elecbyte.MUGEN.libs (the original embeds it
@@ -320,7 +320,7 @@ $(TARGET): $(ENGINE_OBJS) $(RC_OBJ) $(TP_LIBS)
 	$(Q)$(CC) $(ARCHFLAGS) -o $@ $(ENGINE_OBJS) $(RC_OBJ) \
 	    $(PLAT_LDFLAGS) \
 	    -L$(LIB_DIR) -llua -lresample \
-	    $(GLEW_OBJ) $(MINIZIP_OBJ) \
+	    $(GLAD_OBJ) $(MINIZIP_OBJ) \
 	    $(PKG_LIBS) $(SYS_LIBS) \
 	    $(LINK_MODE)
 
@@ -357,12 +357,15 @@ $(LRS_LIB): $(LRS_OBJS)
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(AR) rcs $@ $^
 
-# --- GLEW 1.5.4 -------------------------------------------------------------
+# --- glad 2.1 ---------------------------------------------------------------
+# Generated for this engine: GL 2.1 compatibility profile plus
+# ARB_fragment_program, ARB_texture_non_power_of_two, EXT_blend_logic_op and
+# EXT_framebuffer_object. One self-contained .c, no import library.
 
-$(GLEW_OBJ): $(TP_DIR)/glew-1.5.4/src/glew.c
+$(GLAD_OBJ): $(TP_DIR)/glad-2.1/glad.c
 	@echo "  CC      $<"
 	$(Q)mkdir -p $(dir $@)
-	$(Q)$(CC) $(TP_CFLAGS) -DGLEW_STATIC -I$(TP_DIR)/glew-1.5.4/include -c $< -o $@
+	$(Q)$(CC) $(TP_CFLAGS) -I$(TP_DIR)/glad-2.1 -c $< -o $@
 
 # --- minizip (unzip 0.15) ---------------------------------------------------
 

@@ -33,7 +33,11 @@
 #ifdef _WIN32
 #include <windows.h>
 #endif
-#include <GL/gl.h>
+/*
+ * No <GL/gl.h> here: glad.h (from mugen.h) provides the whole GL API including
+ * the fixed-function entry points this file uses, and glad.h refuses to load if
+ * a GL header came first.
+ */
 
 #include "mugen.h"
 

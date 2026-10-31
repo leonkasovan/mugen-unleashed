@@ -72,82 +72,58 @@ extern int g_nokoLatch; /* 0x00500ef4 */
 extern const char * g_teamModeNames[4]; /* 0x00500f00 */
 extern const char * g_palKeymapKeys[12]; /* 0x00500f10 */
 extern int g_exprStackTop; /* 0x00500f40 */
-extern GlEnumFn __glewActiveTexture; /* 0x00500f70 */
-#define g_glewActiveTexture __glewActiveTexture
-extern GlMultiTexCoord2fFn __glewMultiTexCoord2f; /* 0x00500fcc */
-#define g_glewMultiTexCoord2f __glewMultiTexCoord2f
-extern GlMultiTexCoord4fFn __glewMultiTexCoord4f; /* 0x0050100c */
-#define g_glewMultiTexCoord4f __glewMultiTexCoord4f
-extern GlBlendColorFn __glewBlendColor; /* 0x00501028 */
-#define g_glewBlendColor __glewBlendColor
-extern GlEnumFn __glewBlendEquation; /* 0x0050102c */
-#define g_glewBlendEquation __glewBlendEquation
-extern GlAttachShaderFn __glewAttachShader; /* 0x00501130 */
-#define g_glewAttachShader __glewAttachShader
-extern GlUintFn __glewCompileShader; /* 0x0050113c */
-#define g_glewCompileShader __glewCompileShader
-extern GlCreateProgramFn __glewCreateProgram; /* 0x00501140 */
-#define g_glewCreateProgram __glewCreateProgram
-extern GlCreateShaderFn __glewCreateShader; /* 0x00501144 */
-#define g_glewCreateShader __glewCreateShader
-extern GlUintFn __glewDeleteProgram; /* 0x00501148 */
-#define g_glewDeleteProgram __glewDeleteProgram
-extern GlUintFn __glewDeleteShader; /* 0x0050114c */
-#define g_glewDeleteShader __glewDeleteShader
-extern GlGetInfoLogFn __glewGetProgramInfoLog; /* 0x00501170 */
-#define g_glewGetProgramInfoLog __glewGetProgramInfoLog
-extern GlGetObjectivFn __glewGetProgramiv; /* 0x00501174 */
-#define g_glewGetProgramiv __glewGetProgramiv
-extern GlGetInfoLogFn __glewGetShaderInfoLog; /* 0x00501178 */
-#define g_glewGetShaderInfoLog __glewGetShaderInfoLog
-extern GlGetObjectivFn __glewGetShaderiv; /* 0x00501180 */
-#define g_glewGetShaderiv __glewGetShaderiv
-extern GlGetUniformLocationFn __glewGetUniformLocation; /* 0x00501184 */
-#define g_glewGetUniformLocation __glewGetUniformLocation
-extern GlIsShaderFn __glewIsShader; /* 0x005011a4 */
-#define g_glewIsShader __glewIsShader
-extern GlUintFn __glewLinkProgram; /* 0x005011a8 */
-#define g_glewLinkProgram __glewLinkProgram
-extern GlShaderSourceFn __glewShaderSource; /* 0x005011ac */
-#define g_glewShaderSource __glewShaderSource
-extern GlUniform1fFn __glewUniform1f; /* 0x005011bc */
-#define g_glewUniform1f __glewUniform1f
-extern GlUniform1iFn __glewUniform1i; /* 0x005011c4 */
-#define g_glewUniform1i __glewUniform1i
-extern GlUniform2fFn __glewUniform2f; /* 0x005011cc */
-#define g_glewUniform2f __glewUniform2f
-extern GlUniform3fFn __glewUniform3f; /* 0x005011dc */
-#define g_glewUniform3f __glewUniform3f
-extern GlUintFn __glewUseProgram; /* 0x00501208 */
-#define g_glewUseProgram __glewUseProgram
-extern GlBindFramebufferFn __glewBindFramebufferEXT; /* 0x0050204c */
-#define g_glewBindFramebufferEXT __glewBindFramebufferEXT
-extern GlBindFramebufferFn __glewBindRenderbufferEXT; /* 0x00502050 */
-#define g_glewBindRenderbufferEXT __glewBindRenderbufferEXT
-extern GlCheckFramebufferStatusFn __glewCheckFramebufferStatusEXT; /* 0x00502054 */
-#define g_glewCheckFramebufferStatusEXT __glewCheckFramebufferStatusEXT
-extern GlGenDeleteFn __glewDeleteRenderbuffersEXT; /* 0x0050205c */
-#define g_glewDeleteRenderbuffersEXT __glewDeleteRenderbuffersEXT
-extern GlFramebufferRenderbufferFn __glewFramebufferRenderbufferEXT; /* 0x00502060 */
-#define g_glewFramebufferRenderbufferEXT __glewFramebufferRenderbufferEXT
-extern GlFramebufferTexture2DFn __glewFramebufferTexture2DEXT; /* 0x00502068 */
-#define g_glewFramebufferTexture2DEXT __glewFramebufferTexture2DEXT
-extern GlGenDeleteFn __glewGenFramebuffersEXT; /* 0x00502070 */
-#define g_glewGenFramebuffersEXT __glewGenFramebuffersEXT
-extern GlGenDeleteFn __glewGenRenderbuffersEXT; /* 0x00502074 */
-#define g_glewGenRenderbuffersEXT __glewGenRenderbuffersEXT
-extern GlRenderbufferStorageFn __glewRenderbufferStorageEXT; /* 0x0050208c */
-#define g_glewRenderbufferStorageEXT __glewRenderbufferStorageEXT
-extern unsigned char __GLEW_VERSION_2_0; /* 0x00502ac1 */
-#define g_glewVersion20 __GLEW_VERSION_2_0
-extern unsigned char __GLEW_ARB_fragment_program; /* 0x00502af1 */
-#define g_glewArbFragmentProgram __GLEW_ARB_fragment_program
-extern unsigned char __GLEW_ARB_texture_non_power_of_two; /* 0x00502b24 */
-#define g_glewArbTextureNpot __GLEW_ARB_texture_non_power_of_two
-extern unsigned char __GLEW_EXT_blend_logic_op; /* 0x00502b54 */
-#define g_glewExtBlendLogicOp __GLEW_EXT_blend_logic_op
-extern unsigned char __GLEW_EXT_framebuffer_object; /* 0x00502b68 */
-#define g_glewExtFramebufferObject __GLEW_EXT_framebuffer_object
+/*
+ * OpenGL entry points.
+ *
+ * The original mugen.exe linked GLEW 1.5.4 statically; the addresses in the
+ * trailing comments are where GLEW's function-pointer globals and capability
+ * flags lived in its .data, kept so the mapping to the original binary is still
+ * recorded. The reconstruction loads them with glad 2.1 instead
+ * (third_party/glad-2.1), generated for exactly this engine's needs: GL 2.1
+ * compatibility profile plus ARB_fragment_program,
+ * ARB_texture_non_power_of_two, EXT_blend_logic_op and EXT_framebuffer_object.
+ *
+ * The g_glew* macro names are kept so the call sites in src/ read as they did
+ * when this was written against GLEW; only the target of each macro changed.
+ */
+#define g_glewActiveTexture              glActiveTexture                              /* 0x00500f70 GlEnumFn */
+#define g_glewMultiTexCoord2f            glMultiTexCoord2f                            /* 0x00500fcc GlMultiTexCoord2fFn */
+#define g_glewMultiTexCoord4f            glMultiTexCoord4f                            /* 0x0050100c GlMultiTexCoord4fFn */
+#define g_glewBlendColor                 glBlendColor                                 /* 0x00501028 GlBlendColorFn */
+#define g_glewBlendEquation              glBlendEquation                              /* 0x0050102c GlEnumFn */
+#define g_glewAttachShader               glAttachShader                               /* 0x00501130 GlAttachShaderFn */
+#define g_glewCompileShader              glCompileShader                              /* 0x0050113c GlUintFn */
+#define g_glewCreateProgram              glCreateProgram                              /* 0x00501140 GlCreateProgramFn */
+#define g_glewCreateShader               glCreateShader                               /* 0x00501144 GlCreateShaderFn */
+#define g_glewDeleteProgram              glDeleteProgram                              /* 0x00501148 GlUintFn */
+#define g_glewDeleteShader               glDeleteShader                               /* 0x0050114c GlUintFn */
+#define g_glewGetProgramInfoLog          glGetProgramInfoLog                          /* 0x00501170 GlGetInfoLogFn */
+#define g_glewGetProgramiv               glGetProgramiv                               /* 0x00501174 GlGetObjectivFn */
+#define g_glewGetShaderInfoLog           glGetShaderInfoLog                           /* 0x00501178 GlGetInfoLogFn */
+#define g_glewGetShaderiv                glGetShaderiv                                /* 0x00501180 GlGetObjectivFn */
+#define g_glewGetUniformLocation         glGetUniformLocation                         /* 0x00501184 GlGetUniformLocationFn */
+#define g_glewIsShader                   glIsShader                                   /* 0x005011a4 GlIsShaderFn */
+#define g_glewLinkProgram                glLinkProgram                                /* 0x005011a8 GlUintFn */
+#define g_glewShaderSource               glShaderSource                               /* 0x005011ac GlShaderSourceFn */
+#define g_glewUniform1f                  glUniform1f                                  /* 0x005011bc GlUniform1fFn */
+#define g_glewUniform1i                  glUniform1i                                  /* 0x005011c4 GlUniform1iFn */
+#define g_glewUniform2f                  glUniform2f                                  /* 0x005011cc GlUniform2fFn */
+#define g_glewUniform3f                  glUniform3f                                  /* 0x005011dc GlUniform3fFn */
+#define g_glewUseProgram                 glUseProgram                                 /* 0x00501208 GlUintFn */
+#define g_glewBindFramebufferEXT         glBindFramebufferEXT                         /* 0x0050204c GlBindFramebufferFn */
+#define g_glewBindRenderbufferEXT        glBindRenderbufferEXT                        /* 0x00502050 GlBindFramebufferFn */
+#define g_glewCheckFramebufferStatusEXT  glCheckFramebufferStatusEXT                  /* 0x00502054 GlCheckFramebufferStatusFn */
+#define g_glewDeleteRenderbuffersEXT     glDeleteRenderbuffersEXT                     /* 0x0050205c GlGenDeleteFn */
+#define g_glewFramebufferRenderbufferEXT glFramebufferRenderbufferEXT                 /* 0x00502060 GlFramebufferRenderbufferFn */
+#define g_glewFramebufferTexture2DEXT    glFramebufferTexture2DEXT                    /* 0x00502068 GlFramebufferTexture2DFn */
+#define g_glewGenFramebuffersEXT         glGenFramebuffersEXT                         /* 0x00502070 GlGenDeleteFn */
+#define g_glewGenRenderbuffersEXT        glGenRenderbuffersEXT                        /* 0x00502074 GlGenDeleteFn */
+#define g_glewRenderbufferStorageEXT     glRenderbufferStorageEXT                     /* 0x0050208c GlRenderbufferStorageFn */
+#define g_glewVersion20                  GLAD_GL_VERSION_2_0                          /* 0x00502ac1 */
+#define g_glewArbFragmentProgram         GLAD_GL_ARB_fragment_program                 /* 0x00502af1 */
+#define g_glewArbTextureNpot             GLAD_GL_ARB_texture_non_power_of_two         /* 0x00502b24 */
+#define g_glewExtBlendLogicOp            GLAD_GL_EXT_blend_logic_op                   /* 0x00502b54 */
+#define g_glewExtFramebufferObject       GLAD_GL_EXT_framebuffer_object               /* 0x00502b68 */
 extern SelectInfo * g_selectInfo; /* 0x00503388 */
 extern int g_selectRows; /* 0x0050338c */
 extern int g_selectColumns; /* 0x00503390 */

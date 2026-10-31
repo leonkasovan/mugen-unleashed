@@ -12,7 +12,7 @@
  * playing again with the same id reuses its slot and so stops the previous
  * sound. Channels of the slots are SDL_mixer channels (Mix_AllocateChannels).
  */
-#include <SDL.h>
+/* <SDL.h> comes from mugen.h, which pulls it in after glad.h. */
 #include <SDL_mixer.h>
 #include <libresample.h>
 

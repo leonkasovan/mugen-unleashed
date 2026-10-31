@@ -7,7 +7,7 @@
  * The pause key toggles g_pauseToggled on each press. Shutdown is inlined in
  * System_Deinit.
  */
-#include <SDL.h>
+/* <SDL.h> comes from mugen.h, which pulls it in after glad.h. */
 
 #include "mugen.h"
 

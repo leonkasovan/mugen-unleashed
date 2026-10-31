@@ -12,8 +12,11 @@
 #ifdef _WIN32
 #include <windows.h>
 #endif
-#include <SDL.h>
-#include <GL/gl.h>
+/*
+ * Neither <SDL.h> nor <GL/gl.h> here: mugen.h includes glad.h (the whole GL API,
+ * fixed-function included) before SDL.h, and glad.h refuses to load if a GL
+ * header came first. SDL.h would pull in <GL/gl.h> via SDL_opengl.h.
+ */
 
 #include "mugen.h"
 

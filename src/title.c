@@ -12,7 +12,7 @@
  * training menu are drawn with the built-in fonts and plain rectangles; the
  * key configuration runs its own frame loop.
  */
-#include <SDL.h>
+/* <SDL.h> comes from mugen.h, which pulls it in after glad.h. */
 
 #include "mugen.h"
 

@@ -9,7 +9,7 @@
  * settings and a few engine callbacks; a BGM file is played by the first
  * registered plugin whose extension list has the file's extension.
  */
-#include <SDL.h>
+/* <SDL.h> comes from mugen.h, which pulls it in after glad.h. */
 #define HAVE_STRUCT_TIMESPEC 1      /* the CRT's time.h already has it */
 #include <pthread.h>
 #include <libresample.h>

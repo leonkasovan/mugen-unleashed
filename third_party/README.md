@@ -8,7 +8,8 @@ its own license; the license files and notices are in the directories and header
 |---|---|---|
 | `lua-5.1.4/` | Lua 5.1.4 (lua.org) | MIT (`COPYRIGHT`) |
 | `libpng-1.2.38/` | libpng 1.2.38 | libpng license (`LICENSE`) |
-| `glew-1.5.4/` | GLEW 1.5.4 | Modified BSD / MIT (`LICENSE.txt`) |
+| `glad-2.1/` | **glad 2.1** OpenGL loader, generated for this engine (GL 2.1 **compatibility** profile + `ARB_fragment_program`, `ARB_texture_non_power_of_two`, `EXT_blend_logic_op`, `EXT_framebuffer_object`) | MIT; `khrplatform.h` carries the Khronos MIT text |
+| `glew-1.5.4/` | GLEW 1.5.4 — **no longer built.** The original linked it statically; the reconstruction now uses glad. Kept for reference and for the `.data` addresses recorded in `src/symbols.h` | Modified BSD / MIT (`LICENSE.txt`) |
 | `minizip-0.15/` | unzip 0.15 by Gilles Vollant (zlib 1.1.3 contrib) | zlib license (`unzip.h`) |
 | `sdk/include/SDL/` | SDL 1.2.15 and SDL_mixer 1.2.11 headers | GNU LGPL 2.1 (headers) |
 | `sdk/include/SDL/SDL_ttf.h` | SDL_ttf 2.0.11 header | zlib license |

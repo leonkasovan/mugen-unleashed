@@ -114,7 +114,7 @@ target_compile_definitions(mugen PRIVATE _CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO
 # /wd4100 unreferenced parameter: the reconstructed functions keep every original parameter.
 # /arch:IA32 keeps floating point on the x87 FPU like the original (VS2008, no SSE).
 target_compile_options(mugen PRIVATE "$<$<COMPILE_LANGUAGE:C>:/W3;/wd4100;/utf-8;/arch:IA32>")
-target_link_libraries(mugen PRIVATE mugen_sdk lua51 png12 glew_static minizip
+target_link_libraries(mugen PRIVATE mugen_sdk lua51 png12 glad minizip
   opengl32 glu32 winmm shell32 user32 gdi32)
 
 # The window icon of the original, when its mugen.exe and Python 3 with pefile are available.

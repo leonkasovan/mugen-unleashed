@@ -13,7 +13,7 @@
 #ifdef _WIN32
 #include <richedit.h>
 #endif
-#include <SDL.h>
+/* <SDL.h> comes from mugen.h, which pulls it in after glad.h. */
 /* SDL_syswm.h gives access to the native window handle, used only by the
  * Win32 code paths. On Linux it pulls in <X11/Xlib.h>, which defines
  * "typedef XID Font" -- colliding with the engine's own Font typedef in
