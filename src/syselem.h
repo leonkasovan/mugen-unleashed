@@ -41,7 +41,8 @@ typedef struct SysElem {
     float yangle;           /* 0x4C */
     float xangle;           /* 0x50 */
     char text[0x40];        /* 0x54 font elements */
-    int text_ptr;           /* 0x94 a const char * drawn instead of text when set, as an int */
+    intptr_t text_ptr;      /* 0x94 a const char * drawn instead of text when set. intptr_t
+                             * keeps the 32-bit offset and does not truncate on LP64 */
     int window_x[2];        /* 0x98 .window = x1, y1, x2, y2; -1: none */
     int window_y[2];        /* 0xA0 */
     int textwrap;           /* 0xA8 0 none, 1 'c', 2 otherwise */

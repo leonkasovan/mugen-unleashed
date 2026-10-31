@@ -401,7 +401,7 @@ int Versus_Draw(ScreenLoop *screen, void *state_)
         int idx;
 
         _snprintf(text, sizeof(text), vs->match.text, g_game->arcade_match);
-        vs->match.text_ptr = (int)(intptr_t)text;
+        vs->match.text_ptr = (intptr_t)text;
         g = g_game;
         list = g->sysexplods;
         if (vs->match.layerno == 0) {
@@ -553,7 +553,7 @@ int Victory_Draw(ScreenLoop *screen, void *state_)
                           vi->name_offset[0], vi->name_offset[1]);
     }
     g = g_game;
-    vi->winquote.text_ptr = g->victory_quote[0] != '\0' ? (int)(intptr_t)g->victory_quote : 0;
+    vi->winquote.text_ptr = g->victory_quote[0] != '\0' ? (intptr_t)g->victory_quote : 0;
     list = g->sysexplods;
     if (vi->winquote.layerno == 0) {
         idx = SysElem_Add(&vi->winquote, list, NULL, NULL, g->motif_fonts, 0.0f, 0.0f);

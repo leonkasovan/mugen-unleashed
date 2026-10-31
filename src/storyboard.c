@@ -87,7 +87,7 @@ void Storyboard_SetupScreen(ScreenLoop *screen, Cutscene *cs)
     screen->fadeout_time = 0;
     screen->start_frame = g_game->frames;
     screen->update = (ScreenFn)Storyboard_Update;
-    screen->cutscene = (int)cs;
+    screen->cutscene = (intptr_t)cs;
 }
 
 /*

@@ -520,10 +520,13 @@ typedef struct ScreenLoop {
     void *bg;                       /* 0x34 background drawn behind and over the screen (system.def *BG) */
     float scale;                    /* 0x38 its scale */
     void *bgm;                      /* 0x3C BGM to play (Screen_Run: "Could not load BGM"), or NULL */
-    int cutscene;                   /* 0x40 a Cutscene * (storyboard screens), as an int */
+    intptr_t cutscene;              /* 0x40 a Cutscene * (storyboard screens); intptr_t is
+                                     * 4 bytes on the 32-bit layout, 8 on LP64 (portability fix) */
     int fade_out;                   /* 0x44 fade out started */
     int fade_ticks;                 /* 0x48 */
-    int key_table;                  /* 0x4C menu key table of the frame (g_screenKeys, as an int; Input_FindKey) */
+    intptr_t key_table;             /* 0x4C menu key table of the frame (g_screenKeys; Input_FindKey).
+                                     * Holds a pointer: intptr_t keeps the 32-bit offset and does
+                                     * not truncate on LP64 (portability fix) */
     int key_count;                  /* 0x50 its entries (2) */
     int key;                        /* 0x54 key pressed this frame (27 = escape) */
     unsigned int input2;            /* 0x58 */

@@ -611,7 +611,7 @@ int Screen_Init(ScreenLoop *screen)
     g_keyQueue.read = 0;
     g_screenKeys[0] = g->input_keys[0];
     g_screenKeys[1] = g->input_keys[1];
-    screen->key_table = (int)(intptr_t)g_screenKeys;
+    screen->key_table = (intptr_t)g_screenKeys;
     screen->key_count = 2;
     SysDraw_Clear(g->sysexplods);
     Gfx_SetRenderTarget(g_game->screen, 0);
