@@ -1,0 +1,10 @@
+# Staged by build.sh — regenerated, not part of the port.
+app/src/main/assets/
+app/src/main/jniLibs/
+local.properties
+
+# Gradle / NDK build output.
+.gradle/
+app/build/
+app/.cxx/
+build/

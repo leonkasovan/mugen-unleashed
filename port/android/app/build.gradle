@@ -1,0 +1,177 @@
+// =============================================================================
+// mugen-unleashed — Android app module
+//
+// Mirrors the shape of ikemen-droid's app/build.gradle (the reference build),
+// with the engine differences noted inline.
+// =============================================================================
+apply plugin: 'com.android.application'
+
+// =============================================================================
+// Release signing (H3 in REVIEW.md)
+//
+// The release APK used to be signed with the PUBLIC debug key, which cannot ship
+// on Play and produces a different identity on every machine (breaking updates).
+// A real config is read from the environment, matching the reference build
+// (ikemen-develop-update/tools/generate_android_via_native.sh):
+//
+//     ANDROID_KEYSTORE       path to a .jks / .keystore
+//     ANDROID_KEYSTORE_PASS  store password
+//     ANDROID_KEY_ALIAS      key alias            (default: androidkey)
+//     ANDROID_KEY_PASS       key password         (default: store password)
+//
+// If they are absent the release variant falls back to debug signing and says
+// so, so a local build still works and nobody mistakes its output for a
+// distributable.
+// =============================================================================
+def releaseKeystore = System.getenv('ANDROID_KEYSTORE')
+def haveReleaseKey = releaseKeystore != null && !releaseKeystore.isEmpty() && file(releaseKeystore).exists()
+
+android {
+    namespace "org.mugen_unleashed.mugen"
+    compileSdkVersion 34
+    ndkVersion "27.1.12297006"
+
+    defaultConfig {
+        applicationId "org.mugen_unleashed.mugen"
+        minSdkVersion 21
+        targetSdkVersion 29
+        versionCode 1
+        versionName "1.1.0"
+
+        // 64-bit only. The engine is C with no 32-bit assumptions that would
+        // benefit from an armeabi-v7a build, and one ABI keeps the APK small;
+        // add 'armeabi-v7a' here and build the engine for it if needed.
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+
+        externalNativeBuild {
+            cmake {
+                // The engine tree is 64-bit clean (it is built for x86-64 Linux
+                // and for the Vita's ARM), so no -m32 style flags are needed.
+                // The SDL2 include path is supplied by build.sh through
+                // -Psdl2IncludeDir (SDL2 is cross-compiled separately, not
+                // vendored, so its headers are outside this project).
+                // Both cross-compiled dependency directories come from build.sh
+                // through -P properties; neither library is vendored here.
+                arguments "-DCMAKE_BUILD_TYPE=Release",
+                          "-Dsdl2IncludeDir=" + (project.findProperty('sdl2IncludeDir') ?: ''),
+                          "-Dsdl2MixerTtfDir=" + (project.findProperty('sdl2MixerTtfDir') ?: '')
+                cFlags "-O2"
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path "src/main/jni/src/CMakeLists.txt"
+            version "3.22.1"
+        }
+    }
+
+    aaptOptions {
+        /*
+         * M.U.G.E.N data files are already compressed (SFF/SND) or are parsed by
+         * the engine directly. Compressing them again in the APK wastes
+         * extraction time on first run and, for .zip archives that the engine
+         * reads with minizip, double-compression is actively wrong.
+         */
+        noCompress 'sff', 'snd', 'def', 'air', 'cns', 'cmd', 'st', 'stc', 'txt', 'cfg',
+                   'lua', 'ttf', 'fnt', 'font', 'zip', 'mp3', 'ogg', 'wav'
+    }
+
+    sourceSets.main {
+        // libmain.so and libSDL2.so are staged here by build.sh.
+        jniLibs.srcDir 'src/main/jniLibs'
+        assets.srcDirs = ['src/main/assets']
+    }
+
+    if (haveReleaseKey) {
+        signingConfigs {
+            release {
+                storeFile file(releaseKeystore)
+                storePassword System.getenv('ANDROID_KEYSTORE_PASS') ?: ''
+                keyAlias System.getenv('ANDROID_KEY_ALIAS') ?: 'androidkey'
+                keyPassword System.getenv('ANDROID_KEY_PASS')
+                    ?: (System.getenv('ANDROID_KEYSTORE_PASS') ?: '')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (haveReleaseKey) {
+                signingConfig signingConfigs.release
+            } else {
+                signingConfig signingConfigs.debug
+            }
+        }
+        debug {
+            debuggable true
+        }
+    }
+
+    packagingOptions {
+        // SDL2 ships its own licence file; a duplicate breaks the merge.
+        jniLibs {
+            useLegacyPackaging true   // keeps .so extractable on older devices
+        }
+    }
+
+    lint {
+        abortOnError false
+    }
+}
+
+dependencies {
+    // The engine links SDL2 dynamically (see the CMakeLists); everything else,
+    // including zlib, libpng, Lua and minizip, is compiled from third_party/.
+}
+
+// =============================================================================
+// Asset manifest
+//
+// SDL2's Android asset API cannot enumerate a directory, so the set of files to
+// extract on first run is baked into the APK as assets/manifest.txt. Generating
+// it here, rather than in build.sh, keeps it in step with whatever is actually
+// in src/main/assets.
+// =============================================================================
+task generateAssetManifest {
+    def assetsDir = file("src/main/assets")
+    def manifest = new File(assetsDir, "manifest.txt")
+
+    inputs.dir assetsDir
+    outputs.file manifest
+
+    doLast {
+        def lines = []
+        assetsDir.eachFileRecurse { f ->
+            if (f.isFile() && !f.name.equals("manifest.txt")) {
+                def rel = assetsDir.toPath().relativize(f.toPath()).toString()
+                lines << rel.replace('\\', '/')
+            }
+        }
+        lines.sort()
+        manifest.text = lines.join('\n') + (lines.isEmpty() ? '' : '\n')
+        println "manifest.txt: ${lines.size()} asset(s)"
+    }
+}
+
+preBuild.dependsOn generateAssetManifest
+
+// =============================================================================
+// Warn loudly when a "release" build is about to be debug-signed.
+// =============================================================================
+gradle.taskGraph.whenReady { graph ->
+    boolean buildingRelease = graph.allTasks.any { it.name.toLowerCase().contains('release') }
+    if (buildingRelease && !haveReleaseKey) {
+        logger.warn("")
+        logger.warn("WARNING: building a RELEASE APK signed with the DEBUG keystore.")
+        logger.warn("         It installs and runs, but it is not distributable and will not")
+        logger.warn("         update over a build made on another machine.")
+        logger.warn("         Set ANDROID_KEYSTORE, ANDROID_KEYSTORE_PASS, ANDROID_KEY_ALIAS and")
+        logger.warn("         ANDROID_KEY_PASS to sign properly.")
+        logger.warn("")
+    }
+}

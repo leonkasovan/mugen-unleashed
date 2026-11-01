@@ -1,0 +1,24 @@
+// Top-level build file for the mugen-unleashed Android port.
+//
+// The Android Gradle Plugin version matches the reference project
+// (ikemen-droid/build.gradle) so the same cached toolchain can be reused.
+buildscript {
+    repositories {
+        mavenCentral()
+        google()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.1.1'
+    }
+}
+
+allprojects {
+    repositories {
+        mavenCentral()
+        google()
+    }
+}
+
+task clean(type: Delete) {
+    delete rootProject.buildDir
+}

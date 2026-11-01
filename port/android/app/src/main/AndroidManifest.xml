@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  mugen-unleashed on Android.
+
+  The activity is SDL2's own SDLActivity, supplied as Java source in
+  app/src/main/java/org/libsdl/app/ (copied from the SDL 2.32.10 release, not
+  from the reference project, so it matches the libSDL2.so this build links).
+  It loads libmain.so and calls the engine's main().
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    android:versionCode="1"
+    android:versionName="1.1.0"
+    android:installLocation="auto">
+
+    <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="29" />
+
+    <!-- The engine's System renderer is software, but SDL2 requires a GL context
+         for its window surface. ES 2.0 is enough; nothing here uses ES 3. -->
+    <uses-feature android:glEsVersion="0x00020000" android:required="true" />
+
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-feature android:name="android.hardware.gamepad" android:required="false" />
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
+
+    <!-- External storage holds the extracted M.U.G.E.N tree. On API 19+ this is
+         the app-specific directory, which needs no permission; the legacy
+         permissions are declared for older devices only. -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <application
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:largeHeap="true"
+        android:hardwareAccelerated="true"
+        android:requestLegacyExternalStorage="true"
+        android:preserveLegacyExternalStorage="true"
+        android:theme="@style/AppTheme">
+
+        <meta-data android:name="android.max_aspect" android:value="2.4" />
+
+        <!--
+          M.U.G.E.N is landscape-only: the stages are 4:3 and the original engine
+          has no portrait layout, so the activity is fixed to sensorLandscape.
+        -->
+        <activity
+            android:name="org.libsdl.app.SDLActivity"
+            android:label="@string/app_name"
+            android:exported="true"
+            android:alwaysRetainTaskState="true"
+            android:launchMode="singleInstance"
+            android:screenOrientation="sensorLandscape"
+            android:preferMinimalPostProcessing="true"
+            android:configChanges="layoutDirection|locale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>
