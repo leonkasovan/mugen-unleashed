@@ -611,6 +611,35 @@ truncated step on a path with no 16-bit conversion in the way.
 `smooth != 0` is still refused for indexed surfaces rather than silently
 approximated: no engine call site asks for it.
 
+### Stage 5 verified: audio, music hook and RWops
+
+`tools/test_sdl2audio.sh` links the engine's own `bgmthread.c`, `stream.c` and
+`sdlmixercompat.c` and exercises the paths a `-nosound` run never reaches:
+
+| Area | What is asserted |
+|---|---|
+| Custom music hook | the callback fills **every** byte it is given, in the starvation, paused and muted branches, and writes nothing past `len`; a real block's sequence stamp is read from the front and its payload reaches the stream |
+| `Mix_QuerySpecEx` | returns 0 with no device; once open it reports the real rate, channels and format, and the chunk size comes back exactly as requested |
+| RWops `size` | `rw->size` reports the stream length, is unaffected by position or seek, and closing the RWops leaves the engine's stream alive (`freesrc = 0`) |
+
+Checked by breaking each: removing the tail-silence fails the starvation, paused
+and short-length cases; removing the muted-path `memset` fails the muted case;
+setting `rw->size` to NULL or off by one fails the RWops cases.
+
+A real device was opened during the run (`44100 Hz, 2 ch, format 0x8010, chunk
+1024`); on a machine without one the mixer section reports SKIP rather than
+passing silently.
+
+**Sound-enabled end-to-end run.** Beyond the `-nosound` comparisons, the game
+was run with sound on and its log compared against the SDL 1.2 build's:
+identical (105 fragments each). Both builds print `Could not initialize BGM.`
+because `data/mugen.cfg` lists an `mpg123` plugin whose DLL is not present in
+`install/plugins/` -- pre-existing and faithful on both, not an SDL2 regression.
+
+This does not cover the SDL_mixer **music** path (`Sdlmix_Open` /
+`Mix_LoadMUS_RW`) end to end, because no tracker or MIDI file is loaded by the
+quick-VS scenario; nor effect playback, which needs audible verification.
+
 ### Still open
 
 - `zoomSurface` is byte-identical to SDL_gfx across all 17 differential cases,
@@ -625,5 +654,8 @@ approximated: no engine call site asks for it.
   `SDL_JOYDEVICEADDED`/`REMOVED` handling at all — SDL 1.2 had none either — so
   a pad plugged in mid-session is invisible until restart. That is faithful to
   the original, not a port gap.
-- Audio is unverified; every run here used `-nosound`.
+- Audio: the hook callback, `Mix_QuerySpecEx` and RWops size are unit-tested and
+  a real device opens, but **audible** output has not been checked. `Sdlmix_Open`
+  / `Mix_LoadMUS_RW` are not exercised end to end (no tracker or MIDI file is
+  loaded by the quick-VS scenario), and neither is effect playback.
 - The Linux target has not been built with `SDL_BACKEND=2`.
