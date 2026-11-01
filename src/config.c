@@ -472,13 +472,13 @@ int Config_Load(void)
 #ifdef MUGEN_VITA_GL
     /*
      * PS Vita port (port/psvita): replace the joystick bindings with the real
-     * button indices.
+     * *engine codes*, not the SDL driver indices.
      *
      * The shipped mugen.cfg binds [P1 Joystick] to indices 9..24, which is a
      * 24-button PC pad. SDL's Vita joystick driver reports only 12 buttons, and
      * in a different order, so those bindings make Right jump, Left crouch,
-     * Start walk left, and leave every attack button (13..20) pointing at a
-     * button that does not exist.
+     * Start walk left, and leave every attack button pointing at a button that
+     * does not exist.
      *
      * Indices from SDL_sysjoystick.o in VitaSDK's libSDL.a, confirmed on
      * hardware with port/psvita/input-mapper (12 buttons, 4 axes, 0 hats -- the
@@ -486,6 +486,19 @@ int Config_Load(void)
      *
      *   0 Triangle  1 Circle  2 Cross   3 Square  4 L    5 R
      *   6 Down      7 Left    8 Up      9 Right  10 Select  11 Start
+     *
+     * But Pads_HandleEvent never delivers a raw index. It computes
+     *     code = slot * PAD_BUTTONS + axes*2 + hats*4 + 1 + raw_index,
+     * so with the Vita driver's 4 axes and 0 hats, Triangle (raw 0) arrives as
+     * code 9. Storing the raw index therefore never matches: Triangle would be
+     * B=0, which translates to engine code 0 instead of Triangle's 9. (Zero is
+     * not JOY_NONE=0x80; it is simply a code nothing delivers.)
+     *
+     * The table below is RAW_INDEX + 9 for this topology: 9 Triangle, 10 Circle,
+     * 11 Cross, 12 Square, 13 L, 14 R, 15 Down, 16 Left, 17 Up, 18 Right,
+     * 19 Select, 20 Start. Do NOT hardcode the +9 anywhere else: it is 1 +
+     * axes*2 + hats*4 for the enumerated device, and a different controller
+     * topology produces different codes.
      *
      * Layout is the conventional PS one: Square/Triangle/Circle/Cross = A/B/C/X.
      * Overriding here rather than rewriting the config keeps the patch
@@ -497,6 +510,9 @@ int Config_Load(void)
          * JUMP, RIGHT, CROUCH, LEFT, A..Z, START -- note RIGHT before CROUCH,
          * so an initializer written in reading order would silently swap the
          * vertical and horizontal directions.
+         *
+         * Values are engine button codes for the 4-axis/0-hat driver (raw index
+         * + 9), not the SDL indices. See the comment above.
          */
         int player;
 
@@ -504,17 +520,17 @@ int Config_Load(void)
             int *jk = g_game->joy_keys[player];
 
             memset(jk, JOY_NONE, sizeof(g_game->joy_keys[player]));
-            jk[KEY_JUMP] = 8;      /* d-pad up */
-            jk[KEY_RIGHT] = 9;     /* d-pad right */
-            jk[KEY_CROUCH] = 6;    /* d-pad down */
-            jk[KEY_LEFT] = 7;      /* d-pad left */
+            jk[KEY_JUMP] = 17;     /* d-pad up: raw 8 */
+            jk[KEY_RIGHT] = 18;    /* d-pad right: raw 9 */
+            jk[KEY_CROUCH] = 15;   /* d-pad down: raw 6 */
+            jk[KEY_LEFT] = 16;     /* d-pad left: raw 7 */
             /*
              * Full six-button fight layout. The character select's own
              * overrides (Cross/Square = back, L/R = nothing) are applied per
              * screen in src/events.c, so nothing is lost in a fight.
              */
-            jk[KEY_A] = 3;         /* Square */
-            jk[KEY_B] = 0;         /* Triangle */
+            jk[KEY_A] = 12;        /* Square: raw 3 */
+            jk[KEY_B] = 9;         /* Triangle: raw 0 */
             /*
              * Circle is C. The earlier revision left this unbound because
              * Circle emitted Return, which is also the Start/pause action, so
@@ -522,11 +538,11 @@ int Config_Load(void)
              * emits the C key itself (see VitaInput_KeyForButton), giving the
              * conventional Square/Triangle/Circle/Cross = A/B/C/X layout.
              */
-            jk[KEY_C] = 1;
-            jk[KEY_X] = 2;         /* Cross */
-            jk[KEY_Y] = 4;         /* L */
-            jk[KEY_Z] = 5;         /* R */
-            jk[KEY_START] = 11;    /* Start */
+            jk[KEY_C] = 10;        /* Circle: raw 1 */
+            jk[KEY_X] = 11;        /* Cross: raw 2 */
+            jk[KEY_Y] = 13;        /* L: raw 4 */
+            jk[KEY_Z] = 14;        /* R: raw 5 */
+            jk[KEY_START] = 20;    /* Start: raw 11 */
         }
     }
 #endif
