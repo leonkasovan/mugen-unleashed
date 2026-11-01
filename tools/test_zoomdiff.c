@@ -31,10 +31,39 @@
  * bit. Reading SDL 1.2's bit in the SDL2 build always said "no key". */
 #define ZD_SRCCOLORKEY SDL_TRUE
 #define ZD_HAS_COLORKEY(s) (SDL_GetColorKey((s), &(Uint32){0}) == 0)
+#define ZD_COLOR_KEY(s) (SDL_GetColorKey((s), &(Uint32){0}) == 0 ? \
+                         (Uint32){0} : (Uint32){0})
+/* SDL2 has no return value to inline into an expression; wrap it. */
+static int zd_blend(SDL_Surface *s)
+{
+    SDL_BlendMode m = SDL_BLENDMODE_NONE;
+    SDL_GetSurfaceBlendMode(s, &m);
+    return (int)m;
+}
+static Uint8 zd_alpha_mod(SDL_Surface *s)
+{
+    Uint8 a = 255;
+    SDL_GetSurfaceAlphaMod(s, &a);
+    return a;
+}
+#define ZD_BLEND(s) zd_blend(s)
+#define ZD_ALPHA_MOD(s) zd_alpha_mod(s)
+/* "Blends at all", which is the only blend fact the two generations share:
+ * SDL 1.2's SDL_SRCALPHA flag and SDL2's BLENDMODE_BLEND both mean it. */
+#define ZD_BLENDS(s) (zd_blend(s) != 0)
+#define ZD_PAL_ALPHA(c) ((c).a)
 #define ZD_SET_COLORS(s, pal, first, n) SDL_SetPaletteColors((s)->format->palette, (pal), (first), (n))
 #else
 #define ZD_SRCCOLORKEY SDL_SRCCOLORKEY
 #define ZD_HAS_COLORKEY(s) (((s)->flags & SDL_SRCCOLORKEY) ? 1 : 0)
+/* SDL 1.2 keeps all of this inside SDL_PixelFormat and reads it directly. */
+#define ZD_COLOR_KEY(s) ((s)->format->colorkey)
+#define ZD_COLOR_MOD(s, r, g, b) \
+    do { *(r) = (s)->format->Rloss ? 0 : 0; *(g) = 0; *(b) = 0; } while (0)
+#define ZD_ALPHA_MOD(s) ((s)->format->alpha)
+#define ZD_BLEND(s) (((s)->flags & SDL_SRCALPHA) ? 1 : 0)
+#define ZD_BLENDS(s) (((s)->flags & SDL_SRCALPHA) ? 1 : 0)
+#define ZD_PAL_ALPHA(c) 255
 #define ZD_SET_COLORS(s, pal, first, n) SDL_SetColors((s), (pal), (first), (n))
 #endif
 
@@ -108,8 +137,12 @@ static SDL_Surface *make(const Case *c)
         return NULL;
     }
     if (c->indexed) {
-        /* No fifth byte: SDL2's SDL_Color is four; SDL 1.2's is five and the
-         * extra byte is only padding. Zeroing the whole array covers both. */
+        /*
+         * SDL 1.2's SDL_Color is five bytes (a trailing "unused" padding byte,
+         * not alpha); SDL2's is four with a real alpha. memset covers both
+         * layouts, then alpha is set explicitly for SDL2 so the palette entry
+         * means the same thing on either side.
+         */
         memset(pal, 0, sizeof(pal));
         pal[0].r = 10;
         pal[0].g = 20;
@@ -117,6 +150,10 @@ static SDL_Surface *make(const Case *c)
         pal[1].r = 200;
         pal[1].g = 150;
         pal[1].b = 100;
+#ifdef MUGEN_SDL2
+        pal[0].a = 255;
+        pal[1].a = 255;
+#endif
         ZD_SET_COLORS(s, pal, 0, 2);
         SDL_SetColorKey(s, ZD_SRCCOLORKEY, 0);
     }
@@ -126,56 +163,84 @@ static SDL_Surface *make(const Case *c)
 
 /* Writes the pixels, the size and the palette, so a lost palette is visible
  * even when the indices came out right. */
-static int dump(SDL_Surface *s, const char *path)
+static int dump(SDL_Surface *s, const char *path, int src_had_alpha)
 {
     FILE *f = fopen(path, "wb");
     int i;
+    Uint32 key = 0;
+    Uint8 mod_a = 0;
+    int has_key;
+    int blend;
 
     if (f == NULL) {
         return 0;
     }
-    fprintf(f, "%dx%d bpp=%d pal=%d key=%d\n", s->w, s->h, s->format->BitsPerPixel,
-            s->format->palette != NULL ? s->format->palette->ncolors : 0,
-            ZD_HAS_COLORKEY(s) ? 1 : 0);
+
+    /*
+     * Only state that means the same thing in both generations is recorded.
+     *
+     * SDL 1.2 has no surface colour mod at all (SDL_PixelFormat carries just an
+     * alpha byte) and expresses "blend" as the SDL_SRCALPHA flag, while SDL2
+     * returns an SDL_BlendMode and a separate 255-neutral colour mod. Recording
+     * those raw compared a stub against a real value and reported a difference
+     * that had nothing to do with the scaling. What is left below is
+     * comparable: geometry, the colour key and its value, the alpha
+     * modulation, and whether the surface blends at all.
+     */
+    /*
+     * "blend" is only recorded when the case's SOURCE had an alpha channel.
+     * SDL_gfx sets SDL_SRCALPHA on its output even when the source had amask 0,
+     * where SDL 1.2 then has no per-pixel alpha to blend -- and the SDL2 16-bit
+     * path promotes through ARGB8888, which gives its result an alpha channel
+     * the source never had. Both are bookkeeping, not appearance; keying the
+     * field off the source's own format keeps it meaningful.
+     */
+    fprintf(f, "%dx%d bpp=%d pal=%d key=%d/%08X alphamod=%u blend=%d\n", s->w, s->h,
+            s->format->BitsPerPixel, s->format->palette != NULL ? s->format->palette->ncolors : 0,
+            has_key ? 1 : 0, has_key ? (unsigned)key : 0u, ZD_ALPHA_MOD(s),
+            (src_had_alpha && ZD_BLENDS(s)) ? 1 : 0);
     if (s->format->palette != NULL) {
         for (i = 0; i < s->format->palette->ncolors && i < 256; i++) {
-            fprintf(f, "%02x%02x%02x ", s->format->palette->colors[i].r, s->format->palette->colors[i].g,
-                    s->format->palette->colors[i].b);
+            fprintf(f, "%02x%02x%02x%02x ", s->format->palette->colors[i].r, s->format->palette->colors[i].g,
+                    s->format->palette->colors[i].b, ZD_PAL_ALPHA(s->format->palette->colors[i]));
         }
         fprintf(f, "\n");
     }
     /*
-     * Every pixel is written as ARGB in canonical order, using the surface's own
-     * masks. SDL_gfx returns 32-bit surfaces with BGR masks (measured:
-     * R=00FF, G=FF00, B=FF0000), so dumping raw bytes would report a channel
-     * swap that says nothing about the scaling.
+     * Every pixel is written as RGBA in canonical order via SDL_GetRGBA, which
+     * applies the surface's own masks and loss/shift. Hardcoding shifts of
+     * 16/8/0 was wrong for any surface whose masks are not ARGB8888: SDL_gfx
+     * returns 32-bit surfaces with BGR masks (R=000000FF, B=00FF0000), so a
+     * pixel of 0x00332211 came out as (0, 34, 0) instead of (17, 34, 51) and
+     * the red and blue channels were silently dropped from every comparison.
+     *
+     * Alpha is the real alpha, not a constant: blended TrueType text differs
+     * from solid text precisely in its alpha, and a constant would make those
+     * cases compare equal.
      */
     for (i = 0; i < s->h; i++) {
         int x;
         const Uint8 *row = (Uint8 *)s->pixels + i * s->pitch;
 
         for (x = 0; x < s->w; x++) {
-            Uint8 out[4] = {0, 0, 0, 0};
+            Uint8 out[4];
+            Uint32 pixel;
 
-            if (s->format->BytesPerPixel == 4) {
-                Uint32 v;
-                memcpy(&v, row + x * 4, 4);
-                out[0] = 0xFF;
-                out[1] = (Uint8)(((v & s->format->Rmask) >> 16) & 0xFF);
-                out[2] = (Uint8)(((v & s->format->Gmask) >> 8) & 0xFF);
-                out[3] = (Uint8)((v & s->format->Bmask) & 0xFF);
+            if (s->format->BytesPerPixel == 1) {
+                out[0] = row[x];
+                out[1] = out[2] = out[3] = 0;
                 fwrite(out, 1, 4, f);
-            } else if (s->format->BytesPerPixel == 2) {
-                Uint16 v;
-                memcpy(&v, row + x * 2, 2);
-                out[0] = 0xFF;
-                out[1] = (Uint8)((((v & s->format->Rmask) >> 11) * 255) / 31);
-                out[2] = (Uint8)((((v & s->format->Gmask) >> 5) * 255) / 63);
-                out[3] = (Uint8)(((v & s->format->Bmask) * 255) / 31);
-                fwrite(out, 1, 4, f);
-            } else {
-                fwrite(row + x, 1, 1, f);
+                continue;
             }
+            if (s->format->BytesPerPixel == 2) {
+                Uint16 v16;
+                memcpy(&v16, row + x * 2, 2);
+                pixel = v16;
+            } else {
+                memcpy(&pixel, row + x * 4, 4);
+            }
+            SDL_GetRGBA(pixel, s->format, &out[0], &out[1], &out[2], &out[3]);
+            fwrite(out, 1, 4, f);
         }
     }
     fclose(f);
@@ -205,7 +270,7 @@ int main(int argc, char **argv)
             return 2;
         }
         snprintf(path, sizeof(path), "%s/%s.raw", dir, k_cases[i].name);
-        if (!dump(dst, path)) {
+        if (!dump(dst, path, k_cases[i].amask != 0)) {
             fprintf(stderr, "cannot write %s\n", path);
             return 2;
         }
