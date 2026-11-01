@@ -614,21 +614,38 @@ approximated: no engine call site asks for it.
 ### Stage 5 verified: audio, music hook and RWops
 
 `tools/test_sdl2audio.sh` links the engine's own `bgmthread.c`, `stream.c` and
-`sdlmixercompat.c` and exercises the paths a `-nosound` run never reaches:
+`sdlmixercompat.c` and exercises the paths a `-nosound` run never reaches.
+
+**A first version of this test passed three mutations, and was rewritten.** It
+checked spot offsets rather than whole buffers, and its "short length" case set
+`ring.filled` and then immediately overwrote it with zero, so only the
+starvation branch ever ran. Deleting the callback's `n > len` clamp, corrupting a
+payload byte, and leaving the final silence byte poisoned all passed. The
+rewritten test compares the **entire** buffer against an expected image, with a
+16-byte guard area past `len` checked against poison, over a varied payload.
 
 | Area | What is asserted |
 |---|---|
-| Custom music hook | the callback fills **every** byte it is given, in the starvation, paused and muted branches, and writes nothing past `len`; a real block's sequence stamp is read from the front and its payload reaches the stream |
-| `Mix_QuerySpecEx` | returns 0 with no device; once open it reports the real rate, channels and format, and the chunk size comes back exactly as requested |
-| RWops `size` | `rw->size` reports the stream length, is unaffected by position or seek, and closing the RWops leaves the engine's stream alive (`freesrc = 0`) |
+| Custom music hook | every byte of `[0,len)` equals the expected image (payload then silence) in the starvation, paused and muted branches; nothing is written into `[len, len+16)`; a block with data **and a short `len`** copies only payload bytes and stops; a full block lands byte-for-byte at the right offsets |
+| `Mix_QuerySpecEx` | returns 0 with no device; reports the real rate, channels and format; the chunk size it returns is the **requested** one, labelled as such |
+| Real callback length | measured independently through `Mix_SetPostMix`, which sees the same `len` the mixer uses |
+| RWops `size` | reports the stream length, unaffected by position or seek; closing the RWops leaves the engine's stream alive (`freesrc = 0`) |
 
-Checked by breaking each: removing the tail-silence fails the starvation, paused
-and short-length cases; removing the muted-path `memset` fails the muted case;
-setting `rw->size` to NULL or off by one fails the RWops cases.
+Each was checked by breaking it: removing the `n > len` clamp fails with
+`wrote 0x54 at byte 16, which is past the length 16`; corrupting a payload byte
+fails with `byte 1 is 0xBA, expected 0x45`; shortening the tail silence fails
+with `byte 63 is 0xAA, expected 0x00`.
 
-A real device was opened during the run (`44100 Hz, 2 ch, format 0x8010, chunk
-1024`); on a machine without one the mixer section reports SKIP rather than
-passing silently.
+**Measured, and a real finding: SDL2_mixer 2.8.2 multiplies the requested chunk
+size by 4.** Requesting 256/512/1024/2048/4096 bytes yields 1024/2048/4096/8192/
+16384-byte callbacks. The earlier `chunk == 1024` assertion could never have
+shown this, because the shim echoes back `g_sndChunkSize` by construction. The
+engine sizes its BGM ring from the *requested* chunk, so on this SDL2_mixer the
+ring block would be a quarter of what the mixer delivers and the callback's own
+"unexpected buffer length" check would fire. That is **latent, not live**:
+`Bgm_Init` fails earlier on this machine, so the thread is never started. It is
+recorded here rather than fixed, because changing the ring size would diverge
+from the original's arithmetic until the reachability is understood.
 
 **Sound-enabled end-to-end run.** Beyond the `-nosound` comparisons, the game
 was run with sound on and its log compared against the SDL 1.2 build's:
@@ -655,7 +672,10 @@ quick-VS scenario; nor effect playback, which needs audible verification.
   a pad plugged in mid-session is invisible until restart. That is faithful to
   the original, not a port gap.
 - Audio: the hook callback, `Mix_QuerySpecEx` and RWops size are unit-tested and
-  a real device opens, but **audible** output has not been checked. `Sdlmix_Open`
+  a real device opens, but **audible** output has not been checked.
+- The BGM ring is sized from the requested chunk size, which SDL2_mixer 2.8.2
+  then multiplies by four. Unreachable while `Bgm_Init` fails earlier, but it
+  will matter as soon as BGM initialises. `Sdlmix_Open`
   / `Mix_LoadMUS_RW` are not exercised end to end (no tracker or MIDI file is
   loaded by the quick-VS scenario), and neither is effect playback.
 - The Linux target has not been built with `SDL_BACKEND=2`.
