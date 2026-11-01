@@ -29,7 +29,13 @@ def haveReleaseKey = releaseKeystore != null && !releaseKeystore.isEmpty() && fi
 android {
     namespace "org.mugen_unleashed.mugen"
     compileSdkVersion 34
+    buildToolsVersion "33.0.1"  // AGP 8.1 default; bootstrap installs this exact version.
     ndkVersion "27.1.12297006"
+    // build.sh validates the revision and passes an optional external NDK path.
+    def selectedNdkPath = project.findProperty('mugenNdkPath')
+    if (selectedNdkPath) {
+        ndkPath selectedNdkPath
+    }
 
     defaultConfig {
         applicationId "org.mugen_unleashed.mugen"

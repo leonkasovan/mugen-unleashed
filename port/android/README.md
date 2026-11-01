@@ -1,314 +1,300 @@
 # mugen-unleashed on Android
 
-A port of this engine to Android, built with the NDK and packaged as an APK.
+The Android port already links **SDL2**, while a compatibility adapter supplies
+SDL 1.2-style engine calls. The remaining migration is about correct SDL2
+semantics and platform isolation, not replacing an Android SDL1 library.
 
-The first target is **arm64-v8a** (64-bit ARM), API 21+. It runs the engine's
-**software (System) renderer**; the OpenGL renderer is not built (see
-[Why the software renderer](#why-the-software-renderer)).
+Current target: **arm64-v8a**, minimum API 21, compile SDK 34, target SDK 29.
+Only the engine's **System/software renderer** is implemented. A streaming
+texture/SDL renderer presents its pixels; this is not the MUGEN OpenGL renderer.
 
-```
+**Runtime qualification is incomplete.** The validated [review](REVIEW.md)
+documents open key-indexing, Vita-policy leakage, asset recovery, video lifetime,
+resizing, frame presentation, scaling and BGM-routing defects. A successful
+tool setup or APK build does not establish working gameplay.
+See [PLAN.md](PLAN.md) for the detailed migration and acceptance gates.
+
+## Build entry points and layout
+
+Android uses Gradle and the native CMake project. The root Makefile remains
+for Windows/Linux; do not invoke it to build this Android port.
+
+```text
 port/android/
-  build.sh                  one command → installable APK
-  app/
-    build.gradle            app module
-    src/main/
-      AndroidManifest.xml
-      java/org/libsdl/app/  SDL2's Java activity (from the SDL 2.32.10 release)
-      jni/src/              the Android back end (this port's C code)
-        CMakeLists.txt      the engine + third-party build
-        android_main.c      entry point, asset extraction, chdir
-        android_main.h      the SDL 1.2 compatibility surface
-        android_video.c     SDL 1.2 video subset over SDL2
-        android_gfx.c       zoomSurface (the one SDL_gfx call the engine makes)
-        android_glstub.c    stubs for the excluded GL renderer
-      res/                  label, theme, launcher icon
+  build.sh                         setup/check tools, stage inputs, invoke Gradle
+  README.md / REVIEW.md / PLAN.md
+  app/build.gradle                 ABI, SDK/NDK/CMake pins and signing
+  app/src/main/
+    AndroidManifest.xml
+    java/org/libsdl/app/            SDL2 Java integration (2.32.10)
+    jni/src/
+      CMakeLists.txt               libmain.so + engine/vendor sources
+      android_main.c/.h            entry, assets, legacy API aliases
+      android_video.c              software-surface/streaming presentation
+      android_gfx.c                current local scaling implementation
+      android_glstub.c             excluded-renderer symbols
   tools/
-    build_sdl2_companions.sh   cross-compile SDL2_mixer + SDL2_ttf
+    bootstrap_toolchains.sh        missing-tool installation
+    toolchain_metadata.py          vendor metadata, checksums, extraction
+    build_sdl2_companions.sh        SDL2_ttf / SDL2_mixer cross-build
+  tests/test_build.py               offline bootstrap/orchestration fixtures
 ```
 
----
+## 1. Toolchain setup
 
-## Building
+A Bash environment, curl and Python 3.8+ are host prerequisites. Git and the
+existing companion builder's unzip/tar tools are also needed for the optional
+library source-build workflow below. On Windows,
+use MSYS2/Git Bash with those programs on PATH; set `MUGEN_PYTHON` if the Python
+executable is called `python` or is at a custom path. The script does not run
+sudo, install OS packages or modify shell profiles.
 
-### Prerequisites
+Supported bootstrap host selection: Linux x86_64, Windows x64 under
+MSYS/Cygwin, macOS x86_64/arm64. The pinned NDK uses darwin-x86_64 host tools
+on macOS; Apple Silicon may need Rosetta. Native Windows/macOS execution is
+not qualified by the Linux mock tests.
 
-Already present on this machine; listed so the build is reproducible elsewhere.
+From the repository root:
 
-| Component | Version / path |
+```sh
+bash port/android/build.sh --setup
+source build/android/toolchains/env.sh
+```
+
+`--setup` installs missing tool components and exits before checking SDL
+libraries or packaging assets. Review SDK licenses when sdkmanager asks;
+the script does not accept them automatically. Rerun after a failed download,
+declined license or interrupted SDK package installation.
+
+| Component | Selection |
 |---|---|
-| Android SDK | `C:/Android/SDK` (platform 34, build-tools 30.0.3) |
-| Android NDK | r27d — `C:/Android/SDK/ndk/r27d` |
-| JDK | 17 — `C:/Android/jdk-17` (Gradle 8 requires it) |
-| libSDL2.so | cross-compiled for arm64-v8a, staged in `build/android-deps/` |
+| JDK | Runnable JDK 17 with javac; missing JDK downloaded from official Temurin/Adoptium metadata |
+| Android command-line tools | Version 19.0 bootstrap when needed; existing suitable command-line tools may be reused |
+| SDK platform | `platforms;android-34` |
+| SDK build tools | `build-tools;33.0.1`, explicitly matching the project's AGP 8.1 configuration |
+| NDK | `ndk;27.1.12297006`; validate actual `source.properties` |
+| CMake / Ninja | `cmake;3.22.1` from the SDK |
+| Device tools | `platform-tools` |
+| Gradle / AGP | Wrapper Gradle 8.1.1 and AGP 8.1.1; wrapper downloads Gradle on first real build |
 
-The Android Gradle Plugin pins `ndkVersion "27.1.12297006"` and Gradle is 8.1.1
-(the wrapper is included). Both match the reference build so the same cached
-toolchain is reused.
+The NDK version is the numeric Gradle pin. The previous instructions called it
+r27d while defaulting to an independently named directory; that did not prove
+the selected revision. No global NDK/JDK upgrade is performed here.
 
-### One-time: cross-compile the SDL2 companion libraries
+Downloaded JDK archives are checked against the vendor's SHA256 metadata.
+Android command-line-tool archives use the checksum algorithm/value published
+in Google's repository XML. Archives are verified before staged extraction.
+SDK package downloads are delegated to sdkmanager. The wrapper retains its
+existing Gradle distribution mechanism.
 
-The engine calls `SDL_mixer` (all audio) and `SDL_ttf` (fonts), and this
-repository does **not** vendor them — `third_party/SDL_mixer-1.2.12` and
-`third_party/SDL_ttf-2.0.11` are placeholder directories, because the desktop
-builds take them from the system through pkg-config (the `Makefile`'s
-`STATIC_PKGS`). Android has no such packages, so they are built:
+Default generated locations:
+
+| Location | Contents |
+|---|---|
+| `build/android/toolchains/sdk` | Missing SDK/NDK/CMake components |
+| `build/android/toolchains/jdk-17` | Downloaded JDK, if no usable existing one was selected |
+| `build/android/toolchains/downloads` | Vendor metadata and verified bootstrap archives |
+| `build/android/toolchains/tmp` | Bootstrap extraction and temporary files |
+| `build/android/toolchains/env.sh` | Shell exports for subsequent native-library commands |
+| `build/android/gradle-user-home` | Default Gradle distribution/dependency cache |
+| `build/android/toolchains/android-user-home` | Default Android/JVM user state |
+
+Existing explicitly supplied SDK/JDK/cache paths are respected. SDK package
+installation can add the missing pinned side-by-side packages to that chosen
+SDK. A custom incomplete NDK path is rejected instead of being overwritten.
+
+### Overrides
+
+| Variable | Meaning |
+|---|---|
+| `ANDROID_SDK_ROOT` | First choice for SDK location |
+| `ANDROID_HOME` / `ANDROID_HOME_DIR` | SDK fallbacks, in that order |
+| `ANDROID_NDK_HOME` | Optional external NDK; must match the pinned revision, forwarded to Gradle's ndkPath |
+| `MUGEN_JAVA_HOME` | Explicit JDK 17; an invalid explicit choice fails |
+| `JAVA_HOME` | Reuse when it identifies a runnable JDK 17 |
+| `MUGEN_ANDROID_TOOLS_DIR` | Override bootstrap/cache root; default `build/android/toolchains` |
+| `MUGEN_PYTHON` | Python 3.8+ executable |
+| `GRADLE_USER_HOME` / `ANDROID_USER_HOME` | Optional existing cache/state overrides |
+| `SDL2_DEPS_DIR` | SDL2 prefix; default `build/android/sdl2/arm64-v8a` |
+| `SDL2_COMPANION_DIR` | Mixer/TTF prefix; default `build/android/android-deps/arm64-v8a` |
+| `GAME_DATA_DIR` | Game tree to copy; default repository `install/` |
+
+The script normalizes its exported SDK roots so Gradle and sdkmanager use the
+same SDK. An unsuitable inherited Java 8/11/21 is not used as the Gradle JVM;
+select JDK 17 or request setup. A valid existing JDK does not get replaced.
+
+## 2. Supply the native SDL2 libraries
+
+Toolchain setup does **not** download or build SDL2, SDL2_mixer or SDL2_ttf.
+Supply matching Android arm64-v8a/API-21-compatible libraries and headers.
+The Java integration currently comes from SDL 2.32.10: use that SDL release
+until both sides are deliberately updated together.
+
+If existing prefixes are available:
 
 ```sh
-port/android/tools/build_sdl2_companions.sh
+export SDL2_DEPS_DIR=/path/to/android-sdl2-prefix
+export SDL2_COMPANION_DIR=/path/to/android-mixer-ttf-prefix
 ```
 
-This builds SDL2_ttf 2.20.2 (+ FreeType 2.12.1) and SDL2_mixer 2.6.3 into
-`build/android-deps/arm64-v8a/`. OGG is decoded by the vendored stb_vorbis and
-MP3 by dr_mp3, so no libogg/libvorbis cross-build is needed — the dependency set
-stays at what the engine actually plays (WAV, OGG, MP3).
+SDL2's prefix must contain `include/SDL2/SDL.h`, `lib/libSDL2.so` and its CMake
+package files when building the companions. The companion prefix needs its
+matching headers plus `lib/libSDL2_mixer.so` and `lib/libSDL2_ttf.so`.
 
-### Build the APK
+One source-build workflow, after tool setup, is:
 
 ```sh
-port/android/build.sh                 # release APK with game data
-port/android/build.sh --no-assets     # engine only — fast iteration on code
-port/android/build.sh --debug         # debuggable APK
-port/android/build.sh --clean         # wipe staging first
+source build/android/toolchains/env.sh
+mkdir -p build/android/sources
+git clone --depth 1 --branch release-2.32.10 \
+  https://github.com/libsdl-org/SDL.git build/android/sources/SDL
+
+export SDL2_DEPS_DIR="$PWD/build/android/sdl2/arm64-v8a"
+cmake -S build/android/sources/SDL -B build/android/build-sdl2 -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-21 \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$SDL2_DEPS_DIR" \
+  -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST=OFF
+cmake --build build/android/build-sdl2
+cmake --install build/android/build-sdl2
+
+bash port/android/tools/build_sdl2_companions.sh
 ```
 
-Output: **`build/android/mugen-unleashed-arm64-v8a.apk`**
+Do not repeat the clone into an existing directory; reuse the recorded checkout
+or prepare a separate clean source directory.
 
-Game data comes from `install/` (a real M.U.G.E.N 1.1b1 tree) unless
-`GAME_DATA_DIR` says otherwise. The original's own executables and
-`Elecbyte.MUGEN.libs/` are excluded — this build is self-contained.
+The existing companion script selects SDL2_ttf 2.20.2 with FreeType 2.12.1 and
+SDL2_mixer 2.6.3 with WAV/OGG/MP3-capable decoders. **That does not establish
+engine BGM support:** the current engine route rejects those formats while
+this mixer profile disables the tracker/MIDI formats it accepts. This remains
+open in REVIEW.md. The companion source downloads/build itself were not rerun
+in the documentation/bootstrap validation; record their hashes and dependency
+closure when doing a real build.
+
+## 3. Build and install
+
+Prepare a copy of the game tree with `[Video] RenderMode=System`. The current
+native config path does not reliably reject unsupported GL modes, and the build
+script does not rewrite the cfg. Do not change game dimensions to work around
+the known forced-Vita-panel bug; fix the native policy as described in PLAN.md.
+Reference `install/` data is copied, not modified by the build script.
+
+```sh
+bash port/android/build.sh --check-tools
+GAME_DATA_DIR=/path/to/game-tree bash port/android/build.sh
+bash port/android/build.sh --debug --no-assets
+bash port/android/build.sh --download-tools --debug --no-assets
+```
+
+`--no-assets` really clears the generated asset staging. It does not provide
+game data at runtime: use it only for a previously provisioned data directory
+or diagnostic builds. The first-run extraction/update limitations still apply.
+`--clean` removes generated app build/CMake output; it does not uninstall tools.
+
+Output: **`build/android/mugen-unleashed-arm64-v8a.apk`**.
+Only arm64-v8a is currently supported by Gradle; another `ANDROID_ABI` is rejected
+rather than producing a mislabeled arm64 APK.
+
+After sourcing the tool environment, use the SDK's adb:
+
+```sh
+adb install -r build/android/mugen-unleashed-arm64-v8a.apk
+adb logcat -s mugen
+```
+
+For offline builds, first populate the selected Gradle distribution/dependency
+cache online, then run:
+
+```sh
+bash port/android/build.sh --offline --no-assets
+```
+
+Without a complete cached Gradle 8.1.1 distribution this fails before invoking
+Gradle. Offline mode runs that distribution directly, so the wrapper cannot
+start a distribution download from a different cache key.
+Gradle also needs cached plugin/Maven dependencies. `--offline` cannot be
+combined with setup/download options. A normal online build may still download
+Gradle or dependencies; the opt-in flags specifically control tool provisioning.
 
 ### Signing
 
-A release build is **debug-signed** unless you provide a real key. It installs and
-runs, but it is not distributable and will not update over a build made on another
-machine. Gradle prints a warning that says so.
-
-To sign properly, set:
+Gradle selects release signing when `ANDROID_KEYSTORE` identifies an existing
+keystore; otherwise the release variant falls back to debug signing and warns.
+Provide the required key credentials for your distributable build:
 
 ```sh
 export ANDROID_KEYSTORE=/path/to/release.jks
 export ANDROID_KEYSTORE_PASS=...
-export ANDROID_KEY_ALIAS=androidkey     # default
-export ANDROID_KEY_PASS=...             # defaults to the store password
-port/android/build.sh
+export ANDROID_KEY_ALIAS=androidkey
+export ANDROID_KEY_PASS=...
+bash port/android/build.sh
 ```
 
-### Install
+The key password defaults to the store password, and the alias defaults to
+`androidkey`. Missing/wrong credentials can still fail signing. Updating an
+installed APK requires a compatible signing identity; debug keys from different
+machines are not necessarily identical. The bootstrap does not create a release
+key or print signing credentials.
 
-```sh
-C:/Android/SDK/platform-tools/adb.exe install -r build/android/mugen-unleashed-arm64-v8a.apk
-```
+## 4. Runtime and configuration
 
-Watch the log with:
+`android_main.c` extracts APK assets, changes the working directory, appends
+optional `cmdline` file tokens to SDLActivity's arguments, then calls
+`Mugen_Main`. The file tokenizer is whitespace-based, has bounded line/argument
+storage and does not implement shell quoting. Argument order is preserved;
+the engine parser determines the precedence of repeated options.
 
-```sh
-C:/Android/SDK/platform-tools/adb.exe logcat -s mugen
-```
+The intended data directory is the app-specific external files directory plus
+`mugen`, often:
 
----
-
-## How the port works
-
-### SDL 1.2 over SDL2
-
-The engine reproduces M.U.G.E.N 1.1, whose whole video contract is one
-persistent software surface:
-
-```c
-surface = SDL_SetVideoMode(w, h, bpp, flags);   /* once   */
-...write surface->pixels every frame...         /* always */
-SDL_Flip(surface);                              /* present */
-```
-
-SDL2 removed all three calls. Rather than edit `src/video.c` and `src/gfx.c` —
-faithful reconstructions of the original binary that must stay faithful for the
-Windows and Linux builds — the removed subset is reimplemented in
-`android_video.c`, and `android_main.h` is force-included into every translation
-unit (`-include`) so the engine's call sites compile unchanged.
-
-`SDL_SetVideoMode` becomes "create a window and a streaming texture, hand back a
-software surface matching the requested format"; `SDL_Flip`/`SDL_UpdateRect`
-upload that surface and present it.
-
-Three details this gets right, each a failure mode seen on the Vita port:
-
-- The surface is **always** a software surface. The engine writes
-  `surface->pixels` directly and **never calls `SDL_LockSurface`** — the original
-  never did either. A hardware surface's pixels cannot be touched unlocked.
-- Presenting is an explicit **texture update + `SDL_RenderCopy`**, because SDL2
-  has no "flip a software surface" call. Scaling happens in the GPU, which is
-  free compared with CPU scaling.
-- 8bpp is refused outright rather than silently producing a black screen.
-
-### Entry point and asset extraction
-
-`SDL_main.h` renames the engine's `main()` to `SDL_main`, and SDL2's Java
-activity calls it. `android_main.c` runs first and:
-
-1. extracts the APK's assets to external storage on first launch,
-2. `chdir`s there — so **every relative path in `mugen.cfg` resolves exactly as
-   it does on desktop**, and no engine path handling had to change,
-3. appends the optional `cmdline` file to the arguments SDL parsed from the
-   intent — so flags like `-nosound` can be set on a device with no shell
-   (precedence: SDL's arguments first, then the file),
-4. calls the engine.
-
-`src/main.c`'s `main()` is renamed `Mugen_Main` for this target. That module is
-compiled for its *helpers* as well (`Camera_GetX/Y`, `Rng_Seed`, `Random_Next`,
-`Version_Parse`, `Screen_IsSpecial`) which the rest of the engine calls
-unconditionally — excluding it leaves them undefined at link time.
-
-Assets are enumerated from `assets/manifest.txt`, generated by Gradle at build
-time because SDL2's asset API cannot list a directory. Extraction completes only
-after every file succeeds, so an interrupted first run retries rather than
-leaving a half-populated tree that fails somewhere confusing later.
-
-Runtime location:
-
-```
+```text
 /sdcard/Android/data/org.mugen_unleashed.mugen/files/mugen
 ```
 
-That is the app-specific external directory — writable without runtime
-permissions, and reachable from a file manager, which matters because users
-expect to drop new characters in.
+There is an internal-files fallback. Consult logcat for the actual path.
+App access to its directory does not imply every file manager can edit it on
+every Android version. Broad storage permission is not an import UI. A future
+SAF/import workflow is covered by PLAN.md.
 
-### Why the software renderer
+Assets currently use `manifest.txt` and a constant extraction stamp. Existing
+files are skipped, including potentially interrupted files; new payloads are
+not automatically reconciled. Do not delete user data blindly to “fix” an
+upgrade. Use backed-up test data while validating recovery behavior.
 
-`glrender.c` and `gldetect.c` are excluded from the build. Two independent
-reasons:
+Touch controls are not implemented. Keyboard/gamepad input also needs the
+domain/mapping fixes in REVIEW.md before it can be described as qualified.
+FPS, audio playback, background/resume, real display scaling and clean exit have
+not been verified on a device by this update.
 
-- **No desktop GL.** The engine's GL path is GL 1.x/2.1 fixed-function with glad
-  generated for `wglGetProcAddress`/`glXGetProcAddressARB`. Android has GLES, and
-  no such loader.
-- **No GLEW/glad here.** `mugen.h` includes `<glad.h>` for the desktop builds;
-  on Android that is skipped entirely (`#ifdef ANDROID_PORT`).
+## 5. Validation and troubleshooting
 
-The engine's software renderer is a complete, faithful path — it is what the
-Vita port ships — so nothing is lost.
+```sh
+bash -n port/android/build.sh
+bash -n port/android/tools/bootstrap_toolchains.sh
+bash -n port/android/tools/build_sdl2_companions.sh
+python3 port/android/tests/test_build.py
+```
 
-`android_glstub.c` exists because the GL renderer's *symbols* are still
-referenced from modules that **are** compiled: `gfx.c` selects a renderer through
-the `g_gfx*` function-pointer tables, `sprite.c`/`palette.c` handle `GlTex`
-objects, `video.c`'s teardown names `Gl_Deinit`. Eighteen undefined symbols
-otherwise. The stubs return failure and do nothing; each is reachable only from a
-`RENDER_OPENGL` branch, and `config.c` forces `RENDER_MODE_SYSTEM` on Android, so
-none can run. If one ever does, it fails visibly.
+The tests cover bootstrap and orchestration with simulated vendors/tools,
+including paths with spaces and checksum/download failures. They are not
+real SDK downloads, native compilation or an APK/device test.
 
-### The `MUGEN_VITA_GL` macro
-
-`MUGEN_VITA_GL` is the engine's existing "non-desktop build" guard and is
-reused for Android. It already selects the System rendering path and the guarded
-platform fixes; inventing a second macro would mean auditing ~45 occurrences for
-the Android case. **The name is historical** — it means "not the desktop GL
-build", not "Vita".
-
-Where Vita-specific code sits behind it, Android gets its own branch with its own
-comment. The places that differ are deliberate:
-
-| Area | Android behaviour |
+| Failure | Check |
 |---|---|
-| Error dialog (`error.c`) | `__android_log_print` → `adb logcat -s mugen` |
-| Window events (`events.c`) | SDL2's `SDL_APP_*` lifecycle events instead of `SDL_ACTIVEEVENT` |
-| Key repeat (`console.c`) | no-op — SDL2 made it a platform setting |
-| Unicode key callback | passes 0; SDL2 moved text to `SDL_TextInputEvent` |
-| Window resize | absent — no resizable window |
-| Frame profiling (`frame.c`) | **not implemented** (the Vita's `Vita_FrameLog` has no counterpart yet) |
+| Missing JDK/SDK/NDK/CMake | Run `--setup` or supply the documented matching paths |
+| NDK revision mismatch | Read the reported `source.properties` revision; directory names are not a version check |
+| Download checksum/network failure | Nothing unverified is extracted; rerun setup after checking connectivity/vendor metadata |
+| sdkmanager fails | Read the vendor error/license prompt; do not treat an incomplete installation as success |
+| Missing SDL libraries/headers | Follow section 2 or set both dependency prefixes; tool setup alone is insufficient |
+| UnsatisfiedLinkError | Inspect ABI, SDL Java/native version match and every native `DT_NEEDED` dependency in the APK |
+| Black/blank renderer | Verify actual cfg says System; check the open panel-size/renderer-selection defects |
+| Input crash or wrong action | See A01/A02 in REVIEW.md; do not assume raw SDL2 keys/buttons are engine codes |
+| Extraction/upgrade problem | Preserve user data and investigate the stamp/partial-file issue (A04) |
+| Normal exit crash | Investigate cleanup ordering (A05), not just the last success log line |
 
-`libresample`'s public header uses MSVC `__declspec` attributes, so the build
-passes `-fdeclspec` (the same allowance the Makefile makes for MinGW).
-
-### Changes to `src/`
-
-Every one is guarded by `ANDROID_PORT`; Windows (MSVC) and Linux builds are
-untouched, and the Vita build is unaffected.
-
-| File | Change |
-|---|---|
-| `mugen.h` | skip `<glad.h>` on Android |
-| `main.c` | `main()` → `Mugen_Main` (entry point supplied by the port) |
-| `error.c` | logcat error reporting |
-| `events.c` | SDL2 lifecycle events, unicode, no `SDL_VIDEORESIZE` |
-| `console.c` | `SDL_EnableKeyRepeat` no-op |
-| `gfx.c` | GL branches compiled out |
-| `video.c` | no `Gl_Init`/`Gl_Deinit`; `Surface_ToRGBA32` uses SDL2 alpha API |
-| `font.c` | `SDL_Color` has no `unused` field |
-| `frame.c` | no `Vita_FrameLog` |
-| `stream.c` | SDL2-signature `SDL_RWops` adapters (`Sint64`/`size_t`) |
-| `pads.c` | `SDL_JoystickOpened` removed → check the handle |
-| `globals.c` | explicit deinit-slot casts clang requires |
-| `bgmplugins.c` | `Mix_LoadMUS_RW(rw, 0)` — SDL_mixer 2 added `freesrc` |
-
-The `Mix_LoadMUS_RW` case is the only **semantic** difference: SDL_mixer 2 takes
-ownership of the RWops when `freesrc` is non-zero, and the caller here closes it
-itself, so `0` reproduces SDL_mixer 1.2's behaviour exactly.
-
----
-
-## Status
-
-**Verified**
-
-- The engine cross-compiles for arm64-v8a: `libmain.so`, 1.4 MB, `ELF 64-bit LSB
-  shared object, ARM aarch64, for Android 21`.
-- The APK builds and packages correctly: 6.8 MB, with `libSDL2.so`,
-  `libSDL2_mixer.so`, `libSDL2_ttf.so`, `libmain.so` and 95 asset files plus
-  `manifest.txt`.
-- The build is reproducible end to end from `build.sh`.
-
-Every defect identified statically in [`REVIEW.md`](REVIEW.md) has been fixed —
-including the scancode/keycode input bug, resolution changes, present batching,
-Vita-only code leaking into the Android build, and release signing. MSVC and the
-Vita build remain clean after the changes.
-
-**Fixed in this pass**
-
-| ID | Issue |
-|---|---|
-| H1 | `Keyboard_SyncState` copied scancode-indexed data into a keycode-indexed array — broke input on every app resume. Now translated via `SDL_GetScancodeFromKey`. |
-| H3 | Release APK was always debug-signed. Now reads a real keystore from the environment. |
-| M1 | A second `SetVideoMode` with a different size was ignored. |
-| M2 | Every present call uploaded the whole surface; now batched once per frame. |
-| M3 | Vita scaling code was compiled into the Android build. |
-| M4 | A dead fake JNI export shipped in the library. |
-| M5 | SDL's parsed `argv` was discarded. |
-| L1–L8 | Duplicate macro block, dead variables, Vita leftover names, broken `--help`, hardcoded JDK path, and more. |
-
-**Not yet verified**
-
-- **Nothing has been run on a device.** No Android hardware was available in this
-  environment, so startup, rendering, audio, touch/gamepad input and the asset
-  extraction path are all untested at runtime. This is the single most important
-  caveat in this document.
-- Frame rate is unmeasured.
-- Touch controls are **not implemented** — input requires a gamepad or keyboard
-  attached to the device. This is the most obvious missing feature for a phone.
-
-**Known gaps / next steps**
-
-1. Run it on a device and read `adb logcat -s mugen`.
-2. Touch controls: an on-screen pad would map to `SDL_JOY*` events (the engine's
-   input is joystick- and keyboard-driven), which `port/android/app/src/main/
-   jni/src` can synthesise — the same approach the Vita port used for its
-   keyboard/pad bridge.
-3. Frame statistics (the `Vita_FrameLog` equivalent) to decide whether the
-   software renderer needs the same scaling work it got on the Vita.
-4. `armeabi-v7a`: add it to `abiFilters` and re-run
-   `build_sdl2_companions.sh` with `ANDROID_ABI=armeabi-v7a`.
-
----
-
-## Reference
-
-Built following two existing Android ports on this machine, which are the proven
-pipeline here:
-
-- `C:/Projects/ikemen-develop-update/tools/generate_android_via_native.sh` —
-  SDK/NDK/JDK setup, SDL2 cross-compilation, jniLibs staging, `manifest.txt`
-  generation, Gradle invocation and APK signing.
-- `C:/Projects/ikemen-droid` — the Gradle project layout, `SDLActivity` Java side
-  and `AndroidManifest.xml` shape.
-
-This port reuses their toolchain and conventions but does not download or install
-anything: those components are already present, and `build.sh` fails with a clear
-message rather than installing silently.
+References: [validated review](REVIEW.md), [migration plan](PLAN.md),
+[AGP 8.1 requirements](https://developer.android.com/build/releases/agp-8-1-0-release-notes),
+[SDK manager](https://developer.android.com/tools/sdkmanager),
+[NDK configuration](https://developer.android.com/studio/projects/configure-agp-ndk),
+and [Adoptium installation API](https://adoptium.net/installation/ci-scripts/).

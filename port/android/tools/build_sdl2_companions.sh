@@ -20,16 +20,16 @@
 # =============================================================================
 set -euo pipefail
 
-ANDROID_HOME_DIR="${ANDROID_HOME_DIR:-/c/Android/SDK}"
-ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-${ANDROID_HOME_DIR}/ndk/r27d}"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/../../.." && pwd)"
+ANDROID_HOME_DIR="${ANDROID_HOME_DIR:-${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$ROOT/build/android/toolchains/sdk}}}"
+ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-${ANDROID_HOME_DIR}/ndk/27.1.12297006}"
 ANDROID_ABI="${ANDROID_ABI:-arm64-v8a}"
 ANDROID_PLATFORM="${ANDROID_PLATFORM:-android-21}"
 
-# SDL2 itself, from the reference build on this machine.
-SDL2_DEPS_DIR="${SDL2_DEPS_DIR:-/c/Projects/ikemen-develop-update/build/android_arm64/android-deps/${ANDROID_ABI}}"
+# SDL2 itself is built separately; build.sh uses the same local default.
+SDL2_DEPS_DIR="${SDL2_DEPS_DIR:-$ROOT/build/android/sdl2/${ANDROID_ABI}}"
 
-HERE="$(cd "$(dirname "$0")" && pwd)"
-ROOT="$(cd "$HERE/../.." && pwd)"
 # Everything this script produces lives under build/android/, so one directory
 # holds the whole Android build and can be deleted as a unit.
 ANDROID_BUILD="$ROOT/build/android"

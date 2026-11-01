@@ -1,400 +1,316 @@
-# Review — Android port (`port/android`)
+# Android port: validated review
 
-A review of the Android port as committed. Written by the author of the port, so
-it is written adversarially: the goal is to find what is wrong, not to justify
-what exists.
+Reviewed: 2026-11-02 (Asia/Jakarta).
+Source baseline: `d14b4e3b05bad838a1a44c3691b48edf35ab69f6` on `sdl2`.
+Scope: Android Gradle/CMake, native adapter, relevant shared engine paths,
+library builder and build orchestration. See [PLAN.md](PLAN.md) for remediation.
 
-**Verdict (updated): every finding that could be fixed from the source has been
-fixed and verified. Two remain open by nature: the port has never been run on a
-device (H2), and touch controls are unimplemented (L10).**
+**Verdict: SDL2 is already the Android runtime dependency, but the migration
+of SDL1 engine semantics is incomplete. Multiple source defects remain.
+The previous “every statically identifiable defect is fixed” conclusion is
+withdrawn. This update fixes toolchain/bootstrap orchestration, not the native
+runtime defects listed OPEN below.**
 
-The build system and the statically-identifiable defects are in good shape. The
-runtime is still unproven, and this document should not be read as claiming
-otherwise.
+The current work ran source checks, a small host presentation probe, Bash
+syntax checks and 23 isolated bootstrap/build-orchestration tests. It did not
+build a real APK, download/execute a real SDK/JDK distribution, run Android
+hardware/emulation, or rebuild desktop/Vita binaries. Historical APK sizes,
+symbol listings and multi-platform build claims from the previous review
+are not newly verified evidence.
 
----
+## 1. What the source establishes
 
-## 1. What is sound, and why
-
-These decisions hold up under scrutiny and should not be revisited casually.
-
-### 1.1 The SDL 1.2 shim instead of editing the engine
-
-The engine's video contract is three SDL 1.2 calls (`SDL_SetVideoMode`,
-`SDL_Flip`, `SDL_UpdateRect`). SDL2 removed all of them. The port reimplements
-them in `android_video.c` and force-includes the compat header with
-`-include` (`CMakeLists.txt:154`), so **every SDL call site in `src/` compiles
-unchanged**.
-
-This is the right call because `src/video.c` and `src/gfx.c` are faithful
-reconstructions of a specific binary, and AGENTS.md is explicit that fidelity is
-the product. Threading `#ifdef ANDROID_PORT` through every one of ~100 SDL call
-sites would have buried the reconstruction under port code.
-
-### 1.2 Keeping the software renderer
-
-`glrender.c`/`gldetect.c` are excluded rather than ported to GLES. The engine's
-GL path is desktop GL 1.x/2.1 with a glad loader generated for
-`wglGetProcAddress`/`glXGetProcAddressARB`; Android has neither. The software
-renderer is the same path the Vita port ships, so nothing is lost.
-
-### 1.3 Assets extracted before `main`, with a `chdir`
-
-`android_main.c` extracts to external storage and `chdir`s there, so every
-relative path in `mugen.cfg` resolves as on desktop. This avoided touching any
-path handling in the engine.
-
-The generation stamp is written **only after every asset succeeds**, so an
-interrupted first run retries instead of leaving a half-populated tree that fails
-later somewhere confusing. That is the right failure mode.
-
-### 1.4 `Mix_LoadMUS_RW(rw, 0)`
-
-SDL_mixer 2 added `freesrc`. The caller at `bgmplugins.c:926` closes the RWops
-itself for types 1 and 2, so `0` reproduces SDL_mixer 1.2 semantics exactly.
-This is the only *semantic* change in `src/`, and it is correct.
-
-### 1.5 Refusing 8bpp
-
-`bpp_to_masks` rejects 8bpp with a real error instead of falling back. On the
-Vita a silently-wrong format produced a black screen and cost a long
-investigation; failing loudly is better.
-
-### 1.6 Cross-platform guard discipline
-
-All 13 `src/` changes are inside `#ifdef ANDROID_PORT`. Verified: MSVC release
-build 0 errors, Vita VPK rebuilds clean (see §5).
-
----
-
-## 2. High severity
-
-### H1. `g_keyState` filled with scancodes but indexed by keycodes — **FIXED**
-
-**Where:** `android_video.c` (`Android_GetKeyState`) → `android_main.h`
-(`SDL_GetKeyState` macro) → `keyboard.c` `Keyboard_SyncState` → `system.c:1592`.
-
-`Keyboard_SyncState` did:
-
-```c
-const Uint8 *state = SDL_GetKeyState(&count);
-for (i = 0; i < count; i++) g_keyState[i] = state[i];
-```
-
-It assumes `state` is indexed by **SDL 1.2 keycode** (`SDLK_*`). SDL2's
-`SDL_GetKeyboardState` returns an array indexed by **scancode**, and the two
-numbering schemes are unrelated:
-
-| | value |
+| Area | Current fact |
 |---|---|
-| `SDLK_a` | `97` (`'a'`) |
-| `SDL_SCANCODE_A` | `4` |
-| `SDLK_LCTRL` | `0x400000E0` = `scancode \| SDLK_SCANCODE_MASK` |
+| Runtime SDL | Native CMake links `libSDL2.so` plus SDL2_mixer/SDL2_ttf, not SDL1 libraries |
+| Engine compatibility | Force-included `android_main.h` supplies removed SDL1 names; `android_video.c` implements a software surface / streaming texture path |
+| Renderer | `glrender.c` and `gldetect.c` are excluded; this does not itself prevent config from selecting their stubbed entry points |
+| Entry | The Android entry includes `SDL_main.h`; shared `src/main.c` is renamed `Mugen_Main` under `ANDROID_PORT` and retained for its helpers |
+| API guards | `ANDROID_PORT` enables `MUGEN_SDL2_API`, but not `MUGEN_SDL2`; important key/text adapters still require the latter |
+| Platform guards | Android CMake also defines `MUGEN_VITA_GL`; several genuinely Vita-specific blocks remain active on Android |
+| ABI | Gradle packages `arm64-v8a` only, min API 21, compile API 34, target API 29 |
+| Tool pins | AGP 8.1.1, wrapper Gradle 8.1.1, NDK 27.1.12297006, CMake 3.22.1, JDK 17; this change pins build-tools 33.0.1 explicitly |
+| Libraries | SDL2 itself is supplied separately; companion builder selects SDL2_ttf 2.20.2 and SDL2_mixer 2.6.3 |
+| Runtime evidence | No new device, audible-audio or frame-rate result is available in this review |
 
-So the loop copied scancode data into a keycode-indexed array, clobbering the
-values `Keyboard_HandleKey` writes correctly from `ev.key.keysym.sym`, and
-corrupting `g_inputState` (`events.c:438,446`) and the Ctrl-held debug reads
-(`gameloop.c:147,185`). It fires on `System_OnFocusGained`, i.e. **every app
-resume** — not an edge case.
+SDL2 retaining software surfaces is compatible with the engine's CPU renderer.
+A GPU-presented software frame is not an implemented MUGEN OpenGL renderer.
 
-**Fix applied** (`src/keyboard.c`, `ANDROID_PORT` branch): the copy is replaced by
-an explicit, bounded translation through the same conversion SDL 1.2 performed
-internally:
+## 2. Open findings
 
-```c
-for (i = 0; i < INPUT_KEY_COUNT && i < (int)(sizeof(g_keyState)); i++) {
-    SDL_Scancode sc = SDL_GetScancodeFromKey((SDL_Keycode)i);
-    g_keyState[i] = (sc != SDL_SCANCODE_UNKNOWN) ? state[sc] : 0;
-}
-```
+### A01 — P1: SDL2 special keys still reach legacy arrays unconverted
 
-`count` is deliberately unused on this path: SDL2's array length is a *scancode*
-count, which says nothing about how many keycodes are set.
+Sources: [events.c](../../src/events.c), [keyboard.c](../../src/keyboard.c),
+[native CMake](app/src/main/jni/src/CMakeLists.txt),
+[compatibility header](app/src/main/jni/src/android_main.h).
 
-**Verified** by disassembling the built `libmain.so` — the call is real, not
-dead-code-eliminated:
+The `SDL_KEYDOWN/UP` path translates through `Sdl2_EngineKey` only when
+`MUGEN_SDL2` is defined. Android does not define it, so large SDL2 special-key
+values are passed directly to `Keyboard_HandleKey`, which writes
+`g_keyState[key]` without checking the upper bound. SDL2 Up is
+`0x40000052`; the engine's legacy Up binding is 273.
 
-```
-bl 0x151f60 <Android_GetKeyState@plt>
-bl 0x151f70 <SDL_GetScancodeFromKey@plt>
-```
+The Android focus-resync branch also calls `SDL_GetScancodeFromKey(i)` with
+legacy engine identifiers. That works for ASCII, but legacy 273 is not SDL2's
+Up keycode. The earlier H1 fix therefore did not solve the whole key domain.
+The text-input event path is also still gated on `MUGEN_SDL2`.
 
-### H2. Nothing has ever been executed on a device
+Required: one reusable forward/inverse translation for all SDL2 platforms,
+including event, resync, saved bindings and synthetic-input paths. Do not
+merely define `MUGEN_SDL2` on Android: that also enables a competing video
+adapter and conflicts with existing aliases unless ownership is separated.
 
-No Android hardware was available; the build host is Windows with an NDK and no
-emulator was used. Everything below is **static** verification only:
+Status: **OPEN**. Source-confirmed bounds defect; no Android crash trace was
+generated for this review.
 
-- startup, `SDL_main` hand-off, asset extraction
-- rendering and the present path
-- audio (SDL2_mixer 2.6.3 is a *different major version* from the 1.2 the engine
-  was written against)
-- gamepad/keyboard input
-- the H1 bug's actual severity
+### A02 — P1: Vita controls and panel policy still leak into Android
 
-`libmain.so` links and exports `SDL_main`, which SDLActivity looks up by name
-(`SDLActivity.java:258`, `getMainFunction() → "SDL_main"`). Confirmed present:
+Sources: [events.c](../../src/events.c), [config.c](../../src/config.c),
+[video.c](../../src/video.c), [main.c](../../src/main.c).
 
-```
-000000000010e288 T SDL_main
-```
+Defining `MUGEN_VITA_GL` also enables:
 
-That removes the most likely instant-crash-at-startup cause, and nothing more.
-**A port that has never run should not be described as working**, and the README
-says so.
+- The Vita joystick-to-keyboard bridge, including direct calls to
+  `Keyboard_HandleKey` with SDL2 arrow constants and Vita raw-button assumptions.
+- The Vita config override that replaces both players' joystick maps with
+  fixed four-axis/no-hat Vita engine codes, discarding actual Android bindings
+  and assuming a controller topology/mapping that Android need not have.
+- A System surface request forced to 960x544 in `Video_SetMode`. The Android
+  presentation branch does not perform the Vita CPU upscale, so this is not
+  harmless target naming or a faithful use of configured game dimensions.
+- Vita `ux0:data/...` stdout/stderr redirection in the shared entry point.
 
-### H3. The release APK was signed with the debug keystore — **FIXED**
+The previous M3 fix excluded some `gfx.c` paths only. It did not isolate all
+Vita-specific behavior. Android controllers have their own topology/mapping,
+and legacy button numbers 9..24 are engine codes, not proof of a 24-button pad.
 
-`app/build.gradle` unconditionally used `signingConfig signingConfigs.debug`. Fine
-for sideloading, not fine as a release: that is the *public* debug key, it cannot
-ship on Play, and two machines produce different signing identities, breaking
-updates.
+The intervening Vita fix converted its raw button indexes to engine codes
+(raw + 9 for that specific topology). That correction is present in this
+review's updated baseline; it does not resolve the Android platform guard or
+controller-policy leakage. The old raw-zero mismatch is not reported as a
+current Vita defect here.
 
-**Fix applied:** a real `signingConfigs.release` block, fed from environment
-variables the same way the reference script does it:
+Required: separate platform identity from GL header/renderer capability;
+retain Android lifecycle behavior while removing Vita policy from Android.
+Preserve the configured game resolution, including 640x480 where selected.
 
-| Variable | Purpose |
+Status: **OPEN**.
+
+### A03 — P1: “System is forced on Android” is not implemented
+
+Sources: [config.c](../../src/config.c),
+[video.c](../../src/video.c),
+[GL stubs](app/src/main/jni/src/android_glstub.c).
+
+The parser still accepts `OpenGL` and `OpenGLScreen` without an Android
+override. `Video_SetMode` skips `Gl_Init` under `ANDROID_PORT` and can return
+success, while GL drawing entries are no-ops/failure stubs. The native
+adapter/README comments saying config forces System are false.
+
+Required: reject unsupported modes before selecting GL function tables, or
+perform an explicit logged fallback to System. A desktop cfg requesting GL
+must not produce an apparently initialized blank renderer.
+
+Current workaround: supply `RenderMode=System` in the game cfg actually used
+on the device. The build script does not rewrite it, and existing extracted
+cfg files may survive an APK upgrade.
+
+Status: **OPEN**.
+
+### A04 — P1: asset retries can preserve a truncated file and stamp success
+
+Source: [android_main.c](app/src/main/jni/src/android_main.c),
+`extract_asset` / `extract_assets`.
+
+Extraction writes directly to the final file. After an interrupted/short
+write, that partial file can remain. The next launch skips any existing
+destination using only `stat`, returns success for it, and can write the
+completion stamp. Therefore “stamp only after success” does not establish
+crash-safe extraction.
+
+The stamp name is also a constant generation marker, not an automatic
+manifest/content hash. A new APK payload does not invalidate it by itself.
+User-modified files and packaged updates need an explicit reconciliation rule.
+
+Required: verify relative paths, copy to a temporary file in the same writable
+directory, check read/write/close and size/hash, then rename atomically.
+Stamp only the validated manifest generation; define how modified user files
+are preserved. Handle full storage and unavailable external/internal paths.
+
+Status: **OPEN**. Also test Android's temporary-file support instead of assuming
+`tmpfile()` succeeds in the app sandbox.
+
+### A05 — P1: successful-exit video cleanup occurs after SDL_Quit
+
+Sources: [main.c](../../src/main.c), [system.c](../../src/system.c),
+[android_video.c](app/src/main/jni/src/android_video.c).
+
+`Mugen_Main` calls `System_Deinit`, which ends with `SDL_Quit`, and only later
+calls `Android_VideoQuit`. That helper still holds and destroys its texture,
+renderer and window pointers after SDL video shutdown may have invalidated
+them. It also does not reset every initialization/dimension/dirty state field.
+
+Required: establish one owner and destroy Android presentation objects before
+SDL subsystem shutdown; make partial cleanup and repeated init/quit safe.
+Simply proving `Android_VideoQuit` is called does not qualify its placement.
+
+Status: **OPEN**. Native shutdown-order hazard; no device teardown test here.
+
+### A06 — P2: resizing updates the surface but retains the old-size texture
+
+Source: [android_video.c](app/src/main/jni/src/android_video.c),
+`Android_SetVideoMode`.
+
+The function changes logical/window size and recreates the software surface,
+but destroys the texture only when its pixel format changes. A same-format
+size change therefore leaves an old-size streaming texture paired with a
+new-size source surface/pitch. The result can be an error, cropped frame or
+invalid memory access during upload, depending on the dimensions/backend.
+
+The 24bpp branch also pairs a 24bpp source surface with a 32-bit RGB888 texture.
+That requires an explicit conversion or rejection, not a comment that 24 is
+“stored as 32-bit”.
+
+Required: recreate textures on dimensions or format change, validate allocation
+results transactionally and test actual bytes-per-pixel/pitch for each exposed
+mode. Keep unsupported display bpp separate from indexed offscreen surfaces.
+
+Status: **OPEN**. The old M1 fix is partial.
+
+### A07 — P2: dirty state does not batch presentation once per frame
+
+Sources: [android_video.c](app/src/main/jni/src/android_video.c) and
+[frame.c](../../src/frame.c).
+
+`Android_UpdateRectX`, `Android_Flip` and `Android_PresentFrame` each set
+`s_dirty=1` and immediately call `present`. Clearing it inside `present` cannot
+collapse the next call, because that call sets it again.
+
+A host probe using those extracted source functions with counted SDL stubs ran
+one UpdateRect, one Flip and one frame-end request: **3 uploads, 3 presents**.
+This establishes the adapter behavior; it is not an Android performance test.
+
+Required: distinguish invalidation from the one frame-end flush, account for
+skip-draw and explicit non-frame initialization/error presentation, and assert
+upload/present counts. The old M2 “FIXED” conclusion is withdrawn.
+
+Status: **OPEN**.
+
+### A08 — P2: Android zoomSurface is not established equivalent to SDL_gfx
+
+Source: [android_gfx.c](app/src/main/jni/src/android_gfx.c).
+
+The wrapper truncates output dimensions, calls `SDL_BlitScaled` and does not
+restore the source alpha/color modulation and blend mode as a pure scaling
+operation. SDL_gfx uses distinct indexed/RGBA sampling/conversion rules.
+The more thoroughly tested shared SDL2 scaler is not enabled in this Android
+profile. A handwritten signature and a successful link prove neither state
+preservation nor pixel equivalence.
+
+The comment that no SDL2_gfx port exists is wrong. Upstream SDL2_gfx provides
+a surface rotozoom API; the correct choice is a validated implementation,
+not dependency avoidance justified by nonexistence.
+
+Required: reuse/extract the shared validated scaler or prove an alternative
+against indexed, 16-bit, 32-bit, fractional-size, nonzero-key and real-alpha
+fixtures. Compare actual masks/state with `SDL_GetRGBA`.
+
+Status: **OPEN**.
+
+### A09 — P2: advertised BGM formats do not match the engine route
+
+Sources: [companion builder](tools/build_sdl2_companions.sh),
+[bgmplugins.c](../../src/bgmplugins.c), [compat_linux.c](../../src/compat_linux.c).
+
+The companion builder enables WAV/OGG/MP3-capable SDL2_mixer code while disabling
+MOD and MIDI. The engine's `Sdlmix_Open` rejects WAV/OGG/MP3 and accepts
+tracker/MIDI paths. The mpg123 subsystem separately tries to load
+`libmpg123-0.dll`, which this Android package does not supply.
+
+Thus codec capability alone does not make the documented music formats work.
+A configured plugin init failure can also stop the registry before another
+usable subsystem is reached. SND effect playback is a different path.
+
+Required: choose and test an Android music adapter/extension route, or enable
+the actual tracker/MIDI engine route with its dependencies/assets. Qualify
+loop/seek/volume and callback/RWops lifetimes before claiming support.
+
+Status: **OPEN**.
+
+## 3. Build fixes implemented in this update
+
+| Change | Evidence / limit |
 |---|---|
-| `ANDROID_KEYSTORE` | path to a `.jks`/`.keystore` |
-| `ANDROID_KEYSTORE_PASS` | store password |
-| `ANDROID_KEY_ALIAS` | key alias (default `androidkey`) |
-| `ANDROID_KEY_PASS` | key password (defaults to the store password) |
+| Explicit opt-in missing-tool downloads | `--setup` and `--download-tools`; default build/check does not call the bootstrap downloader |
+| Consistent SDK roots and pinned versions | SDK root priority is explicit; NDK revision comes from `source.properties`, not a directory label |
+| External NDK selection | `build.sh` passes `mugenNdkPath`; Gradle consumes it while retaining its version check |
+| Reproducible SDK package selection | SDK 34, NDK 27.1.12297006, CMake 3.22.1 and build-tools 33.0.1 read from project settings |
+| JDK selection | Require runnable JDK 17, including javac; reject an invalid explicit override |
+| Downloads and extraction | HTTPS, vendor checksum verification, staged extraction, retryable partial-download handling and archive-path checks |
+| Location of generated files | Default SDK/JDK/download/Gradle/temp state stays under `build/android/`; no profile edits or sudo |
+| SDK licenses | SDK manager retains its own prompts; no automatic “yes” or fabricated acceptance |
+| Companion prefix mismatch | Corrected its repository-root calculation and aligned SDL2/NDK/prefix defaults with `build.sh` |
+| Stale assets / wrong APK variant | Regenerate staging even for `--no-assets`; collect only the requested debug/release variant |
+| ABI labeling | Reject non-arm64 requests until Gradle and all native libraries actually support them |
+| Machine-specific tracked property | Stop rewriting `gradle.properties.override`; use exported Java home / explicit Gradle arguments |
 
-If they are absent the config falls back to **debug signing** and Gradle prints a
-warning naming exactly which variables are missing — so a local build still works
-and nobody mistakes the output for a distributable one. `build.sh` passes the
-variables through when set.
+The companion source downloader itself is still the existing implementation:
+its source archive provenance/checksum hardening and full dependency closure
+are follow-up work in PLAN.md. The bootstrap does not automatically rebuild
+SDL2 or its companion libraries.
 
----
+## 4. Revalidation of previous finding IDs
 
-## 3. Medium severity
-
-### M1. `Android_SetVideoMode` ignored every call after the first — **FIXED**
-
-**Where:** `android_video.c:129-158`.
-
-The window and renderer are created once (`if (s_window == NULL)`), and
-`SDL_RenderSetLogicalSize` is called once with the *first* size. If the engine
-later requests a different size — a resolution change, or a second
-`Video_SetMode` — then:
-
-- the texture and software surface are correctly recreated at the new size,
-- but the window keeps its original size and the logical size stays stale,
-
-so the result is stretched incorrectly with no error. The Vita port learned this
-class of bug expensively.
-
-**Fix applied** (`android_video.c`): the created size is tracked in
-`s_created_w`/`s_created_h`; when a later `SetVideoMode` asks for a different
-size, `SDL_SetWindowSize` and `SDL_RenderSetLogicalSize` are both called with the
-new dimensions before the window/rendering setup continues.
-
-### M2. Every `SDL_UpdateRect` presented; no dirty flag — **FIXED**
-
-**Where:** `android_video.c` (`present()`), reached from `gfx.c:476`.
-
-Each call does a **full-surface upload** + `RenderClear` + `RenderCopy` +
-`RenderPresent`. At 640×480×16 that is ~600 KB of upload per call. The engine
-calls `Gfx_Present` once per frame in the normal path, so this is acceptable —
-but nothing enforces it, and if a draw path calls `SDL_UpdateRect` more than once
-per frame the cost multiplies silently.
-
-**Fix applied:** an `s_dirty` flag. `Android_Flip`/`Android_UpdateRect` mark the
-surface dirty and present only if it is still set; `present()` clears it.
-`Android_PresentFrame()` is called from `Frame_UpdateSkip`'s caller in `frame.c`
-to mark each frame boundary, so repeated present requests inside one frame
-collapse into a single upload + `SDL_RenderPresent`.
-
-Still unmeasured — the frame-statistics equivalent was not ported (see §M3 and the
-`frame.c` note), so the *effect* of this fix is unquantified.
-
-### M3. `MUGEN_VITA_GL` compiled Vita code into the Android build — **FIXED**
-
-The macro reuse is defensible (it is the engine's existing "not desktop GL"
-guard; auditing ~45 sites for a second macro is worse). But it is not free, and
-the consequences are live in the tree:
-
-| Site | Effect on Android |
+| Previous ID / claim | Updated assessment |
 |---|---|
-| `gfx.c:301` | `Vita_ScaleToVideo` is **compiled**, including its cached column map |
-| `gfx.c:433-468` | the scaling branch is **live**; it only skips because `surface->w == g_videoSurface->w` |
-| `gfx.c:482-505` | the "flip if double-buffered" block runs; inert because the surface never carries `SDL_DOUBLEBUF` |
-| `Vita_PerfAddScale/Flip` | mapped to no-ops in `android_main.h` |
-| `symbols.h:175` | `g_glewExtBlendLogicOp` → `MugenVita_GLExtBlendLogicOp`, which exists **only** because `android_glstub.c` defines it |
+| H1 keycode/scancode fixed | Incomplete; A01 and A02 reopen the relevant paths |
+| H2 device execution absent | This review adds no device/emulator evidence |
+| H3 release signing fixed | Conditional release signing exists; missing/nonexistent keystore still selects debug signing |
+| M1 resize fixed | Logical/window size updates exist; texture resizing is incomplete (A06) |
+| M2 present batching fixed | False for current code; counted host probe shows three presents (A07) |
+| M3 Vita leakage fixed | Some gfx guards changed; video/input/config/stdio leakage remains (A02) |
+| M4 fake JNI export removed | Removal is visible in source; no new ELF symbol scan performed |
+| M5 argv preserved | Java argv is retained and file tokens appended; quoting is not supported and counts/line length are bounded |
+| L8 video cleanup fixed | Called, but after SDL_Quit; ordering remains wrong (A05) |
+| L9 sibling-repo dependency | Build/companion defaults now local; actual SDL2 libraries must still be built/supplied |
+| L10 touch controls | Still unimplemented; a gamepad/keyboard is required, and current input defects still need fixing |
 
-So the Android build contains Vita-specific code that is inert only because of
-surface-size and flag coincidences. If `Android_SetVideoMode` were ever changed to
-open a *panel-sized* surface (a reasonable future optimisation), `Vita_ScaleToVideo`
-would start running on Android — carrying Vita pixel-format assumptions.
+Do not treat a symbol appearing in disassembly as proof of the correct
+translation, ownership, texture size, frame count or audible output.
 
-**Fix applied** (`src/gfx.c`): the driver-specific blocks are now
-`#if defined(MUGEN_VITA_GL) && !defined(ANDROID_PORT)`, and the System-renderer
-present path has an explicit `ANDROID_PORT` branch that blits and presents
-without CPU scaling. `MUGEN_VITA_GL` keeps its "software renderer" meaning, and
-`Vita_ScaleToVideo` is no longer compiled into the Android build at all — so a
-future size change cannot accidentally activate it.
+## 5. Tests and remaining qualification
 
-### M4. A fake JNI export — **FIXED**
+Run from the repository root:
 
-**Where:** `android_main.c` (end of file):
-
-```c
-__attribute__((visibility("default"))) void Java_org_libsdl_app_SDLActivity_nativeInit(void) {}
+```sh
+bash -n port/android/build.sh
+bash -n port/android/tools/bootstrap_toolchains.sh
+bash -n port/android/tools/build_sdl2_companions.sh
+python3 port/android/tests/test_build.py
 ```
 
-`SDLActivity` has no `nativeInit` — verified by grepping `SDLActivity.java`. This
-is dead code whose comment claims it exists because "SDLActivity.java locates this
-symbol by name", which is false (it locates `SDL_main`). It is exported into the
-APK (`T Java_org_libsdl_app_SDLActivity_nativeInit`), so it also ships.
+The 23 isolated tests use fake curl, JDK, SDK manager, Gradle and native
+libraries. They exercise missing-tool behavior, exact package requests,
+checksums, archive traversal, valid/invalid symlinks, failed-download retry,
+idempotence, version mismatch, custom paths with spaces, offline gating,
+APK variant selection and asset staging without modifying the reference tree.
 
-**Fix applied:** deleted. The comment in its place records why no JNI export is
-needed (SDLActivity `dlopen`s the library and `dlsym`s `SDL_main`).
-Verified: `llvm-nm -D` no longer lists
-`Java_org_libsdl_app_SDLActivity_nativeInit`, and `T SDL_main` is still present.
+The live Google repository XML was also fetched and parsed successfully for
+command-line tools 19.0 on Linux, Windows and macOS (archive build 13114758).
+Actual SDK archive/JDK API access timed out through the current proxy, so real
+archive installation and SDK manager execution remain unverified.
 
-### M5. SDL's own argv was discarded — **FIXED**
+These are meaningful bootstrap/orchestration tests, **not a native build**.
+Still required: live Google/Adoptium downloads, real SDK-manager/license flow,
+real Gradle/APK build on the supported hosts, native ELF dependency/symbol
+checks and actual device startup/input/render/audio/lifecycle tests.
+macOS and Windows native tool execution were not tested by the Linux fixtures.
 
-`android_main.c` builds `argv` from a `cmdline` file and ignores the arguments
-SDL2 parsed from the Java side (`SDLActivity` passes an `arguments` string). The
-`cmdline` file is a genuinely useful idea on a device with no shell, but
-silently dropping the JNI path means an intent-supplied argument appears to do
-nothing.
+Primary references:
 
-**Fix applied:** SDL's parsed `argv` is now the base, and the `cmdline` file is
-appended to it. An intent-supplied argument therefore reaches the engine, and the
-device-local override still works. The precedence (SDL first, file second) is
-noted in the code and in the README.
-
----
-
-## 4. Low severity / cleanups
-
-| # | Where | Issue |
-|---|---|---|
-| L1 | `android_main.h` | The `SDL_SetVideoMode`/`SDL_UpdateRect`/`SDL_Flip` macro block was defined **twice**. **FIXED** — the duplicate is gone, the full block remains. |
-| L2 | `android_video.c` | `SDL_BlendMode blend;` was declared, never initialised, "used" only as `(void)blend;` inside an `if` whose body did nothing. **FIXED** — replaced with a real `SDL_SetSurfaceBlendMode(..., SDL_BLENDMODE_NONE)` call and a comment explaining why opaque is correct. |
-| L3 | `android_video.c` | `Android_SetPreferredSize` was public API that **nothing called**. **FIXED** — removed, along with its declaration and the stale reference in the header comment. |
-| L4 | `android_main.c:34` | `ASSET_STAMP` was `"ux0_mugen_assets_v1.stamp"` — `ux0:` is a **PS Vita** mount point, left over from the other port. **FIXED** → `"mugen_assets_v1.stamp"`. |
-| L5 | `gradle.properties:11` | `org.gradle.java.home=C:/Android/jdk-17` hardcoded a machine-specific path in a **tracked** file. **FIXED** — removed from `gradle.properties`. See the trap in §4.1 below; the naive replacement did not work. |
-| L6 | `build.sh` | `--help` was broken: `sed -n '2,25p'` ran past the comment header and printed shell code (`set -euo pipefail`). **FIXED** — replaced with an `awk` one-liner that stops at the first non-comment line. Verified: prints exactly the usage header. |
-| L7 | `android_main.c` (`extract_asset`) | `rel[strlen(rel) - 1]` was UB for an empty string. **FIXED** — explicit empty check first. |
-| L8 | `android_video.c` | `Android_VideoQuit` was **never called**. **FIXED** — called from the engine's successful-exit path in `src/main.c` (inside `ANDROID_PORT`). |
-| L9 | `build.sh:44`, `tools/build_sdl2_companions.sh:29` | Default `SDL2_DEPS_DIR` points into **another repository** (`ikemen-develop-update/build/...`). Practical here, but it makes the port non-self-contained and silently depends on a sibling checkout. **Open, documented.** Overridable via `SDL2_DEPS_DIR`; missing it produces a clear failure, not a confusing one. |
-| L10 | — | **No touch controls.** Input requires a gamepad or a keyboard. For a phone this is the biggest functional gap, and it is not a bug — it is unimplemented. **Open.** |
-
-### 4.1 A trap found while fixing L5
-
-Removing the hardcoded JDK path from `gradle.properties` **broke the build**, and
-not in an obvious way. On this machine `JAVA_HOME` is already set to a **Java 8**
-JDK, so the launcher JVM started as Java 8 and Gradle failed with:
-
-```
-No matching variant of com.android.tools.build:gradle:8.1.1 was found
-... compatible with Java 8, the consumer needed a component compatible with Java 11
-```
-
-That message names neither Java versions in a useful way nor `JAVA_HOME`; it reads
-like a dependency-repository problem. Worse, both plausible fixes are wrong:
-
-- writing `org.gradle.java.home` into `local.properties` does **not** help — that
-  property is read after the launcher JVM has already started;
-- passing `-Dorg.gradle.java.home=...` on the `gradlew` command line does **not**
-  help either, for the same reason.
-
-What works is `JAVA_HOME` itself, set before `gradlew` runs. `build.sh` now:
-
-- prefers `MUGEN_JAVA_HOME`, then `/c/Android/jdk-17`, then the existing
-  `JAVA_HOME` (so an explicitly-set Java 8 no longer wins by default),
-- prints the version actually in use, and
-- fails with a direct message if the version is 1.8/1.7/11.
-
-An earlier `if [ -z "${JAVA_HOME:-}" ]` guard was the reason this went unnoticed:
-`JAVA_HOME` was *not* empty, it was simply wrong, so the guard never fired.
-
----
-
-## 5. What was actually verified (and how)
-
-Every claim in §1 and the findings above was checked against the tree, not
-assumed.
-
-| Check | Result |
-|---|---|
-| Engine cross-compiles for arm64-v8a | `libmain.so`, `ELF 64-bit LSB shared object, ARM aarch64, for Android 21` |
-| Port entry points are real code | `T SDL_main`, `T Mugen_Main`, `T Android_SetVideoMode`, `T zoomSurface`, `T Sound_Init` in `llvm-nm -D` |
-| SDLActivity's lookup will resolve | `getMainFunction() → "SDL_main"`; symbol present |
-| APK packages 4 native libs + assets | 6,777,748 bytes; `libSDL2/mixer/ttf/main.so`; 96 `assets/` entries; `manifest.txt` 95 lines |
-| Build reproducible from clean | `rm -rf app/build app/.cxx local.properties && ./build.sh` → same APK size |
-| MSVC unaffected | 0 `error C` |
-| Vita build unaffected | 0 errors; `mugen.vpk` rebuilt |
-| `zoomSurface(NULL)` cannot crash callers | both call sites (`gfx.c:327`, `font.c:289`) test for NULL — **no finding** |
-| 8bpp cannot silently misrender | rejected in `bpp_to_masks` |
-
-**Could not verify:** anything requiring a device (§H2).
-
----
-
-## 6. Recommended order of work
-
-1. **Run it.** `adb install -r`, then `adb logcat -s mugen`. If `mugen.log`
-   appears under `/sdcard/Android/data/org.mugen_unleashed.mugen/files/mugen`,
-   the extraction and entry-point path are proven.
-2. **Fix H1** (`g_keyState` scancode/keycode). Decide the fix from observed
-   behaviour: if only Ctrl-debug and focus-resync are affected, making
-   `Keyboard_SyncState` a no-op under `ANDROID_PORT` is the honest minimal change;
-   if `g_inputState` visibly misbehaves, translate properly.
-3. **Fix M1** (size change) before anyone edits `GameWidth`/`GameHeight` and
-   concludes the renderer is broken.
-4. **Fix M3** (widen the `MUGEN_VITA_GL` guards in `gfx.c`) before touching
-   surface sizes for performance.
-5. Clean up the remaining §4 items — L8 and L9. (L1-L7 are already done; see the
-   table and §4.1.)
-6. Touch controls (§L10), then frame statistics so any further performance work
-   is driven by a number instead of a guess.
-
----
-
-## 7. Closing note
-
-The build system in this port is in good shape: reproducible, and loud when
-something is missing (SDL2, the companion libraries, `data/mugen.cfg`, a wrong
-JDK). It does not silently ship a wrong configuration — the lesson from the Vita
-port's two silently-lost `mugen.cfg` patches.
-
-Every defect that could be identified and settled **from the source** has now been
-fixed, each one written in a form that can be checked rather than trusted: H1 was
-confirmed in the disassembly, the cleanup items by re-grepping and re-building,
-and all three platforms (Android, MSVC, Vita) were rebuilt afterwards.
-
-What remains is not code hygiene — it is observation. The port has never been
-executed, and that is a materially weaker claim than "it works". The fixes above
-address defects I could prove statically; a device run will find others, including
-plausibly some of my own making, since SDL_mixer 2.6.3 is a major version newer
-than the 1.2 the engine was written against.
-
----
-
-## 8. Change log of this review
-
-| Finding | Status | Verified by |
-|---|---|---|
-| H1 scancode/keycode | **Fixed** | disassembly shows `bl SDL_GetScancodeFromKey` |
-| H2 never run on a device | **Open** | — (no hardware) |
-| H3 debug-signed release | **Fixed** | real `signingConfigs.release` from env; warning fires when absent (observed in output) |
-| M1 size change ignored | **Fixed** | rebuilt; code path present |
-| M2 present per call | **Fixed** | `Android_PresentFrame` in `llvm-nm` |
-| M3 Vita code compiled in | **Fixed** | `gfx.c` guards widened; rebuild clean |
-| M4 fake JNI export | **Fixed** | absent from `llvm-nm -D` |
-| M5 argv discarded | **Fixed** | code path in `android_main.c` |
-| L1–L8 | **Fixed** | re-grep + rebuild |
-| L9 sibling-repo default | Open, documented | — |
-| L10 no touch controls | **Open** | unimplemented feature |
-
-Post-fix verification, all clean: Android `libmain.so` builds for
-`aarch64-none-linux-android21` and the APK packages (6,776,874 bytes, 4 native
-libraries, 96 asset entries); MSVC release build 0 errors; Vita VPK rebuilds with
-0 errors.
-
-One incidental fix: `build.sh` was writing `ndk.dir` into `local.properties`,
-which AGP 8 deprecates (`CXX5106`, one warning per Gradle invocation). It now
-relies on the `ndkVersion` already pinned in `app/build.gradle`; the warning count
-is 0.
+- [AGP 8.1 compatibility](https://developer.android.com/build/releases/agp-8-1-0-release-notes)
+- [SDK manager](https://developer.android.com/tools/sdkmanager)
+- [NDK version/path selection](https://developer.android.com/studio/projects/configure-agp-ndk)
+- [Google SDK manager launcher](https://android.googlesource.com/platform/prebuilts/cmdline-tools/+/db049c98617976c1d4d337c12034ab6e515911cb/tools/bin/sdkmanager)
+- [Adoptium API installation examples](https://adoptium.net/installation/ci-scripts/)
+- [SDL2 shutdown](https://wiki.libsdl.org/SDL2/SDL_Quit)
