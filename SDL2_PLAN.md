@@ -692,3 +692,18 @@ quick-VS scenario; nor effect playback, which needs audible verification.
   / `Mix_LoadMUS_RW` are not exercised end to end (no tracker or MIDI file is
   loaded by the quick-VS scenario), and neither is effect playback.
 - The Linux target has not been built with `SDL_BACKEND=2`.
+
+### Verified (Stage 6): 8/8 deterministic scenarios match SDL1 exactly
+
+All eight deterministic scenario combinations were compared against the SDL1
+baseline: three render modes (System, OpenGL, OpenGLScreen) × two fullscreen
+states (windowed/fullscreen), plus `-nomusic` and sound-enabled quick VS. Logs
+matched byte-for-byte after numeric normalisation across all eight runs.
+
+Non-deterministic scenarios (attract/demo mode, AI-vs-AI) are inherently
+incomparable via log comparison: even the same binary produces different logs
+in different runs due to random character selection and variable round timing.
+This was confirmed by comparing SDL1 vs SDL1 on those scenarios — they differ.
+
+Conclusion: SDL2 reproduction is exact for every verified deterministic path; no
+regression found.
