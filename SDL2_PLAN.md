@@ -559,24 +559,43 @@ The replacement is now an explicit nearest-neighbour copy loop for every format,
 with 16-bit sources promoted to 32-bit first (SDL_gfx does the same). 11 of the
 14 cases are byte-identical.
 
-The three 16-bit cases still differ, and that is a finding rather than a
-regression: SDL_gfx's own 16->32 conversion is lossy and byte-swapped. Measured
-directly, pure green `0x07E0` comes back as `0xFE00` on a surface whose masks
-are `R=00FF, B=FF0000`, and a 565 blue of 5 decodes to 0 instead of 41. The SDL2
-path converts through `SDL_ConvertSurfaceFormat`, which agrees with SDL's own
-`SDL_BlitSurface` (`R=00 G=04 B=0x28` for the same pixel). Reproducing SDL_gfx
-here would mean reproducing a bug, so `tools/test_zoomdiff.sh` reports those
-three as expected differences and fails on anything else.
+**That conclusion did not survive review, and the correction matters.** The
+first version of the test decoded 32-bit pixels with hardcoded shifts of 16/8/0
+instead of using the surface's masks. SDL_gfx returns 32-bit surfaces with BGR
+masks (`R=000000FF`, `B=00FF0000`), so red and blue were shifted to zero and
+`0x00332211` decoded as `(0,34,0)` rather than `(17,34,51)`. The apparent
+"byte-swap and loss" was an artefact of the test feeding itself wrong data. The
+decoder now uses `SDL_GetRGBA`, and the transparency record (colour-key value,
+alpha mod, blend state) is compared too.
+
+With that fixed, `rgb565_2x` became byte-identical, and the claim "SDL_gfx's
+16-bit conversion is lossy and byte-swapped" was withdrawn: it was my
+measurement that was broken, not SDL_gfx. Two cases still differ —
+`rgb565_0p75x` and `rgb555_1p5x` — and reading the images back shows SDL_gfx
+simply samples different source pixels (for `rgb565_0p75x` its row-0 samples are
+source x = 0,1,2,3,5,6,7,9,10,11,13,14 where this implementation reads
+0,1,2,4,5,6,8,9,10,12,13,14). Neither `floor(o*src/dst)`, `(int)(o/zoom)` nor an
+incremental float accumulator reproduces that sequence, so **the cause is not
+established** and is recorded as open rather than explained away.
+
+The exemption for those two cases is no longer "any difference passes". It
+requires an identical header (geometry, size, format, palette size, colour-key
+value, alpha mod, blend), an identical byte count, and that neither image is a
+constant fill — so a wrong size, a black image or uninitialised memory still
+fails. Checked by breaking the shim to emit black: the run fails.
 
 `smooth != 0` is still refused for indexed surfaces rather than silently
 approximated: no engine call site asks for it.
 
 ### Still open
 
-- `zoomSurface` reproduces SDL_gfx for 8- and 32-bit sources. Its 16-bit path
-  deliberately does not (SDL_gfx's is lossy and byte-swapped); the engine's only
-  `zoomSurface` call sites are scaled text, which is 8-bit or 32-bit, so the
-  difference is not reachable from font.c today.
+- `zoomSurface` is byte-identical to SDL_gfx for every 8-bit and 32-bit case,
+  and for 16-bit sources that scale by whole numbers. Two 16-bit cases with
+  fractional scale factors (`rgb565_0p75x`, `rgb555_1p5x`) sample different
+  source pixels and the reason is **not established**; they are exempted by
+  shape invariants only. The engine's `zoomSurface` call sites are scaled text,
+  which is 8-bit or 32-bit, so this is not currently reachable from `font.c`,
+  but it must be resolved before claiming 16-bit equivalence.
 - Windowed/fullscreen *transitions* at runtime (rather than starts) and display
   selection have not been exercised.
 - **Console editing and command submission** are covered against the handler
