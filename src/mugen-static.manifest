@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Manifest of the statically linked mugen-static.exe (the GNU Make / MinGW
+  build).
+
+  Deliberately differs from src/mugen.manifest in one way: no dependency on the
+  private assembly Elecbyte.MUGEN.libs.
+
+  That dependency is inherited from the original binary, whose DLLs (SDL.dll,
+  SDL_mixer.dll, zlib1.dll, libresample.dll, ...) are resolved through the
+  private assembly folder Elecbyte.MUGEN.libs next to mugen.exe. The Windows
+  loader checks such a dependency BEFORE running any code, so if the folder is
+  absent it refuses to start the process at all:
+
+      The application has failed to start because its side-by-side
+      configuration is incorrect.
+
+  This build links every one of those libraries statically, so its import table
+  holds Windows system DLLs and msvcrt.dll and nothing else. The dependency
+  describes something the executable does not use. Keeping it made the static
+  build refuse to start without the very folder it exists to make unnecessary,
+  and produced no log line, no error and no code execution to diagnose it from.
+
+  The MSVC build keeps the original manifest, because it does link those DLLs.
+
+  requestedExecutionLevel is kept: it is what makes Windows treat the process as
+  a normal application rather than applying installer heuristics.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"></requestedExecutionLevel>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+</assembly>

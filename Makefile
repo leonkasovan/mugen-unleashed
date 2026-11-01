@@ -286,11 +286,17 @@ LUA_LIB := $(LIB_DIR)/liblua.a
 LRS_LIB := $(LIB_DIR)/libresample.a
 TP_LIBS := $(LUA_LIB) $(LRS_LIB) $(GLAD_OBJ) $(MINIZIP_OBJ)
 
-# Resources: the error dialog (200) and version info from mugen.rc, plus the
-# assembly manifest that points at Elecbyte.MUGEN.libs (the original embeds it
-# the same way, as RT_MANIFEST 1). windres takes a single .rc, so the manifest
-# is appended to a copy of mugen.rc instead of being compiled separately --
-# keeping it one .rc is what makes this build independent of cvtres /merge.
+# Resources: the error dialog (200) and version info from mugen.rc, plus an
+# assembly manifest (the original embeds one the same way, as RT_MANIFEST 1).
+# windres takes a single .rc, so the manifest is appended to a copy of mugen.rc
+# instead of being compiled separately -- keeping it one .rc is what makes this
+# build independent of cvtres /merge.
+#
+# The manifest is NOT src/mugen.manifest: that one declares a dependency on the
+# private assembly Elecbyte.MUGEN.libs, which resolves the original's DLLs. The
+# loader enforces it before any code runs, so this statically linked build
+# refused to start without a folder of DLLs it never loads. See
+# src/mugen-static.manifest.
 ifeq ($(MUGEN_FAMILY),win32)
 RC_OBJ  := $(OBJ_DIR)/res/mugen_all.res.o
 ALL_RC  := $(OBJ_DIR)/res/mugen_all.rc
@@ -381,16 +387,18 @@ $(ICON_ICO):
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(PYTHON3) tools/extract_icon.py "$(MUGEN_GAME_DIR)/mugen.exe" $@
 
+MANIFEST := $(SRC_DIR)/mugen-static.manifest
+
 ifeq ($(ICON_ICO),)
-$(ALL_RC): $(SRC_DIR)/mugen.rc $(SRC_DIR)/mugen.manifest
+$(ALL_RC): $(SRC_DIR)/mugen.rc $(MANIFEST)
 else
-$(ALL_RC): $(SRC_DIR)/mugen.rc $(SRC_DIR)/mugen.manifest $(ICON_ICO)
+$(ALL_RC): $(SRC_DIR)/mugen.rc $(MANIFEST) $(ICON_ICO)
 endif
 	@echo "  GEN     $@"
 	$(Q)mkdir -p $(dir $@)
 	$(Q)cat $(SRC_DIR)/mugen.rc > $@
 	$(Q)printf '\n/* generated: the assembly manifest, RT_MANIFEST 1 */\n1 24 "%s"\n' \
-	    "$(CURDIR)/$(SRC_DIR)/mugen.manifest" >> $@
+	    "$(CURDIR)/$(MANIFEST)" >> $@
 
 $(RC_OBJ): $(ALL_RC)
 	@echo "  WINDRES $<"
