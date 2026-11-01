@@ -349,9 +349,17 @@ The original linked Elecbyte's own SDL_mixer, which exported `Mix_QuerySpecEx`
 
 That is the truthful answer, not a silent failure: the call sites already treat
 a NULL handle as "plugin not installed", so the log reads exactly like a
-missing DLL on Windows. The built-in SDL_mixer BGM subsystem —
-WAV, OGG and MP3 through `Mix_LoadMUS` — is what works. `SDL_mixer` on the Vita
-links libmikmod/FLAC/vorbis/mpg123, so that covers the usual formats.
+missing DLL on Windows.
+
+What actually plays through this path is narrower than the codec list suggests.
+`Sdlmix_Open` (`src/bgmplugins.c`) routes only tracker and MIDI files through
+SDL_mixer and explicitly refuses WAV, OGG and MP3 before the mixer is even
+reached -- linking libmikmod/FLAC/vorbis/mpg123 does not wire those formats
+into the engine. So: MIDI/MOD-style files are the supported BGM route here
+(pending on-device verification), WAV/OGG/MP3 through `sdlmix` are not, and
+a missing codec library is a different failure from a deliberately refused
+format. See `port/psvita/PLAN.md` M4 and scenario A03 for the format-by-format
+status to test.
 
 ### GLU
 
@@ -1096,12 +1104,17 @@ are **game content** shipping with M.U.G.E.N 1.1b1.
 | Custom vitaGL build (`UNPURE_TEXFORMATS`, `HAVE_FFP_SHADER_SUPPORT`, `UNPURE_TEXCOORDS`) | small | flags identified; build verified to work |
 | `vglInitExtended` instead of `SDL_OPENGL`, `vglSwapBuffers` to present | small | not written |
 | Probe: accept `"OpenGL ES 2.0 VitaGL"`, `GL_OES_texture_npot`, drop `ARB_fragment_program` | small | not written |
-| `sampler1D`/`texture1D` -> 2D in `indexed.frag` | small | not written |
-| Rewrite all four shaders for `in`/`out` instead of `gl_TexCoord`/`gl_MultiTexCoord` | **substantial** | not written |
+| `sampler1D`/`texture1D` -> 2D in `indexed.frag` | small | done in the packaged shaders (`sampler2D`/`texture2D`); draw-path verification open |
+| Rewrite all four shaders for `in`/`out` instead of `gl_TexCoord`/`gl_MultiTexCoord` | **substantial** | written, packaged, runtime verification open |
 | `glBlendColor` absent -> constant-alpha blending becomes additive | accepted loss | documented |
 
-The last two are why this is not a quick switch. The shader rewrite is the real
-cost, and it changes shipped game content rather than port code.
+The shader rewrite is done as source (four assets in `port/psvita/shaders/`,
+selected at packaging by `port/psvita/CMakeLists.txt`), but it is not verified:
+compiling, linking, drawing actual geometry and reading pixels back on hardware
+are all still open -- present shaders are not proof of working rendering. The
+remaining blocker is the draw path itself (explicit attributes, FBO handling,
+constant-alpha blending, texcoord Q), not the shader text. The rewrite also
+changes shipped game content rather than port code.
 
 Point 1 and 2 change **game content**, not port code -- `data/indexed.frag` ships
 with M.U.G.E.N, so editing it means the VPK carries a modified shader. That is
