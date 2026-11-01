@@ -10,6 +10,230 @@
 
 #include "mugen.h"
 
+#ifdef MUGEN_VITA_GL
+/*
+ * PS Vita port (port/psvita): make the gamepad drive the keyboard.
+ *
+ * M.U.G.E.N's menus are keyboard-only. Joystick input goes through
+ * Pads_HandleEvent into the pad input codes (Input_TranslateJoy adds
+ * INPUT_PAD_BASE), which the fight engine reads -- the system screens never
+ * look at them. They read screen->key, which comes from the keyboard queue. On
+ * a desktop that is fine: there is a keyboard with F1, Escape and arrows. The
+ * Vita has none, so the first-run info box ("Press F1 to continue.") could not
+ * be dismissed and the game sat there.
+ *
+ * The indices below are not guesses. SDL's Vita joystick driver
+ * (SDL_sysjoystick.o in VitaSDK's libSDL.a) reports 12 buttons, 4 axes and
+ * NO hats -- the d-pad arrives as ordinary buttons, not as a hat -- and its
+ * update function maps SCE_CTRL bits to indices like this:
+ *
+ *     index  bit     button        index  bit     button
+ *       0   0x1000   Triangle       6    0x40    Down
+ *       1   0x2000   Circle         7    0x80    Left
+ *       2   0x4000   Cross          8    0x10    Up
+ *       3   0x8000   Square         9    0x20    Right
+ *       4   0x100    L             10    0x1     Select
+ *       5   0x200    R             11    0x8     Start
+ *
+ * Cross and Circle follow the console's own convention as configured on the
+ * device: Cross = cancel/back, Circle = confirm. Getting this backwards makes
+ * every menu feel wrong, so it is stated explicitly rather than inferred.
+ */
+
+#define VITA_PAD_TRIANGLE  0
+#define VITA_PAD_CIRCLE    1
+#define VITA_PAD_CROSS     2
+#define VITA_PAD_SQUARE    3
+#define VITA_PAD_L         4
+#define VITA_PAD_R         5
+#define VITA_PAD_DOWN      6
+#define VITA_PAD_LEFT      7
+#define VITA_PAD_UP        8
+#define VITA_PAD_RIGHT     9
+#define VITA_PAD_SELECT   10
+#define VITA_PAD_START    11
+
+/* How far the analog stick must move before it counts as a press. */
+#define VITA_AXIS_DEADZONE 0x4000
+
+/*
+ * Character-select overrides.
+ *
+ * Every menu confirms on any A..Z bit of `screen->input`
+ * (SCREEN_IN_BUTTONS = 0x7F0), so a pad button cannot mean two things while it
+ * stays in joy_keys. Rather than weaken the fight bindings, the four buttons in
+ * question are handled per screen:
+ *
+ *   in the character select   Cross and Square emit Escape (back), L and R emit
+ *                             nothing, and Pads_HandleEvent is skipped for them
+ *                             so they contribute no A..Z bit and cannot also
+ *                             confirm;
+ *   anywhere else             nothing changes: the pad channel supplies them
+ *                             exactly as configured, so A/X/Y/Z all work in a
+ *                             fight.
+ *
+ * Skipping the pad event is what makes "back" unambiguous: without it the press
+ * would both leave the screen and confirm whatever was under the cursor.
+ */
+static int VitaInput_InCharSelect(void)
+{
+    return g_game != NULL && g_game->screen_kind == 2;
+}
+
+static int VitaInput_PadOverridden(int button)
+{
+    if (!VitaInput_InCharSelect()) {
+        return 0;
+    }
+    return button == VITA_PAD_CROSS || button == VITA_PAD_SQUARE || button == VITA_PAD_L ||
+           button == VITA_PAD_R;
+}
+
+static int g_vitaAxisX;   /* analog X direction currently held: -1, 0, 1 */
+static int g_vitaAxisY;
+static unsigned char g_vitaKeyLogged[16];   /* buttons whose mapping has been logged */
+
+/* The keyboard key a pad button stands for, or 0 for none. */
+static int VitaInput_KeyForButton(int button)
+{
+    switch (button) {
+    case VITA_PAD_CIRCLE:
+        /*
+         * The built-in "C" key (SDLK_SLASH, 47), not Return.
+         *
+         * The two screens accept different masks. The title screen uses
+         * TITLE_IN_BUTTONS (0xFF0), so any button bit confirms -- Return's
+         * KEY_START (0x400) included. The character select instead has explicit
+         * branches for 0x010..0x200 only, with no case for 0x400:
+         *
+         *     if (input & 0x010) result = 0;   // A
+         *     ...
+         *     if (input & 0x200) result = 5;   // Z
+         *
+         * In the original, Start is a *modifier* there (palettes 7..12), not an
+         * accept. So Circle emitting Return confirmed the mode select and did
+         * nothing in the character grid, which is exactly the reported symptom.
+         *
+         * Emitting C gives 0x040, which both masks accept, and matches the
+         * conventional pad layout (Square/Triangle/Circle/Cross = A/B/C/X), so
+         * Circle is also the C attack in a fight.
+         */
+        return SDLK_SLASH;
+    case VITA_PAD_START:
+        return SDLK_RETURN;
+    case VITA_PAD_CROSS:
+    case VITA_PAD_SQUARE:
+        /*
+         * Back, in the character select only.
+         *
+         * SDLK_ESCAPE is the engine's cancel key and the only way to leave a
+         * screen: Screen_ReadInput sets `screen->done = 1` on 27. Everywhere
+         * else these buttons return 0 here and fall through to the pad channel,
+         * which still supplies Cross = X and Square = A in a fight.
+         */
+        return VitaInput_InCharSelect() ? SDLK_ESCAPE : 0;
+    case VITA_PAD_SELECT:
+        /*
+         * Cancel/back lives on Select, not Cross.
+         *
+         * M.U.G.E.N has no "back" key: Escape is the cancel key, and on the
+         * title screen `Title_Update` turns Escape into "choose Exit" --
+         *
+         *     if (key == SDLK_ESCAPE || g_quitRequested) {
+         *         st->item = TITLE_ITEM_EXIT;
+         *
+         * so mapping Cross to Escape made Cross quit the game from the mode
+         * select, which is worse than having no cancel button there. Cross is
+         * the X attack in a fight, and it stays unbound in menus.
+         */
+        return SDLK_ESCAPE;
+    case VITA_PAD_UP:
+        return SDLK_UP;
+    case VITA_PAD_DOWN:
+        return SDLK_DOWN;
+    case VITA_PAD_LEFT:
+        return SDLK_LEFT;
+    case VITA_PAD_RIGHT:
+        return SDLK_RIGHT;
+    default:
+        /*
+         * Triangle, Square and L/R are unbound.
+         *
+         * Triangle used to map to F1, which opens the title screen's info box.
+         * That was removed on request: on a console the info panel interrupts
+         * the mode select, and the flag that opens it ([Config] FirstRun) is
+         * now packed as 0 as well. Square and L/R have no menu function in
+         * M.U.G.E.N at all; binding something arbitrary is worse than leaving
+         * them inert. All four still work in a fight (A/B/Y/Z) through the
+         * joystick bindings in src/config.c.
+         */
+        return 0;
+    }
+}
+
+/* One axis of the analog stick as a direction, edge triggered. */
+static void VitaInput_SetAxis(int *held, int value, int negative, int positive)
+{
+    int dir = 0;
+
+    if (value < -VITA_AXIS_DEADZONE) {
+        dir = -1;
+    } else if (value > VITA_AXIS_DEADZONE) {
+        dir = 1;
+    }
+    if (dir != *held) {
+        if (*held == -1) {
+            Keyboard_HandleKey(negative, 0);
+        } else if (*held == 1) {
+            Keyboard_HandleKey(positive, 0);
+        }
+        if (dir == -1) {
+            Keyboard_HandleKey(negative, 1);
+        } else if (dir == 1) {
+            Keyboard_HandleKey(positive, 1);
+        }
+        *held = dir;
+    }
+}
+
+/* Turns a joystick event into keyboard events. */
+static void VitaInput_TranslateEvent(const SDL_Event *ev)
+{
+    switch (ev->type) {
+    case SDL_JOYBUTTONDOWN:
+    case SDL_JOYBUTTONUP: {
+        int button = ev->jbutton.button;
+        int pressed = ev->type == SDL_JOYBUTTONDOWN;
+        int key = VitaInput_KeyForButton(button);
+
+        /* Log each button's key once, so mugen.log shows that the bridge
+         * actually fired for a given button rather than leaving "the button
+         * does nothing" to guesswork. */
+        if (pressed && button >= 0 && button < (int)sizeof(g_vitaKeyLogged) && g_vitaKeyLogged[button] == 0) {
+            g_vitaKeyLogged[button] = 1;
+            Log_Printf("pad: button %d -> key %d\n", button, key);
+        }
+        if (key != 0) {
+            Keyboard_HandleKey(key, pressed);
+        }
+        break;
+    }
+    case SDL_JOYAXISMOTION:
+        /* Axes 0 and 1 are the left stick (LX, LY). The right stick, 2 and 3,
+         * is left alone: it has no menu meaning and would only fight the
+         * player's thumb on the left stick. */
+        if (ev->jaxis.axis == 0) {
+            VitaInput_SetAxis(&g_vitaAxisX, ev->jaxis.value, SDLK_LEFT, SDLK_RIGHT);
+        } else if (ev->jaxis.axis == 1) {
+            VitaInput_SetAxis(&g_vitaAxisY, ev->jaxis.value, SDLK_UP, SDLK_DOWN);
+        }
+        break;
+    default:
+        break;
+    }
+}
+#endif /* MUGEN_VITA_GL */
+
 /* 0x0046B210: handles every pending SDL event. */
 void Events_Poll(void)
 {
@@ -17,6 +241,25 @@ void Events_Poll(void)
 
     while (SDL_PollEvent(&ev)) {
         switch (ev.type) {
+#ifdef ANDROID_PORT
+        /*
+         * Android port: SDL_ACTIVEEVENT is gone. SDL2 reports the same thing as
+         * SDL_APP_WILLENTERBACKGROUND / SDL_APP_DIDENTERFOREGROUND /
+         * SDL_APP_TERMINATING. Only the focus callback and the mod-state refresh
+         * are reproduced; SDL_ShowCursor has no meaning on a touch device.
+         */
+        case SDL_APP_WILLENTERBACKGROUND:
+            if (g_onActivate != NULL) {
+                g_onActivate(0);
+            }
+            break;
+        case SDL_APP_DIDENTERFOREGROUND:
+            g_keyModState = SDL_GetModState();
+            if (g_onActivate != NULL) {
+                g_onActivate(1);
+            }
+            break;
+#else
         case SDL_ACTIVEEVENT:
             if (ev.active.state & SDL_APPINPUTFOCUS) {
                 int gain = ev.active.gain;
@@ -29,28 +272,65 @@ void Events_Poll(void)
                 }
             }
             break;
+#endif
         case SDL_KEYDOWN:
         case SDL_KEYUP:
             Keyboard_HandleKey(ev.key.keysym.sym, ev.type == SDL_KEYDOWN);
             if (g_keyEventHandler != NULL) {
+#ifdef ANDROID_PORT
+                /*
+                 * Android port: SDL2 moved the unicode character out of
+                 * SDL_Keysym into the SDL_TextInputEvent, and SDL_KEYDOWN no
+                 * longer carries it. The console is the only consumer, and it
+                 * is unreachable on a device (keyboard-driven), so 0 is passed
+                 * rather than synthesising a text-input path nothing uses.
+                 */
+                g_keyEventHandler(0, ev.key.keysym.sym, ev.type == SDL_KEYDOWN);
+#else
                 /* The original passes the dword at the unicode field, padding included. */
                 unsigned int unicode;
                 memcpy(&unicode, &ev.key.keysym.unicode, sizeof(unicode));
                 g_keyEventHandler(unicode, ev.key.keysym.sym, ev.type == SDL_KEYDOWN);
+#endif
             }
             break;
         case SDL_JOYAXISMOTION:
         case SDL_JOYHATMOTION:
+            Pads_HandleEvent(&ev);
+#ifdef MUGEN_VITA_GL
+            VitaInput_TranslateEvent(&ev);
+#endif
+            break;
         case SDL_JOYBUTTONDOWN:
         case SDL_JOYBUTTONUP:
-            Pads_HandleEvent(&ev);
+#ifdef MUGEN_VITA_GL
+            /*
+             * PS Vita port: in the character select, Cross/Square are "back" and
+             * L/R do nothing, so their pad code is withheld -- otherwise the
+             * A..Z bit they carry would confirm as well. See
+             * VitaInput_PadOverridden.
+             */
+            if (!VitaInput_PadOverridden(ev.jbutton.button))
+#endif
+            {
+                Pads_HandleEvent(&ev);
+            }
+#ifdef MUGEN_VITA_GL
+            /* PS Vita port: the pads also drive the keyboard menus; see the
+             * VitaInput_TranslateEvent comment at the top of this file. */
+            VitaInput_TranslateEvent(&ev);
+#endif
             break;
         case SDL_QUIT:
             g_quitRequested = 1;
             break;
+#ifndef ANDROID_PORT
+        /* Android has no resizable window: SDL_VIDEORESIZE does not exist and
+         * the surface size is fixed by SetVideoMode. */
         case SDL_VIDEORESIZE:
             Video_OnResize(ev.resize.w, ev.resize.h);
             break;
+#endif
         }
     }
 }
