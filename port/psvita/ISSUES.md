@@ -492,7 +492,15 @@ API names: disassembling the driver, reading vitaGL's source, and putting the
 
 ## OPEN — presentation cost
 
-45 fps at 480×272 with the upscale, `tick 60/s`, so the engine is fine and
-presentation is ~20 ms short. The `per frame: scale … ms, flip … ms` line is the
-measurement that decides whether to optimise the copy or accept a smaller render
-size; that data has not been collected from a match yet.
+45 fps at 480×272 with the upscale. That is ~22.22 ms per frame against a
+16.67 ms budget at 60 Hz: a **5.56 ms** gap, not ~20 ms as previously written.
+`tick 60/s` alone does not locate the bottleneck either: the engine can hold
+its tick while skipping rendering through `Frame_UpdateSkip`, so a steady
+tick with a low frame count says nothing about where the missing
+milliseconds go.
+
+The `per frame: scale … ms, flip … ms` line from a match is the measurement that
+decides whether to optimise the copy or accept a smaller render size; that
+data has not been collected from a match yet. When it is, report logic,
+raster/upload, present/wait separately with medians and frame-time
+distributions -- not a single FPS number, and not an inferred deficit.
