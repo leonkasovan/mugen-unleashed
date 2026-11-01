@@ -143,9 +143,29 @@ void Error_Exit(void)
         Log_Close();
         g_log = NULL;
     }
+#ifdef MUGEN_VITA_GL
+    /*
+     * PS Vita port (port/psvita): skip the teardown.
+     *
+     * GameVars_Free assumes a fully initialised game, and Error_Exit frequently
+     * runs because start-up did NOT get that far: a rejected video mode, a
+     * missing font. Match_FreeAssets dereferences g_game->palgroups, which only
+     * GameVars_Init allocates -- and GameVars_Init runs *after* video and font
+     * setup. The cleanup therefore faulted on a NULL, so the process died with
+     * SIGSEGV while reporting the error, and the message never reached the
+     * user (the console only ever showed C2-12828-1 with PC in Match_FreeAssets).
+     *
+     * exit(1) follows immediately and the OS reclaims the process, so nothing
+     * is leaked that matters. Windows and Linux keep the original order, where
+     * this is reachable only after a successful start-up.
+     */
+    SDL_Quit();
+    exit(1);
+#else
     GameVars_Free();
     SDL_Quit();
     exit(1);
+#endif
 }
 
 #ifdef _WIN32
@@ -238,6 +258,39 @@ int Error_ShowDialog(const char *text, const char *title)
     data.title = title;
     DialogBoxParamA(GetModuleHandleA(NULL), MAKEINTRESOURCEA(ERROR_DIALOG_ID), parent, ErrorDialog_Proc,
                     (LPARAM)&data);
+    return 0;
+#elif defined(ANDROID_PORT)
+    /*
+     * Android port: report through logcat.
+     *
+     * There is no stderr to read on a device (stdout/stderr go nowhere unless a
+     * developer attaches `adb logcat`), so writing the message to SDL's stream
+     * was as invisible here as it was on the Vita -- the exact failure this
+     * #elif chain exists to avoid on each target. __android_log_print reaches
+     * `adb logcat -s mugen`.
+     */
+    {
+        extern int __android_log_print(int prio, const char *tag, const char *fmt, ...);
+        __android_log_print(6 /* ANDROID_LOG_ERROR */, "mugen", "error: %s",
+                            (text != NULL && text[0] != '\0') ? text
+                            : (title != NULL ? title : "(no message)"));
+    }
+    return 0;
+#elif defined(MUGEN_VITA_GL)
+    /*
+     * PS Vita port (port/psvita): there is no console and no stderr to read, so
+     * an error that only went to stderr was completely invisible -- it looked
+     * like a silent crash, or like nothing happening at all. SDL's Vita backend
+     * exposes the system message box; show the text there instead.
+     *
+     * Same text as the original dialog, different presentation -- the same
+     * trade-off already recorded for the Linux build below.
+     */
+    if (text != NULL && text[0] != '\0') {
+        SDL_VITA_ShowMessageBox(text);
+    } else if (title != NULL && title[0] != '\0') {
+        SDL_VITA_ShowMessageBox(title);
+    }
     return 0;
 #else
     /*
