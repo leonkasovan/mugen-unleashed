@@ -11,7 +11,7 @@ The repository already has an Android port that uses SDL2. Treat it as a source 
 - The desktop engine is a C reconstruction of the original 32-bit Windows executable. It uses SDL 1.2 and SDL add-ons, with MSVC/CMake and MinGW/Make build paths.
 - `src/sdlmain.c` contains the reconstructed SDL 1.2 `SDLmain` behavior. SDL2's `SDL_main` is optional and has a different role; review this file and the entry point before deciding whether to retain, replace, or bypass it.
 - Existing Linux, Windows, and Android ports mean the migration should be isolated behind a small platform layer or compile-time backend selection. Avoid broad changes to engine logic and reconstructed data structures.
-- Rendering uses legacy OpenGL (GL 2.1 compatibility behavior per the Makefile), so use SDL2 windows plus an OpenGL context and retain the existing GL renderer. Do not switch to SDL_Renderer as part of the initial migration.
+- Rendering has both System/software and legacy OpenGL paths. Preserve both. Use an SDL2 window and GL context for GL; retain CPU surfaces for System and choose one explicit presentation backend for it.
 - SDL2 has separate versioned add-ons (SDL2_gfx, SDL2_mixer, SDL2_ttf, etc.). Verify exact API and ABI requirements for every linked library and the compatibility shim `src/sdlmixercompat.c`.
 
 ## Recommended implementation sequence
@@ -52,7 +52,7 @@ Update mouse coordinate mapping for window scaling and high-DPI output. Migrate 
 
 SDL2 keeps surfaces but changes video presentation. Identify whether the desktop path draws into software surfaces before uploading/drawing through OpenGL. Replace SDL 1.2 screen-surface assumptions with an SDL2 window/context presentation path; preserve pixel format, pitch, palette/colorkey/alpha semantics, and locking behavior for off-screen surfaces.
 
-Prefer the existing OpenGL renderer for presentation. Do not mix SDL_Renderer presentation with direct OpenGL rendering in the first port. Verify SDL_gfx calls against SDL2_gfx equivalents and preserve their rasterization results.
+For GL modes, retain the existing OpenGL renderer. For System mode, retain CPU rasterization and present through a dedicated streaming texture/SDL_Renderer or a window-surface backend. Select and validate one System presentation strategy; never use SDL_Renderer and direct GL on the same window. Verify SDL_gfx calls against SDL2_gfx equivalents and preserve their rasterization results.
 
 ### 6. Port audio and add-ons
 
@@ -93,3 +93,138 @@ Only make SDL2 the default after both build systems pass and the behavior compar
 - [SDL2 video API](https://wiki.libsdl.org/SDL2/CategoryVideo)
 - [SDL2 OpenGL support](https://wiki.libsdl.org/SDL2/CategorySDLVideo)
 - Repository Android port: `port/android/` (SDL2-based; consult as implementation evidence)
+
+
+## Source validation and implementation detail (2026-11-01)
+
+This revision is based on direct inspection of the current sdl2 branch: AGENTS.md, Makefile, CMakeLists.txt, src/{gfx,font,video,keyboard,events,pads,sound,sdlmixercompat,bgm,bgmplugins,bgmthread,stream,mugen}.{c,h} where applicable, and Android's android_gfx.c. This is a source review, not proof that an SDL2 desktop build works. No engine build or runtime tests were performed for this documentation change. Read the source again before implementation because the branch is active.
+
+AGENTS.md requires preserving reconstructed behavior, address annotations, and floating-point rules. Its initial x86-only statement conflicts with its later Linux instructions and the current Makefile; keep Windows i686 as the reference and validate existing Linux targets independently. SDL2 dependencies are explicitly within this migration's requested scope. Preserve the current SDL1 build and platform ports during rollout.
+
+### Corrected conclusions
+
+1. System/software rendering is real: src/video.c creates software/video surfaces and src/gfx.c blits, updates, and flips them. A GL-only migration would remove supported behavior.
+2. SDL_gfx is not being used here as a general drawing renderer. The inspected gfx.c and font.c call zoomSurface with smooth=0. SDL2_gfx's surface rotozoom API is relevant; its SDL_Renderer primitive API is not a reason to rewrite this engine.
+3. Android already contains SDL2-specific handling in shared source. Separate SDL version checks from Android lifecycle checks; desktop SDL2 must not inherit mobile-only omissions.
+4. Android's android_gfx.c claim that there is no SDL2_gfx port is incorrect: upstream publishes SDL2_rotozoom.c. Its replacement must be treated as an unvalidated alternative, not a pixel-equivalent implementation.
+5. Music has two paths: SDL_mixer music in bgmplugins.c and a ring-buffer custom music hook in bgmthread.c. Both must be tested.
+6. The Makefile has evolved since the earlier review: platform-aware toolchain/library checks are present. Do not carry old review findings forward without checking current code.
+
+### File and work map
+
+| Files | Observed integration | Required work |
+|---|---|---|
+| src/video.c, src/gfx.c, src/softrender.c, src/glrender.c | Software surfaces plus GL presentation | Separate window ownership, software framebuffer and GL context; preserve renderer selection |
+| src/font.c, src/font.h | TTF font handles, measurement, solid/blended rendering, surface scaling | Use SDL2_ttf headers; validate metrics, alpha and surface ownership |
+| src/gfx.c, src/font.c | zoomSurface, externally declared | Link SDL2_gfx rotozoom or adopt a proven equivalent; eliminate conflicting declarations |
+| src/sound.c, src/sdlmixercompat.c | Channel effects, WAV conversion, custom QuerySpecEx | Handle obtained audio format, chunk-size contract and ownership explicitly |
+| src/bgmplugins.c | SDL_mixer music, completion hook, seeking | Port RWops ownership and callback lifecycle; validate MOD/MIDI behavior |
+| src/bgmthread.c | Mix_HookMusic, ring buffer, SDL_LockAudio | Validate callback byte length and synchronization with the chosen mixer version |
+| src/stream.c | Custom RWops and Android widened adapters | Supply SDL2 size callback, bounds checks and correct seek/read/write signatures |
+| src/events.c, src/keyboard.c, src/pads.c | Legacy key arrays and joystick indexing | Translate SDL2 keys and instance IDs; preserve saved controls |
+| src/sdlmain.c, src/mugen.h, cmake/MugenSdk.cmake, Makefile | Legacy startup/header/link assumptions | Isolate SDL major version; avoid SDK SDL1 headers and Elecbyte SDL1 DLL imports |
+
+### SDL_gfx: choose surface scaling deliberately
+
+Recommended first implementation: use SDL2_gfx's zoomSurface from SDL2_rotozoom.h for SDL2 builds. Keep a narrow engine wrapper if needed so dependency details do not spread. Confirm the exact exported signature and Windows calling convention against the selected headers; do not retain handwritten extern declarations alongside incompatible headers.
+
+Inventory every zoomSurface use, including platform-conditional fallbacks. In font.c, scaled text is blitted and then freed. In gfx.c the inspected additional scaling use is a Vita fallback. Keep platform conditions intact rather than adding a desktop dependency solely because a Vita-only call exists.
+
+Before accepting SDL2_gfx, compare it with the original SDL_gfx on:
+- indexed 8-bit surfaces with nontrivial palettes and transparent index;
+- 16-bit inputs that the library may convert, and 32-bit RGBA inputs;
+- fractional scale factors, odd dimensions, 1-pixel sizes, enlargement and reduction;
+- color keys, per-surface alpha, per-pixel alpha, and clip rectangles;
+- output dimensions, palette, pitch, pixel format and actual pixel content.
+
+Do not assume output always retains the source format or that dimensions are simply truncated. Inspect upstream zoomSurfaceSize/zoomSurface behavior and compare against the old dependency.
+
+Android's implementation currently truncates dimensions, rejects nonpositive factors, uses SDL_BlitScaled, copies palettes/color keys, but does not explicitly restore alpha modulation/blend mode on the destination. Scaling through a blitter can blend during transformation rather than merely copy source pixels, and indexed formats need specific support checks. These are review risks, not runtime failures proven here. Reuse only after differential images pass. If choosing a small local implementation instead of SDL2_gfx, document supported inputs and ownership and justify it with those comparisons.
+
+### SDL_ttf: preserve layout and compositing
+
+Observed calls in font.c include TTF_OpenFont, TTF_CloseFont, TTF_FontAscent, TTF_SizeUTF8, TTF_RenderUTF8_Solid and TTF_RenderUTF8_Blended. Font handles are already opaque in font.h.
+
+Work items:
+1. Link SDL2_ttf and compile all consumers against its headers. Locate initialization/TTF_Quit ownership and make failure cleanup symmetric.
+2. Set SDL_Color alpha explicitly for SDL2, normally 255 for the existing opaque foreground intent. Review the Android conditional around color initialization; do not copy SDL1 padding assumptions.
+3. Retain UTF-8 and existing newline/space handling. Keep font size, baseline/ascent adjustment, scale and rounding order.
+4. Test solid text's indexed/color-key output and blended text's alpha output through both Surface_ToRGBA32/GL upload and direct software blits. Review video.c's Android alpha/blend save/restore path for reuse under an SDL-version condition.
+5. Compare TTF_SizeUTF8 metrics and rendered placement before considering optimizations. SDL2_ttf/FreeType versions and optional shaping features can change glyph pixels and widths. Pin the actual dependency versions and record any accepted differences.
+6. Keep bitmap/SFF fonts working independently. Do not introduce an atlas/cache refactor in the initial migration.
+
+Acceptance: title/menu/console text and scaled TrueType text retain baseline, clipping, spacing, alignment and transparency in both rendering modes. Include ASCII, multibyte UTF-8, spaces, empty strings, missing glyphs, solid/blended modes, and failed font loads. Free every successful rendered surface exactly once; do not silently change documented original error quirks.
+
+### SDL_mixer: effects, streamed music and RWops
+
+Effects in sound.c:
+- Mix_OpenAudio requests AUDIO_S16LSB, a configured rate/channel count and g_sndChunkSize.
+- Mix_QuerySpecEx updates the engine's audio format.
+- Mix_AllocateChannels, Mix_PlayChannelTimed, Mix_Volume, Mix_SetPanning, Mix_Playing and Mix_HaltChannel implement effect slots.
+- WAV input uses Mix_LoadWAV_RW; the custom resample path uses Mix_QuickLoad_RAW and application-managed buffers.
+
+Preserve slot/channel mapping, reserved channels, percentage-to-volume rounding, panning and looping. Do not confuse output channel count with allocated effect channels. Trace chunk->allocated and buffer cleanup around Mix_QuickLoad_RAW/Mix_FreeChunk to prevent leaks or double frees.
+
+QuerySpecEx is an Elecbyte extension, not a stock SDL2_mixer API. Compile the local adapter for every SDL2 target, including CMake, instead of importing the original DLL symbol. Mix_QuerySpec reports rate/format/channels but not callback size. The current shim echoes g_sndChunkSize; that does not establish the device's actual callback length. Audit all chunk-size consumers, drive callback processing from its len argument, and label the request separately from observed callback lengths. Do not claim logs alone prove callback-size equivalence. Check the query return value and all unsupported output formats.
+
+Music in bgmplugins.c:
+- The inspected sdlmix path refuses WAV/MP3/OGG and routes tracker/MIDI through SDL_mixer; inspect the surrounding plugin dispatch before changing codec routing.
+- Reuse SDL2's Mix_LoadMUS_RW(rw, freesrc) signature, but trace success and failure lifetimes. Streaming music may retain the RWops until Mix_FreeMusic. Ensure the underlying Stream outlives it and close/free exactly once.
+- Preserve existing repeat, pause/resume, seek, rewind, volume and finished-hook behavior, including intentional quirks.
+- Pin codec backends and MIDI configuration/SoundFont requirements. A linked library alone does not guarantee MOD/MIDI playback is usable.
+
+Custom streaming in bgmthread.c:
+- Mix_HookMusic replaces normal mixer music while effect chunks still mix afterward. Preserve transitions between custom BGM and sdlmix; unregister hooks before destroying callback state.
+- Inspect BgmThread_MixCallback and fully fill every supplied byte, including short reads, empty ring buffer, end-of-stream and pause. Use silence appropriate to the obtained audio format.
+- Retain a single mixer-owned output device. Do not open a second SDL device just to obtain a device ID.
+- Review SDL_LockAudio usage against the selected SDL2_mixer implementation; choose its documented compatible synchronization or an engine-owned nonblocking handoff. Avoid recursive audio locks, blocking I/O, allocation and thread joins inside callbacks.
+- Order shutdown so workers stop, hooks detach under safe synchronization, callback users quiesce, and buffers/music/device resources are freed safely.
+
+RWops in stream.c:
+- Existing SDL2 adapters widen callback signatures; audit narrowing conversions to the engine's int-based stream API.
+- Implement rw->size where required, reject offsets/count multiplication beyond representable limits, and return item counts, not bytes, from read/write.
+- Distinguish SDL_FreeRW (wrapper only) from SDL_RWclose (close callback plus wrapper ownership). Validate EOF, seek failure and truncated streams.
+
+Acceptance: overlap effects and each BGM path; exercise volume/pan/mute, repeated play/stop, loop boundaries, seek, pause/resume, focus changes, malformed WAVs, missing codecs and clean shutdown. Verify both SDL resampling and custom libresample modes. Capture PCM or loopback output in addition to logs; logs cannot demonstrate audio equivalence.
+
+### Video/input blockers and implementation decisions
+
+Keep 640x480 as the handheld acceptance mode; do not silently change its physical output size. Preserve other existing desktop configuration choices. Separate logical size, window size and GL drawable size.
+
+For System mode, first retain CPU surfaces and choose a window-surface update backend for minimum implementation complexity, or a streaming texture backend if scaling is required. If selecting textures, keep the CPU framebuffer owned by the engine, respect pitch during upload and use explicit scaling/filtering. GL and System windows must have separate creation/presentation rules; recreate resources deliberately when switching modes.
+
+Do not put SDL2 objects inside reconstructed structures at assumed SDL1 offsets. Audit sizeof(SDL_Surface), SDL_Rect field widths, surface flag tests and direct SDL_PixelFormat field accesses. Keep SDL_Window/SDL_GLContext in platform-owned state.
+
+events.c currently sends SDL key symbols directly to Keyboard_HandleKey. SDL2 special keycodes are large values; feeding them into legacy key arrays can corrupt memory. Use explicit SDL2-to-engine legacy key translation for events, bindings and focus-state refresh. keyboard.c's Android scancode adaptation is useful evidence but does not prove all special keys are translated. Implement text-input handling for the desktop console rather than Android's zero-Unicode placeholder. Preserve independent key repeat policy for gameplay and text entry.
+
+pads.c must map SDL_JoystickID to engine slots, not use the instance ID as an array index. Preserve existing axis/hat/button numbering and four-pad limits. Keep the joystick API initially; GameController mapping is optional later work.
+
+### Build integration and staged acceptance gates
+
+Proposed options (not implemented): SDL_BACKEND=1|2 for Make and MUGEN_SDL_MAJOR=1|2 for CMake. Include the backend in output/object directories so flag changes cannot reuse incompatible objects.
+
+SDL2 pkg-config candidates: sdl2 SDL2_ttf SDL2_mixer SDL2_gfx plus existing zlib/libpng. Verify names for the selected distribution. Preserve static transitive dependency discovery on MinGW and shared dependencies on Linux. Remove SDL1 headers/import definitions from the SDL2 include/link path without losing unrelated SDK headers. Keep a separate SDL2 startup/manifest path and ensure Elecbyte.MUGEN.libs is not required by it. Record exact package versions and verify produced DLL dependencies. No SDL_image addition is needed solely for this work: current PNG handling already uses libpng.
+
+| Stage | Deliverable | Exit gate |
+|---|---|---|
+| 0 | Frozen SDL1 reference commit, compiler/dependency versions and same game-data/config fixtures | Baseline logs, screenshots and audio captured |
+| 1 | Backend build switch, headers, entry point, structs/RWops adapters | SDL1 still builds; SDL2 compiles/links without SDL1 ABI imports |
+| 2 | System and GL windows/presentation | Both render title/select/fight at 640x480; screenshots and fullscreen/focus checks pass |
+| 3 | Key/text/joystick adaptation | Existing bindings work; no out-of-range key/instance indexing |
+| 4 | zoomSurface and TrueType integration | Scaling fixtures and font layout/compositing comparisons pass |
+| 5 | Effects, sdlmix music and custom stream hook | Audible/PCM checks and lifetime/underrun tests pass |
+| 6 | Windows MSVC/MinGW, Linux and existing port regression checks | Debug/release comparisons pass; differences documented |
+| 7 | Make SDL2 default in a separate change | Review accepted; SDL1 rollback instructions retained |
+
+Use tools/compare_logs.py for normalized logs with matched durations/configuration. Run -nosound scenarios for deterministic engine comparison, then separate sound-enabled scenarios. Include -nomusic, absent audio device, bad character/font/music input, repeated restart, and mode switching. Use available sanitizers for adapter bounds/lifetime checks without treating sanitizer timing as a performance reference. Put artifacts under project build/ per AGENTS.md. Do not delete user game data or existing logs.
+
+Release blockers: corrupted key indexing, unsafe callback teardown, mixed SDL1/SDL2 ABI, broken System renderer, altered palette/alpha behavior, or unapproved font/audio differences. Retain the SDL1 build and a baseline commit for rollback. Effort depends on how much Android adaptation can be generalized; no delivery date is promised before stages 1–2 resolve these risks.
+
+### Additional primary references
+
+- [SDL2_gfx surface rotozoom implementation/API](https://www.ferzkopp.net/Software/SDL2_gfx/Docs/html/_s_d_l2__rotozoom_8c.html)
+- [SDL2_ttf solid UTF-8 rendering](https://wiki.libsdl.org/SDL2_ttf/TTF_RenderUTF8_Solid)
+- [SDL2_ttf blended UTF-8 rendering](https://wiki.libsdl.org/SDL2_ttf/TTF_RenderUTF8_Blended)
+- [SDL2_mixer audio format query](https://wiki.libsdl.org/SDL2_mixer/Mix_QuerySpec)
+- [SDL2_mixer custom music hook](https://wiki.libsdl.org/SDL2_mixer/Mix_HookMusic)
+- [SDL2_mixer device opening and format changes](https://wiki.libsdl.org/SDL2_mixer/Mix_OpenAudioDevice)
