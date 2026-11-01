@@ -20,6 +20,9 @@
 
 #include "mugen.h"
 
+/* SDL_gfx, as in src/font.c: the header is not in the SDK. */
+extern SDL_Surface *__cdecl zoomSurface(SDL_Surface *src, double zoomx, double zoomy, int smooth);
+
 #define GL_FRAMEBUFFER_EXT 0x8D40
 
 /* Sprite slot `index` of a sprite set, as the original computes it (no bounds check). */
@@ -163,12 +166,15 @@ int Gfx_SetRenderTarget(SpriteSet *target, int index)
         g_targetPixels = 0;
         g_targetBytesPerPixel = g_videoBytesPerPixel;
         g_clipRowSkip = 0;
+#ifndef ANDROID_PORT
+        /* Android port: no GL renderer is compiled in, so these cannot run. */
         if (g_renderMode == RENDER_OPENGL && changed) {
             g_glewBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
             g_glBoundFramebuffer = 0;
             glViewport(0, 0, g_videoWidth, g_videoHeight);
             Gl_SetupView();
         }
+#endif
         Gfx_SetClipRect(0, 0, g_targetWidth, g_targetHeight);
         return 1;
     }
@@ -292,6 +298,117 @@ static void Gfx_PresentGlScreen(const SDL_Surface *surface)
  * surface when double buffered. w and h are only used by the OpenGL
  * renderer's version.
  */
+#ifdef MUGEN_VITA_GL
+/*
+ * Scales src into dst for the PS Vita port, writing pixels directly.
+ *
+ * Three paths: an exact 2x uint16 fast path (the default 480x272 -> 960x544),
+ * a general nearest-neighbour path using a cached integer column map, and
+ * zoomSurface for anything the first two cannot express (differing pixel
+ * formats). The column map is rebuilt only when the sizes change.
+ *
+ * Nearest neighbour is the right filter here: the default scale is an exact
+ * integer, where any smoothing would only cost time and soften the image.
+ */
+static void Vita_ScaleToVideo(SDL_Surface *src, SDL_Surface *dst)
+{
+    static int *xmap;
+    static int xmap_w;
+    static int xmap_sw;
+
+    int sw = src->w;
+    int sh = src->h;
+    int dw = dst->w;
+    int dh = dst->h;
+    int bpp = src->format->BytesPerPixel;
+    int y;
+    Uint8 *dbase = (Uint8 *)dst->pixels;
+
+    /* Formats must agree for a direct copy; otherwise let SDL_gfx convert. */
+    if (src->format->BitsPerPixel != dst->format->BitsPerPixel || bpp < 1 || bpp > 4 ||
+        dbase == NULL || src->pixels == NULL) {
+        SDL_Surface *zoomed = zoomSurface(src, (double)dw / (double)sw, (double)dh / (double)sh, 0);
+
+        if (zoomed != NULL) {
+            SDL_Rect full;
+            full.x = 0;
+            full.y = 0;
+            full.w = 0;
+            full.h = 0;
+            SDL_UpperBlit(zoomed, NULL, dst, &full);
+            SDL_FreeSurface(zoomed);
+        }
+        return;
+    }
+
+    /*
+     * Exact 2x, 16-bit: duplicate each pixel horizontally, each row vertically.
+     *
+     * One 32-bit store per source pixel rather than two 16-bit stores -- the
+     * duplicated pair is a single word (c | c << 16) -- and the second output
+     * row is a row copy. This matters because the video surface's pixels are
+     * GPU-mapped memory (gxm_init allocates it with
+     * vita_gpu_alloc_mapped_aligned), so store count and coalescing cost more
+     * here than they would in ordinary cached RAM.
+     */
+    if (dw == sw * 2 && dh == sh * 2 && bpp == 2) {
+        const Uint8 *sbase = (const Uint8 *)src->pixels;
+        Uint8 *row = dbase;
+        const size_t dstride = (size_t)dst->pitch;
+
+        for (y = 0; y < sh; y++) {
+            const Uint16 *s = (const Uint16 *)(sbase + (size_t)y * src->pitch);
+            Uint32 *d0 = (Uint32 *)row;
+            int x;
+
+            for (x = 0; x < sw; x++) {
+                Uint32 c = s[x];
+                d0[x] = c | (c << 16);
+            }
+            memcpy(row + dstride, row, (size_t)dw * 2);
+            row += dstride * 2;
+        }
+        return;
+    }
+
+    /* General nearest neighbour with a cached column map. */
+    if (xmap == NULL || xmap_w != dw || xmap_sw != sw) {
+        if (xmap != NULL) {
+            free(xmap);
+        }
+        xmap = malloc((size_t)dw * sizeof(int));
+        if (xmap == NULL) {
+            xmap_w = 0;
+            return;
+        }
+        for (y = 0; y < dw; y++) {
+            xmap[y] = y * sw / dw;
+        }
+        xmap_w = dw;
+        xmap_sw = sw;
+    }
+    for (y = 0; y < dh; y++) {
+        const Uint8 *s = (const Uint8 *)src->pixels + (size_t)(y * sh / dh) * src->pitch;
+        Uint8 *d = dbase + (size_t)y * dst->pitch;
+        int x;
+
+        if (bpp == 2) {
+            for (x = 0; x < dw; x++) {
+                ((Uint16 *)d)[x] = ((const Uint16 *)s)[xmap[x]];
+            }
+        } else if (bpp == 4) {
+            for (x = 0; x < dw; x++) {
+                ((Uint32 *)d)[x] = ((const Uint32 *)s)[xmap[x]];
+            }
+        } else {
+            for (x = 0; x < dw; x++) {
+                memcpy(d + (size_t)x * bpp, s + (size_t)xmap[x] * bpp, (size_t)bpp);
+            }
+        }
+    }
+}
+#endif
+
 void Gfx_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
 {
     SDL_Surface *surface = NULL;
@@ -313,27 +430,131 @@ void Gfx_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
         Gfx_PresentGlScreen(surface);
     } else if (g_renderMode == RENDER_SYSTEM) {
         SDL_Rect dst;
+#ifdef ANDROID_PORT
+        /*
+         * Android port: no CPU scaling.
+         *
+         * The Vita branch below scales the game surface up to the panel because
+         * its SDL driver flips 1:1. Android's present path is an SDL_RenderCopy
+         * of a streaming texture, so the GPU does the scaling for free -- doing
+         * it on the CPU first would be pure waste, and would drag
+         * Vita_ScaleToVideo's pixel-format assumptions onto a platform it was
+         * never tested on.
+         */
         dst.x = (Sint16)(int)x;
         dst.y = (Sint16)(int)y;
         dst.w = 0;
         dst.h = 0;
         SDL_UpperBlit(surface, NULL, g_screenSurface, &dst);
         SDL_UpdateRect(g_screenSurface, 0, 0, 0, 0);
+#elif defined(MUGEN_VITA_GL)
+        /*
+         * PS Vita port (port/psvita): stretch the game surface up to the panel.
+         *
+         * The System renderer opens a surface of the *game* size -- 480x272 by
+         * default, so the software blitter does a quarter of the per-pixel work
+         * of a full panel size -- while the SDL video surface is the panel size
+         * (960x544). The driver's flip draws that surface one-to-one, so
+         * something has to scale in between.
+         *
+         * Not SDL_VITA_SetVideoModeScaling: it writes a scale into the driver's
+         * video struct that only its software-blit path reads, and this build
+         * never uses that path (VITA_UpdateRects is an empty stub,
+         * VITA_FlipHWSurface passes no scale).
+         *
+         * Not zoomSurface either, at least not as the normal path: it allocates
+         * a fresh panel-sized surface and runs generic nearest-neighbour code on
+         * every call, which cost 60 fps -> 4.4 fps when it was the per-frame
+         * path. This writes straight into the video surface's pixels with a
+         * cached column map, and specialises the exact-2x case that the default
+         * 480x272 -> 960x544 is. SDL_MUSTLOCK is false for this surface (its
+         * flags carry no HWSURFACE/ASYNCBLIT/RLEACCEL), so writing pixels
+         * directly is legal.
+         *
+         * zoomSurface remains the fallback for formats or ratios the fast paths
+         * do not cover.
+         */
+        if (g_videoSurface != NULL && surface != NULL &&
+            (surface->w != g_videoSurface->w || surface->h != g_videoSurface->h)) {
+            int64_t t0 = 0;
+
+            QueryPerformanceCounter(&t0);
+            Vita_ScaleToVideo(surface, g_videoSurface);
+            {
+                int64_t t1 = 0;
+                QueryPerformanceCounter(&t1);
+                Vita_PerfAddScale(t1 - t0);
+            }
+        } else
+#endif
+        {
+            dst.x = (Sint16)(int)x;
+            dst.y = (Sint16)(int)y;
+            dst.w = 0;
+            dst.h = 0;
+            SDL_UpperBlit(surface, NULL, g_screenSurface, &dst);
+            SDL_UpdateRect(g_screenSurface, 0, 0, 0, 0);
+        }
     }
+#if defined(MUGEN_VITA_GL) && !defined(ANDROID_PORT)
+    /*
+     * PS Vita port (port/psvita): present with SDL_Flip.
+     *
+     * The Vita's SDL video driver hands back a double-buffered surface whether
+     * or not SDL_DOUBLEBUF was requested. mugen.log records exactly that:
+     *
+     *     video: surface 960x544 16bit flags 0xC0000020
+     *
+     * 0xC0000020 is SDL_FULLSCREEN|SDL_DOUBLEBUF, for a plain SDL_SWSURFACE
+     * request. SDL 1.2 only presents a double-buffered surface on SDL_Flip --
+     * SDL_UpdateRect merely marks the shadow buffer dirty.
+     *
+     * The engine flips only when VIDEO_HWBLIT is set (BlitMode = PageFlip, or
+     * the OpenGL renderers), and the System renderer does not set it. So every
+     * frame was drawn into the back buffer and never shown: the log ran to
+     * completion, the loop paced itself at 60 fps, and the panel stayed black.
+     *
+     * Flip whenever the driver actually gave us double buffering, and stay out
+     * of the way when the generic block below is about to flip anyway.
+     */
+    if ((g_videoFlags & VIDEO_HWBLIT) == 0 && g_videoSurface != NULL &&
+        (g_videoSurface->flags & SDL_DOUBLEBUF) != 0) {
+        int64_t t0 = 0;
+
+        QueryPerformanceCounter(&t0);
+        SDL_Flip(g_videoSurface);
+        {
+            int64_t t1 = 0;
+            QueryPerformanceCounter(&t1);
+            Vita_PerfAddFlip(t1 - t0);
+        }
+    }
+#endif
     if (g_videoFlags & VIDEO_HWBLIT) {
         if (g_videoSdlFlags & SDL_DOUBLEBUF) {
+#ifdef ANDROID_PORT
+            /*
+             * Android port: no GL renderer is compiled in (glrender.c is
+             * excluded), so the OpenGL branches below cannot be reached and the
+             * GL calls are not available. Only the software flip remains.
+             */
+            SDL_Flip(g_videoSurface);
+#else
             if (g_renderMode == RENDER_OPENGL || g_renderMode == RENDER_OPENGL_SCREEN) {
                 SDL_GL_SwapBuffers();
             } else {
                 SDL_Flip(g_videoSurface);
             }
+#endif
         }
+#ifndef ANDROID_PORT
         if (g_renderMode == RENDER_OPENGL) {
             glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
             glClearDepth(1.0);
             glDisable(GL_SCISSOR_TEST);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         }
+#endif
     }
 }
 
