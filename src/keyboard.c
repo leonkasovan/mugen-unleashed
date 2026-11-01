@@ -68,6 +68,39 @@ void Keyboard_SyncState(void)
     const Uint8 *state = SDL_GetKeyState(&count);
     int i;
 
+#ifdef ANDROID_PORT
+    /*
+     * Android port: SDL2 indexes its key-state array by SCANCODE, SDL 1.2 by
+     * KEYCODE, and the two numbering schemes are unrelated --
+     *
+     *     SDLK_a            = 97 ('a')
+     *     SDL_SCANCODE_A    = 4
+     *     SDLK_LCTRL        = 0x400000E0 (scancode | SDLK_SCANCODE_MASK)
+     *
+     * The generic loop below would therefore copy scancode-indexed data into a
+     * keycode-indexed array, clobbering the values Keyboard_HandleKey writes
+     * correctly from ev.key.keysym.sym. This runs on System_OnFocusGained, i.e.
+     * every time the app returns to the foreground, so it is not an edge case.
+     *
+     * The translation is explicit and bounded: g_keyState is keycode-indexed and
+     * INPUT_KEY_COUNT (0x200) covers the 7-bit ASCII range the engine maps
+     * (INPUT_KEY_A..Z are 1..26 only for pad aliases; see events.h). Only the
+     * keys the engine can observe are looked up, and each lookup goes through
+     * SDL_GetScancodeFromKey, which is exactly the conversion SDL 1.2 did
+     * internally.
+     *
+     * `count` is unused on this path: SDL2's array length is a scancode count,
+     * which says nothing about how many keycodes are set.
+     */
+    (void)count;
+    for (i = 0; i < INPUT_KEY_COUNT && i < (int)(sizeof(g_keyState)); i++) {
+        SDL_Scancode sc = SDL_GetScancodeFromKey((SDL_Keycode)i);
+
+        /* SDL_SCANCODE_UNKNOWN (0) means "no scancode for this keycode". */
+        g_keyState[i] = (sc != SDL_SCANCODE_UNKNOWN) ? state[sc] : 0;
+    }
+    return;
+#endif
     if (count > 0x143) {
         count = 0x143;
     } else if (count > INPUT_KEY_COUNT) {

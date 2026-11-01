@@ -394,6 +394,27 @@ static int SDLCALL StreamRW_Write(SDL_RWops *rw, const void *ptr, int size, int 
     return -1;
 }
 
+#ifdef ANDROID_PORT
+/*
+ * SDL2-signature adapters (see the assignment site). Each forwards to the
+ * int-based callback the engine already implements.
+ */
+static Sint64 SDLCALL StreamRW_Seek64(SDL_RWops *rw, Sint64 offset, int whence)
+{
+    return (Sint64)StreamRW_Seek(rw, (int)offset, whence);
+}
+
+static size_t SDLCALL StreamRW_Read64(SDL_RWops *rw, void *ptr, size_t size, size_t maxnum)
+{
+    return (size_t)StreamRW_Read(rw, ptr, (int)size, (int)maxnum);
+}
+
+static size_t SDLCALL StreamRW_Write64(SDL_RWops *rw, const void *ptr, size_t size, size_t num)
+{
+    return (size_t)StreamRW_Write(rw, ptr, (int)size, (int)num);
+}
+#endif
+
 /* 0x004673F0 */
 static int SDLCALL StreamRW_Close(SDL_RWops *rw)
 {
@@ -425,11 +446,28 @@ SDL_RWops *Stream_ToRWops(Stream *s)
         SDL_FreeRW(rw);
         return NULL;
     }
+#ifdef ANDROID_PORT
+    /*
+     * Android port: SDL2 widened the RWops callbacks -- seek takes and returns
+     * Sint64 instead of int, and read/write use size_t. The engine's Stream
+     * layer is the original's int-based interface, so the three callbacks are
+     * adapted here rather than changing the reconstruction.
+     *
+     * The conversions are lossless in the direction that matters: a 32-bit
+     * M.U.G.E.N file/stream offset always fits in Sint64.
+     */
+    rw->type = STREAM_RW_TYPE;
+    rw->close = StreamRW_Close;
+    rw->seek = StreamRW_Seek64;
+    rw->write = StreamRW_Write64;
+    rw->read = StreamRW_Read64;
+#else
     rw->type = STREAM_RW_TYPE;
     rw->close = StreamRW_Close;
     rw->seek = StreamRW_Seek;
     rw->write = StreamRW_Write;
     rw->read = StreamRW_Read;
+#endif
     ctx->stream = s;
     ctx->close_stream = 0;
     if (s->type == STREAM_MEMORY) {

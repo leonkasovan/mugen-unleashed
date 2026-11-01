@@ -3,8 +3,29 @@
 
 #include "mugen.h"
 
-BgmSubsystem g_bgmSdlmixSubsystem = { Bgm_BuiltinVersion, Sdlmix_Extensions, Sdlmix_Init, Stub_ReturnZero, Sdlmix_Create, Sdlmix_Destroy, Sdlmix_IsPlaying, Sdlmix_Start, Sdlmix_Stop, Sdlmix_Rewind, Sdlmix_Seek, Sdlmix_Open, Sdlmix_Close, Sdlmix_GetVolume, Sdlmix_SetVolume, Sdlmix_GetLoopFlag, Sdlmix_SetLoopFlag, Sdlmix_GetLoopPoints, Sdlmix_SetLoopPoints, Sdlmix_SetEndCallback, Sdlmix_StrError, Sdlmix_Read, NULL, Sdlmix_Poll, Sdlmix_IsPaused, Sdlmix_Pause, Sdlmix_Resume, Sdlmix_SetMute, Sdlmix_GetMute, NULL }; /* 0x004f17a0 */
-BgmSubsystem g_bgmMpg123Subsystem = { Bgm_BuiltinVersion, Mpg123_Extensions, Mpg123_Init, Mpg123_Deinit, Mpg123_Create, Mpg123_Destroy, Mpg123_IsPlaying, Mpg123_Start, Mpg123_Stop, Mpg123_Rewind, Mpg123_Seek, Mpg123_Open, Mpg123_Close, Mpg123_GetVolume, Mpg123_SetVolume, Mpg123_GetLoopFlag, Mpg123_SetLoopFlag, Mpg123_GetLoopPoints, Mpg123_SetLoopPoints, Mpg123_SetEndCallback, Mpg123_StrError, Mpg123_Read, Mpg123_GetFormatOf, NULL, NULL, NULL, NULL, NULL, NULL, NULL }; /* 0x004f1818 */
+#ifdef ANDROID_PORT
+/* clang rejects the int/void return mismatch MSVC allows; the slot is only ever
+ * called through BgmPluginDeinitFn, so the cast is safe and local. */
+#define SDLMIX_DEINIT_SLOT (BgmPluginDeinitFn)(void (*)(void))Stub_ReturnZero
+#else
+#define SDLMIX_DEINIT_SLOT Stub_ReturnZero
+#endif
+
+BgmSubsystem g_bgmSdlmixSubsystem = { Bgm_BuiltinVersion, Sdlmix_Extensions, Sdlmix_Init, SDLMIX_DEINIT_SLOT, Sdlmix_Create, Sdlmix_Destroy, Sdlmix_IsPlaying, Sdlmix_Start, Sdlmix_Stop, Sdlmix_Rewind, Sdlmix_Seek, Sdlmix_Open, Sdlmix_Close, Sdlmix_GetVolume, Sdlmix_SetVolume, Sdlmix_GetLoopFlag, Sdlmix_SetLoopFlag, Sdlmix_GetLoopPoints, Sdlmix_SetLoopPoints, Sdlmix_SetEndCallback, Sdlmix_StrError, Sdlmix_Read, NULL, Sdlmix_Poll, Sdlmix_IsPaused, Sdlmix_Pause, Sdlmix_Resume, Sdlmix_SetMute, Sdlmix_GetMute, NULL }; /* 0x004f17a0 */
+/*
+ * Android port: Mpg123_Deinit is BgmPluginDeinitFn (void(void)), but the mpg123
+ * entry is initialised through a cast to keep this one table exactly as the
+ * original .data had it. clang rejects the implicit mismatch that MSVC accepts,
+ * so the cast is explicit here. The cast is safe: the slot is only ever called
+ * through BgmPluginDeinitFn.
+ */
+#ifdef ANDROID_PORT
+#define MPG123_DEINIT_SLOT (BgmPluginDeinitFn)(void (*)(void))Mpg123_Deinit
+#else
+#define MPG123_DEINIT_SLOT Mpg123_Deinit
+#endif
+
+BgmSubsystem g_bgmMpg123Subsystem = { Bgm_BuiltinVersion, Mpg123_Extensions, Mpg123_Init, MPG123_DEINIT_SLOT, Mpg123_Create, Mpg123_Destroy, Mpg123_IsPlaying, Mpg123_Start, Mpg123_Stop, Mpg123_Rewind, Mpg123_Seek, Mpg123_Open, Mpg123_Close, Mpg123_GetVolume, Mpg123_SetVolume, Mpg123_GetLoopFlag, Mpg123_SetLoopFlag, Mpg123_GetLoopPoints, Mpg123_SetLoopPoints, Mpg123_SetEndCallback, Mpg123_StrError, Mpg123_Read, Mpg123_GetFormatOf, NULL, NULL, NULL, NULL, NULL, NULL, NULL }; /* 0x004f1818 */
 const ResamplerVtbl g_resamplerVtbl = { Resampler_Open, Resampler_Create, Resampler_Close, Resampler_InputNeeded, Resampler_State, Resampler_Write, Resampler_Read, Resampler_InFormat, Resampler_OutFormat, Resampler_Reset, Resampler_InBlock, Resampler_OutBlock }; /* 0x004f1890 */
 SpriteEncodeFn g_spriteEncoders[13] = { NULL, NULL, (SpriteEncodeFn)Rle8_Encode, (SpriteEncodeFn)Rle5_Encode, (SpriteEncodeFn)Lz5_Encode, NULL, NULL, NULL, NULL, NULL, (SpriteEncodeFn)Png_Encode8, (SpriteEncodeFn)Png_Encode24, (SpriteEncodeFn)Png_Encode32 }; /* 0x004f19e0 */
 SpriteDecodeFn g_spriteDecoders[13] = { NULL, NULL, (SpriteDecodeFn)Rle8_Decode, (SpriteDecodeFn)Rle5_Decode, (SpriteDecodeFn)Lz5_Decode, NULL, NULL, NULL, NULL, NULL, (SpriteDecodeFn)Png_Decode, (SpriteDecodeFn)Png_Decode, (SpriteDecodeFn)Png_Decode }; /* 0x004f1a14 */

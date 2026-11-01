@@ -78,7 +78,16 @@ void Input_DeinitPads(void)
     g_padQueueRead = 0;
     SDL_JoystickEventState(SDL_IGNORE);
     for (i = 0; i < g_padCount; i++) {
+#ifdef ANDROID_PORT
+        /*
+         * Android port: SDL_JoystickOpened was removed. The engine keeps its own
+         * handle per pad slot, which is the same test -- a non-NULL handle means
+         * the slot is open.
+         */
+        if (g_pads[i].joystick != NULL) {
+#else
         if (SDL_JoystickOpened(i) && g_pads[i].joystick != NULL) {
+#endif
             SDL_JoystickClose(g_pads[i].joystick);
         }
     }

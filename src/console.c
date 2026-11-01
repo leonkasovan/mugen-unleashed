@@ -609,7 +609,14 @@ void Console_Toggle(void)
 
     c->open = c->open == 0;
     if (c->open != 0) {
+#ifdef ANDROID_PORT
+        /* Android port: SDL2 removed SDL_EnableKeyRepeat; key repeat is a
+         * platform setting now and Android handles it itself. The console is
+         * keyboard-driven and unreachable on a device anyway, so this is a
+         * no-op rather than a different repeat rate. */
+#else
         SDL_EnableKeyRepeat(0x140, 0x32);
+#endif
         g = g_game;
         g->input_blocked = 1;
         g->console_open = 1;
@@ -618,7 +625,9 @@ void Console_Toggle(void)
         c->ticks[1] = 0;
         return;
     }
+#ifndef ANDROID_PORT
     SDL_EnableKeyRepeat(0, 0);
+#endif
     g = g_game;
     g->input_blocked = 0;
     g->console_open = 0;
