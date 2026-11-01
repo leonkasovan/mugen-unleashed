@@ -636,16 +636,31 @@ Each was checked by breaking it: removing the `n > len` clamp fails with
 fails with `byte 1 is 0xBA, expected 0x45`; shortening the tail silence fails
 with `byte 63 is 0xAA, expected 0x00`.
 
-**Measured, and a real finding: SDL2_mixer 2.8.2 multiplies the requested chunk
-size by 4.** Requesting 256/512/1024/2048/4096 bytes yields 1024/2048/4096/8192/
-16384-byte callbacks. The earlier `chunk == 1024` assertion could never have
-shown this, because the shim echoes back `g_sndChunkSize` by construction. The
-engine sizes its BGM ring from the *requested* chunk, so on this SDL2_mixer the
-ring block would be a quarter of what the mixer delivers and the callback's own
-"unexpected buffer length" check would fire. That is **latent, not live**:
-`Bgm_Init` fails earlier on this machine, so the thread is never started. It is
-recorded here rather than fixed, because changing the ring size would diverge
-from the original's arithmetic until the reachability is understood.
+**Measured callback length, and a correction.** `Mix_OpenAudio`'s `chunksize`
+is in sample **frames**, while the callback's `len` is in **bytes**, so the
+expected length is `frames x channels x bytes_per_sample`. Requesting 1024
+frames on a 44100 Hz stereo S16 device yields 4096-byte callbacks, and that is
+ordinary conversion, not a backend quirk: sweeping 256/512/1024/2048/4096 frames
+gives 1024/2048/4096/8192/16384 bytes, matching the formula exactly every time.
+
+An earlier revision of this section called that a 4x multiplication by
+SDL2_mixer and predicted the engine's ring would end up a quarter of the
+callback length. **That was wrong on units.** `BgmThread_Init` already multiplies
+by `channels * sample_size`, so the ring block is 4096 bytes plus the four-byte
+stamp -- exactly what the mixer delivers. There is no defect, and the "Still
+open" entry about it has been removed.
+
+The test that produced the wrong conclusion also had its own bug: it derived
+bytes-per-sample from the sign bit (`format & 0x8000`) instead of the width, so
+`AUDIO_S16LSB` (0x8010, 16-bit) was counted as four bytes per sample and the
+4096-byte callback was reported as 512 frames. It now uses
+`SDL_AUDIO_BITSIZE(format) / 8` and reports `4096 bytes = 1024 frames of 4 bytes`.
+
+The assertion is meaningful rather than tautological: changing the expected
+length by a single byte fails it
+(`expected 4097 bytes (1024 frames x 2 ch x 2 B)`), so a backend that really did
+round or clamp would be caught -- which was the point of measuring instead of
+echoing `Mix_QuerySpecEx`.
 
 **Sound-enabled end-to-end run.** Beyond the `-nosound` comparisons, the game
 was run with sound on and its log compared against the SDL 1.2 build's:
@@ -673,9 +688,7 @@ quick-VS scenario; nor effect playback, which needs audible verification.
   the original, not a port gap.
 - Audio: the hook callback, `Mix_QuerySpecEx` and RWops size are unit-tested and
   a real device opens, but **audible** output has not been checked.
-- The BGM ring is sized from the requested chunk size, which SDL2_mixer 2.8.2
-  then multiplies by four. Unreachable while `Bgm_Init` fails earlier, but it
-  will matter as soon as BGM initialises. `Sdlmix_Open`
+ `Sdlmix_Open`
   / `Mix_LoadMUS_RW` are not exercised end to end (no tracker or MIDI file is
   loaded by the quick-VS scenario), and neither is effect playback.
 - The Linux target has not been built with `SDL_BACKEND=2`.

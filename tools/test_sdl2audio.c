@@ -318,11 +318,11 @@ static void test_query_spec_ex(void)
     /*
      * Mix_QuerySpecEx echoes back the size the engine REQUESTED; it cannot
      * report what the backend actually does, because the shim has no way to ask.
-     * So the requested value is recorded as such, and the real buffer length is
-     * measured separately below from a live mixer callback.
+     * That is why the value is labelled "requested" and the real callback
+     * length is measured separately below.
      */
-    check(chunk == 1024, "Mix_QuerySpecEx reports the requested chunk size (requested = 1024)");
-    printf("  device: %d Hz, %d ch, format 0x%04X, requested chunk %d bytes\n", freq, channels, format,
+    check(chunk == 1024, "Mix_QuerySpecEx reports the requested chunk size (requested = 1024 frames)");
+    printf("  device: %d Hz, %d ch, format 0x%04X, requested chunk %d frames\n", freq, channels, format,
            chunk);
 
     /*
@@ -344,28 +344,30 @@ static void test_query_spec_ex(void)
     if (posts == 0 || measured_len <= 0) {
         printf("SKIP: the device produced no callback in 1s; real buffer length not measured\n");
     } else {
-        int bytes_per_frame = ((format & 0xFF) == 8 ? 1 : ((format & 0x8000) ? 4 : 2)) * channels;
-
-        printf("  measured: %d byte callbacks (%d frames of %d bytes)\n", measured_len,
-               measured_len / bytes_per_frame, bytes_per_frame);
         /*
-         * SDL2_mixer 2.8.2 multiplies the requested chunk size by 4: 256 -> 1024,
-         * 512 -> 2048, 1024 -> 4096. Measured here, not assumed.
+         * Mix_OpenAudio's chunksize is in sample FRAMES, and the callback's len
+         * is in BYTES, so the expected length is
          *
-         * This is why the earlier assertion in this test was worthless -- it
-         * only read back the value the shim echoes. The consequence for the
-         * engine: BgmThread_Init derives g_bgmChunkBytes from the requested
-         * chunk, so on this SDL2_mixer the ring block would be a quarter of the
-         * length the mixer actually delivers, and the callback's own
-         * "unexpected buffer length" check would fire. That path is not
-         * reachable today (Bgm_Init fails earlier, because mugen.cfg lists an
-         * mpg123 plugin whose DLL is absent), so it is recorded rather than
-         * treated as a live regression.
+         *     frames * channels * bytes_per_sample
+         *
+         * SDL_AUDIO_BITSIZE gives the bits per sample from the format word.
+         * Deriving bytes_per_sample from the sign bit instead -- as an earlier
+         * version did with `format & 0x8000` -- reads signedness as size:
+         * AUDIO_S16LSB (0x8010) is 16 bits, but that test says "4 bytes", so a
+         * 4096-byte callback was reported as 512 frames instead of 1024.
          */
-        check(measured_len == chunk * 4,
-              "the mixer calls back with 4x the requested chunk (measured, not echoed)");
-        printf("  note: SDL2_mixer multiplies the requested chunk by 4; "
-               "the engine's ring is sized from the request, not the measurement\n");
+        int bytes_per_sample = SDL_AUDIO_BITSIZE(format) / 8;
+        int bytes_per_frame = bytes_per_sample * channels;
+        int expected = chunk * bytes_per_frame;
+
+        printf("  measured: %d bytes = %d frames of %d bytes (%d-bit samples)\n", measured_len,
+               measured_len / bytes_per_frame, bytes_per_frame, SDL_AUDIO_BITSIZE(format));
+        check(measured_len == expected,
+              "the callback length equals requested frames x channels x bytes per sample");
+        if (measured_len != expected) {
+            printf("   expected %d bytes (%d frames x %d ch x %d B)\n", expected, chunk, channels,
+                   bytes_per_sample);
+        }
     }
     Mix_CloseAudio();
 }
