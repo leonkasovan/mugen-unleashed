@@ -145,19 +145,20 @@ int Game_DebugKeys(ScreenLoop *screen)
     int key = screen->key;
 
     /*
-     * SDL2: SDLK_RCTRL and SDLK_LCTRL carry SDLK_SCANCODE_MASK (0x40000000),
-     * so the keycode is not usable as an index into g_keyState directly. The
-     * translation is the one SDL 1.2 did internally; the SDL 1.2 build keeps
-     * indexing by keycode, as the original did.
+     * The engine's key identifiers are SDL 1.2's numbering (RCTRL is 305, LCTRL
+     * 306), which is what g_keyState is indexed by. Under SDL2 the constants
+     * named SDLK_RCTRL are scancode|0x40000000 instead, so the index comes from
+     * the engine's own value; events.c converts every key to that numbering
+     * before it reaches g_keyState.
      */
 #ifdef MUGEN_SDL2
-#define GAME_KEY_HELD(k) \
-    (g_keyState[SDL_GetScancodeFromKey(k)] != 0 && \
-     (int)SDL_GetScancodeFromKey(k) < (int)sizeof(g_keyState))
+#define GAME_KEY_RCTRL 305      /* SDL 1.2 SDLK_RCTRL */
+#define GAME_KEY_LCTRL 306      /* SDL 1.2 SDLK_LCTRL */
 #else
-#define GAME_KEY_HELD(k) (g_keyState[k] != 0)
+#define GAME_KEY_RCTRL SDLK_RCTRL
+#define GAME_KEY_LCTRL SDLK_LCTRL
 #endif
-    if (!GAME_KEY_HELD(SDLK_RCTRL) && !GAME_KEY_HELD(SDLK_LCTRL)) {
+    if (!g_keyState[GAME_KEY_RCTRL] && !g_keyState[GAME_KEY_LCTRL]) {
         return 1;
     }
     if (keys) {
@@ -195,7 +196,7 @@ int Game_DebugKeys(ScreenLoop *screen)
             g->sound_enabled = 1;
         }
     }
-    if (!GAME_KEY_HELD(SDLK_RCTRL) && !GAME_KEY_HELD(SDLK_LCTRL)) {
+    if (!g_keyState[GAME_KEY_RCTRL] && !g_keyState[GAME_KEY_LCTRL]) {
         return 1;
     }
     if (key == 'd' && g->allow_debug_mode != 0) {

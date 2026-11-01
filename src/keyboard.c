@@ -70,34 +70,41 @@ void Keyboard_SyncState(void)
 
 #ifdef MUGEN_SDL2_API
     /*
-     * SDL2 indexes its key-state array by SCANCODE, SDL 1.2 by KEYCODE, and
-     * the two numbering schemes are unrelated --
+     * SDL2 indexes its key-state array by SCANCODE, SDL 1.2 by KEYCODE, and the
+     * two numbering schemes are unrelated --
      *
-     *     SDLK_a            = 97 ('a')
-     *     SDL_SCANCODE_A    = 4
-     *     SDLK_LCTRL        = 0x400000E0 (scancode | SDLK_SCANCODE_MASK)
+     *     SDLK_a         = 97 ('a', the same in both)
+     *     SDL_SCANCODE_A = 4
+     *     SDL 1.2 SDLK_UP   = 273
+     *     SDL2  SDLK_UP     = scancode|0x40000000
+     *     SDL2  SCANCODE_UP = 82
      *
      * The generic loop below would therefore copy scancode-indexed data into a
      * keycode-indexed array, clobbering the values Keyboard_HandleKey writes
-     * correctly from ev.key.keysym.sym. This runs on System_OnFocusGained, i.e.
-     * every time the app returns to the foreground, so it is not an edge case.
+     * correctly from the translated event. This runs on System_OnFocusGained,
+     * i.e. every time the app returns to the foreground, so it is not an edge
+     * case.
      *
-     * The translation is explicit and bounded: g_keyState is keycode-indexed and
-     * INPUT_KEY_COUNT (0x200) covers the 7-bit ASCII range the engine maps
-     * (INPUT_KEY_A..Z are 1..26 only for pad aliases; see events.h). Only the
-     * keys the engine can observe are looked up, and each lookup goes through
-     * SDL_GetScancodeFromKey, which is exactly the conversion SDL 1.2 did
-     * internally.
+     * The conversion is the inverse of events.c's: for each engine key
+     * identifier i, find the SDL2 keycode that translates to i
+     * (Sdl2_SdlKeyForEngineKey), and read that key's current scancode.
      *
      * `count` is unused on this path: SDL2's array length is a scancode count,
      * which says nothing about how many keycodes are set.
      */
     (void)count;
-    for (i = 0; i < INPUT_KEY_COUNT && i < (int)(sizeof(g_keyState)); i++) {
-        SDL_Scancode sc = SDL_GetScancodeFromKey((SDL_Keycode)i);
+    memset(g_keyState, 0, sizeof(g_keyState));
+    for (i = 1; i < INPUT_KEY_COUNT && i < (int)(sizeof(g_keyState)); i++) {
+        SDL_Keycode sdl_key = Sdl2_SdlKeyForEngineKey(i);
+        SDL_Scancode sc;
 
-        /* SDL_SCANCODE_UNKNOWN (0) means "no scancode for this keycode". */
-        g_keyState[i] = (sc != SDL_SCANCODE_UNKNOWN) ? state[sc] : 0;
+        if (sdl_key == SDLK_UNKNOWN) {
+            continue;
+        }
+        sc = SDL_GetScancodeFromKey(sdl_key);
+        if (sc != SDL_SCANCODE_UNKNOWN && (int)sc < SDL_NUM_SCANCODES) {
+            g_keyState[i] = state[sc];
+        }
     }
     return;
 #endif

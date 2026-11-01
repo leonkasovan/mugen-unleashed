@@ -430,24 +430,21 @@ void Video_HandleFullscreenKey(int *key)
     int mode;
 
     /*
-     * SDL2: SDLK_LALT / SDLK_RALT carry SDLK_SCANCODE_MASK (0x40000000) and are
-     * not usable as g_keyState indexes, which is keycode-indexed on SDL 1.2.
-     * Translate through the scancode, as keyboard.c does; the SDL 1.2 build
-     * keeps indexing directly, as the original did.
+     * The engine's key identifiers are SDL 1.2's numbering (RALT is 307, LALT
+     * 308), which is what g_keyState is indexed by. Under SDL2 the constants
+     * named SDLK_LALT are scancode|0x40000000 instead, so the index comes from
+     * the engine's own value; events.c converts every key to that numbering.
      */
 #ifdef MUGEN_SDL2
-    if (SDL_GetScancodeFromKey(SDLK_LALT) >= sizeof(g_keyState) ||
-        SDL_GetScancodeFromKey(SDLK_RALT) >= sizeof(g_keyState)) {
-        return;
-    }
-    if (!g_keyState[SDL_GetScancodeFromKey(SDLK_LALT)] && !g_keyState[SDL_GetScancodeFromKey(SDLK_RALT)]) {
-        return;
-    }
+#define VIDEO_KEY_RALT 307      /* SDL 1.2 SDLK_RALT */
+#define VIDEO_KEY_LALT 308      /* SDL 1.2 SDLK_LALT */
 #else
-    if (!g_keyState[SDLK_LALT] && !g_keyState[SDLK_RALT]) {
+#define VIDEO_KEY_RALT SDLK_RALT
+#define VIDEO_KEY_LALT SDLK_LALT
+#endif
+    if (!g_keyState[VIDEO_KEY_LALT] && !g_keyState[VIDEO_KEY_RALT]) {
         return;
     }
-#endif
     if (*key != SDLK_RETURN) {
         return;
     }

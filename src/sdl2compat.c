@@ -39,8 +39,9 @@
 #undef SDL_UpdateRect
 
 #include <math.h>
+/* SDL_syswm.h for Sdl2_GetWindowHandle's SDL_GetWindowWMInfo. The engine's own
+ * modules include it separately; it has a proper include guard. */
 #include <SDL_syswm.h>
-#define SDL_syswm_h_ 1 /* our include above satisfied the guard */
 
 typedef struct Sdl2Video {
     SDL_Window *window;
@@ -50,6 +51,10 @@ typedef struct Sdl2Video {
     SDL_Surface *surface;       /* what the engine draws into (System) */
     SDL_Surface *placeholder;   /* what the engine sees in GL modes */
     Uint32 texture_format;
+    int texture_w;
+    int texture_h;
+    int logical_w;
+    int logical_h;
     int width;
     int height;
     int bpp;
@@ -166,8 +171,15 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
         Log_Printf("video: %s\n", SDL_GetError());
         return NULL;
     }
-    if (g_sdl2Video.window != NULL && (g_sdl2Video.is_gl != is_gl || g_sdl2Video.width != want_w ||
-                                       g_sdl2Video.height != want_h || g_sdl2Video.bpp != bpp)) {
+    /*
+     * Only a backend change destroys anything. A size change must NOT: the GL
+     * renderer keeps its textures and display lists in the context, and the
+     * engine reaches this path from Video_OnResize() while a match is running.
+     * Recreating the context there invalidated every GL object the renderer
+     * still held. Depth is not a reason to rebuild either -- the surface is
+     * ours to replace, and a GL context does not care about its colour depth.
+     */
+    if (g_sdl2Video.window != NULL && g_sdl2Video.is_gl != is_gl) {
         Sdl2_DestroyVideo();
     }
     if (g_sdl2Video.window == NULL) {
@@ -236,7 +248,14 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
         SDL_RenderSetLogicalSize(g_sdl2Video.renderer, g_sdl2Video.width, g_sdl2Video.height);
         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");   /* nearest: pixel art */
         SDL_RenderSetIntegerScale(g_sdl2Video.renderer, SDL_FALSE);
+    } else if (g_sdl2Video.logical_w != g_sdl2Video.width || g_sdl2Video.logical_h != g_sdl2Video.height) {
+        /* The window changed size, so the logical size has to follow or the
+         * new image would be stretched by the old ratio -- with no error. */
+        SDL_RenderSetLogicalSize(g_sdl2Video.renderer, g_sdl2Video.width, g_sdl2Video.height);
     }
+    g_sdl2Video.logical_w = g_sdl2Video.width;
+    g_sdl2Video.logical_h = g_sdl2Video.height;
+
     if (g_sdl2Video.texture == NULL || g_sdl2Video.texture_format != format) {
         if (g_sdl2Video.texture != NULL) {
             SDL_DestroyTexture(g_sdl2Video.texture);
@@ -248,8 +267,27 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
             return NULL;
         }
         g_sdl2Video.texture_format = format;
+    } else if (g_sdl2Video.texture_w != g_sdl2Video.width || g_sdl2Video.texture_h != g_sdl2Video.height) {
+        /* A streaming texture's size is fixed at creation. */
+        SDL_Texture *resized = SDL_CreateTexture(g_sdl2Video.renderer, format, SDL_TEXTUREACCESS_STREAMING,
+                                                 g_sdl2Video.width, g_sdl2Video.height);
+
+        if (resized != NULL) {
+            SDL_DestroyTexture(g_sdl2Video.texture);
+            g_sdl2Video.texture = resized;
+        }
+        /* On failure the old texture is kept: a stale frame beats no window. */
     }
-    if (g_sdl2Video.surface == NULL) {
+    g_sdl2Video.texture_w = g_sdl2Video.width;
+    g_sdl2Video.texture_h = g_sdl2Video.height;
+
+    if (g_sdl2Video.surface == NULL || g_sdl2Video.surface->w != g_sdl2Video.width ||
+        g_sdl2Video.surface->h != g_sdl2Video.height ||
+        g_sdl2Video.surface->format->BitsPerPixel != bpp) {
+        if (g_sdl2Video.surface != NULL) {
+            SDL_FreeSurface(g_sdl2Video.surface);
+            g_sdl2Video.surface = NULL;
+        }
         g_sdl2Video.surface = SDL_CreateRGBSurface(0, g_sdl2Video.width, g_sdl2Video.height, bpp, rmask, gmask,
                                                    bmask, amask);
         if (g_sdl2Video.surface == NULL) {
@@ -407,7 +445,266 @@ int Sdl2_EnableUNICODE(int enable)
     return previous;
 }
 
+/*
+ * SDL2 keycode -> the engine's key identifier (SDL 1.2 numbering).
+ *
+ * Why a table: SDL 1.2 and SDL2 do not share a number for any non-printable
+ * key, and the difference is not a constant offset. SDL 1.2 called the up
+ * arrow SDLK_UP == 273; SDL2 calls it scancode|SDLK_SCANCODE_MASK, and its
+ * scancode for the same key is 82. The engine indexes g_keyState, g_keyMap and
+ * g_inputState with the SDL 1.2 numbers -- they are also what mugen.cfg
+ * contains -- so the conversion has to be name-exact.
+ *
+ * Printable ASCII is the same in both (SDLK_a == 'a', SDLK_RETURN == '\r',
+ * SDLK_SPACE == ' ', SDLK_ESCAPE == 0x1B), so those are passed through and are
+ * not listed. Everything else is below. A key SDL2 has and SDL 1.2 did not
+ * (LGUI, PRINTSCREEN, KP_CLEAR, ...) returns 0, which every consumer already
+ * treats as "ignore".
+ *
+ * Like SDL 1.2's own SDL_EnableUNICODE translation, the result is not
+ * remembered: a key pressed under one layout and released under another can
+ * leave its state set. The engine already tolerates that (Keyboard_Init clears
+ * the array, and Android's port has the same property).
+ */
+int Sdl2_EngineKey(int sdl_keycode)
+{
+    /* SDL 1.2's numbering for everything below 256; ASCII is identical. */
+    if (sdl_keycode >= 0 && sdl_keycode < 256) {
+        return sdl_keycode;
+    }
+    switch (sdl_keycode) {
+    /*
+     * SDLK_PAUSE is the one non-ASCII key SDL 1.2 numbered below 256 (19, the
+     * PC pause scancode), so the range check above does not cover it. The
+     * engine treats it specially: KEY_PAUSE_TOGGLE in keyboard.c toggles
+     * g_pauseToggled, and gameloop.c tests it. SDL2 moved it above the mask.
+     */
+    case SDLK_PAUSE: return 19;         /* SDL 1.2 SDLK_PAUSE */
+    case SDLK_KP_PERIOD: return 266;   /* SDL 1.2 SDLK_KP_PERIOD */
+    case SDLK_KP_DIVIDE: return 267;   /* SDL 1.2 SDLK_KP_DIVIDE */
+    case SDLK_KP_MULTIPLY: return 268;   /* SDL 1.2 SDLK_KP_MULTIPLY */
+    case SDLK_KP_MINUS: return 269;   /* SDL 1.2 SDLK_KP_MINUS */
+    case SDLK_KP_PLUS: return 270;   /* SDL 1.2 SDLK_KP_PLUS */
+    case SDLK_KP_ENTER: return 271;   /* SDL 1.2 SDLK_KP_ENTER */
+    case SDLK_KP_EQUALS: return 272;   /* SDL 1.2 SDLK_KP_EQUALS */
+    case SDLK_UP: return 273;   /* SDL 1.2 SDLK_UP */
+    case SDLK_DOWN: return 274;   /* SDL 1.2 SDLK_DOWN */
+    case SDLK_RIGHT: return 275;   /* SDL 1.2 SDLK_RIGHT */
+    case SDLK_LEFT: return 276;   /* SDL 1.2 SDLK_LEFT */
+    case SDLK_INSERT: return 277;   /* SDL 1.2 SDLK_INSERT */
+    case SDLK_HOME: return 278;   /* SDL 1.2 SDLK_HOME */
+    case SDLK_END: return 279;   /* SDL 1.2 SDLK_END */
+    case SDLK_PAGEUP: return 280;   /* SDL 1.2 SDLK_PAGEUP */
+    case SDLK_PAGEDOWN: return 281;   /* SDL 1.2 SDLK_PAGEDOWN */
+    case SDLK_F1: return 282;   /* SDL 1.2 SDLK_F1 */
+    case SDLK_F2: return 283;   /* SDL 1.2 SDLK_F2 */
+    case SDLK_F3: return 284;   /* SDL 1.2 SDLK_F3 */
+    case SDLK_F4: return 285;   /* SDL 1.2 SDLK_F4 */
+    case SDLK_F5: return 286;   /* SDL 1.2 SDLK_F5 */
+    case SDLK_F6: return 287;   /* SDL 1.2 SDLK_F6 */
+    case SDLK_F7: return 288;   /* SDL 1.2 SDLK_F7 */
+    case SDLK_F8: return 289;   /* SDL 1.2 SDLK_F8 */
+    case SDLK_F9: return 290;   /* SDL 1.2 SDLK_F9 */
+    case SDLK_F10: return 291;   /* SDL 1.2 SDLK_F10 */
+    case SDLK_F11: return 292;   /* SDL 1.2 SDLK_F11 */
+    case SDLK_F12: return 293;   /* SDL 1.2 SDLK_F12 */
+    case SDLK_F13: return 294;   /* SDL 1.2 SDLK_F13 */
+    case SDLK_F14: return 295;   /* SDL 1.2 SDLK_F14 */
+    case SDLK_F15: return 296;   /* SDL 1.2 SDLK_F15 */
+    case SDLK_CAPSLOCK: return 301;   /* SDL 1.2 SDLK_CAPSLOCK */
+    case SDLK_RSHIFT: return 303;   /* SDL 1.2 SDLK_RSHIFT */
+    case SDLK_LSHIFT: return 304;   /* SDL 1.2 SDLK_LSHIFT */
+    case SDLK_RCTRL: return 305;   /* SDL 1.2 SDLK_RCTRL */
+    case SDLK_LCTRL: return 306;   /* SDL 1.2 SDLK_LCTRL */
+    case SDLK_RALT: return 307;   /* SDL 1.2 SDLK_RALT */
+    case SDLK_LALT: return 308;   /* SDL 1.2 SDLK_LALT */
+    case SDLK_SYSREQ: return 317;   /* SDL 1.2 SDLK_SYSREQ */
+    default:
+        return 0;
+    }
+}
+
+/*
+ * The inverse of Sdl2_EngineKey.
+ *
+ * Each non-printable engine key has exactly one SDL2 keycode that translates to
+ * it, so a reverse switch is exact. 1..255 are their own SDL2 keycode. The
+ * lookup exists so "is engine key N held?" can be answered from SDL2's
+ * scancode-indexed key state without guessing at a numbering scheme.
+ */
+SDL_Keycode Sdl2_SdlKeyForEngineKey(int engine_key)
+{
+    if (engine_key > 0 && engine_key < 256) {
+        /* SDLK_PAUSE is the exception: nineteen in SDL 1.2, but SDL2 spells it
+         * scancode|SDLK_SCANCODE_MASK like the rest of the non-ASCII keys. */
+        if (engine_key == 19) {
+            return SDLK_PAUSE;
+        }
+        return (SDL_Keycode)engine_key;
+    }
+    switch (engine_key) {
+    case 266: return SDLK_KP_PERIOD;
+    case 267: return SDLK_KP_DIVIDE;
+    case 268: return SDLK_KP_MULTIPLY;
+    case 269: return SDLK_KP_MINUS;
+    case 270: return SDLK_KP_PLUS;
+    case 271: return SDLK_KP_ENTER;
+    case 272: return SDLK_KP_EQUALS;
+    case 273: return SDLK_UP;
+    case 274: return SDLK_DOWN;
+    case 275: return SDLK_RIGHT;
+    case 276: return SDLK_LEFT;
+    case 277: return SDLK_INSERT;
+    case 278: return SDLK_HOME;
+    case 279: return SDLK_END;
+    case 280: return SDLK_PAGEUP;
+    case 281: return SDLK_PAGEDOWN;
+    case 282: return SDLK_F1;
+    case 283: return SDLK_F2;
+    case 284: return SDLK_F3;
+    case 285: return SDLK_F4;
+    case 286: return SDLK_F5;
+    case 287: return SDLK_F6;
+    case 288: return SDLK_F7;
+    case 289: return SDLK_F8;
+    case 290: return SDLK_F9;
+    case 291: return SDLK_F10;
+    case 292: return SDLK_F11;
+    case 293: return SDLK_F12;
+    case 294: return SDLK_F13;
+    case 295: return SDLK_F14;
+    case 296: return SDLK_F15;
+    case 300: return SDLK_NUMLOCKCLEAR;
+    case 301: return SDLK_CAPSLOCK;
+    case 302: return SDLK_SCROLLLOCK;
+    case 303: return SDLK_RSHIFT;
+    case 304: return SDLK_LSHIFT;
+    case 305: return SDLK_RCTRL;
+    case 306: return SDLK_LCTRL;
+    case 307: return SDLK_RALT;
+    case 308: return SDLK_LALT;
+    case 317: return SDLK_SYSREQ;
+    default: return SDLK_UNKNOWN;
+    }
+}
+
+/* The engine key's name, as the console prints bindings (title.c formats the
+ * list with SDL_GetKeyName). SDL2's own names are for SDL2 keycodes, which the
+ * engine no longer carries, so translate first and name the SDL 1.2 value. */
+const char *Sdl2_KeyName(int engine_key)
+{
+    return SDL_GetKeyName((SDL_Keycode)Sdl2_EngineKey(engine_key));
+}
+
 /* --------------------------------------------------------------- zoomSurface */
+
+/* Palette, colour key and modulation of src onto the fresh surface dst, which
+ * zoomSurface must reproduce: SDL 1.2's SDL_gfx did, and the engine's callers
+ * free the result without further fix-up. */
+static void Sdl2_CopySurfaceState(SDL_Surface *src, SDL_Surface *dst)
+{
+    Uint32 key = 0;
+    Uint8 r = 0, g = 0, b = 0, a = 255;
+    SDL_BlendMode blend = SDL_BLENDMODE_NONE;
+
+    if (src->format->palette != NULL && dst->format->palette != NULL) {
+        int ncolors = src->format->palette->ncolors;
+
+        if (ncolors > dst->format->palette->ncolors) {
+            ncolors = dst->format->palette->ncolors;
+        }
+        SDL_SetPaletteColors(dst->format->palette, src->format->palette->colors, 0, ncolors);
+    }
+    if (SDL_GetColorKey(src, &key) == 0) {
+        SDL_SetColorKey(dst, SDL_TRUE, key);
+    }
+    SDL_GetSurfaceColorMod(src, &r, &g, &b);
+    SDL_GetSurfaceAlphaMod(src, &a);
+    SDL_GetSurfaceBlendMode(src, &blend);
+    SDL_SetSurfaceColorMod(dst, r, g, b);
+    SDL_SetSurfaceAlphaMod(dst, a);
+    SDL_SetSurfaceBlendMode(dst, blend);
+}
+
+/* SDL_BlitScaled with the scale-quality hint set for the duration. Both engine
+ * call sites pass smooth = 0, which is nearest neighbour -- what SDL_gfx's
+ * non-smooth path did and what pixel art needs. */
+static int Sdl2_BlitScaledWithHint(SDL_Surface *src, SDL_Surface *dst, int smooth)
+{
+    const char *quality = SDL_GetHint(SDL_HINT_RENDER_SCALE_QUALITY);
+    char saved[8];
+    int rc;
+
+    saved[0] = '\0';
+    if (quality != NULL) {
+        strncpy(saved, quality, sizeof(saved) - 1);
+        saved[sizeof(saved) - 1] = '\0';
+    }
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, smooth ? "1" : "0");
+    rc = SDL_BlitScaled(src, NULL, dst, NULL);
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, saved[0] != '\0' ? saved : "0");
+    return rc;
+}
+
+/*
+ * Indexed (8-bit) scaling, pixel by pixel.
+ *
+ * Not a blitter: SDL2 refuses 8->8 scaling. Nearest neighbour is also exactly
+ * what SDL 1.2's SDL_gfx did here, so copying source indices straight through
+ * reproduces the old output rather than approximating it. The destination is
+ * built with Sdl2_CopySurfaceState, so index 0 stays the colour key and the
+ * text colour stays wherever TTF_RenderUTF8_Solid put it.
+ */
+static SDL_Surface *Sdl2_ZoomIndexed(SDL_Surface *src, int dw, int dh, int smooth)
+{
+    SDL_Surface *dst;
+    int x, y;
+    const Uint8 *spix;
+    Uint8 *dpix;
+
+    if (smooth != 0) {
+        SDL_SetError("zoomSurface: smooth scaling of 8-bit surfaces is not supported");
+        return NULL;
+    }
+    dst = SDL_CreateRGBSurfaceWithFormat(0, dw, dh, 8, src->format->format);
+    if (dst == NULL || dst->format->palette == NULL) {
+        if (dst != NULL) {
+            SDL_FreeSurface(dst);
+        }
+        return NULL;
+    }
+    Sdl2_CopySurfaceState(src, dst);
+    if (SDL_LockSurface(src) != 0) {
+        SDL_FreeSurface(dst);
+        return NULL;
+    }
+    if (SDL_LockSurface(dst) != 0) {
+        SDL_UnlockSurface(src);
+        SDL_FreeSurface(dst);
+        return NULL;
+    }
+    spix = (const Uint8 *)src->pixels;
+    dpix = (Uint8 *)dst->pixels;
+    for (y = 0; y < dh; y++) {
+        int sy = (int)((long long)y * src->h / dh);
+
+        if (sy >= src->h) {
+            sy = src->h - 1;
+        }
+        for (x = 0; x < dw; x++) {
+            int sx = (int)((long long)x * src->w / dw);
+
+            if (sx >= src->w) {
+                sx = src->w - 1;
+            }
+            dpix[y * dst->pitch + x] = spix[sy * src->pitch + sx];
+        }
+    }
+    SDL_UnlockSurface(dst);
+    SDL_UnlockSurface(src);
+    return dst;
+}
+
 
 /*
  * SDL_gfx's zoomSurface over SDL2's blitter.
@@ -429,11 +726,7 @@ int Sdl2_EnableUNICODE(int enable)
 SDL_Surface *zoomSurface(SDL_Surface *src, double zoomx, double zoomy, int smooth)
 {
     int dw, dh;
-    Uint32 key = 0;
-    Uint8 r = 0, g = 0, b = 0, a = 255;
-    SDL_BlendMode blend = SDL_BLENDMODE_NONE;
     SDL_Surface *dst;
-    const char *quality;
 
     if (src == NULL) {
         return NULL;
@@ -448,29 +741,28 @@ SDL_Surface *zoomSurface(SDL_Surface *src, double zoomx, double zoomy, int smoot
         SDL_SetError("zoomSurface: resulting size is empty");
         return NULL;
     }
+
+    /*
+     * Indexed sources get their own path, and not for the palette alone:
+     * SDL2's blitter cannot scale 8-bit to 8-bit at all -- SDL_BlitScaled
+     * returns -1 "Blit combination not supported" -- so the generic path below
+     * does not merely lose the colours, it fails outright. That matters because
+     * TTF_RenderUTF8_Solid returns an 8-bit palettised surface, and font.c
+     * scales it.
+     */
+    if (src->format->BitsPerPixel == 8) {
+        return Sdl2_ZoomIndexed(src, dw, dh, smooth);
+    }
+
     dst = SDL_CreateRGBSurfaceWithFormat(0, dw, dh, src->format->BitsPerPixel, src->format->format);
     if (dst == NULL) {
         return NULL;
     }
-    /* Same surface state as the source, as SDL_gfx produced. */
-    if (SDL_GetColorKey(src, &key) == 0) {
-        SDL_SetColorKey(dst, SDL_TRUE, key);
-    }
-    SDL_GetSurfaceColorMod(src, &r, &g, &b);
-    SDL_GetSurfaceAlphaMod(src, &a);
-    SDL_GetSurfaceBlendMode(src, &blend);
-    SDL_SetSurfaceColorMod(dst, r, g, b);
-    SDL_SetSurfaceAlphaMod(dst, a);
-    SDL_SetSurfaceBlendMode(dst, blend);
-
-    quality = SDL_GetHint(SDL_HINT_RENDER_SCALE_QUALITY);
-    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, smooth ? "1" : "0");
-    if (SDL_BlitScaled(src, NULL, dst, NULL) != 0) {
-        SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, quality != NULL ? quality : "0");
+    Sdl2_CopySurfaceState(src, dst);
+    if (Sdl2_BlitScaledWithHint(src, dst, smooth) != 0) {
         SDL_FreeSurface(dst);
         return NULL;
     }
-    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, quality != NULL ? quality : "0");
     return dst;
 }
 

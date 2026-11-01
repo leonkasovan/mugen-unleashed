@@ -74,9 +74,6 @@
 #ifndef SDLK_LAST
 #define SDLK_LAST 0x140      /* SDL 1.2's last keycode; SDL2 has no such count */
 #endif
-/* SDL 1.2's key type. SDL2 only has SDL_Keycode (Sint32), which is what every
- * Site that names SDLKey actually passes. */
-typedef SDL_Keycode SDLKey;
 
 /*
  * SDL_GL_SWAP_CONTROL was an SDL 1.2 attribute passed to SDL_GL_SetAttribute
@@ -109,6 +106,35 @@ void *Sdl2_GetWindowHandle(void);
 
 /* Audio: SDL 1.2's SDL_AudioDriverName; SDL2 only has the no-length form. */
 char *Sdl2_AudioDriverName(char *namebuf, int maxlen);
+
+/*
+ * SDL2 keycode -> the engine's key identifier (SDL 1.2's numbering).
+ *
+ * The engine is full of SDL 1.2 keycodes: SDLK_UP == 273, SDLK_RETURN == 13,
+ * SDLK_SPACE == 32, SDLK_PAUSE == 19. They index g_keyState, g_keyMap and
+ * g_inputState, they are written to mugen.cfg, and they are what the console's
+ * key bindings compare against. SDL2 renumbered every non-printable key to
+ * scancode|SDLK_SCANCODE_MASK, and SDL2's scancode is NOT SDL 1.2's keycode
+ * either (SDL2 SDL_SCANCODE_UP == 82 against SDL 1.2 SDLK_UP == 273), so no
+ * shift of the SDL2 value can recover it. The conversion is a name-exact table.
+ *
+ * Boundaries: the result is either 0 or inside the engine's key space, so
+ * callers may index g_keyState with it. A key SDL2 has and SDL 1.2 did not
+ * (LGUI, PRINTSCREEN, ...) returns 0, which every consumer already treats as
+ * "ignore". Like SDL 1.2, the translation is applied per event and is not
+ * remembered: a key down-translated by a layout change can stay up.
+ */
+int Sdl2_EngineKey(int sdl_keycode);
+
+/* The inverse of Sdl2_EngineKey: the SDL2 keycode whose translation is
+ * engine_key, or SDLK_UNKNOWN. Needed to answer "is this engine key held?"
+ * from SDL2's scancode-indexed key state. */
+SDL_Keycode Sdl2_SdlKeyForEngineKey(int engine_key);
+
+/* SDL 1.2's SDLKey. SDL2 renamed the type to SDL_Keycode and returns *its* key
+ * names, so title.c's binding names go through the shim instead. */
+typedef int SDLKey;
+const char *Sdl2_KeyName(int engine_key);
 
 /* Key repeat and unicode translation are SDL2 platform behaviour. They are
  * kept as no-ops so the reconstructed calls (and their comments) stay. */

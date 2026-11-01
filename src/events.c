@@ -305,8 +305,23 @@ void Events_Poll(void)
             break;
 #endif
         case SDL_KEYDOWN:
-        case SDL_KEYUP:
-            Keyboard_HandleKey(ev.key.keysym.sym, ev.type == SDL_KEYDOWN);
+        case SDL_KEYUP: {
+            /*
+             * The engine's key identifiers are SDL 1.2's keycodes (SDLK_UP is
+             * 273 and indexes g_keyState). SDL2's are scancode|0x40000000 for
+             * every non-printable key, so an unconverted event would write
+             * hundreds of megabytes past the array. Sdl2_EngineKey() is the one
+             * conversion, and 0 means "a key SDL 1.2 did not have".
+             */
+#ifdef MUGEN_SDL2
+            int engine_key = Sdl2_EngineKey(ev.key.keysym.sym);
+#else
+            int engine_key = ev.key.keysym.sym;
+#endif
+            if (engine_key == 0) {
+                break;
+            }
+            Keyboard_HandleKey(engine_key, ev.type == SDL_KEYDOWN);
             if (g_keyEventHandler != NULL) {
 #if defined(MUGEN_SDL2_API)
                 /*
@@ -321,7 +336,7 @@ void Events_Poll(void)
                  * keysym.sym == unicode, which is why the text-input branch
                  * passes the codepoint as the key too.
                  */
-                int sym = ev.key.keysym.sym;
+                int sym = engine_key;
 
                 if (sym < 0x20 || sym > 0x7E) {
                     g_keyEventHandler(0, sym, ev.type == SDL_KEYDOWN);
@@ -330,10 +345,11 @@ void Events_Poll(void)
                 /* The original passes the dword at the unicode field, padding included. */
                 unsigned int unicode;
                 memcpy(&unicode, &ev.key.keysym.unicode, sizeof(unicode));
-                g_keyEventHandler(unicode, ev.key.keysym.sym, ev.type == SDL_KEYDOWN);
+                g_keyEventHandler(unicode, engine_key, ev.type == SDL_KEYDOWN);
 #endif
             }
             break;
+        }
 #ifdef MUGEN_SDL2
         /*
          * SDL2 delivers typed text separately from the key event. Decoding the

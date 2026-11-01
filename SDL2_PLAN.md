@@ -341,13 +341,69 @@ running, not merely loading. The SDL 1.2 executable is unchanged by this work
 (`build/mingw/mugen-static.exe` is byte-identical with `sdl2compat.c` excluded
 from its build).
 
+### Review findings fixed after the first SDL2 commit
+
+A static review of commit `838bd70` found four defects. All were real; the
+first two were memory-unsafety, not cosmetic.
+
+1. **Event delivery was unconverted.** `events.c` passed `keysym.sym` straight
+   to `Keyboard_HandleKey`, which writes `g_keyState[key]` with no bound. SDL2's
+   `SDLK_UP` is 1073741906, so a single arrow press wrote ~1 GB past the array.
+   The first commit had only fixed the *binding* tables, not event delivery.
+2. **The binding translation used the wrong scheme.** It mapped SDL2 keycodes
+   through `SDL_GetScancodeFromKey`, assuming SDL2 scancodes equal SDL 1.2
+   keycodes. They do not: `SDL_SCANCODE_UP` is 82 where `SDLK_UP` was 273, so
+   `g_keyMap` held 82 for the up arrow and saved bindings, focus resync and the
+   modifier tests all disagreed.
+
+   Both are now one function, `Sdl2_EngineKey()` in `src/sdl2compat.c`: a
+   name-exact SDL2-keycode → SDL 1.2-keycode table with a bounded result (0 for
+   keys SDL 1.2 never had, e.g. LGUI), plus `Sdl2_SdlKeyForEngineKey()` for the
+   inverse that focus resync needs. `events.c` applies it to every delivered
+   key, `system.c`'s built-in tables already carry the engine's numbering, and
+   `gameloop.c`/`video.c` test modifiers with the engine's values.
+3. **Resizing destroyed the GL context.** `Sdl2_SetVideoMode` rebuilt the window
+   and context whenever the size changed, and `Video_OnResize` calls it in the
+   middle of a match, invalidating every texture and display list the GL
+   renderer held. Only a *backend* change (GL ↔ System) destroys anything now;
+   a size change resizes the window, the streaming texture and the surface in
+   place, and re-sets the renderer's logical size.
+4. **Scaled solid TrueType text lost its palette.** `zoomSurface` created a
+   destination surface but never copied the source palette. `TTF_RenderUTF8_Solid`
+   returns an 8-bit palettised surface (index 1 is the text colour, index 0 the
+   colour key), so scaled text came out in SDL's default grey ramp. Worse, SDL2's
+   blitter refuses 8→8 scaling outright (`SDL_BlitScaled` returns -1, "Blit
+   combination not supported"), so the old path did not merely recolour the text
+   — it failed and returned NULL. Indexed sources now take an explicit
+   nearest-neighbour path that copies the palette, colour key and modulation.
+
+### How these were checked
+
+`tools/test_sdl2shim.sh` builds `tools/test_sdl2shim.c` against
+`src/sdl2compat.c` and asserts, without a display:
+
+- 25 known key pairs translate both ways (arrows, F-keys, modifiers, PAUSE,
+  keypad, printable ASCII);
+- **every** SDL2 keycode — a sampled sweep of the whole 32-bit space, the dense
+  low range, and every scancode-derived keycode — translates to 0 or to a value
+  inside `g_keyState[0x201]`;
+- an indexed surface survives scaling with its palette entry and colour key
+  intact.
+
+`tools/win_input.py` sends real Windows input (`SendInput`/`MoveWindow`) so the
+event and resize paths can be exercised at runtime. With it, the SDL2 build
+survives arrow/Home/End/Insert/F1/Pause/Delete presses and a live window resize
+during a match; `mugen.log` from the same session still ends at `Match loop
+init`.
+
 ### Still open
 
-- Stage 2+: the shim presents System mode through a streaming texture; the
-  GL renderer path has not been exercised on this desktop build yet
-  (the test environment reports `render mode 2`, i.e. System).
-- `zoomSurface` is the `SDL_BlitScaled` substitute, still awaiting the
-  differential image test listed under "SDL_gfx" above.
-- Joystick hot-plug, text input on the desktop console, and audio (the test
-  runs use `-nosound`) are unverified.
+- The GL renderer path has not been exercised on this desktop build: the test
+  environment reports `render mode 2` (System), so the context-preserving
+  resize fix is verified structurally but not against live GL rendering.
+- `zoomSurface`'s non-indexed path is still `SDL_BlitScaled`; the differential
+  image test listed under "SDL_gfx" above is still outstanding for 16/32-bit
+  surfaces.
+- Joystick hot-plug, text input on the desktop console, and audio (every run
+  here used `-nosound`) are unverified.
 - The Linux target has not been built with `SDL_BACKEND=2`.

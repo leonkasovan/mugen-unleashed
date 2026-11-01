@@ -534,36 +534,32 @@ static const int input_key_slots[INPUT_KEYS] = {
     KEY_JUMP, KEY_CROUCH, KEY_LEFT, KEY_RIGHT, KEY_A, KEY_B, KEY_C, KEY_X, KEY_Y, KEY_Z, KEY_START,
 };
 
-/* .rdata 0x4F2038: built-in keys of each player (SDL key codes). */
+/*
+ * .rdata 0x4F2038: built-in keys of each player (SDL key codes).
+ *
+ * These are the engine's key identifiers, i.e. SDL 1.2's numbering: the arrow
+ * keys are 273-276, not SDL2's scancode|SDLK_SCANCODE_MASK. They stay spelled
+ * SDLK_UP etc. because they are named after the SDL 1.2 constants, and every
+ * key that reaches the engine (events, saved bindings, SDL's key state) has
+ * already been converted to this numbering by Sdl2_EngineKey().
+ */
+#ifdef MUGEN_SDL2
+#define ENGINE_SDLK_UP 273      /* SDL 1.2 SDLK_UP */
+#define ENGINE_SDLK_DOWN 274
+#define ENGINE_SDLK_RIGHT 275
+#define ENGINE_SDLK_LEFT 276
+#else
+#define ENGINE_SDLK_UP SDLK_UP
+#define ENGINE_SDLK_DOWN SDLK_DOWN
+#define ENGINE_SDLK_RIGHT SDLK_RIGHT
+#define ENGINE_SDLK_LEFT SDLK_LEFT
+#endif
+
 static const int input_builtin_keys[2][INPUT_KEYS] = {
-    { SDLK_UP, SDLK_DOWN, SDLK_LEFT, SDLK_RIGHT, SDLK_COMMA, SDLK_PERIOD, SDLK_SLASH, SDLK_l, SDLK_SEMICOLON,
-      SDLK_QUOTE, SDLK_RETURN },
+    { ENGINE_SDLK_UP, ENGINE_SDLK_DOWN, ENGINE_SDLK_LEFT, ENGINE_SDLK_RIGHT, SDLK_COMMA, SDLK_PERIOD, SDLK_SLASH,
+      SDLK_l, SDLK_SEMICOLON, SDLK_QUOTE, SDLK_RETURN },
     { SDLK_w, SDLK_s, SDLK_a, SDLK_d, SDLK_f, SDLK_g, SDLK_h, SDLK_r, SDLK_t, SDLK_y, SDLK_u },
 };
-
-/*
- * A built-in key in the index space the input engine uses.
- *
- * The tables above are the original's .rdata and hold SDL 1.2 keycodes: the
- * arrow keys are SDLK_UP == 273 and so on. SDL2 renumbered those to
- * scancode|0x40000000, and the engine indexes g_keyState/g_keyMap by keycode, so
- * feeding an SDL2 keycode into the table writes far outside the arrays (SDL2's
- * SDLK_UP is 1073741906). SDL 1.2's 273 is SDL2's SDL_SCANCODE_UP, so the
- * translation is the scancode -- the number that was always there.
- *
- * Printable keys are unaffected (their keycode is their ASCII value), which is
- * why the tables above stay readable and the correction happens at the single
- * point where a table entry becomes an engine key.
- */
-static int Input_EngineKey(int key)
-{
-#ifdef MUGEN_SDL2
-    if (key & SDLK_SCANCODE_MASK) {
-        return (int)SDL_GetScancodeFromKey((SDL_Keycode)key);
-    }
-#endif
-    return key;
-}
 
 /* Gives the unassigned (0) entries 1..12 of a key map the "none" value. */
 static void Input_FillUnassigned(int *keys, int none)
@@ -627,7 +623,7 @@ void Input_Init(void)
 
     for (p = 0; p < 2; p++) {
         for (i = 0; i < INPUT_KEYS; i++) {
-            keys[p][input_key_slots[i]] = Input_EngineKey(input_builtin_keys[p][i]);
+            keys[p][input_key_slots[i]] = input_builtin_keys[p][i];
         }
     }
 }
@@ -656,7 +652,7 @@ int Input_Remap(void)
 
             for (i = 0; i < INPUT_KEYS; i++) {
                 /* The translation of the built-in key is Input_TranslateKey, inlined. */
-                int builtin = Input_EngineKey(input_builtin_keys[p][i]);
+                int builtin = input_builtin_keys[p][i];
                 int code = builtin & ~KEYMAP_KEY_SHIFT;
 
                 if (code == KEY_NONE || code == 0) {

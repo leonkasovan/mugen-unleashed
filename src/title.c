@@ -1456,7 +1456,12 @@ static void KeyConfig_KeyName(int joystick, int v, int none, char *text)
     if (v == none) {
         strcpy(text, "Not used");
     } else if (!joystick) {
+#ifdef MUGEN_SDL2
+        /* v is an engine key (SDL 1.2 numbering); the shim names it. */
+        sprintf(text, "%s", (v > 0 && v < SDLK_LAST) ? Sdl2_KeyName(v) : "");
+#else
         sprintf(text, "%s", v < SDLK_LAST ? SDL_GetKeyName((SDLKey)v) : "");
+#endif
     } else {
         sprintf(text, "%c-%02i", 'A' + (v >> 5 & 3), v & ~0x60);
     }
