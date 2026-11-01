@@ -25,7 +25,39 @@
  * glad becomes the single source of GL declarations, fixed-function pipeline
  * included (it is generated with the compatibility profile).
  */
+#ifdef ANDROID_PORT
+/*
+ * Android port (port/android): no GL loader at all.
+ *
+ * The port builds the software (System) renderer only -- glrender.c is excluded
+ * from the Android build -- so nothing in the compiled engine references a GL
+ * symbol. Including glad here would require the desktop GL loader machinery
+ * (generated for wglGetProcAddress / glXGetProcAddressARB), which does not
+ * exist on Android; the device has GLES, not desktop GL.
+ *
+ * The engine's SDL CALLS are supplied by port/android/app/src/main/jni/src/
+ * android_main.h, which the Android CMakeLists force-includes; that header
+ * reimplements the SDL 1.2 video subset over SDL2.
+ */
+#elif defined(MUGEN_VITA_GL)
+/*
+ * PS Vita port (port/psvita): glad is not part of that build. It is generated
+ * for the desktop GL loader (wglGetProcAddress / glXGetProcAddressARB against
+ * libGL.so / opengl32.dll), which the Vita does not have. VitaSDK's SDL 1.2
+ * OpenGL driver runs on vitaGL, which implements the same GL 1.x/2.1
+ * fixed-function API over SceGxm and declares it in <vitaGL.h>. SDL 1.2's
+ * <SDL.h> does not include SDL_opengl.h, so vitaGL is included here directly
+ * and becomes the single source of GL declarations on this target. Capability
+ * probing and the few entry points vitaGL lacks move to port/psvita/src, whose
+ * header is included here so that symbols.h can map the g_glew* macros onto
+ * them.
+ */
+#include <vitaGL.h>
+#include "vita_gl_shim.h"
+#include "vita_fps.h"
+#else
 #include <glad.h>
+#endif
 
 #include <SDL.h>
 #include <unzip.h>
