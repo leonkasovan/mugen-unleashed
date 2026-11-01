@@ -567,9 +567,10 @@ Two successive measurement errors, both now fixed:
    so red and blue were shifted to zero and `0x00332211` decoded as `(0,34,0)`
    rather than `(17,34,51)`. Now uses `SDL_GetRGBA`.
 2. Transparency was not compared at all: alpha was a constant `0xFF`, and the
-   header recorded only whether a colour key existed. Colour-key value, alpha
-   modulation and blend state are compared now, which exposed two real shim
-   bugs (blend state not inherited, palette padding the wrong alpha).
+   header recorded only whether a colour key existed. Alpha modulation and blend
+   state are compared now, which exposed two real shim bugs (blend state not
+   inherited, palette padding the wrong alpha). The colour-key *value* was still
+   not compared at that point -- see the third finding below.
 
 With those fixed, the sampling differences were traced to SDL_gfx's 16.16
 fixed-point arithmetic:
@@ -591,7 +592,17 @@ shifts** (`5 -> 0x28 = 5<<3`), because SDL's blitters branch on
 `BitsPerPixel` -- 16 for RGB565, 15 for RGB555. SDL2's converter matches the
 first and not the second, so each takes its own path.
 
-The result is **17 of 17 cases byte-identical to `libSDL_gfx.a`, with no
+A third review found that the colour-key *value* was not being compared after
+all: `has_key` and `key` were declared in the dump function and then never
+assigned (one read uninitialised, the other always zero), and the SDL2 helper
+macro returned zero from both ternary arms. Every indexed case keys index 0, so
+zero was indistinguishable from "never read" and nothing noticed. Both fields are
+now populated from a single `SDL_GetColorKey`/flag query, and a fixture with a
+**nonzero** key (`indexed_key1_2x`, `indexed_key1_0p5x`) makes a lost or
+wrong-valued key detectable. Checked by breaking the shim to drop the key and to
+set the wrong one: both now fail.
+
+The result is **19 of 19 cases byte-identical to `libSDL_gfx.a`, with no
 exemptions** (previously 11 identical plus two allowed to differ arbitrarily).
 The 32-bit fixtures were added specifically because the behaviour belongs to the
 RGBA sampler: `rgba32_16to12`, `rgba32_10to15` and `rgba32_13to20` exercise the
