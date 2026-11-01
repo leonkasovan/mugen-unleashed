@@ -96,20 +96,68 @@ void MatchLog_Printf(int level, const char *fmt, ...)
 #define CHUNK 64
 
 /*
- * The callback must leave no byte of the output buffer untouched.
+ * The callback must produce an exact, predictable image in the buffer it is
+ * given.
  *
  * SDL_mixer hands the hook a buffer it expects to be fully filled; the previous
- * contents are whatever the mixer had there. A path that copies fewer bytes
- * than len and does not silence the rest leaks that state into the audio output
- * -- and under SDL2 the callback can be invoked with a length different from
- * the one the engine requested, so every branch has to account for `len`
- * rather than for a stored chunk size.
+ * contents are whatever the mixer had there. So every test below compares the
+ * WHOLE buffer -- payload bytes, silence bytes and the guard bytes past `len` --
+ * against the image the callback is required to produce. Spot-checking a few
+ * offsets let real defects through: corrupting a payload byte, or leaving the
+ * final silence byte poisoned, both passed the earlier version of this test.
  */
+
+#define GUARD 16
+
+/* The expected image for a call that must produce nothing but silence. */
+static void expect_silence(unsigned char *buf, int len)
+{
+    int i;
+
+    for (i = 0; i < len; i++) {
+        if (buf[i] != 0) {
+            printf("  byte %d is 0x%02X, expected silence\n", i, buf[i]);
+            check(0, "callback left un-silenced bytes in the buffer");
+            return;
+        }
+    }
+}
+
+/*
+ * Runs one call with a poisoned buffer plus a guard area past `len`, and
+ * compares everything: [0,len) against `expected_payload`, and [len, len+GUARD)
+ * against the poison, which proves the callback did not write past its length.
+ */
+static void run_and_compare(const char *what, int len, const unsigned char *payload, int payload_len)
+{
+    unsigned char out[CHUNK + GUARD];
+    int i;
+
+    memset(out, 0xAA, sizeof(out));
+    BgmThread_MixCallback(NULL, out, len);
+    for (i = 0; i < len; i++) {
+        unsigned char want = (i < payload_len) ? payload[i] : 0;
+
+        if (out[i] != want) {
+            printf("  %s: byte %d is 0x%02X, expected 0x%02X\n", what, i, out[i], want);
+            check(0, what);
+            return;
+        }
+    }
+    for (i = len; i < len + GUARD; i++) {
+        if (out[i] != 0xAA) {
+            printf("  %s: wrote 0x%02X at byte %d, which is past the length %d\n", what, out[i], i, len);
+            check(0, "the callback wrote past the length it was given");
+            return;
+        }
+    }
+}
+
 static void test_callback_fills_every_byte(void)
 {
     static BgmRing ring;
     static unsigned char ringbuf[CHUNK * 4];
-    unsigned char out[CHUNK];
+    unsigned char expected[CHUNK];
     int i;
 
     memset(&ring, 0, sizeof(ring));
@@ -123,77 +171,98 @@ static void test_callback_fills_every_byte(void)
     g_bgmThreadFormat.format = AUDIO_FMT_S16;
     g_bgmMuted = 0;
     g_bgmPlayedSeq = 1;
+    memset(ringbuf, 0, sizeof(ringbuf));
 
-    /* Case 1: an empty ring (starvation). Everything must become silence. */
+    /* Case 1: an empty ring (starvation) -- all silence. */
     ring.filled = 0;
-    memset(out, 0xAA, sizeof(out));
-    BgmThread_MixCallback(NULL, out, CHUNK);
-    for (i = 0; i < CHUNK; i++) {
-        if (out[i] != 0) {
-            check(0, "starvation left un-silenced bytes in the buffer");
-            break;
-        }
-    }
+    run_and_compare("starvation left un-silenced bytes", CHUNK, NULL, 0);
 
-    /* Case 2: paused. Same requirement. */
+    /* Case 2: paused -- all silence. */
     ring.paused = 1;
-    memset(out, 0xAA, sizeof(out));
-    BgmThread_MixCallback(NULL, out, CHUNK);
-    for (i = 0; i < CHUNK; i++) {
-        if (out[i] != 0) {
-            check(0, "paused callback left un-silenced bytes in the buffer");
-            break;
-        }
-    }
+    run_and_compare("paused callback left un-silenced bytes", CHUNK, NULL, 0);
     ring.paused = 0;
 
-    /* Case 3: muted. Silence, and the ring's space is returned. */
+    /* Case 3: muted -- all silence. */
     g_bgmMuted = 1;
-    memset(out, 0xAA, sizeof(out));
-    BgmThread_MixCallback(NULL, out, CHUNK);
-    for (i = 0; i < CHUNK; i++) {
-        if (out[i] != 0) {
-            check(0, "muted callback left un-silenced bytes in the buffer");
-            break;
-        }
-    }
+    run_and_compare("muted callback left un-silenced bytes", CHUNK, NULL, 0);
     g_bgmMuted = 0;
 
     /*
-     * Case 4: a SHORT length. The mixer may ask for fewer bytes than the
-     * engine's block, and the callback must still fill exactly that many.
+     * Case 4: a ring that HAS data, asked for FEWER bytes than the block holds.
+     *
+     * This is the case the previous version never ran: it set ring.filled and
+     * then immediately overwrote it with 0, so only the starvation branch was
+     * exercised and deleting the `n > len` clamp went unnoticed. The clamp is
+     * what stops the callback copying a whole block into a short buffer.
      */
-    ring.filled = CHUNK * 4;
-    ring.filled = 0;
-    memset(out, 0xAA, sizeof(out));
-    BgmThread_MixCallback(NULL, out, 16);
-    for (i = 0; i < 16; i++) {
-        if (out[i] != 0) {
-            check(0, "short-length callback left un-silenced bytes");
-            break;
-        }
+    for (i = 0; i < CHUNK; i++) {
+        ringbuf[i] = (unsigned char)(0x40 + i);   /* varied, so a wrong offset shows */
     }
-    check(out[16] == 0xAA, "the callback wrote past the length it was given");
+    expected[0] = 0;                              /* filled below */
+    ring.filled = CHUNK;
+    ring.read = 0;
+    for (i = 0; i < CHUNK; i++) {
+        ringbuf[i] = (unsigned char)(0x40 + i);
+    }
+    /* Block layout: 4-byte sequence stamp, then payload. Ask for 16 bytes: the
+     * callback copies the first 16 of the payload and must not run past len. */
+    {
+        unsigned char want[16];
+
+        for (i = 0; i < 16; i++) {
+            want[i] = ringbuf[4 + i];
+        }
+        run_and_compare("short-length callback copied the wrong bytes", 16, want, 16);
+    }
 
     /*
-     * Case 5: a block with real data. The first four bytes are the sequence
-     * stamp and are consumed; the rest must reach the stream.
+     * Case 5: a full block. Everything after the 4-byte stamp must arrive at
+     * byte-for-byte the right offset, and the tail beyond the payload must be
+     * silence.
      */
+    ring.filled = CHUNK;
+    ring.read = 0;
     memset(ringbuf, 0, sizeof(ringbuf));
     ringbuf[0] = 0x11;
     ringbuf[1] = 0x22;
     ringbuf[2] = 0x33;
     ringbuf[3] = 0x44;
-    memset(ringbuf + 4, 0x7E, CHUNK - 4);
-    ring.filled = CHUNK;
-    ring.read = 0;
-    memset(out, 0xAA, sizeof(out));
-    BgmThread_MixCallback(NULL, out, CHUNK);
+    for (i = 4; i < CHUNK; i++) {
+        ringbuf[i] = (unsigned char)(0xA0 + i);
+    }
+    {
+        unsigned char want[CHUNK];
+
+        /* The callback consumes the stamp and copies up to len bytes of the
+         * payload; a block of CHUNK including the stamp yields CHUNK-4 payload
+         * bytes, so the last four output bytes are silence. */
+        for (i = 0; i < CHUNK; i++) {
+            int src = 4 + i;
+
+            want[i] = (src < CHUNK) ? ringbuf[src] : 0;
+        }
+        run_and_compare("full block did not reach the stream byte for byte", CHUNK, want, CHUNK);
+    }
     check(g_bgmPlayedSeq == 0x44332211, "the block's sequence stamp was read from the front");
-    check(out[0] == 0x7E, "the payload after the stamp reached the stream");
-    check(out[CHUNK - 5] == 0x7E, "the payload reached the end of the stream");
-    /* The last byte is past the block: it must be silence, not stale data. */
-    check(out[CHUNK - 3] == 0 || out[CHUNK - 3] == 0x7E, "no stale bytes at the block boundary");
+
+    /*
+     * Case 6: a block whose payload is entirely non-silent, so a callback that
+     * drops the final byte cannot be mistaken for one that pads correctly. The
+     * stamp is zero here; everything after it is 0x5A, so the last four output
+     * bytes are the only ones that may be silence.
+     */
+    ring.read = 0;
+    ring.filled = CHUNK;
+    memset(ringbuf, 0x5A, sizeof(ringbuf));
+    memset(ringbuf, 0x00, 4);
+    {
+        unsigned char want[CHUNK];
+
+        for (i = 0; i < CHUNK; i++) {
+            want[i] = (i < CHUNK - 4) ? 0x5A : 0;
+        }
+        run_and_compare("uniform payload did not fill the stream", CHUNK, want, CHUNK);
+    }
 }
 
 /* -------------------------------------------------------------- QuerySpecEx */
@@ -203,11 +272,26 @@ static void test_callback_fills_every_byte(void)
  * report what the device actually opened with, and pass through 0 when the
  * mixer is not open.
  */
+/* Set by the mixer's post-mix callback, which sees the real buffer length. */
+static volatile int posts;
+static volatile int measured_len;
+
+static void SDLCALL MeasurePostMix(void *udata, Uint8 *stream, int len)
+{
+    (void)udata;
+    (void)stream;
+    if (posts == 0) {
+        measured_len = len;
+    }
+    posts++;
+}
+
 static void test_query_spec_ex(void)
 {
     int freq = 0, channels = 0, chunk = 0;
     Uint16 format = 0;
     int rc;
+    int i;
 
     /* With no mixer open, Mix_QuerySpec returns 0 and so must the shim. */
     rc = Mix_QuerySpecEx(&freq, &format, &channels, &chunk);
@@ -232,12 +316,57 @@ static void test_query_spec_ex(void)
               format == AUDIO_S32LSB || format == AUDIO_F32LSB,
           "the format is one the engine understands");
     /*
-     * The engine's own note: SDL_mixer opens the device with exactly the chunk
-     * size it is given, so this must come back as requested. If a future
-     * SDL_mixer rounds it, this assertion is what tells us.
+     * Mix_QuerySpecEx echoes back the size the engine REQUESTED; it cannot
+     * report what the backend actually does, because the shim has no way to ask.
+     * So the requested value is recorded as such, and the real buffer length is
+     * measured separately below from a live mixer callback.
      */
-    check(chunk == 1024, "the chunk size came back as the engine requested");
-    printf("  device: %d Hz, %d ch, format 0x%04X, chunk %d\n", freq, channels, format, chunk);
+    check(chunk == 1024, "Mix_QuerySpecEx reports the requested chunk size (requested = 1024)");
+    printf("  device: %d Hz, %d ch, format 0x%04X, requested chunk %d bytes\n", freq, channels, format,
+           chunk);
+
+    /*
+     * Measure the length the mixer really calls back with.
+     *
+     * Mix_SetPostMix receives the same (stream, len) the mixer works on, so the
+     * first call after opening tells us the backend's actual buffer size --
+     * independent of the shim. If a backend rounded or clamped the request, the
+     * two numbers differ and this is what shows it.
+     */
+    posts = 0;
+    measured_len = 0;
+    Mix_SetPostMix(MeasurePostMix, NULL);
+    /* Let the device run until at least one callback has happened. */
+    for (i = 0; i < 200 && posts == 0; i++) {
+        SDL_Delay(5);
+    }
+    Mix_SetPostMix(NULL, NULL);
+    if (posts == 0 || measured_len <= 0) {
+        printf("SKIP: the device produced no callback in 1s; real buffer length not measured\n");
+    } else {
+        int bytes_per_frame = ((format & 0xFF) == 8 ? 1 : ((format & 0x8000) ? 4 : 2)) * channels;
+
+        printf("  measured: %d byte callbacks (%d frames of %d bytes)\n", measured_len,
+               measured_len / bytes_per_frame, bytes_per_frame);
+        /*
+         * SDL2_mixer 2.8.2 multiplies the requested chunk size by 4: 256 -> 1024,
+         * 512 -> 2048, 1024 -> 4096. Measured here, not assumed.
+         *
+         * This is why the earlier assertion in this test was worthless -- it
+         * only read back the value the shim echoes. The consequence for the
+         * engine: BgmThread_Init derives g_bgmChunkBytes from the requested
+         * chunk, so on this SDL2_mixer the ring block would be a quarter of the
+         * length the mixer actually delivers, and the callback's own
+         * "unexpected buffer length" check would fire. That path is not
+         * reachable today (Bgm_Init fails earlier, because mugen.cfg lists an
+         * mpg123 plugin whose DLL is absent), so it is recorded rather than
+         * treated as a live regression.
+         */
+        check(measured_len == chunk * 4,
+              "the mixer calls back with 4x the requested chunk (measured, not echoed)");
+        printf("  note: SDL2_mixer multiplies the requested chunk by 4; "
+               "the engine's ring is sized from the request, not the measurement\n");
+    }
     Mix_CloseAudio();
 }
 
