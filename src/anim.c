@@ -13,6 +13,56 @@
  */
 #include "mugen.h"
 
+#ifdef MUGEN_VITA_GL
+/*
+ * PS Vita port (port/psvita): animation trace.
+ *
+ * The character-preview crash needs to be tied to a specific animation, element
+ * and draw size, and the log had nothing between "Selected char" and the fault.
+ * These lines fill that gap for Anim_SetAction (state changes), Anim_Step
+ * (element transitions and loops) and Anim_Draw (suspicious draw sizes only).
+ *
+ * Scoped to the character-select screen (GameVars.screen_kind == 2), because the
+ * title screen runs demo matches that animate continuously -- an unscoped trace
+ * spent its whole budget there and left the character preview black. The budget
+ * is therefore only drawn down on the screen that matters.
+ *
+ * Bounded anyway, because Anim_Draw runs per sprite per frame: a long session
+ * must not bury the rest of mugen.log.
+ */
+static int g_animTraceLeft = 4000;
+static int g_animTraceArmed;
+
+#define ANIM_TRACE(...) \
+    do { \
+        if (g_animTraceLeft > 0 && g_game != NULL && g_game->screen_kind == 2) { \
+            if (!g_animTraceArmed) { \
+                g_animTraceArmed = 1; \
+                Log_Printf("anim: tracing starts (character select)\n"); \
+            } \
+            g_animTraceLeft--; \
+            Log_Printf(__VA_ARGS__); \
+            if (g_animTraceLeft == 0) { \
+                Log_Printf("anim: trace budget exhausted\n"); \
+            } \
+        } \
+    } while (0)
+
+/* A draw size the renderer cannot honour: NaN/inf, non-positive, or absurd. */
+static int Anim_ScaleSuspicious(float sx, float sy)
+{
+    if (!isfinite(sx) || !isfinite(sy)) {
+        return 1;
+    }
+    if (sx <= 0.0f || sy <= 0.0f) {
+        return 1;
+    }
+    return sx > 64.0f || sy > 64.0f;
+}
+#else
+#define ANIM_TRACE(...) do { } while (0)
+#endif
+
 #define ANIM_GROUP_PREFIX "begin action "
 
 /* The action an animation state is playing. */
@@ -501,6 +551,10 @@ int Anim_Step(AnimState *st)
 {
     AnimAction *action = Anim_CurAction(st);
     int looped = 0;
+#ifdef MUGEN_VITA_GL
+    int prev_elem = st->elem_index;
+    int prev_time = st->time;
+#endif
 
     Anim_SeekElem(st);
     if (st->time >= action->total_time && action->total_time != -1) {
@@ -518,6 +572,14 @@ int Anim_Step(AnimState *st)
     }
     st->ticks++;
     st->time++;
+#ifdef MUGEN_VITA_GL
+    if (looped != 0) {
+        ANIM_TRACE("anim: looped at time %d -> elem 0 (action %d)\n", prev_time, st->action);
+    } else if (st->elem_index != prev_elem) {
+        ANIM_TRACE("anim: elem %d -> %d at time %d (sprite %d, scale %.3fx%.3f)\n", prev_elem,
+                   st->elem_index, st->time, st->sprite, (double)st->dp.scale_x, (double)st->dp.scale_y);
+    }
+#endif
     return looped;
 }
 
@@ -614,9 +676,13 @@ int Anim_SetAction(AnimState *st, int action_no)
     }
     slot = KeyedArray_Find(st->anim->actions, 0, action_no);
     if (slot == -1) {
+        ANIM_TRACE("anim: ChangeAnim %d MISSING (actions %d)\n", action_no,
+                   st->anim->action_count);
         return 0;
     }
     if (st->action != slot) {
+        ANIM_TRACE("anim: ChangeAnim %d -> slot %d (was %d, time %d)\n", action_no, slot, st->action,
+                   st->time);
         st->action = slot;
         st->ticks = 0;
         st->time = 0;
@@ -678,6 +744,13 @@ void Anim_Draw(AnimState *st, const DrawParams *dp, float sx, float sy)
             local.x = local.x * sx;
             local.y = local.y * sy;
             DrawParams_Combine(dp, &local);
+#ifdef MUGEN_VITA_GL
+            if (Anim_ScaleSuspicious(local.scale_x, local.scale_y)) {
+                ANIM_TRACE("anim: SUSPICIOUS draw sprite %d scale %.4gx%.4g at %.4g,%.4g "
+                           "(elem %d time %d)\n", st->sprite, (double)local.scale_x,
+                           (double)local.scale_y, (double)local.x, (double)local.y, i, st->time);
+            }
+#endif
             if (st->sprite != -1) {
                 if (st->queue == NULL) {
                     if (g_renderMode == RENDER_MODE_GL) {

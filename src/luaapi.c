@@ -366,8 +366,72 @@ int LuaMugen_ToggleTrainingMode(struct lua_State *L)
     return 0;
 }
 
+/*
+ * PS Vita port (port/psvita): mugen.padstate()
+ *
+ * Returns a string describing the current gamepad state, for input debugging
+ * from a Lua script, e.g.:
+ *
+ *     local s = mugen.padstate()
+ *     if s then print(s) end
+ *
+ * Two separate channels feed screens and it is not obvious from outside which
+ * one a press arrives on:
+ *
+ *   keys   the keyboard state array -- what the gamepad-to-keyboard bridge in
+ *          src/events.c feeds (arrows, Return, Escape, F1, F2)
+ *   pads   the raw joystick buttons as SDL reports them (0 = Triangle,
+ *          1 = Circle, 2 = Cross, 3 = Square, 4 = L, 5 = R, 6 = Down, 7 = Left,
+ *          8 = Up, 9 = Right, 10 = Select, 11 = Start)
+ *
+ * The returned text lists which pad buttons are held and which of the bridge's
+ * keys are held, which is enough to tell a mapping bug from a screen that
+ * ignores the key it is given.
+ */
+int LuaMugen_PadState(struct lua_State *L)
+{
+    char text[256];
+    size_t len;
+    int i;
+
+    text[0] = '\0';
+    strcat(text, "pads=");
+    for (i = 0; i < INPUT_PAD_COUNT && i < 16; i++) {
+        if (g_padButtonState[i] != 0) {
+            char one[8];
+
+            _snprintf(one, sizeof(one), "%d,", i);
+            strcat(text, one);
+        }
+    }
+    strcat(text, " keys=");
+    {
+        static const struct {
+            const char *name;
+            int key;
+        } watch[] = { { "Up", SDLK_UP },   { "Down", SDLK_DOWN }, { "Left", SDLK_LEFT },
+                      { "Right", SDLK_RIGHT }, { "Return", SDLK_RETURN }, { "Escape", SDLK_ESCAPE },
+                      { "F1", SDLK_F1 },   { "F2", SDLK_F2 } };
+        int n;
+
+        for (n = 0; n < (int)(sizeof(watch) / sizeof(watch[0])); n++) {
+            if (g_keyState[watch[n].key] != 0) {
+                strcat(text, watch[n].name);
+                strcat(text, ",");
+            }
+        }
+    }
+    len = strlen(text);
+    if (len > 0 && text[len - 1] == ',') {
+        text[len - 1] = '\0';
+    }
+    lua_pushstring(L, text);
+    return 1;
+}
+
 /* The "mugen" library (0x004F1F08 in the original, with its own functions). */
 static const LuaReg luamugen_funcs[] = {
+    { "padstate", LuaMugen_PadState },
     { "lifereset", LuaMugen_LifeReset },
     { "winningteam", LuaMugen_WinningTeam },
     { "gametime", LuaMugen_GameTime },

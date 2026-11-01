@@ -973,6 +973,23 @@ int Charsel_Update(ScreenLoop *screen, CharselState *st)
                 old_row = cur->row;
                 sel = Charsel_MoveCursor(screen->input, screen->input_side, &cur->col, &cur->row,
                                          swap ? 1 - side : side);
+#ifdef MUGEN_VITA_GL
+                /*
+                 * PS Vita port (port/psvita): the cursor path, which the
+                 * screen-level trace cannot see.
+                 *
+                 * screen->input was already shown to be correct (0x2 right,
+                 * 0x8 left, 0x400 confirm), yet the grid cursor would not move.
+                 * Charsel_MoveCursor returns -1 immediately unless
+                 * input_side == side, so the deciding values are those two plus
+                 * the row/column before and after. Logged only when something
+                 * arrived, so it stays quiet.
+                 */
+                if (screen->input != 0) {
+                    Log_Printf("charsel: side=%d swap=%d input=0x%X input_side=%d %d,%d -> %d,%d sel=%d\n", side,
+                               swap, screen->input, screen->input_side, old_col, old_row, cur->col, cur->row, sel);
+                }
+#endif
                 if (sel == -1) {
                     if (cur->auto_timer == 0) {
                         sel = Random_Next() % 12;

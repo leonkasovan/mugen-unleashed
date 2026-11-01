@@ -88,13 +88,32 @@ extern int g_exprStackTop; /* 0x00500f40 */
  */
 #define g_glewActiveTexture              glActiveTexture                              /* 0x00500f70 GlEnumFn */
 #define g_glewMultiTexCoord2f            glMultiTexCoord2f                            /* 0x00500fcc GlMultiTexCoord2fFn */
+#ifdef MUGEN_VITA_GL
+/*
+ * PS Vita port (port/psvita): vitaGL does not declare glMultiTexCoord4f,
+ * glBlendColor or glIsShader, and has no glIsProgram either.
+ * port/psvita/src/vita_gl_shim.c supplies them; see the comments there for what
+ * each does (and does not) do. Only the macro targets change -- the call sites
+ * in src/ keep the original's names.
+ */
+#define g_glewMultiTexCoord4f            MugenVita_MultiTexCoord4f                    /* 0x0050100c GlMultiTexCoord4fFn */
+#define g_glewBlendColor                 MugenVita_BlendColor                         /* 0x00501028 GlBlendColorFn */
+#define g_glewIsShader                   MugenVita_IsShader                           /* 0x005011a4 GlIsShaderFn */
+/* glCreateShader must record the handle MugenVita_IsShader classifies. */
+#define g_glewCreateShader(type)         MugenVita_TrackShader(glCreateShader(type))  /* 0x00501144 GlCreateShaderFn */
+/* vitaGL has no logic-op stage; unreachable while the probe reports it absent. */
+#define g_glewLogicOp                    MugenVita_LogicOp
+#else
 #define g_glewMultiTexCoord4f            glMultiTexCoord4f                            /* 0x0050100c GlMultiTexCoord4fFn */
 #define g_glewBlendColor                 glBlendColor                                 /* 0x00501028 GlBlendColorFn */
+#define g_glewIsShader                   glIsShader                                   /* 0x005011a4 GlIsShaderFn */
+#define g_glewCreateShader               glCreateShader                               /* 0x00501144 GlCreateShaderFn */
+#define g_glewLogicOp                    glLogicOp
+#endif
 #define g_glewBlendEquation              glBlendEquation                              /* 0x0050102c GlEnumFn */
 #define g_glewAttachShader               glAttachShader                               /* 0x00501130 GlAttachShaderFn */
 #define g_glewCompileShader              glCompileShader                              /* 0x0050113c GlUintFn */
 #define g_glewCreateProgram              glCreateProgram                              /* 0x00501140 GlCreateProgramFn */
-#define g_glewCreateShader               glCreateShader                               /* 0x00501144 GlCreateShaderFn */
 #define g_glewDeleteProgram              glDeleteProgram                              /* 0x00501148 GlUintFn */
 #define g_glewDeleteShader               glDeleteShader                               /* 0x0050114c GlUintFn */
 #define g_glewGetProgramInfoLog          glGetProgramInfoLog                          /* 0x00501170 GlGetInfoLogFn */
@@ -102,7 +121,6 @@ extern int g_exprStackTop; /* 0x00500f40 */
 #define g_glewGetShaderInfoLog           glGetShaderInfoLog                           /* 0x00501178 GlGetInfoLogFn */
 #define g_glewGetShaderiv                glGetShaderiv                                /* 0x00501180 GlGetObjectivFn */
 #define g_glewGetUniformLocation         glGetUniformLocation                         /* 0x00501184 GlGetUniformLocationFn */
-#define g_glewIsShader                   glIsShader                                   /* 0x005011a4 GlIsShaderFn */
 #define g_glewLinkProgram                glLinkProgram                                /* 0x005011a8 GlUintFn */
 #define g_glewShaderSource               glShaderSource                               /* 0x005011ac GlShaderSourceFn */
 #define g_glewUniform1f                  glUniform1f                                  /* 0x005011bc GlUniform1fFn */
@@ -110,6 +128,24 @@ extern int g_exprStackTop; /* 0x00500f40 */
 #define g_glewUniform2f                  glUniform2f                                  /* 0x005011cc GlUniform2fFn */
 #define g_glewUniform3f                  glUniform3f                                  /* 0x005011dc GlUniform3fFn */
 #define g_glewUseProgram                 glUseProgram                                 /* 0x00501208 GlUintFn */
+#ifdef MUGEN_VITA_GL
+/*
+ * PS Vita port (port/psvita): vitaGL implements the framebuffer-object
+ * extension under its core-GL names (glBindFramebuffer, not
+ * glBindFramebufferEXT) and GL 2.1 core is what it exposes. The original's
+ * GLEW names are kept at the call sites; only the macro targets change, the
+ * same way the glad migration above did it.
+ */
+#define g_glewBindFramebufferEXT         glBindFramebuffer                            /* 0x0050204c GlBindFramebufferFn */
+#define g_glewBindRenderbufferEXT        glBindRenderbuffer                           /* 0x00502050 GlBindFramebufferFn */
+#define g_glewCheckFramebufferStatusEXT  glCheckFramebufferStatus                     /* 0x00502054 GlCheckFramebufferStatusFn */
+#define g_glewDeleteRenderbuffersEXT     glDeleteRenderbuffers                        /* 0x0050205c GlGenDeleteFn */
+#define g_glewFramebufferRenderbufferEXT glFramebufferRenderbuffer                    /* 0x00502060 GlFramebufferRenderbufferFn */
+#define g_glewFramebufferTexture2DEXT    glFramebufferTexture2D                       /* 0x00502068 GlFramebufferTexture2DFn */
+#define g_glewGenFramebuffersEXT         glGenFramebuffers                            /* 0x00502070 GlGenDeleteFn */
+#define g_glewGenRenderbuffersEXT        glGenRenderbuffers                           /* 0x00502074 GlGenDeleteFn */
+#define g_glewRenderbufferStorageEXT     glRenderbufferStorage                        /* 0x0050208c GlRenderbufferStorageFn */
+#else
 #define g_glewBindFramebufferEXT         glBindFramebufferEXT                         /* 0x0050204c GlBindFramebufferFn */
 #define g_glewBindRenderbufferEXT        glBindRenderbufferEXT                        /* 0x00502050 GlBindFramebufferFn */
 #define g_glewCheckFramebufferStatusEXT  glCheckFramebufferStatusEXT                  /* 0x00502054 GlCheckFramebufferStatusFn */
@@ -119,11 +155,31 @@ extern int g_exprStackTop; /* 0x00500f40 */
 #define g_glewGenFramebuffersEXT         glGenFramebuffersEXT                         /* 0x00502070 GlGenDeleteFn */
 #define g_glewGenRenderbuffersEXT        glGenRenderbuffersEXT                        /* 0x00502074 GlGenDeleteFn */
 #define g_glewRenderbufferStorageEXT     glRenderbufferStorageEXT                     /* 0x0050208c GlRenderbufferStorageFn */
+#endif
+/*
+ * The capability flags stay glad's on every target: on the Vita they are
+ * defined by port/psvita/src/vita_gl_shim.c, which fills them from
+ * glGetString exactly as GLEW did. glad.h is not included there, so name them
+ * directly instead of through it.
+ */
+#ifndef MUGEN_VITA_GL
 #define g_glewVersion20                  GLAD_GL_VERSION_2_0                          /* 0x00502ac1 */
 #define g_glewArbFragmentProgram         GLAD_GL_ARB_fragment_program                 /* 0x00502af1 */
 #define g_glewArbTextureNpot             GLAD_GL_ARB_texture_non_power_of_two         /* 0x00502b24 */
 #define g_glewExtBlendLogicOp            GLAD_GL_EXT_blend_logic_op                   /* 0x00502b54 */
 #define g_glewExtFramebufferObject       GLAD_GL_EXT_framebuffer_object               /* 0x00502b68 */
+#else
+#define g_glewVersion20                  MugenVita_GLVersion20                        /* 0x00502ac1 */
+#define g_glewArbFragmentProgram         MugenVita_GLArbFragmentProgram               /* 0x00502af1 */
+#define g_glewArbTextureNpot             MugenVita_GLArbTextureNpot                   /* 0x00502b24 */
+#define g_glewExtBlendLogicOp            MugenVita_GLExtBlendLogicOp                  /* 0x00502b54 */
+#define g_glewExtFramebufferObject       MugenVita_GLExtFramebufferObject             /* 0x00502b68 */
+extern int MugenVita_GLVersion20;
+extern int MugenVita_GLArbFragmentProgram;
+extern int MugenVita_GLArbTextureNpot;
+extern int MugenVita_GLExtBlendLogicOp;
+extern int MugenVita_GLExtFramebufferObject;
+#endif
 extern SelectInfo * g_selectInfo; /* 0x00503388 */
 extern int g_selectRows; /* 0x0050338c */
 extern int g_selectColumns; /* 0x00503390 */

@@ -154,11 +154,38 @@ int Title_Init(ScreenLoop *screen, TitleState *st)
                 "non-commercial use only.\nPlease read the license in readme.txt before using this software.\n",
                 sizeof(st->text) - 1 - len);
     }
+#ifdef MUGEN_VITA_GL
+    /*
+     * PS Vita port (port/psvita): size the info box to the screen.
+     *
+     * The 600x400 below are the original's pixel values for a 640x480 target,
+     * where the box spans 94% of the width. The motif scales its own content by
+     * motif_scale (system.def says localcoord = 320,240, so at 960x544 the scale
+     * is 3.0), but this box does not: at 960 wide the fixed 600 leaves it 62% of
+     * the screen while the text inside is drawn at 3x, so lines ran out of room
+     * and were clipped at the right edge.
+     *
+     * Keeping the original 600/640 and 400/480 proportions gives the box, and so
+     * the text, the width the motif was designed to have.
+     */
+    st->box_w = g_targetWidth * 600 / 640;
+    st->box_h = g_targetHeight * 400 / 480;
+    if (st->box_w > g_targetWidth - 8) {
+        st->box_w = g_targetWidth - 8;
+    }
+    if (st->box_h > g_targetHeight - 8) {
+        st->box_h = g_targetHeight - 8;
+    }
+    st->box_x = st->box_x_hidden = st->box_x_shown = (g_targetWidth - st->box_w) / 2;
+    st->box_y = st->box_y_target = st->box_y_hidden = -(st->box_h + 5);
+    st->box_y_shown = (g_targetHeight - st->box_h) / 2;
+#else
     st->box_x = st->box_x_hidden = st->box_x_shown = (g_targetWidth - 600) / 2;
     st->box_y = st->box_y_target = st->box_y_hidden = -405;
     st->box_y_shown = (g_targetHeight - 400) / 2;
     st->box_w = 600;
     st->box_h = 400;
+#endif
 
     g = g_game;
     if (!g_titleInfoShown) {
@@ -241,7 +268,21 @@ int Title_Update(ScreenLoop *screen, TitleState *st)
         st->chosen_side = 1;
         chosen = 1;
     }
+#ifdef MUGEN_VITA_GL
+    /*
+     * PS Vita port (port/psvita): no key opens the info box on this target.
+     *
+     * It used to toggle on F1 (and, in an earlier revision, on Return), which on
+     * a console means a gamepad button interrupting the mode select with a
+     * licence panel. Removed at request; the box now only appears on its own
+     * when [Config] FirstRun is set, which the packaged mugen.cfg fixes at 0.
+     * The box is still drawn if something else sets box_shown -- this only drops
+     * the key that opened it.
+     */
+    if (st->show_info) {
+#else
     if (key == SDLK_F1 || st->show_info) {
+#endif
         st->box_moving = 1;
         st->box_shown = st->box_shown == 0;
         if (st->box_shown == 1) {
@@ -399,7 +440,11 @@ static void Title_DrawInfoBox(TitleState *st)
         g_gfxFillRect(x1 + 10, ym, x2 - 10, ym + 1, Video_MapRGB(0xFF, 0xFF, 0xFF));
         Infobox_DrawText(st->text, st->box_x + 10, ym + 6);
     }
+#ifdef MUGEN_VITA_GL
+    Infobox_DrawText("Press Circle to continue.", st->box_x + 10, st->box_y - 21 + st->box_h);
+#else
     Infobox_DrawText("Press F1 to continue.", st->box_x + 10, st->box_y - 21 + st->box_h);
+#endif
     Gfx_SetClipRect(0, 0, g_targetWidth, g_targetHeight);
     g_fontWrapMode = wrap;
 }
@@ -476,10 +521,20 @@ int Title_Draw(ScreenLoop *screen, TitleState *st)
                 MUGEN_VERSION_MAJOR, MUGEN_VERSION_MINOR, MUGEN_VERSION_PATCH, MUGEN_VERSION_TAG);
     Font_DrawText("(c) Elecbyte 1999-2013", g_game->font_small, g_targetWidth - 3, y_bar, FONT_ALIGN_RIGHT, 0, 0xC0,
                   0xC0, 0xC0);
+#ifdef MUGEN_VITA_GL
+    /* PS Vita port: name the button that actually does this on the console
+     * (Triangle = F1 = info, Circle = Return = confirm) instead of a key the
+     * device does not have. */
+    Font_DrawText("Press Triangle for info", g_game->font_small, g_targetWidth / 2 - 1,
+                  (int)(st->box_progress * 18.0 + y_bar), FONT_ALIGN_CENTER, 0, 0xC0, 0xC0, 0xC0);
+    Font_DrawText("Press Circle to continue", g_game->font_small, g_targetWidth / 2 - 1,
+                  (int)((y_bar + 18) - st->box_progress * 18.0), FONT_ALIGN_CENTER, 0, 0xC0, 0xC0, 0xC0);
+#else
     Font_DrawText("Press F1 for info", g_game->font_small, g_targetWidth / 2 - 1,
                   (int)(st->box_progress * 18.0 + y_bar), FONT_ALIGN_CENTER, 0, 0xC0, 0xC0, 0xC0);
     Font_DrawText("Press F1 to continue", g_game->font_small, g_targetWidth / 2 - 1,
                   (int)((y_bar + 18) - st->box_progress * 18.0), FONT_ALIGN_CENTER, 0, 0xC0, 0xC0, 0xC0);
+#endif
     return 1;
 }
 

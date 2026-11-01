@@ -113,12 +113,39 @@ static void System_NormalizeCwd(char *cwd)
 void System_Init(void)
 {
     CmdLineArgs *args = g_cmdline;
+#ifdef _WIN32
+    /* Only the SHGetFolderPathA branch below needs this buffer. */
     char fonts[0x200] = { 0 };
+#endif
     GameVars *g;
     int mode;
 
     SDL_putenv("SDL_DISABLE_LOCK_KEYS=1");
+#ifdef MUGEN_VITA_GL
+    /*
+     * PS Vita port (port/psvita): initialise video on its own.
+     *
+     * SDL 1.2's SDL_Init walks its subsystems in a fixed order -- TIMER, AUDIO,
+     * VIDEO, CDROM, JOYSTICK -- and returns -1 at the first failure. Audio is
+     * therefore a hard prerequisite for video: if SDL_AudioInit fails, video is
+     * never initialised at all, and the first symptom is SDL_SetVideoMode
+     * failing with "Can't change video mode" -- which is precisely what this
+     * port hit, and it looks like a graphics bug when it is an audio one.
+     *
+     * The engine ignores SDL_Init's return value (the original did too), so the
+     * failure was silent. Video is mandatory and audio is not, so they are
+     * requested separately and an audio failure is only logged; Sound_Init
+     * deals with audio not working further down.
+     */
+    if (SDL_Init(SDL_INIT_TIMER | SDL_INIT_VIDEO | SDL_INIT_JOYSTICK) < 0) {
+        Log_Printf("SDL video init failed: %s\n", SDL_GetError());
+    }
+    if (SDL_Init(SDL_INIT_AUDIO) < 0) {
+        Log_Printf("SDL audio init failed (video is unaffected): %s\n", SDL_GetError());
+    }
+#else
     SDL_Init(0xFFFF);
+#endif
     g_libraryError = LIBERR_NONE;
     g_unused505200 = 0;
     g_libraryErrorText[0] = '\0';
@@ -262,7 +289,46 @@ void System_Init(void)
     if (!Video_SetMode((int)g->game_coord[0], (int)g->game_coord[1], g->video_width, g->video_height, g->depth,
                        g->video_flags)) {
         Log_Printf("failed. ");
+#ifdef MUGEN_VITA_GL
+        /*
+         * PS Vita port (port/psvita): fall back to the software renderer
+         * instead of giving up.
+         *
+         * VitaSDK's SDL 1.2 has no OpenGL support: its Vita video driver
+         * (SDL_vitavideo.o) is a SceGxm 2D blitter that references no GL
+         * context API at all -- not vitaGL, not egl, nothing. SDL_OPENGL
+         * therefore yields a surface but no context, so Gl_Init's
+         * glGetString calls get NULL and the renderer cannot start. On the
+         * desktop a failure here means the machine genuinely cannot render;
+         * on the Vita it means the requested renderer is not available and a
+         * working one is.
+         *
+         * The System renderer needs nothing but an SDL surface to blit to,
+         * which is exactly what this video driver provides. config.c forces
+         * depth 16 and takes the game size for the System renderer, so those
+         * are mirrored here.
+         */
+        if (g_renderMode != RENDER_SYSTEM) {
+            Log_Printf("Falling back to the system renderer. ");
+            g_renderMode = RENDER_SYSTEM;
+            g_game->render_mode = RENDER_SYSTEM;
+            g_game->depth = 16;
+            g_game->stage_fit = 0;
+            g_game->system_fit = 0;
+            Gfx_SelectRenderer(RENDER_SYSTEM);
+            g_libraryError = LIBERR_NONE;
+            if (!Video_SetMode((int)g_game->game_coord[0], (int)g_game->game_coord[1],
+                               (int)g_game->game_width, (int)g_game->game_height, g_game->depth,
+                               g_game->video_flags)) {
+                Log_Printf("failed. ");
+                Error_Exit();
+            }
+        } else {
+            Error_Exit();
+        }
+#else
         Error_Exit();
+#endif
     }
     Log_Printf("success...");
     if (g_bgmInitialized && (g_game->video_flags & VIDEO_FULLSCREEN)) {
