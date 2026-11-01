@@ -378,6 +378,18 @@ int Sdl2_GL_SetAttribute(SDL_GLattr attr, int value)
     if (attr == SDL_GL_SWAP_CONTROL) {
         g_sdl2Video.swap_interval = value;
         g_sdl2Video.vsync_applied = 0;
+        /*
+         * SDL 1.2 let this be set before the surface existed. SDL2 has no such
+         * attribute -- vsync is a property of a live context -- so the value is
+         * recorded here and applied at context creation. When a context already
+         * exists it must be applied immediately: the vretrace toggle is the
+         * in-match Ctrl+V debug key, and deferring it to the next video mode
+         * change meant the setting did nothing until the mode was re-set.
+         */
+        if (g_sdl2Video.gl != NULL) {
+            SDL_GL_SetSwapInterval(value != 0);
+            g_sdl2Video.vsync_applied = 1;
+        }
         return 0;
     }
     return SDL_GL_SetAttribute(attr, value);

@@ -396,14 +396,52 @@ survives arrow/Home/End/Insert/F1/Pause/Delete presses and a live window resize
 during a match; `mugen.log` from the same session still ends at `Match loop
 init`.
 
+### Stage 2 verified: window and presentation
+
+All three renderers now run on SDL2 and are checked against the frozen SDL 1.2
+`mugen.log` (quick VS, `-nosound -p1 kfm -p2 kfm`, `tools/compare_logs.py`):
+
+| `[Video] RenderMode` | Result |
+| --- | --- |
+| `System` (streaming texture) | log identical to the SDL 1.2 baseline |
+| `OpenGL` (window + GL context) | log identical to the SDL 1.2 baseline |
+| `OpenGLScreen` (GL context) | log identical to the SDL 1.2 baseline |
+
+The GL path is genuinely initialised, not silently skipped: a temporary probe in
+`Gl_Init` reported `ver=4.6.0 rend=Intel(R) Graphics maxtex=16384 fb=1 npot=1
+fp=1`, i.e. the full GL 2.0 + framebuffer-object + fragment-program set the
+renderer requires is present through the SDL2-created context.
+
+`Video_SetFullscreen` works (windowed and fullscreen starts both reach
+`Match loop init`), and `SDL_GL_SWAP_CONTROL` / `VRetrace = 1` reports
+`SetSwapInterval(1) rc=0 actual=1`.
+
+#### The resize defect, proven and fixed
+
+Finding #3 turned out to be reachable after all — in `RENDER_OPENGL_SCREEN`, which
+`Video_OnResize` handles by calling `SDL_SetVideoMode` and then immediately using
+the context (`glViewport`, `gluOrtho2D`, `glClear`). Instrumenting both builds
+and resizing a live window gives:
+
+```
+pre-fix (838bd70)   [probe] SetVideoMode 784x561 ... cur_gl=1
+                    [probe] DestroyVideo: gl=00030000 win=01D342F8 is_gl=1   <-- context destroyed
+                    [probe] SetVideoMode 784x561 ...
+post-fix            [probe] SetVideoMode 784x561 ... cur_gl=1
+                    (no DestroyVideo)
+```
+
+So the engine was issuing GL calls on a context it had just deleted. `RENDER_OPENGL`
+does not reach `SDL_SetVideoMode` from a resize at all (it only records the new
+size), which is why the earlier system-mode-only runs never showed it.
+
 ### Still open
 
-- The GL renderer path has not been exercised on this desktop build: the test
-  environment reports `render mode 2` (System), so the context-preserving
-  resize fix is verified structurally but not against live GL rendering.
 - `zoomSurface`'s non-indexed path is still `SDL_BlitScaled`; the differential
   image test listed under "SDL_gfx" above is still outstanding for 16/32-bit
-  surfaces.
+  surfaces. The indexed path (solid TrueType text) is now explicit and tested.
+- Windowed/fullscreen *transitions* at runtime (rather than starts) and display
+  selection have not been exercised.
 - Joystick hot-plug, text input on the desktop console, and audio (every run
   here used `-nosound`) are unverified.
 - The Linux target has not been built with `SDL_BACKEND=2`.
