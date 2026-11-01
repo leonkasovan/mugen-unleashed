@@ -772,12 +772,108 @@ static void Sdl2_CopySurfaceState(SDL_Surface *src, SDL_Surface *dst)
  * Copying the source pixels directly reproduces SDL_gfx's non-smooth path,
  * which is what both engine call sites ask for (smooth = 0).
  */
-static SDL_Surface *Sdl2_ZoomNearest(SDL_Surface *src, int dw, int dh)
+/*
+ * Source coordinate for output column x, using SDL_gfx's two sampling rules.
+ *
+ * They are genuinely different and must not be unified:
+ *
+ *  - The RGBA path (_zoomSurfaceRGBA) truncates the step once to 16.16
+ *    fixed point and then extracts each coordinate with >> 16:
+ *        step = floor(65536 * src / dst)
+ *        sx   = (x * step) >> 16
+ *    The quantised step makes the mapping drift by a pixel on some ratios: for
+ *    16 -> 12 the step is 87381, so x=3 gives 262143 >> 16 = 3 where exact
+ *    arithmetic gives 4. A floating-point accumulator cannot reproduce that,
+ *    because the error is introduced by truncating the step, not accumulated.
+ *
+ *  - The indexed path (_zoomSurfaceY) walks integer remainders instead:
+ *    pos += src per output pixel, emitting pos for each multiple of dst.
+ *
+ * Both were confirmed against the kit's libSDL_gfx.a image by image.
+ */
+#define SDLGFX_FP_ONE 65536
+
+static int Sdl2_ZoomStep(int src_len, int dst_len)
+{
+    return (SDLGFX_FP_ONE * src_len) / dst_len;
+}
+
+static int Sdl2_ZoomRgbaCoord(int x, int step)
+{
+    return (x * step) >> 16;
+}
+
+/* Integer remainder accumulation, emitting `pos` when the running numerator
+ * reaches dst_len. `rem` carries across calls. */
+static int Sdl2_ZoomIndexedCoord(int src_len, int dst_len, int *rem, int *pos)
+{
+    int out = *pos;
+
+    *rem += src_len;
+    while (*rem >= dst_len) {
+        *rem -= dst_len;
+        (*pos)++;
+    }
+    return out;
+}
+
+/*
+ * RGB555 (15bpp) source -> ARGB8888 by shifting.
+ *
+ * SDL 1.2's blitter widened a 5-bit channel with >>loss << loss, which for a
+ * 5-bit value is a plain << 3: pixel 0x0025 reads as B=0x28. SDL2's converter
+ * scales instead and gives 0x29, so the RGB555 case is handled here. RGB565 is
+ * 16 bits wide, takes the other path in SDL 1.2, and agrees with SDL2's
+ * converter -- it uses that.
+ */
+static SDL_Surface *Sdl2_Promote16(SDL_Surface *src)
 {
     SDL_Surface *dst;
     int x, y;
-    int spitch, dpitch, bpp;
 
+    dst = SDL_CreateRGBSurfaceWithFormat(0, src->w, src->h, 32, SDL_PIXELFORMAT_ARGB8888);
+    if (dst == NULL) {
+        return NULL;
+    }
+    if (SDL_LockSurface(src) != 0) {
+        SDL_FreeSurface(dst);
+        return NULL;
+    }
+    if (SDL_LockSurface(dst) != 0) {
+        SDL_UnlockSurface(src);
+        SDL_FreeSurface(dst);
+        return NULL;
+    }
+    for (y = 0; y < src->h; y++) {
+        const Uint16 *srow = (const Uint16 *)((const Uint8 *)src->pixels + y * src->pitch);
+        Uint32 *drow = (Uint32 *)((Uint8 *)dst->pixels + y * dst->pitch);
+
+        for (x = 0; x < src->w; x++) {
+            Uint16 v = srow[x];
+            Uint32 r = ((v & src->format->Rmask) >> src->format->Rshift) << src->format->Rloss;
+            Uint32 g = ((v & src->format->Gmask) >> src->format->Gshift) << src->format->Gloss;
+            Uint32 b = ((v & src->format->Bmask) >> src->format->Bshift) << src->format->Bloss;
+
+            drow[x] = 0xFF000000u | ((r & 0xFF) << 16) | ((g & 0xFF) << 8) | (b & 0xFF);
+        }
+    }
+    SDL_UnlockSurface(dst);
+    SDL_UnlockSurface(src);
+    return dst;
+}
+
+static SDL_Surface *Sdl2_ZoomNearest(SDL_Surface *src, int dw, int dh)
+{
+    SDL_Surface *dst;
+    int x;
+    int spitch, dpitch, bpp;
+    int indexed = src->format->palette != NULL;
+    int step_x = 0, step_y = 0;
+
+    if (!indexed) {
+        step_x = Sdl2_ZoomStep(src->w, dw);
+        step_y = Sdl2_ZoomStep(src->h, dh);
+    }
     dst = SDL_CreateRGBSurfaceWithFormat(0, dw, dh, src->format->BitsPerPixel, src->format->format);
     if (dst == NULL) {
         return NULL;
@@ -795,20 +891,45 @@ static SDL_Surface *Sdl2_ZoomNearest(SDL_Surface *src, int dw, int dh)
     bpp = src->format->BytesPerPixel;
     spitch = src->pitch;
     dpitch = dst->pitch;
-    for (y = 0; y < dh; y++) {
-        int sy = (int)((long long)y * src->h / dh);
+    if (indexed) {
+        int rem_y = 0, pos_y = 0;
+        int y;
 
-        if (sy >= src->h) {
-            sy = src->h - 1;
-        }
-        for (x = 0; x < dw; x++) {
-            int sx = (int)((long long)x * src->w / dw);
+        for (y = 0; y < dh; y++) {
+            int sy = Sdl2_ZoomIndexedCoord(src->h, dh, &rem_y, &pos_y);
+            int rem_x = 0, pos_x = 0;
 
-            if (sx >= src->w) {
-                sx = src->w - 1;
+            if (sy >= src->h) {
+                sy = src->h - 1;
             }
-            memcpy((Uint8 *)dst->pixels + y * dpitch + x * bpp,
-                   (const Uint8 *)src->pixels + sy * spitch + sx * bpp, (size_t)bpp);
+            for (x = 0; x < dw; x++) {
+                int sx = Sdl2_ZoomIndexedCoord(src->w, dw, &rem_x, &pos_x);
+
+                if (sx >= src->w) {
+                    sx = src->w - 1;
+                }
+                memcpy((Uint8 *)dst->pixels + y * dpitch + x * bpp,
+                       (const Uint8 *)src->pixels + sy * spitch + sx * bpp, (size_t)bpp);
+            }
+        }
+    } else {
+        int y;
+
+        for (y = 0; y < dh; y++) {
+            int sy = Sdl2_ZoomRgbaCoord(y, step_y);
+
+            if (sy >= src->h) {
+                sy = src->h - 1;
+            }
+            for (x = 0; x < dw; x++) {
+                int sx = Sdl2_ZoomRgbaCoord(x, step_x);
+
+                if (sx >= src->w) {
+                    sx = src->w - 1;
+                }
+                memcpy((Uint8 *)dst->pixels + y * dpitch + x * bpp,
+                       (const Uint8 *)src->pixels + sy * spitch + sx * bpp, (size_t)bpp);
+            }
         }
     }
     SDL_UnlockSurface(dst);
@@ -820,7 +941,6 @@ SDL_Surface *zoomSurface(SDL_Surface *src, double zoomx, double zoomy, int smoot
 {
     int dw, dh;
     SDL_Surface *dst;
-    Uint32 format;
 
     if (src == NULL) {
         return NULL;
@@ -874,8 +994,25 @@ SDL_Surface *zoomSurface(SDL_Surface *src, double zoomx, double zoomy, int smoot
      */
     /* BitsPerPixel is 15 or 16 for the two 16-bit formats (RGB555 and RGB565),
      * so test the byte width instead of guessing at the bit count. */
+    /*
+     * SDL_gfx promotes 16-bit sources to 32-bit output (measured: an RGB565
+     * surface comes back as 32bpp), so the scaling itself runs on 32-bit
+     * pixels. The conversion uses SDL2's own converter for the same reason
+     * SDL_gfx uses SDL_ConvertSurface: any channel-expansion rounding then
+     * comes from SDL, not from this shim, and the remaining comparison is
+     * about the scaling.
+     */
     if (src->format->BytesPerPixel == 2) {
-        SDL_Surface *promoted = SDL_ConvertSurfaceFormat(src, SDL_PIXELFORMAT_ARGB8888, 0);
+        /*
+         * RGB565 goes through SDL2's converter, which scales and which the
+         * differential test has proven identical. RGB555 takes the shift path
+         * below: it is 15 bits wide, so SDL 1.2's blitter widened it with a
+         * shift rather than a scale (5 -> 0x28, not 0x29), and SDL2's converter
+         * does not reproduce that.
+         */
+        SDL_Surface *promoted = (src->format->BitsPerPixel == 16)
+                                    ? SDL_ConvertSurfaceFormat(src, SDL_PIXELFORMAT_ARGB8888, 0)
+                                    : Sdl2_Promote16(src);
         int had_alpha = src->format->Amask != 0;
 
         if (promoted == NULL) {
@@ -884,9 +1021,6 @@ SDL_Surface *zoomSurface(SDL_Surface *src, double zoomx, double zoomy, int smoot
         dst = Sdl2_ZoomNearest(promoted, dw, dh);
         SDL_FreeSurface(promoted);
         if (dst != NULL && !had_alpha) {
-            /* The promotion gives the intermediate an alpha channel the source
-             * never had. SDL_gfx's result keeps the source's (absent) alpha, so
-             * clear the blend state the promotion introduced. */
             SDL_SetSurfaceBlendMode(dst, SDL_BLENDMODE_NONE);
         }
         return dst;
