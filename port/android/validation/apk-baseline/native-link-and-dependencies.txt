@@ -1,0 +1,41 @@
+=== NDK ===
+Pkg.Revision = 27.1.12297006
+Pkg.BaseRevision = 27.1.12297006
+=== JDK ===
+openjdk version "17.0.19" 2026-04-21
+=== SONAME/NEEDED (libmain + SDL2 + mixer + ttf) ===
+--- lib/arm64-v8a/libmain.so:
+  0x0000000000000001 (NEEDED)       Shared library: [libSDL2.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libSDL2_mixer.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libSDL2_ttf.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libGLESv1_CM.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libGLESv2.so]
+  0x0000000000000001 (NEEDED)       Shared library: [liblog.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libandroid.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libm.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libdl.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libz.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libc.so]
+  0x000000000000000e (SONAME)       Library soname: [libmain.so]
+--- lib/arm64-v8a/libSDL2.so:
+  0x0000000000000001 (NEEDED)       Shared library: [libm.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libOpenSLES.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libdl.so]
+  0x0000000000000001 (NEEDED)       Shared library: [liblog.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libandroid.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libGLESv1_CM.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libGLESv2.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libc.so]
+  0x000000000000000e (SONAME)       Library soname: [libSDL2.so]
+--- lib/arm64-v8a/libSDL2_mixer.so:
+  0x0000000000000001 (NEEDED)       Shared library: [libSDL2.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libm.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libdl.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libc.so]
+  0x000000000000000e (SONAME)       Library soname: [libSDL2_mixer.so]
+--- lib/arm64-v8a/libSDL2_ttf.so:
+  0x0000000000000001 (NEEDED)       Shared library: [libSDL2.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libm.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libdl.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libc.so]
+  0x000000000000000e (SONAME)       Library soname: [libSDL2_ttf.so]
