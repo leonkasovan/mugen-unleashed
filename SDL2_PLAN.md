@@ -474,7 +474,7 @@ answer (`video: vsync 1 set (driver reports 1)`) instead of recording success
 unconditionally, and prints on its own line so the reconstructed
 `Initializing graphics...` line stays byte-comparable with the SDL 1.2 baseline.
 
-### Stage 3 verified: keys, text and joysticks
+### Stage 3 partially verified: keys, text and joysticks
 
 The three input paths were checked at runtime rather than by reading the code.
 `tools/test_sdl2input.sh` links the engine's real `pads.c`, `keyboard.c` and
@@ -500,6 +500,46 @@ fails the three multi-byte cases.
 SDL2 calls it implicitly when the video subsystem initialises on desktop, so
 `SDL_TEXTINPUT` arrives by default.
 
+#### Why this was only "partially" verified at first, and three bugs it hid
+
+The component tests above call `Keyboard_HandleKey()` directly and substitute a
+`TextSink` for the console. That is not the path the game takes, and a review of
+the Stage 3 commit found three integration defects behind it. All were real:
+
+1. **Console navigation was dead.** `Console_HandleKey()` compares `key` against
+   `SDLK_UP`/`SDLK_HOME`/... which under SDL2 are `scancode|SDLK_SCANCODE_MASK`
+   (1073741906, 1073741898), while `events.c` delivers the engine numbering
+   (273, 278). Home, End, the arrows and Delete could never match. The console
+   now uses `CONSOLE_KEY_*` constants in SDL 1.2's numbering, which is what the
+   engine stores under both backends.
+2. **Backspace and Enter did nothing.** They were reached through the unicode
+   field (`ch == 8`, `ch == 0xD`), and SDL2 hands control keys over with
+   unicode 0 — `events.c` deliberately sends 0 for everything outside printable
+   ASCII. Matching on the key as well fixes it. That match also has to test
+   `pressed`: under SDL 1.2 the unicode field was only filled on KEYDOWN, so a
+   release could never match; keying off the key alone applied both twice and
+   the second Backspace deleted a character the user never typed. That was
+   caught by the new test, not by reading the code.
+3. **A multi-codepoint text event lost characters.** SDL2 only splits at
+   `SDL_TEXTINPUTEVENT_TEXT_SIZE` (32 bytes), so a single event can carry
+   several codepoints; the decoder read only the first, dropping the "b" from
+   `"ab"`. It now walks the whole string, and stops rather than reading past the
+   buffer if a sequence is truncated.
+
+They were fixed and are now covered by `tools/test_sdl2input.sh`, which drives
+`Events_Poll()` into the real `Console_HandleKey()` and asserts on the console's
+own line buffer: typing `"ab"` in one event, Backspace removing exactly one
+character, Home/End/Left/Right moving the cursor, and Enter clearing the input
+and echoing the line. Reverting each fix fails these assertions (navigation →
+`Home moved the cursor to the start`; unicode-only Backspace → `Backspace
+deleted the last character`; first-codepoint-only decode → `the line reads
+abc`).
+
+The console test builds the console from `ConsoleInput_Init`/`ConsoleView_Init`
+with `tools/contheme_stub.c` standing in for the debug command table, the font
+and the player helpers `console.c` also contains. It exercises the real key
+handler and line buffer, not the debug commands themselves.
+
 ### Still open
 
 - `zoomSurface`'s non-indexed path is still `SDL_BlitScaled`; the differential
@@ -507,6 +547,9 @@ SDL2 calls it implicitly when the video subsystem initialises on desktop, so
   surfaces. The indexed path (solid TrueType text) is now explicit and tested.
 - Windowed/fullscreen *transitions* at runtime (rather than starts) and display
   selection have not been exercised.
+- **Console editing and command submission** are covered against the handler
+  and its line buffer, but not end to end: the submitted line is queued, not
+  executed, because the debug commands need a running match.
 - Joystick **hot-plug** is still unverified: the pad test attaches virtual
   devices before `Pads_Init` runs. The engine has no
   `SDL_JOYDEVICEADDED`/`REMOVED` handling at all — SDL 1.2 had none either — so

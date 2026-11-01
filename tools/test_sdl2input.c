@@ -39,6 +39,9 @@ IntArray g_keyQueue;
 InputHandlerFn g_keyHandler;
 InputHandlerFn g_padHandler;
 int g_padsChanged;
+Console *g_console;
+GameVars *g_game;
+int g_outOfMemory;
 Uint32 g_videoSdlFlags;
 ActivateFn g_onActivate;
 int g_quitRequested;
@@ -193,6 +196,8 @@ static int text_sink_calls;
 static unsigned int text_sink_unicode;
 static int text_sink_key;
 
+
+
 static void __cdecl TextSink(unsigned int unicode, int key, int pressed)
 {
     (void)pressed;
@@ -283,6 +288,134 @@ static void test_text_input(void)
     Keyboard_SetEventHandler(NULL);
 }
 
+
+/* --------------------------------------------------------------- console */
+
+/*
+ * The real console, driven the way the game drives it: an SDL event is queued,
+ * Events_Poll() runs, and the console's own handler edits its line buffer.
+ *
+ * These are the integration cases the component tests cannot see. The console
+ * compares `key` against SDL 1.2 keycodes (273 = Up) while SDL2 spells SDLK_UP
+ * as scancode|0x40000000, and it reads Backspace/Enter from the unicode field,
+ * which SDL2 no longer fills in for control keys.
+ */
+static void console_type(const char *utf8)
+{
+    SDL_Event ev;
+
+    memset(&ev, 0, sizeof(ev));
+    ev.type = SDL_TEXTINPUT;
+    SDL_strlcpy(ev.text.text, utf8, sizeof(ev.text.text));
+    SDL_PushEvent(&ev);
+    Events_Poll();
+}
+
+static void console_key(int engine_key)
+{
+    SDL_Event ev;
+
+    memset(&ev, 0, sizeof(ev));
+    ev.type = SDL_KEYDOWN;
+    ev.key.keysym.sym = (SDL_Keycode)Sdl2_SdlKeyForEngineKey(engine_key);
+    ev.key.keysym.scancode = SDL_GetScancodeFromKey((SDL_Keycode)Sdl2_SdlKeyForEngineKey(engine_key));
+    SDL_PushEvent(&ev);
+    Events_Poll();
+    ev.type = SDL_KEYUP;
+    SDL_PushEvent(&ev);
+    Events_Poll();
+}
+
+static const char *console_line(void)
+{
+    return g_console != NULL ? g_console->input.text->buf : "";
+}
+
+static void test_console_integration(void)
+{
+    /*
+     * Console_Create() also registers the debug commands, which needs the whole
+     * game. What the key handler actually touches is the input line buffer, the
+     * view and the GameVars flags, so the console is built from those.
+     *
+     * GameVars first: ConsoleView_Init() reads g_game->font_medium.
+     */
+    g_game = (GameVars *)calloc(1, sizeof(GameVars));
+    g_console = (Console *)calloc(1, sizeof(Console));
+    if (g_game == NULL || g_console == NULL || !ConsoleInput_Init(&g_console->input) ||
+        !ConsoleView_Init(&g_console->view)) {
+        printf("SKIP: could not build a console\n");
+        return;
+    }
+    /* Console_Create() allocates these; the key handler uses scratch to build
+     * each inserted character and the view to record the echoed line. */
+    g_console->scratch = ConText_Create(0x202);
+    g_console->bindings = KeybindList_Create();
+    /* Enter submission appends the submitted line to the pending-command list,
+     * which Console_Create() otherwise allocates. */
+    g_console->pending = (DynArray *)calloc(1, sizeof(DynArray));
+    if (g_console->pending != NULL) {
+        g_console->pending->data = calloc(0x40, 4);
+        g_console->pending->capacity = 0x40;
+        g_console->pending->elem_size = 4;
+    }
+    if (g_console->scratch == NULL || g_console->bindings == NULL || g_console->pending == NULL) {
+        printf("SKIP: could not finish the console\n");
+        return;
+    }
+    if (g_console->bindings == NULL) {
+        printf("SKIP: could not create the binding list\n");
+        return;
+    }
+    /* Collect the console's key events the way the game does. */
+    Keyboard_SetEventHandler(Console_HandleKey);
+    g_keyEventHandler = Console_HandleKey;
+
+    /* Open the console. */
+    if (g_console->open == 0) {
+        Console_Toggle();
+    }
+    check(g_console->open != 0, "the console opened");
+    /* ConsoleInput_Init() already points the cursor at the input text; just
+     * clear the line and put the cursor back at the start. */
+    ConText_Set(g_console->input.text, "");
+    g_console->input.cursor.chars = 0;
+    g_console->input.cursor.bytes = 0;
+
+    /* Typing through SDL_TEXTINPUT reaches the line buffer. */
+    console_type("ab");
+    check(strcmp(console_line(), "ab") == 0, "typing \"ab\" in one event put both characters on the line");
+
+    /* Backspace removes the last character. SDL2 sends it as a key with
+     * unicode 0; the console used to look for unicode 8. */
+    console_key(8 /* SDL 1.2 SDLK_BACKSPACE */);
+    check(strcmp(console_line(), "a") == 0, "Backspace deleted the last character");
+
+    /* Home/End and the arrows are compared against SDL 1.2 keycodes. */
+    console_type("bc");
+    check(strcmp(console_line(), "abc") == 0, "the line reads abc");
+    console_key(278 /* Home */);
+    check(g_console->input.cursor.chars == 0, "Home moved the cursor to the start");
+    console_key(279 /* End */);
+    check(g_console->input.cursor.chars == 3, "End moved the cursor to the end");
+    console_key(276 /* Left */);
+    check(g_console->input.cursor.chars == 2, "Left moved the cursor left");
+    console_key(275 /* Right */);
+    check(g_console->input.cursor.chars == 3, "Right moved the cursor right");
+
+    /* Enter submits: the console echoes the line and clears its input. */
+    {
+        unsigned int lines_before = g_console->view.lines->count;
+
+        console_key(13 /* SDLK_RETURN */);
+        check(strcmp(console_line(), "") == 0, "Enter cleared the input line");
+        check(g_console->view.lines->count != lines_before, "Enter echoed the line into the output");
+    }
+
+    g_keyEventHandler = NULL;
+    Keyboard_SetEventHandler(NULL);
+}
+
 int main(void)
 {
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
@@ -295,6 +428,8 @@ int main(void)
     test_key_delivery();
     printf("text input:\n");
     test_text_input();
+    printf("console integration:\n");
+    test_console_integration();
     SDL_Quit();
     if (failures == 0) {
         printf("ok: sdl2 input tests passed\n");

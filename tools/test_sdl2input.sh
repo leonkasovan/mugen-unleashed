@@ -28,7 +28,9 @@ $CC -m32 -std=gnu11 -O1 -g -Wall \
     -Ithird_party/lua-5.1.4/src -Ithird_party/sdk/include \
     -Ithird_party/libresample/include \
     $(pkg-config --cflags $PKGS | sed 's/-Dmain=SDL_main//') \
-    tools/test_sdl2input.c src/pads.c src/keyboard.c src/events.c src/sdl2compat.c \
+    tools/test_sdl2input.c src/pads.c src/keyboard.c src/events.c src/sdl2compat.c src/console.c \
+    src/keybind.c tools/contheme_stub.c \
+    $(ls third_party/lua-5.1.4/src/*.c) \
     -o "$OUT/test_sdl2input" \
     $(pkg-config --libs --static $PKGS | sed 's/-lSDL2main//') \
     -lopengl32 -lglu32 -lwinmm -lshell32 -luser32 -lgdi32 -lm
