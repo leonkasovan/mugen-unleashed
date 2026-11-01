@@ -14,6 +14,9 @@
 /* Only the declarations, not the engine's headers: this test links against the
  * shim and SDL2, not the engine. */
 int Sdl2_EngineKey(int sdl_keycode);
+SDL_Keycode Sdl2_SdlKeyForEngineKey(int engine_key);
+const char *Sdl2_KeyName(int engine_key);
+SDL_Surface *zoomSurface(SDL_Surface *src, double zoomx, double zoomy, int smooth);
 
 /* The shim logs through the engine's logger; this test is not the engine. */
 void Log_Printf(const char *fmt, ...);
@@ -65,6 +68,16 @@ static void test_translation(void)
         {"SDLK_QUOTE", SDLK_QUOTE, '\''},
         {"SDLK_KP_ENTER", SDLK_KP_ENTER, 271},
         {"SDLK_CAPSLOCK", SDLK_CAPSLOCK, 301},
+        /* Keypad digits (SDL 1.2 256..265) and the lock keys: forward and
+         * inverse have to agree or a key can be pressed but never released,
+         * and focus resync disagrees with event delivery. */
+        {"SDLK_KP_0", SDLK_KP_0, 256},
+        {"SDLK_KP_5", SDLK_KP_5, 261},
+        {"SDLK_KP_9", SDLK_KP_9, 265},
+        {"SDLK_NUMLOCKCLEAR", SDLK_NUMLOCKCLEAR, 300},
+        {"SDLK_SCROLLLOCK", SDLK_SCROLLLOCK, 302},
+        {"SDLK_RSHIFT", SDLK_RSHIFT, 303},
+        {"SDLK_LSHIFT", SDLK_LSHIFT, 304},
     };
     size_t i;
 
@@ -136,6 +149,43 @@ static void test_translation(void)
     check(Sdl2_EngineKey(SDLK_LGUI) == 0, "SDLK_LGUI has no SDL 1.2 number and must translate to 0");
     check(Sdl2_EngineKey(SDLK_PRINTSCREEN) == 0, "SDLK_PRINTSCREEN has no SDL 1.2 number");
     check(Sdl2_SdlKeyForEngineKey(0) == SDLK_UNKNOWN, "engine key 0 has no SDL2 key");
+
+    /*
+     * Every engine key with an SDL2 counterpart must reverse back to the
+     * keycode it came from. This is the property that was broken for the
+     * keypad digits and the lock keys.
+     */
+    for (i = 0; i < ENGINE_KEY_COUNT; i++) {
+        SDL_Keycode sdl_key = Sdl2_SdlKeyForEngineKey(i);
+        char msg[128];
+
+        if (sdl_key == SDLK_UNKNOWN) {
+            continue;
+        }
+        snprintf(msg, sizeof(msg), "engine key %d -> SDL2 0x%X does not translate back", i, (unsigned)sdl_key);
+        check(Sdl2_EngineKey((int)sdl_key) == i, msg);
+    }
+
+    /*
+     * Binding-menu key names. Running the translation the wrong way round made
+     * every special key name empty, so these must match SDL2's own name for the
+     * keycode an engine key maps to.
+     */
+    {
+        static const int named[] = {273 /* Up */, 274 /* Down */, 282 /* F1 */, 306 /* LCtrl */,
+                                    19 /* Pause */, 304 /* LShift */};
+        size_t n;
+
+        for (n = 0; n < sizeof(named) / sizeof(named[0]); n++) {
+            const char *expected = SDL_GetKeyName(Sdl2_SdlKeyForEngineKey(named[n]));
+            const char *got = Sdl2_KeyName(named[n]);
+            char msg[160];
+
+            snprintf(msg, sizeof(msg), "key name for engine key %d is \"%s\", expected \"%s\"", named[n],
+                     got != NULL ? got : "(null)", expected != NULL ? expected : "(null)");
+            check(got != NULL && expected != NULL && got[0] != '\0' && strcmp(got, expected) == 0, msg);
+        }
+    }
 }
 
 /*
@@ -149,7 +199,9 @@ static void test_zoom_palette(void)
     SDL_Surface *src;
     SDL_Surface *dst;
     SDL_Color colors[2];
-    Uint8 text_index;
+    Uint32 color_key = 0xFFFFFFFFu;   /* a value the test can tell apart from 0 */
+    Uint8 *spix;
+    int x, y;
 
     src = SDL_CreateRGBSurfaceWithFormat(0, 4, 4, 8, SDL_PIXELFORMAT_INDEX8);
     if (src == NULL) {
@@ -165,13 +217,28 @@ static void test_zoom_palette(void)
     colors[1].b = 16;
     colors[1].a = 255;
     SDL_SetPaletteColors(src->format->palette, colors, 0, 2);
-    /* Mark entry 0 as the colour key, the way TTF_RenderUTF8_Solid does. */
+
+    /*
+     * A real glyph, not an empty image: the top-left 2x2 block is index 1 (the
+     * text) and everything else is index 0 (the colour key). An all-zero source
+     * would satisfy a palette-only check without ever proving that glyph pixels
+     * survive the scale, which is the property src/font.c depends on.
+     */
     memset(src->pixels, 0, (size_t)src->pitch * 4);
+    spix = (Uint8 *)src->pixels;
+    for (y = 0; y < 2; y++) {
+        for (x = 0; x < 2; x++) {
+            spix[y * src->pitch + x] = 1;
+        }
+    }
+    /* Mark entry 0 as the colour key, the way TTF_RenderUTF8_Solid does. */
     SDL_SetColorKey(src, SDL_TRUE, 0);
 
     dst = zoomSurface(src, 2.0, 2.0, 0);
     check(dst != NULL, "zoomSurface returned NULL for an indexed surface");
     if (dst != NULL) {
+        Uint8 *dpix = NULL;
+
         check(dst->w == 8 && dst->h == 8, "zoomSurface doubled the size");
         check(dst->format->BitsPerPixel == 8, "zoomSurface kept the 8-bit format");
         check(dst->format->palette != NULL, "the destination has a palette");
@@ -183,11 +250,30 @@ static void test_zoom_palette(void)
             check(dst->format->palette->colors[1].b == colors[1].b,
                   "zoomed surface kept palette entry 1 blue");
         }
-        /* The colour key has to survive too, or the background stops being
-         * transparent. */
-        if (SDL_GetColorKey(dst, (Uint32 *)&text_index) != 0) {
-            check(0, "zoomed surface lost its colour key");
+
+        /* The glyph itself: the 2x2 block becomes 4x4 at the top-left, and
+         * every other pixel stays on the colour-key index. */
+        if (SDL_LockSurface(dst) == 0) {
+            dpix = (Uint8 *)dst->pixels;
+            check(dpix[0 * dst->pitch + 0] == 1 && dpix[0 * dst->pitch + 3] == 1 &&
+                  dpix[3 * dst->pitch + 0] == 1 && dpix[3 * dst->pitch + 3] == 1,
+                  "zoomed glyph pixels kept palette index 1");
+            check(dpix[0 * dst->pitch + 4] == 0 && dpix[4 * dst->pitch + 0] == 0 &&
+                  dpix[7 * dst->pitch + 7] == 0,
+                  "pixels outside the glyph stayed on the colour-key index");
+            check(dpix[4 * dst->pitch + 4] == 0, "the glyph did not grow past 4x4");
+            SDL_UnlockSurface(dst);
+        } else {
+            check(0, "could not lock the zoomed surface");
         }
+
+        /*
+         * The colour key has to survive too, or the background stops being
+         * transparent. SDL_GetColorKey writes a Uint32; passing the address of
+         * a Uint8 was a four-byte write into a one-byte variable.
+         */
+        check(SDL_GetColorKey(dst, &color_key) == 0, "zoomed surface lost its colour key");
+        check(color_key == 0, "the colour key is still index 0");
         SDL_FreeSurface(dst);
     }
     SDL_FreeSurface(src);

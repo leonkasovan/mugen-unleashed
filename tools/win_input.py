@@ -26,19 +26,42 @@ class KEYBDINPUT(ctypes.Structure):
                 ("time", wt.DWORD), ("dwExtraInfo", ctypes.POINTER(wt.ULONG))]
 
 
+class MOUSEINPUT(ctypes.Structure):
+    """Needed even though this script never sends mouse input.
+
+    The native INPUT union holds MOUSEINPUT, KEYBDINPUT and HARDWAREINPUT, so
+    sizeof(INPUT) is the size of the *largest* member. A union holding only
+    KEYBDINPUT is 8 bytes too small, SendInput rejects the mismatched cbSize,
+    and because the return value used to be ignored the script still printed
+    "sent". Keyboard input therefore was not being delivered at all.
+    """
+    _fields_ = [("dx", wt.LONG), ("dy", wt.LONG), ("mouseData", wt.DWORD),
+                ("dwFlags", wt.DWORD), ("time", wt.DWORD),
+                ("dwExtraInfo", ctypes.POINTER(wt.ULONG))]
+
+
+class HARDWAREINPUT(ctypes.Structure):
+    _fields_ = [("uMsg", wt.DWORD), ("wParamL", wt.WORD), ("wParamH", wt.WORD)]
+
+
 class INPUT(ctypes.Structure):
     class _U(ctypes.Union):
-        _fields_ = [("ki", KEYBDINPUT)]
+        _fields_ = [("mi", MOUSEINPUT), ("ki", KEYBDINPUT), ("hi", HARDWAREINPUT)]
     _anonymous_ = ("u",)
     _fields_ = [("type", wt.DWORD), ("u", _U)]
 
 
 def send(vk, up=False):
+    """Injects one key event and insists Windows accepted it."""
     inp = INPUT(type=INPUT_KEYBOARD)
     inp.ki = KEYBDINPUT(wVk=vk, wScan=0,
                         dwFlags=KEYEVENTF_KEYUP if up else 0,
                         time=0, dwExtraInfo=None)
-    u32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+    sent = u32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+    if sent != 1:
+        raise OSError("SendInput failed for vk=0x%02X (returned %d, sizeof(INPUT)=%d)"
+                      % (vk, sent, ctypes.sizeof(INPUT)))
+    return sent
 
 
 def find_window(substr):
