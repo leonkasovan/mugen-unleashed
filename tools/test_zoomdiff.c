@@ -28,11 +28,26 @@
  */
 #ifdef MUGEN_SDL2
 /* SDL2 reports the colour key through SDL_GetColorKey; SDL 1.2 through a flag
- * bit. Reading SDL 1.2's bit in the SDL2 build always said "no key". */
+ * bit plus SDL_PixelFormat.colorkey. Reading SDL 1.2's bit in the SDL2 build
+ * always said "no key", which is why this is split rather than shared. */
 #define ZD_SRCCOLORKEY SDL_TRUE
-#define ZD_HAS_COLORKEY(s) (SDL_GetColorKey((s), &(Uint32){0}) == 0)
-#define ZD_COLOR_KEY(s) (SDL_GetColorKey((s), &(Uint32){0}) == 0 ? \
-                         (Uint32){0} : (Uint32){0})
+
+/* Returns 1 and stores the key in *out when the surface has one, else 0.
+ *
+ * This was a pair of macros that read SDL_GetColorKey twice and threw the
+ * result away -- both ternary arms returned 0 -- so the recorded key value was
+ * always zero. A function is the right shape: the caller needs both the flag
+ * and the value from a single query. */
+static int zd_color_key(SDL_Surface *s, Uint32 *out)
+{
+    Uint32 key = 0;
+
+    if (SDL_GetColorKey(s, &key) != 0) {
+        return 0;
+    }
+    *out = key;
+    return 1;
+}
 /* SDL2 has no return value to inline into an expression; wrap it. */
 static int zd_blend(SDL_Surface *s)
 {
@@ -55,9 +70,15 @@ static Uint8 zd_alpha_mod(SDL_Surface *s)
 #define ZD_SET_COLORS(s, pal, first, n) SDL_SetPaletteColors((s)->format->palette, (pal), (first), (n))
 #else
 #define ZD_SRCCOLORKEY SDL_SRCCOLORKEY
-#define ZD_HAS_COLORKEY(s) (((s)->flags & SDL_SRCCOLORKEY) ? 1 : 0)
-/* SDL 1.2 keeps all of this inside SDL_PixelFormat and reads it directly. */
-#define ZD_COLOR_KEY(s) ((s)->format->colorkey)
+/* SDL 1.2 keeps both the flag and the value in the surface itself. */
+static int zd_color_key(SDL_Surface *s, Uint32 *out)
+{
+    if ((s->flags & SDL_SRCCOLORKEY) == 0) {
+        return 0;
+    }
+    *out = s->format->colorkey;
+    return 1;
+}
 #define ZD_COLOR_MOD(s, r, g, b) \
     do { *(r) = (s)->format->Rloss ? 0 : 0; *(g) = 0; *(b) = 0; } while (0)
 #define ZD_ALPHA_MOD(s) ((s)->format->alpha)
@@ -84,6 +105,7 @@ typedef struct Case {
     Uint32 rmask, gmask, bmask, amask;
     double zx, zy;
     int indexed;                /* fill with a 2-entry palette + colour key */
+    int colorkey;               /* the key index to set; 0 if unused */
 } Case;
 
 static const Case k_cases[] = {
@@ -95,11 +117,19 @@ static const Case k_cases[] = {
     {"rgb565_2x",        16, 16, 16, 0xF800, 0x07E0, 0x001F, 0x0000, 2.0, 2.0, 0},
     {"rgb565_0p75x",     16, 16, 16, 0xF800, 0x07E0, 0x001F, 0x0000, 0.75, 0.75, 0},
     {"rgb555_1p5x",      10, 10, 16, 0x7C00, 0x03E0, 0x001F, 0x0000, 1.5, 1.5, 0},
-    {"indexed_2x",       16, 16,  8, 0, 0, 0, 0, 2.0, 2.0, 1},
-    {"indexed_0p5x",     16, 16,  8, 0, 0, 0, 0, 0.5, 0.5, 1},
-    {"indexed_frac",     13,  7,  8, 0, 0, 0, 0, 1.5, 2.5, 1},
+    {"indexed_2x",       16, 16,  8, 0, 0, 0, 0, 2.0, 2.0, 1, 0},
+    {"indexed_0p5x",     16, 16,  8, 0, 0, 0, 0, 0.5, 0.5, 1, 0},
+    {"indexed_frac",     13,  7,  8, 0, 0, 0, 0, 1.5, 2.5, 1, 0},
     {"one_px_2x",         1,  1, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 2.0, 2.0, 0},
-    {"one_px_indexed",    1,  1,  8, 0, 0, 0, 0, 3.0, 3.0, 1},
+    {"one_px_indexed",    1,  1,  8, 0, 0, 0, 0, 3.0, 3.0, 1, 0},
+    /*
+     * A NONZERO colour key. Every other indexed case keys index 0, which is
+     * indistinguishable from "the key was never read" -- the dump defaulted to
+     * zero and nothing noticed. This one fails if the recorded value is not
+     * carried across, or if the key is silently reset to 0.
+     */
+    {"indexed_key1_2x",  16, 16,  8, 0, 0, 0, 0, 2.0, 2.0, 1, 1},
+    {"indexed_key1_0p5x", 16, 16,  8, 0, 0, 0, 0, 0.5, 0.5, 1, 1},
     {"tall_thin",        1, 17, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 3.0, 0.5, 0},
     /*
      * The ratios that expose SDL_gfx's 16.16 fixed-point step. The behaviour
@@ -164,7 +194,7 @@ static SDL_Surface *make(const Case *c)
         pal[1].a = 255;
 #endif
         ZD_SET_COLORS(s, pal, 0, 2);
-        SDL_SetColorKey(s, ZD_SRCCOLORKEY, 0);
+        SDL_SetColorKey(s, ZD_SRCCOLORKEY, (Uint32)c->colorkey);
     }
     fill(s, c);
     return s;
@@ -204,6 +234,14 @@ static int dump(SDL_Surface *s, const char *path, int src_had_alpha)
      * the source never had. Both are bookkeeping, not appearance; keying the
      * field off the source's own format keeps it meaningful.
      */
+    /*
+     * The colour key is queried here, once, into both fields. They used to be
+     * declared and then never assigned: has_key was read uninitialised and the
+     * recorded value was always zero, so a surface that lost its key -- or
+     * pointed it at the wrong index -- compared equal to one that had it.
+     */
+    has_key = zd_color_key(s, &key);
+
     fprintf(f, "%dx%d bpp=%d pal=%d key=%d/%08X alphamod=%u blend=%d\n", s->w, s->h,
             s->format->BitsPerPixel, s->format->palette != NULL ? s->format->palette->ncolors : 0,
             has_key ? 1 : 0, has_key ? (unsigned)key : 0u, ZD_ALPHA_MOD(s),
