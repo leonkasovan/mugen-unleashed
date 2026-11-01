@@ -952,6 +952,27 @@ void Console_Draw(void)
  * Quirk kept: Delete deletes the character at the cursor, then inserts its
  * unicode value (0x7F).
  */
+/*
+ * Engine key identifiers used by the console, in SDL 1.2's numbering.
+ *
+ * SDL 1.2 spelled these SDLK_DELETE/UP/DOWN/LEFT/RIGHT/HOME/END and they were
+ * small numbers (127, 273..279). SDL2 kept the ASCII ones but moved every
+ * non-printable key above SDLK_SCANCODE_MASK, and events.c converts each key to
+ * the SDL 1.2 numbering before it reaches the console. Naming the values the
+ * engine actually uses keeps this switch correct under both backends -- the
+ * SDL 1.2 build's values are identical.
+ */
+#define CONSOLE_KEY_ESCAPE 27       /* SDL 1.2 SDLK_ESCAPE */
+#define CONSOLE_KEY_DELETE 127      /* SDL 1.2 SDLK_DELETE */
+#define CONSOLE_KEY_UP 273          /* SDL 1.2 SDLK_UP */
+#define CONSOLE_KEY_DOWN 274
+#define CONSOLE_KEY_RIGHT 275
+#define CONSOLE_KEY_LEFT 276
+#define CONSOLE_KEY_HOME 278
+#define CONSOLE_KEY_END 279
+#define CONSOLE_KEY_BACKSPACE 8     /* SDL 1.2 SDLK_BACKSPACE */
+#define CONSOLE_KEY_RETURN 13       /* SDL 1.2 SDLK_RETURN / '\r' */
+
 void Console_HandleKey(unsigned int unicode, int key, int pressed)
 {
     Console *c = g_console;
@@ -981,8 +1002,16 @@ void Console_HandleKey(unsigned int unicode, int key, int pressed)
     }
     if (pressed != 0) {
         c->ticks[2] = 0;
+        /*
+         * The switch compares against the engine's key identifiers, which are
+         * SDL 1.2's keycodes: Escape is 27, Up is 273, Home is 278. Under SDL2
+         * the constants spelled SDLK_UP are scancode|SDLK_SCANCODE_MASK
+         * (1073741906), and events.c delivers the engine numbering, so using
+         * them here would make every navigation case unreachable.
+         * SDL 1.2's spellings are named below for both builds.
+         */
         switch (key) {
-        case SDLK_ESCAPE:
+        case CONSOLE_KEY_ESCAPE:
             if (in->text->chars > 0) {
                 ConText_Set(in->text, "");
                 in->cursor.text = in->text;
@@ -993,41 +1022,58 @@ void Console_HandleKey(unsigned int unicode, int key, int pressed)
             }
             Console_Toggle();
             return;
-        case SDLK_DELETE:
+        case CONSOLE_KEY_DELETE:
             ConCursor_Delete(&in->cursor);
             c = g_console;
             break;
-        case SDLK_UP:
+        case CONSOLE_KEY_UP:
             Console_HistoryMove(1);
             return;
-        case SDLK_DOWN:
+        case CONSOLE_KEY_DOWN:
             Console_HistoryMove(-1);
             return;
-        case SDLK_RIGHT:
+        case CONSOLE_KEY_RIGHT:
             ConCursor_Move(&in->cursor, 1);
             return;
-        case SDLK_LEFT:
+        case CONSOLE_KEY_LEFT:
             ConCursor_Move(&in->cursor, -1);
             return;
-        case SDLK_HOME:
+        case CONSOLE_KEY_HOME:
             in->cursor.bytes = 0;
             in->cursor.chars = 0;
             return;
-        case SDLK_END:
+        case CONSOLE_KEY_END:
             ConCursor_SetChars(&in->cursor, in->cursor.text->chars);
             return;
         default:
             break;
         }
     }
-    if (ch == 8) {
+    /*
+     * Backspace and Enter arrive as KEYS with no unicode under SDL2: events.c
+     * hands control keys over with unicode 0 and lets SDL_TEXTINPUT carry the
+     * printable ones, because SDL2 removed SDL_Keysym.unicode. SDL 1.2 sent
+     * both in one event (unicode 8 for Backspace, 13 for Return), so the
+     * unicode tests below still hold there; the key spelling covers SDL2 and is
+     * equally true of an SDL 1.2 press.
+     */
+    /*
+     * pressed is part of the test, and it has to be: under SDL 1.2 these were
+     * reached through the unicode value, which SDL only filled in for KEYDOWN,
+     * so a release could never match. SDL2 delivers the key itself, and
+     * events.c passes both presses and releases through, so matching on the
+     * key alone applied Backspace and Enter twice -- the second one deleting a
+     * character the user never saw.
+     */
+    if (pressed != 0 &&
+        (ch == CONSOLE_KEY_BACKSPACE || key == CONSOLE_KEY_BACKSPACE)) {
         if (in->cursor.chars > 0) {
             ConCursor_Move(&in->cursor, -1);
             ConCursor_Delete(&in->cursor);
         }
         return;
     }
-    if (ch == 0xD) {
+    if (pressed != 0 && (ch == CONSOLE_KEY_RETURN || key == CONSOLE_KEY_RETURN)) {
         char *line = in->text->buf;
         ConText_Set(c->scratch, c->lua_mode != 0 ? "$> " : "> ");
         ConText_Append(g_console->scratch, in->text);

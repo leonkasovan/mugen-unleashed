@@ -359,28 +359,51 @@ void Events_Poll(void)
          */
         case SDL_TEXTINPUT:
             if (g_keyEventHandler != NULL) {
+                /*
+                 * SDL2 allows several codepoints in one SDL_TEXTINPUT (it only
+                 * splits at SDL_TEXTINPUTEVENT_TEXT_SIZE), and it never splits
+                 * in the middle of a sequence. Decoding just the first one lost
+                 * "b" from a payload like "ab" -- fast typing, an IME commit or
+                 * a paste all produce those. Each codepoint goes to the console
+                 * separately, which is what SDL 1.2 effectively did by sending
+                 * one event per keystroke.
+                 */
                 const unsigned char *s = (const unsigned char *)ev.text.text;
-                unsigned int cp = 0;
-                int extra = 0;
-                int i;
 
-                if (s[0] < 0x80) {
-                    cp = s[0];
-                } else if ((s[0] & 0xE0) == 0xC0) {
-                    cp = s[0] & 0x1F;
-                    extra = 1;
-                } else if ((s[0] & 0xF0) == 0xE0) {
-                    cp = s[0] & 0x0F;
-                    extra = 2;
-                } else if ((s[0] & 0xF8) == 0xF0) {
-                    cp = s[0] & 0x07;
-                    extra = 3;
-                }
-                for (i = 1; i <= extra; i++) {
-                    cp = (cp << 6) | (unsigned int)(s[i] & 0x3F);
-                }
-                if (cp != 0) {
-                    g_keyEventHandler(cp, (int)cp, 1);
+                while (*s != '\0') {
+                    unsigned int cp = 0;
+                    int extra = 0;
+                    int i;
+
+                    if (*s < 0x80) {
+                        cp = *s;
+                    } else if ((*s & 0xE0) == 0xC0) {
+                        cp = (unsigned int)(*s & 0x1F);
+                        extra = 1;
+                    } else if ((*s & 0xF0) == 0xE0) {
+                        cp = (unsigned int)(*s & 0x0F);
+                        extra = 2;
+                    } else if ((*s & 0xF8) == 0xF0) {
+                        cp = (unsigned int)(*s & 0x07);
+                        extra = 3;
+                    } else {
+                        /* A continuation byte with no lead byte: skip it rather
+                         * than spinning on it. */
+                        s++;
+                        continue;
+                    }
+                    s++;
+                    for (i = 0; i < extra; i++) {
+                        if (*s == '\0') {
+                            break;      /* truncated sequence: SDL2 promises not
+                                         * to, but do not read past the buffer */
+                        }
+                        cp = (cp << 6) | (unsigned int)(*s & 0x3F);
+                        s++;
+                    }
+                    if (cp != 0) {
+                        g_keyEventHandler(cp, (int)cp, 1);
+                    }
                 }
             }
             break;
