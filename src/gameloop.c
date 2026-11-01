@@ -780,6 +780,30 @@ int Screen_ReadInput(ScreenLoop *screen)
         screen->input = (unsigned int)r;
         screen->input_side = (int)(r >> 32);
     }
+#ifdef MUGEN_VITA_GL
+    /*
+     * PS Vita port (port/psvita): trace what each screen frame actually acts on.
+     *
+     * Placed after the key/input decode on purpose. The menus do not read
+     * screen->key -- they read screen->input, which is
+     * Input_FindKey(input_keys, 2, screen->key_code) against the built-in
+     * keyboard table. Logging only key/pad (as an earlier revision did) shows
+     * the input arriving but not what the screen makes of it, which is why
+     * "the button does X" kept being unanswerable.
+     *
+     *   key        keyboard queue value (0x200 = release)
+     *   key_code   the input code after g_keyMap translation -- what
+     *              Input_FindKey matches (273 = up, 274 = down, 276 = left,
+     *              275 = right, 13 = Return/Start, 44/46/47/108/59/39 = A..Z)
+     *   input      SCREEN_IN_* bitmask the screen acts on
+     *   side       which player's row matched
+     *   pad        raw joystick queue code (9 + button, 0x100 = release)
+     */
+    if (screen->key != 0 || screen->key_code != 0 || screen->input != 0 || screen->input2 != 0) {
+        Log_Printf("input: kind=%d key=%d key_code=%d input=0x%X side=%d pad=%u\n", screen->kind,
+                   screen->key, screen->key_code, screen->input, screen->input_side, screen->input2);
+    }
+#endif
     key = screen->key;
     if (key != 0 || screen->key_code != 0) {
         screen->idle_ticks = 0;
