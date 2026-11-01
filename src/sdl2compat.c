@@ -158,6 +158,34 @@ static void Sdl2_DestroyVideo(void)
     g_sdl2Video.vsync_applied = 0;
 }
 
+/*
+ * Sets vsync and says so when the driver refuses.
+ *
+ * SDL_GL_SetSwapInterval returns -1 when the request cannot be honoured (no
+ * context, or a driver that does not implement it). Reporting it matters
+ * because the engine's own VRetrace setting then silently does not take
+ * effect, and "the game still runs at the wrong speed" is hard to attribute
+ * without this line.
+ */
+static void Sdl2_ApplySwapInterval(int interval)
+{
+    int rc = SDL_GL_SetSwapInterval(interval);
+
+    /*
+     * Printed on its own line, after the engine's "...success...OK" line is
+     * finished: mugen.log is compared line by line against the SDL 1.2
+     * baseline, and a message spliced into the middle of the reconstructed
+     * "Initializing graphics..." line breaks that comparison for no reason.
+     */
+    if (rc != 0) {
+        Log_Printf("\nvideo: vsync %d refused by the driver (%s)", interval, SDL_GetError());
+        return;
+    }
+    if (SDL_GL_GetSwapInterval() != interval) {
+        Log_Printf("\nvideo: vsync %d requested, driver reports %d", interval, SDL_GL_GetSwapInterval());
+    }
+}
+
 /* -------------------------------------------------------------------- video */
 
 SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
@@ -219,7 +247,7 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
         /* SDL_GL_SWAP_CONTROL arrives before the context exists, so it is
          * recorded by Sdl2_GL_SetAttribute and applied here. */
         if (!g_sdl2Video.vsync_applied && g_sdl2Video.swap_interval >= 0) {
-            SDL_GL_SetSwapInterval(g_sdl2Video.swap_interval);
+            Sdl2_ApplySwapInterval(g_sdl2Video.swap_interval);
             g_sdl2Video.vsync_applied = 1;
         }
         if (g_sdl2Video.placeholder == NULL) {
@@ -387,7 +415,7 @@ int Sdl2_GL_SetAttribute(SDL_GLattr attr, int value)
          * change meant the setting did nothing until the mode was re-set.
          */
         if (g_sdl2Video.gl != NULL) {
-            SDL_GL_SetSwapInterval(value != 0);
+            Sdl2_ApplySwapInterval(value != 0);
             g_sdl2Video.vsync_applied = 1;
         }
         return 0;
@@ -492,6 +520,22 @@ int Sdl2_EngineKey(int sdl_keycode)
      * g_pauseToggled, and gameloop.c tests it. SDL2 moved it above the mask.
      */
     case SDLK_PAUSE: return 19;         /* SDL 1.2 SDLK_PAUSE */
+    /*
+     * Keypad. SDL 1.2 numbered the digits 256..265 and the operators
+     * 266..272; SDL2 spells all of them scancode|SDLK_SCANCODE_MASK. These
+     * must match Sdl2_SdlKeyForEngineKey exactly, or a key can be pressed but
+     * not released, and focus resync disagrees with event delivery.
+     */
+    case SDLK_KP_0: return 256;         /* SDL 1.2 SDLK_KP0 */
+    case SDLK_KP_1: return 257;
+    case SDLK_KP_2: return 258;
+    case SDLK_KP_3: return 259;
+    case SDLK_KP_4: return 260;
+    case SDLK_KP_5: return 261;
+    case SDLK_KP_6: return 262;
+    case SDLK_KP_7: return 263;
+    case SDLK_KP_8: return 264;
+    case SDLK_KP_9: return 265;
     case SDLK_KP_PERIOD: return 266;   /* SDL 1.2 SDLK_KP_PERIOD */
     case SDLK_KP_DIVIDE: return 267;   /* SDL 1.2 SDLK_KP_DIVIDE */
     case SDLK_KP_MULTIPLY: return 268;   /* SDL 1.2 SDLK_KP_MULTIPLY */
@@ -499,6 +543,9 @@ int Sdl2_EngineKey(int sdl_keycode)
     case SDLK_KP_PLUS: return 270;   /* SDL 1.2 SDLK_KP_PLUS */
     case SDLK_KP_ENTER: return 271;   /* SDL 1.2 SDLK_KP_ENTER */
     case SDLK_KP_EQUALS: return 272;   /* SDL 1.2 SDLK_KP_EQUALS */
+    case SDLK_NUMLOCKCLEAR: return 300;   /* SDL 1.2 SDLK_NUMLOCK */
+    case SDLK_CAPSLOCK: return 301;       /* SDL 1.2 SDLK_CAPSLOCK */
+    case SDLK_SCROLLLOCK: return 302;     /* SDL 1.2 SDLK_SCROLLOCK */
     case SDLK_UP: return 273;   /* SDL 1.2 SDLK_UP */
     case SDLK_DOWN: return 274;   /* SDL 1.2 SDLK_DOWN */
     case SDLK_RIGHT: return 275;   /* SDL 1.2 SDLK_RIGHT */
@@ -523,7 +570,6 @@ int Sdl2_EngineKey(int sdl_keycode)
     case SDLK_F13: return 294;   /* SDL 1.2 SDLK_F13 */
     case SDLK_F14: return 295;   /* SDL 1.2 SDLK_F14 */
     case SDLK_F15: return 296;   /* SDL 1.2 SDLK_F15 */
-    case SDLK_CAPSLOCK: return 301;   /* SDL 1.2 SDLK_CAPSLOCK */
     case SDLK_RSHIFT: return 303;   /* SDL 1.2 SDLK_RSHIFT */
     case SDLK_LSHIFT: return 304;   /* SDL 1.2 SDLK_LSHIFT */
     case SDLK_RCTRL: return 305;   /* SDL 1.2 SDLK_RCTRL */
@@ -555,6 +601,16 @@ SDL_Keycode Sdl2_SdlKeyForEngineKey(int engine_key)
         return (SDL_Keycode)engine_key;
     }
     switch (engine_key) {
+    case 256: return SDLK_KP_0;
+    case 257: return SDLK_KP_1;
+    case 258: return SDLK_KP_2;
+    case 259: return SDLK_KP_3;
+    case 260: return SDLK_KP_4;
+    case 261: return SDLK_KP_5;
+    case 262: return SDLK_KP_6;
+    case 263: return SDLK_KP_7;
+    case 264: return SDLK_KP_8;
+    case 265: return SDLK_KP_9;
     case 266: return SDLK_KP_PERIOD;
     case 267: return SDLK_KP_DIVIDE;
     case 268: return SDLK_KP_MULTIPLY;
@@ -605,7 +661,20 @@ SDL_Keycode Sdl2_SdlKeyForEngineKey(int engine_key)
  * engine no longer carries, so translate first and name the SDL 1.2 value. */
 const char *Sdl2_KeyName(int engine_key)
 {
-    return SDL_GetKeyName((SDL_Keycode)Sdl2_EngineKey(engine_key));
+    /*
+     * engine_key is already in the engine's numbering, so it has to go through
+     * the *inverse* to become an SDL2 keycode. Running the forward translation
+     * here would be backwards: Sdl2_EngineKey expects an SDL2 keycode, so 273
+     * (SDL 1.2's Up) would be looked up as if it were an SDL2 value, miss the
+     * table, and return 0 -- SDL_GetKeyName(0) is "" -- so every arrow, F-key
+     * and modifier would read as an empty name in the binding menu.
+     */
+    SDL_Keycode sdl_key = Sdl2_SdlKeyForEngineKey(engine_key);
+
+    if (sdl_key == SDLK_UNKNOWN) {
+        return "";
+    }
+    return SDL_GetKeyName(sdl_key);
 }
 
 /* --------------------------------------------------------------- zoomSurface */
