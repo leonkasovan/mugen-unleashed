@@ -30,7 +30,23 @@
 
 #include "mugen.h"
 
+#ifndef MUGEN_VITA_GL
 #include <GL/glu.h>
+#else
+/*
+ * PS Vita port (port/psvita): vitaGL is GL only -- there is no GLU, and the
+ * VitaSDK sysroot has no <GL/glu.h>. The engine uses exactly one GLU function,
+ * gluOrtho2D, which is three lines of matrix setup; it is provided inline here
+ * with desktop GLU's definition rather than adding GLU as a dependency.
+ *
+ * gluOrtho2D(left, right, bottom, top) is glOrtho with near=-1, far=1, and
+ * glOrtho is already in vitaGL.
+ */
+static void gluOrtho2D(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top)
+{
+    glOrtho(left, right, bottom, top, -1.0, 1.0);
+}
+#endif
 
 /* ---- coordinates ---- */
 
@@ -112,7 +128,10 @@ int Video_PreInit(void)
 int Video_Deinit(void)
 {
     if (g_renderMode == RENDER_OPENGL || g_renderMode == RENDER_OPENGL_SCREEN) {
+#ifndef ANDROID_PORT
+        /* Android port: no GL renderer is compiled in. */
         Gl_Deinit();
+#endif
     }
     if (g_unusedSurface1 != NULL) {
         SDL_FreeSurface(g_unusedSurface1);
@@ -157,11 +176,33 @@ int Video_SetMode(int game_width, int game_height, int width, int height, int de
     Uint32 sdl_flags;
     SDL_Surface *surface;
     int bytes;
+    int sdl_width;
+    int sdl_height;
 
     if (g_renderMode != RENDER_OPENGL) {
         width = game_width;
         height = game_height;
     }
+    /*
+     * PS Vita port (port/psvita): the surface SDL hands back is what the driver
+     * blits to the panel, and it blits one-to-one. Rendering at 480x272 keeps
+     * the software blitter cheap, but the panel is fixed at 960x544, so the SDL
+     * video surface is requested at the panel size while the engine keeps
+     * drawing at the game size: the screen buffer (`g_game->screen`, sized from
+     * game_coord) is the render target, `g_screenSurface` is the video surface,
+     * and Gfx_Present scales one into the other.
+     *
+     * Only the SDL request changes here -- g_targetWidth/Height must stay at the
+     * game size, because every clip rectangle and draw coordinate uses them.
+     */
+    sdl_width = width;
+    sdl_height = height;
+#ifdef MUGEN_VITA_GL
+    if (g_renderMode == RENDER_SYSTEM) {
+        sdl_width = 960;
+        sdl_height = 544;
+    }
+#endif
     if (g_unusedSurface1 != NULL) {
         SDL_FreeSurface(g_unusedSurface1);
     }
@@ -189,7 +230,27 @@ int Video_SetMode(int game_width, int game_height, int width, int height, int de
             SDL_GL_SetAttribute(SDL_GL_SWAP_CONTROL, 1);
         }
     } else {
+#ifdef MUGEN_VITA_GL
+        /*
+         * PS Vita port (port/psvita): SDL_SWSURFACE, not SDL_HWSURFACE.
+         *
+         * The software renderer writes straight into surface->pixels and never
+         * calls SDL_LockSurface -- that is how the original works, and there is
+         * no lock anywhere in src/. SDL 1.2 requires a SDL_HWSURFACE to be
+         * locked before its pixels are touched, and on the Vita's SceGxm backend
+         * a hardware surface keeps its pixels in a texture that only locking
+         * maps out.
+         *
+         * With SDL_HWSURFACE the engine therefore rendered perfectly into
+         * memory that was never presented: the log ran all the way to
+         * "Mode select init", the frame loop paced itself correctly, and the
+         * panel stayed black. A software surface has ordinary pixels and
+         * SDL_UpdateRect (which Gfx_Present already calls) uploads them.
+         */
+        sdl_flags = SDL_SWSURFACE;
+#else
         sdl_flags = SDL_HWSURFACE;
+#endif
     }
     if (flags & VIDEO_FULLSCREEN) {
         sdl_flags |= SDL_FULLSCREEN;
@@ -204,8 +265,64 @@ int Video_SetMode(int game_width, int game_height, int width, int height, int de
     if (flags & VIDEO_DIRECTX) {
         SDL_putenv("SDL_VIDEODRIVER=directx");
     }
-    surface = SDL_SetVideoMode(width, height, depth, sdl_flags);
+    surface = SDL_SetVideoMode(sdl_width, sdl_height, depth, sdl_flags);
     g_videoSurface = surface;
+#ifdef MUGEN_VITA_GL
+    /*
+     * PS Vita port (port/psvita): a failed SDL_SetVideoMode is fatal here.
+     *
+     * Quirk of the original: the OpenGL paths do not check for a NULL surface
+     * (see the comment above Video_SetMode), so the engine carries on to
+     * Gl_Init with no GL context. On Windows and Linux that is survivable --
+     * the driver returns something and the glGetString calls report "no
+     * context" in the match log. On the Vita it is a hard crash (C2-12828-1)
+     * before the first frame, because glGetString has no context to read from.
+     *
+     * This is a port fix, not a fidelity change: it only converts an
+     * unrecoverable crash into the engine's normal failure path, which logs
+     * LIBERR_VIDEO_MODE and shows the error dialog. Windows and Linux keep the
+     * original behaviour unchanged.
+     */
+    if (surface == NULL) {
+        /*
+         * The Vita's SDL 1.2 GL driver accepts a narrower set of surface flags
+         * than the desktop drivers the engine was written for, and the flag
+         * combination the engine builds (HWSURFACE|HWACCEL, plus DOUBLEBUF and
+         * FULLSCREEN here) is not guaranteed to be one of them. Rather than
+         * abandon start-up over a surface hint, degrade one flag at a time and
+         * record which combination the driver took, together with the driver's
+         * own reason for each rejection.
+         *
+         * Every attempt keeps SDL_OPENGL and the 960x544 size, which are the
+         * two things vitaGL genuinely requires.
+         */
+        static const Uint32 k_drop[] = {
+            SDL_DOUBLEBUF,                       /* not all drivers honour it */
+            SDL_HWSURFACE | SDL_HWACCEL,         /* meaningless for a GL surface */
+            SDL_FULLSCREEN                        /* the panel is filled regardless */
+        };
+        Uint32 attempt = sdl_flags;
+        size_t k;
+
+        Log_Printf("video: %ix%ix%i flags 0x%X refused (%s)\n", sdl_width, sdl_height, depth, (unsigned)attempt,
+                   SDL_GetError());
+        for (k = 0; k < sizeof(k_drop) / sizeof(k_drop[0]) && surface == NULL; k++) {
+            attempt &= ~k_drop[k];
+            surface = SDL_SetVideoMode(sdl_width, sdl_height, depth, attempt);
+            g_videoSurface = surface;
+            if (surface != NULL) {
+                sdl_flags = attempt;
+                Log_Printf("video: driver accepted flags 0x%X\n", (unsigned)attempt);
+            } else {
+                Log_Printf("video: flags 0x%X refused (%s)\n", (unsigned)attempt, SDL_GetError());
+            }
+        }
+        if (surface == NULL) {
+            g_libraryError = LIBERR_VIDEO_MODE;
+            return 0;
+        }
+    }
+#else
     if (surface == NULL && g_renderMode != RENDER_OPENGL && g_renderMode != RENDER_OPENGL_SCREEN) {
         sdl_flags &= ~(SDL_HWSURFACE | VIDEO_SDL_HWACCEL);
         surface = SDL_SetVideoMode(width, height, depth, sdl_flags);
@@ -215,13 +332,26 @@ int Video_SetMode(int game_width, int game_height, int width, int height, int de
             return 0;
         }
     }
+#endif
+#ifdef MUGEN_VITA_GL
+    /*
+     * PS Vita port: record what the driver actually handed back. A software
+     * surface whose pixels are not writable, or a size that does not match the
+     * request, is the difference between a working screen and a black one, and
+     * neither is visible from the panel.
+     */
+    Log_Printf("video: surface %ix%i %ibit flags 0x%X%s\n", surface->w, surface->h,
+               surface->format->BitsPerPixel, (unsigned)surface->flags,
+               (surface->pixels != NULL) ? "" : " pixels=NULL");
+
+#endif
     g_videoGameWidth = game_width;
     g_videoGameHeight = game_height;
     g_videoGamePixels = game_width * game_height;
     g_videoFlags = flags;
     g_videoSdlFlags = sdl_flags;
-    g_videoWidth = width;
-    g_videoHeight = height;
+    g_videoWidth = sdl_width;
+    g_videoHeight = sdl_height;
     g_videoDepth = depth;
     bytes = Video_BytesPerPixel(depth);
     g_videoBytesPerPixel = bytes;
@@ -232,6 +362,13 @@ int Video_SetMode(int game_width, int game_height, int width, int height, int de
     g_screenSurface = surface;
     g_unused50424C = 0;
     SDL_ShowCursor((sdl_flags & SDL_FULLSCREEN) ? SDL_DISABLE : SDL_ENABLE);
+#ifdef ANDROID_PORT
+    /*
+     * Android port: glrender.c and gldetect.c are excluded from the build, so
+     * Gl_Init does not exist. The software (System) renderer is the only one,
+     * which config.c also forces -- see the RenderMode handling there.
+     */
+#else
     if (g_renderMode == RENDER_OPENGL_SCREEN) {
         if (!Gl_Init(0)) {
             return 0;
@@ -241,6 +378,7 @@ int Video_SetMode(int game_width, int game_height, int width, int height, int de
             return 0;
         }
     }
+#endif
     Gfx_SetRenderTarget(NULL, 0);
     return 1;
 }
@@ -736,6 +874,34 @@ SDL_Surface *Surface_ToRGBA32(SDL_Surface *src)
     if (dst == NULL) {
         return NULL;
     }
+#ifdef ANDROID_PORT
+    /*
+     * Android port: SDL2 keeps per-surface alpha outside SDL_PixelFormat
+     * (SDL_GetSurfaceAlphaMod / SDL_SetSurfaceAlphaMod), and dropped
+     * SDL_RLEACCELOK (RLE is automatic). The intent here is "temporarily make
+     * the source opaque, blit, then restore", which maps directly onto the
+     * blend-mode calls.
+     */
+    {
+        Uint8 saved_alpha = 255;
+        SDL_BlendMode saved_blend = SDL_BLENDMODE_NONE;
+
+        (void)flags;
+        SDL_GetSurfaceAlphaMod(src, &saved_alpha);
+        SDL_GetSurfaceBlendMode(src, &saved_blend);
+        (void)alpha;
+
+        SDL_SetSurfaceBlendMode(src, SDL_BLENDMODE_NONE);
+        rect.x = 0;
+        rect.y = 0;
+        rect.w = (Uint16)src->w;
+        rect.h = (Uint16)src->h;
+        SDL_UpperBlit(src, &rect, dst, &rect);
+        SDL_SetSurfaceAlphaMod(src, saved_alpha);
+        SDL_SetSurfaceBlendMode(src, saved_blend);
+    }
+    return dst;
+#else
     flags = src->flags & (SDL_SRCALPHA | SDL_RLEACCELOK);
     alpha = src->format->alpha;
     if (flags & SDL_SRCALPHA) {
@@ -750,6 +916,7 @@ SDL_Surface *Surface_ToRGBA32(SDL_Surface *src)
         SDL_SetAlpha(src, flags, alpha);
     }
     return dst;
+#endif
 }
 
 /* 0x004635C0: [Video] VRetrace; only the OpenGL renderers pass it to SDL. */
