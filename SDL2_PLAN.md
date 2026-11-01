@@ -474,6 +474,32 @@ answer (`video: vsync 1 set (driver reports 1)`) instead of recording success
 unconditionally, and prints on its own line so the reconstructed
 `Initializing graphics...` line stays byte-comparable with the SDL 1.2 baseline.
 
+### Stage 3 verified: keys, text and joysticks
+
+The three input paths were checked at runtime rather than by reading the code.
+`tools/test_sdl2input.sh` links the engine's real `pads.c`, `keyboard.c` and
+`events.c` (not copies) against the shim and runs them:
+
+| Path | What is asserted |
+|---|---|
+| Pad slot mapping | an event from the *second* pad lands on slot 1's button code and not slot 0's, and an unknown instance id is dropped instead of indexing |
+| Key delivery | an SDL 1.2-numbered special key (273 = Up, 282 = F1) sets `g_keyState` in place and reaches the input engine unchanged |
+| Text input | `SDL_TEXTINPUT` payloads of 1, 2, 3 and 4 bytes decode to U+0061, U+00E9, U+20AC and U+1F600 |
+
+No joystick is present on the test machine, so the pad test uses SDL's virtual
+joystick API. That exposed a trap worth recording: **SDL numbers virtual
+instance ids from 0, so on a clean process `which` equals the device index and
+an index-based bug passes.** The first version of this test did exactly that —
+it passed with the mapping deliberately broken. It now attaches three pads and
+detaches the first, forcing instance ids 1 and 2 against indices 0 and 1, and
+asserts that precondition. With the pad mapping reverted to `return (int)id;`
+the test fails four assertions; with the UTF-8 continuation loop shortened it
+fails the three multi-byte cases.
+
+`SDL_StartTextInput()` is never called by the engine and does not need to be:
+SDL2 calls it implicitly when the video subsystem initialises on desktop, so
+`SDL_TEXTINPUT` arrives by default.
+
 ### Still open
 
 - `zoomSurface`'s non-indexed path is still `SDL_BlitScaled`; the differential
@@ -481,6 +507,10 @@ unconditionally, and prints on its own line so the reconstructed
   surfaces. The indexed path (solid TrueType text) is now explicit and tested.
 - Windowed/fullscreen *transitions* at runtime (rather than starts) and display
   selection have not been exercised.
-- Joystick hot-plug, text input on the desktop console, and audio (every run
-  here used `-nosound`) are unverified.
+- Joystick **hot-plug** is still unverified: the pad test attaches virtual
+  devices before `Pads_Init` runs. The engine has no
+  `SDL_JOYDEVICEADDED`/`REMOVED` handling at all — SDL 1.2 had none either — so
+  a pad plugged in mid-session is invisible until restart. That is faithful to
+  the original, not a port gap.
+- Audio is unverified; every run here used `-nosound`.
 - The Linux target has not been built with `SDL_BACKEND=2`.
