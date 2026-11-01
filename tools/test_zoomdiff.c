@@ -101,6 +101,15 @@ static const Case k_cases[] = {
     {"one_px_2x",         1,  1, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 2.0, 2.0, 0},
     {"one_px_indexed",    1,  1,  8, 0, 0, 0, 0, 3.0, 3.0, 1},
     {"tall_thin",        1, 17, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 3.0, 0.5, 0},
+    /*
+     * The ratios that expose SDL_gfx's 16.16 fixed-point step. The behaviour
+     * belongs to the RGBA sampler, so these are 32-bit: a 16-bit source only
+     * reaches it after conversion. For 16 -> 12 the truncated step is 87381 and
+     * output x=3 reads source 3, where exact arithmetic reads 4.
+     */
+    {"rgba32_16to12",   16, 16, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 0.75, 0.75, 0},
+    {"rgba32_10to15",   10, 10, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 1.5, 1.5, 0},
+    {"rgba32_13to20",   13, 13, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 20.0 / 13.0, 20.0 / 13.0, 0},
 };
 
 #define CASE_COUNT ((int)(sizeof(k_cases) / sizeof(k_cases[0])))
