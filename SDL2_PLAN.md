@@ -120,13 +120,13 @@ AGENTS.md requires preserving reconstructed behavior, address annotations, and f
 | src/sound.c, src/sdlmixercompat.c | Channel effects, WAV conversion, custom QuerySpecEx | Handle obtained audio format, chunk-size contract and ownership explicitly |
 | src/bgmplugins.c | SDL_mixer music, completion hook, seeking | Port RWops ownership and callback lifecycle; validate MOD/MIDI behavior |
 | src/bgmthread.c | Mix_HookMusic, ring buffer, SDL_LockAudio | Validate callback byte length and synchronization with the chosen mixer version |
-| src/stream.c | Custom RWops and Android widened adapters | Supply SDL2 size callback, bounds checks and correct seek/read/write signatures |
+| src/stream.c | Custom RWops and Android widened adapters | Supply SDL2 size callback, bounds checks and correct seek/read/write signatures (verified gap: the SDL2 branch of `Stream_ToRWops` never sets `rw->size`) |
 | src/events.c, src/keyboard.c, src/pads.c | Legacy key arrays and joystick indexing | Translate SDL2 keys and instance IDs; preserve saved controls |
 | src/sdlmain.c, src/mugen.h, cmake/MugenSdk.cmake, Makefile | Legacy startup/header/link assumptions | Isolate SDL major version; avoid SDK SDL1 headers and Elecbyte SDL1 DLL imports |
 
 ### SDL_gfx: choose surface scaling deliberately
 
-Recommended first implementation: use SDL2_gfx's zoomSurface from SDL2_rotozoom.h for SDL2 builds. Keep a narrow engine wrapper if needed so dependency details do not spread. Confirm the exact exported signature and Windows calling convention against the selected headers; do not retain handwritten extern declarations alongside incompatible headers.
+Recommended first implementation: use SDL2_gfx's zoomSurface from SDL2_rotozoom.h for SDL2 builds. Keep a narrow engine wrapper if needed so dependency details do not spread. Confirm the exact exported signature and Windows calling convention against the selected headers; do not retain handwritten extern declarations alongside incompatible headers. (2026-11-01: the x86devkit does **not** ship SDL2_gfx — no `SDL2_rotozoom.h`, `libSDL2_gfx.a` or `SDL2_gfx.pc` — so this choice means building ferzkopp's SDL2_gfx from upstream or adopting the Android wrapper. The 1.2 side's `SDL_rotozoom.h` in the kit does declare `zoomSurface(SDL_Surface *src, double zoomx, double zoomy, int smooth)`, matching the handwritten `extern`s in `src/font.c:17` and `src/gfx.c:24`.)
 
 Inventory every zoomSurface use, including platform-conditional fallbacks. In font.c, scaled text is blitted and then freed. In gfx.c the inspected additional scaling use is a Vita fallback. Keep platform conditions intact rather than adding a desktop dependency solely because a Vita-only call exists.
 
@@ -193,7 +193,7 @@ Keep 640x480 as the handheld acceptance mode; do not silently change its physica
 
 For System mode, first retain CPU surfaces and choose a window-surface update backend for minimum implementation complexity, or a streaming texture backend if scaling is required. If selecting textures, keep the CPU framebuffer owned by the engine, respect pitch during upload and use explicit scaling/filtering. GL and System windows must have separate creation/presentation rules; recreate resources deliberately when switching modes.
 
-Do not put SDL2 objects inside reconstructed structures at assumed SDL1 offsets. Audit sizeof(SDL_Surface), SDL_Rect field widths, surface flag tests and direct SDL_PixelFormat field accesses. Keep SDL_Window/SDL_GLContext in platform-owned state.
+Do not put SDL2 objects inside reconstructed structures at assumed SDL1 offsets. Audit sizeof(SDL_Surface), SDL_Rect field widths, surface flag tests and direct SDL_PixelFormat field accesses. Keep SDL_Window/SDL_GLContext in platform-owned state. (Verified: `SDL_Rect` widens from `Sint16 x,y; Uint16 w,h` to `int x,y,w,h`; `SDL_Surface.pitch` widens from `Uint16` to `int` and `offset`/`hwdata` are replaced by `userdata`/`list_blitmap`; `SDL_PixelFormat` gains a `Uint32 format` field and loses `Rshift/Gshift/Bshift/Ashift`. `src/` currently uses none of the removed fields — details in the header-validation section.)
 
 events.c currently sends SDL key symbols directly to Keyboard_HandleKey. SDL2 special keycodes are large values; feeding them into legacy key arrays can corrupt memory. Use explicit SDL2-to-engine legacy key translation for events, bindings and focus-state refresh. keyboard.c's Android scancode adaptation is useful evidence but does not prove all special keys are translated. Implement text-input handling for the desktop console rather than Android's zero-Unicode placeholder. Preserve independent key repeat policy for gameplay and text entry.
 
@@ -203,7 +203,7 @@ pads.c must map SDL_JoystickID to engine slots, not use the instance ID as an ar
 
 Proposed options (not implemented): SDL_BACKEND=1|2 for Make and MUGEN_SDL_MAJOR=1|2 for CMake. Include the backend in output/object directories so flag changes cannot reuse incompatible objects.
 
-SDL2 pkg-config candidates: sdl2 SDL2_ttf SDL2_mixer SDL2_gfx plus existing zlib/libpng. Verify names for the selected distribution. Preserve static transitive dependency discovery on MinGW and shared dependencies on Linux. Remove SDL1 headers/import definitions from the SDL2 include/link path without losing unrelated SDK headers. Keep a separate SDL2 startup/manifest path and ensure Elecbyte.MUGEN.libs is not required by it. Record exact package versions and verify produced DLL dependencies. No SDL_image addition is needed solely for this work: current PNG handling already uses libpng.
+SDL2 pkg-config candidates: sdl2 SDL2_ttf SDL2_mixer SDL2_gfx plus existing zlib/libpng. Verify names for the selected distribution. Preserve static transitive dependency discovery on MinGW and shared dependencies on Linux. Remove SDL1 headers/import definitions from the SDL2 include/link path without losing unrelated SDK headers. Keep a separate SDL2 startup/manifest path and ensure Elecbyte.MUGEN.libs is not required by it. Record exact package versions and verify produced DLL dependencies. No SDL_image addition is needed solely for this work: current PNG handling already uses libpng. (2026-11-01 kit check: `sdl2`, `SDL2_ttf` and `SDL2_mixer` are present; **SDL2_gfx is not shipped by the kit** — see the header-validation section.)
 
 | Stage | Deliverable | Exit gate |
 |---|---|---|
@@ -228,3 +228,61 @@ Release blockers: corrupted key indexing, unsafe callback teardown, mixed SDL1/S
 - [SDL2_mixer audio format query](https://wiki.libsdl.org/SDL2_mixer/Mix_QuerySpec)
 - [SDL2_mixer custom music hook](https://wiki.libsdl.org/SDL2_mixer/Mix_HookMusic)
 - [SDL2_mixer device opening and format changes](https://wiki.libsdl.org/SDL2_mixer/Mix_OpenAudioDevice)
+
+## Header and kit validation against x86devkit (2026-11-01)
+
+Everything below was verified directly against `C:\x86devkit\include\SDL2`,
+`C:\x86devkit\include\SDL`, `C:\x86devkit\lib` and the kit's `.pc` files. It
+replaces the generic "verify the API" notes above with concrete facts. Re-check
+against your distribution if you build with something other than this kit.
+
+### Kit contents
+
+| Component | SDL 1.2 side | SDL2 side |
+| --- | --- | --- |
+| SDL | 1.2.15 (`SDL_version.h`) | 2.32.10 |
+| Mixer | `SDL_mixer.h`, `libSDL_mixer.a` | `SDL_mixer.h` 2.8.2, `libSDL2_mixer.a` |
+| TTF | `SDL_ttf.h`, `libSDL_ttf.a` | `SDL_ttf.h` 2.24.0, `libSDL2_ttf.a` |
+| GFX | `SDL_rotozoom.h` (`zoomSurface`), `libSDL_gfx.a` | **absent** — no `SDL2_rotozoom.h`, `libSDL2_gfx.a`, `SDL2_gfx.pc` |
+| Image | — | `SDL_image.h` 2.8.x, `libSDL2_image.a` (present; not needed — PNG already goes through libpng) |
+| SDLmain | — | `libSDL2main.a` |
+| pkg-config | `sdl.pc`, `SDL_gfx.pc`, `SDL_mixer.pc`, `SDL_ttf.pc` | `sdl2.pc`, `SDL2_mixer.pc`, `SDL2_ttf.pc`, `SDL2_image.pc` |
+
+### Verified API differences, header against header
+
+| Area | SDL 1.2 (kit) | SDL2 (kit) | Consequence for this engine |
+| --- | --- | --- | --- |
+| `SDL_Rect` | `Sint16 x,y; Uint16 w,h` | `int x,y,w,h` | Existing 1.2-era casts (e.g. `dst.y = (Sint16)(int)...` in `src/font.c`) stay range-safe for 640×480, but rects now hold full ints; do not rely on 16-bit truncation |
+| `SDL_Surface` | `Uint16 pitch`; `offset`, `hwdata` | `int pitch`; `userdata`, `list_blitmap`; no `offset`/`hwdata` | Layout differs; code touching only `w/h/pitch/pixels/format` ports unchanged |
+| `SDL_PixelFormat` | `palette` first, then BPP; has `Rshift/Gshift/Bshift/Ashift` | `Uint32 format` first; shifts replaced by `padding` | `src/` uses neither the shifts nor `SDL_SetColors` today (grepped), so only the new `format` field is visible through `format->BitsPerPixel` etc. |
+| `SDL_Keysym` | `Uint8 scancode; SDLKey sym; mod; Uint16 unicode` | `SDL_Scancode scancode; SDL_Keycode sym; Uint16 mod; Uint32 unused` — **no unicode** | `src/events.c` already branches on `ANDROID_PORT` for the missing unicode (passing 0); desktop SDL2 must feed the console real `SDL_TEXTINPUT` instead. `SDL_EnableUNICODE` does not exist in SDL2 |
+| Key repeat | `SDL_EnableKeyRepeat` | removed | Called in `src/console.c` and `src/keyboard.c`; both need SDL2 guards (console.c already notes this for Android) |
+| `SDL_INIT_NOPARACHUTE` | real flag | compatibility define, ignored | `src/sdlmain.c`'s `SDL_Init(SDL_INIT_NOPARACHUTE)` compiles as-is |
+| Joystick events | `which` is a `Uint8` device index; no timestamp | `which` is `SDL_JoystickID` (`Sint32`) instance id; `timestamp` added | `src/pads.c` indexes pads directly with `ev->jaxis.which` etc. — correct for 1.2, must be remapped for 2.0 exactly as the plan warns |
+| `SDL_RWops` | int-based `read/write/seek`; no `size` | `Sint64` `read/write/seek`; new `size` callback | `src/stream.c` already carries widened 64-bit adapters under `ANDROID_PORT`; that branch never sets `rw->size`, and SDL2_mixer music seeking needs it — confirmed gap |
+| `Mix_OpenAudio` | 4 args | still present with the same 4-arg signature (equivalent to `Mix_OpenAudioDevice(..., NULL, 0)`); `Mix_OpenAudioDevice` adds `device` and `allowed_changes` | `src/sound.c`'s request (AUDIO_S16LSB, `g_sndChunkSize`) ports directly; use `allowed_changes=0` or re-read with `Mix_QuerySpec` |
+| `Mix_QuerySpec` | `(freq, format, channels)` | identical 3 args | `src/sdlmixercompat.c`'s `Mix_QuerySpecEx` keeps echoing `g_sndChunkSize`; still a request, not the observed callback size |
+| `Mix_LoadMUS_RW` | `(rw)` — never takes ownership | `(rw, freesrc)` | `src/bgmplugins.c` already has the `ANDROID_PORT` conditional adding `freesrc`; generalize that pattern |
+| `Mix_HookMusic` / `Mix_HookMusicFinished` | `(mix_func, arg)` / `(cb)` | same shape (`Mix_MixCallback` typedef) | `src/bgmthread.c` and `src/bgmplugins.c` port without signature changes |
+| `Mix_LoadWAV_RW`, `Mix_QuickLoad_RAW`, `Mix_PlayChannelTimed`, `Mix_SetPanning`, `Mix_Volume` | 1.2 kit | identical signatures in 2.8.2 | `src/sound.c` ports as-is (its `Mix_LoadWAV_RW(rw, 0)` already passes `freesrc`) |
+| SDL_ttf (`TTF_OpenFont`, `TTF_CloseFont`, `TTF_FontAscent`, `TTF_SizeUTF8`, `TTF_RenderUTF8_Solid`, `TTF_RenderUTF8_Blended`) | 1.2 kit | identical names and signatures in 2.24.0 | `src/font.c` compiles against SDL2_ttf unchanged; the diff risk is FreeType's pixels/metrics, not the API |
+| Window/video | `SDL_SetVideoMode`, `SDL_WM_SetCaption`, `SDL_WM_ToggleFullScreen`, `SDL_Flip`, `SDL_UpdateRect` | `SDL_CreateWindow` (+`SDL_WINDOW_OPENGL`), `SDL_SetWindowTitle`, `SDL_SetWindowFullscreen`, `SDL_GL_SwapWindow`, `SDL_GetWindowSurface`/`SDL_UpdateWindowSurface` | All SDL2 names verified present in `SDL_video.h`; `SDL_WINDOWEVENT_RESIZED`/`SDL_WINDOWEVENT_SIZE_CHANGED` (in `SDL_video.h` for 2.32) and `SDL_GL_SetSwapInterval(int)` exist |
+| Text input | unicode rides `SDL_KEYDOWN` | `SDL_TEXTINPUT`, text capped at `SDL_TEXTINPUTEVENT_TEXT_SIZE` (32) | Console text entry must be separated from gameplay key handling, as the plan requires |
+
+### Corrections to earlier statements in this document
+
+- **Build integration:** the verified in-kit SDL2 packages are `sdl2`,
+  `SDL2_ttf`, `SDL2_mixer` (plus unused `SDL2_image`). **No SDL2_gfx in the kit.**
+- **SDL_gfx choice:** upstream ferzkopp SDL2_gfx exists and ships `zoomSurface`
+  in `SDL2_rotozoom.h` with the same signature as the 1.2 `SDL_rotozoom.h`
+  verified above, so the Android wrapper's "no maintained SDL2 port" comment is
+  inaccurate — but since the kit does not ship it, the practical options are
+  (a) build SDL2_gfx from upstream, or (b) adopt the Android `SDL_BlitScaled`
+  wrapper after the differential tests this plan already demands. Either way
+  the handwritten `extern ... zoomSurface` declarations in `src/font.c:17` and
+  `src/gfx.c:24` must be replaced by the real header.
+- **zoomSurface call sites:** confirmed as `src/font.c:292` (smooth=0) and
+  `src/gfx.c:330` (smooth=0, inside the `MUGEN_VITA_GL`-only `Vita_ScaleToVideo`
+  fallback) — those are the only two.
+- **`src/stream.c` RWops adapters:** they exist (under `ANDROID_PORT`) but do
+  not set the new `size` callback; now a verified gap, not a maybe.
