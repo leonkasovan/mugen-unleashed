@@ -464,7 +464,9 @@ Char kfm720.def (1) request pal 4 3F (3F) -> reserved 4 (2F)
 
 **Guards currently in place** (defensive, none of which is a fix):
 
-- `Soft_Scale`/`Soft_Rotate` reject non-finite parameters.
+- `Soft_Scale` and `Soft_Rotate` reject non-finite parameters. `Soft_Rotate`
+  previously had no such check despite the claim; the guard was added alongside
+  this correction.
 - `Soft_Scale` bounds each row against the target surface and sanity-checks the
   surface's own fields, logging once if it looks stale.
 - `Soft_Scale` checks the palette for NULL — the check `softrender.c`'s own

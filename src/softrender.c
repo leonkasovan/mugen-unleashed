@@ -692,6 +692,15 @@ static int Soft_InSprite(int u, int v, int w, int h)
 static void Soft_Rotate(SpriteSet *set, int sprite, float x, float y, float angle, float scale_x, float scale_y,
                         float scale2_x, float scale2_y, int mirror, int op)
 {
+    /*
+     * Same non-finite guard as Soft_Scale: a NaN angle or scale makes Ftol and
+     * the row math below index garbage, exactly the corruption the scale path
+     * was already protected from.
+     */
+    if (!isfinite(x) || !isfinite(y) || !isfinite(angle) || !isfinite(scale_x) || !isfinite(scale_y) ||
+        !isfinite(scale2_x) || !isfinite(scale2_y)) {
+        return;
+    }
     const Sprite *spr = Soft_SpriteAt(set, sprite);
     const Sprite *tspr = Soft_SpriteAt(g_renderTarget, g_renderTargetSprite);
     const int *srows = spr->rows;
