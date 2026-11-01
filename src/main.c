@@ -7,8 +7,50 @@
 #include "mugen.h"
 
 /* 0x00421500 (SDL.h renames main to SDL_main) */
+#ifdef ANDROID_PORT
+/*
+ * Android port: main.c is compiled for its helpers, not its entry point.
+ *
+ * This module also holds Screen_IsSpecial, Camera_GetX/Y, Str_IsVersionNumber,
+ * Version_Parse, Rng_Seed and Random_Next, which the rest of the engine calls
+ * unconditionally -- excluding the file leaves them undefined. The entry point
+ * is instead provided by port/android/app/src/main/jni/src/android_main.c,
+ * which prepares the asset tree and then calls Mugen_Main.
+ *
+ * Renaming rather than duplicating keeps the reconstructed flow identical; only
+ * the symbol name and the caller change.
+ */
+int Mugen_Main(int argc, char *argv[])
+#else
 int main(int argc, char *argv[])
+#endif
 {
+#ifdef MUGEN_VITA_GL
+    /*
+     * PS Vita port (port/psvita): give stdout and stderr real files.
+     *
+     * The console has no standard output. Whatever descriptor newlib hands out
+     * for stdout/stderr is not a valid SceIo fd, and writing to it faults inside
+     * sceIoWrite -- core dump 1793497610 (delta 0x4e000) died exactly there,
+     * reached from _write_r.
+     *
+     * The engine writes to these streams on its error paths: Error_Printf falls
+     * back to vfprintf(stderr, ...) when the error clipboard does not exist yet,
+     * and several allocations printf before the log is up. So the failure mode
+     * was: something goes wrong, the engine tries to report it, and reporting it
+     * takes the process down -- hiding the original fault.
+     *
+     * Redirecting them costs nothing, removes a whole class of crash, and leaves
+     * the text on the memory card where it can actually be read. Windows has
+     * SDLmain doing the same thing to stdout.txt/stderr.txt.
+     */
+    if (freopen("ux0:data/mugen-stdout.txt", "w", stdout) == NULL) {
+        (void)0;    /* nothing to report to: carry on with the original stream */
+    }
+    if (freopen("ux0:data/mugen-stderr.txt", "w", stderr) == NULL) {
+        (void)0;
+    }
+#endif
     g_cmdline = malloc(sizeof(CmdLineArgs));
     if (g_cmdline == NULL) {
         return 0;
@@ -60,6 +102,16 @@ int main(int argc, char *argv[])
         Log_Close();
         g_log = NULL;
     }
+#ifdef ANDROID_PORT
+    /*
+     * Android port: release the window, renderer and texture. The process is
+     * about to exit and the OS would reclaim them anyway, but leaving an
+     * acquired window would matter if this path ever became reachable from an
+     * Android lifecycle pause instead of process death. Android_VideoQuit is
+     * declared in port/android/.../android_main.h, which is force-included.
+     */
+    Android_VideoQuit();
+#endif
     return 0;
 }
 
