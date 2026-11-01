@@ -435,6 +435,45 @@ So the engine was issuing GL calls on a context it had just deleted. `RENDER_OPE
 does not reach `SDL_SetVideoMode` from a resize at all (it only records the new
 size), which is why the earlier system-mode-only runs never showed it.
 
+### Second review of 889258b: five more fixes
+
+1. **[P1] The Android build could not see the key helpers.** `keyboard.c` called
+   `Sdl2_SdlKeyForEngineKey()` under `MUGEN_SDL2_API` — which includes Android —
+   but the declaration lives under `MUGEN_SDL2`, which Android does not define.
+   The Android branch now keeps its own scancode loop and never references the
+   desktop-only table.
+2. **Keypad digits and lock keys were dropped.** The forward table had no
+   entries for `SDLK_KP_0`..`SDLK_KP_9` (SDL 1.2 256..265) or Num/Scroll Lock,
+   while the inverse did, so those keys were pressed-but-never-released and
+   focus resync disagreed with event delivery. Both directions are complete now,
+   and the test walks *every* engine key through the round trip.
+3. **Binding-menu names came out empty.** `Sdl2_KeyName()` ran the forward
+   translation on a value that was already an engine key, so 273 looked up as if
+   it were an SDL2 keycode, missed, and returned 0 — `SDL_GetKeyName(0)` is
+   `""`. It now uses the inverse, which is what the input actually is.
+4. **`tools/win_input.py` was not delivering keys at all.** Its `INPUT` union
+   held only `KEYBDINPUT`, so `sizeof(INPUT)` was 32 where the native Windows
+   union is 40 (it also holds `MOUSEINPUT`). `SendInput` returned 0 and the
+   script ignored that and printed "sent". The union is complete now and every
+   send asserts a return of 1 — the earlier "keys are delivered" claim was
+   unfounded and has been re-established with the fixed helper.
+5. **The palette test had undefined behaviour.** It passed `(Uint32 *)&` of a
+   `Uint8` to `SDL_GetColorKey`, a four-byte write into a one-byte variable,
+   and its source image was all zeros. It now uses a `Uint32`, fills a real 2x2
+   glyph of palette index 1, and asserts the scaled pixels — which is the
+   property `font.c` depends on.
+
+Each fix was verified by reintroducing the defect and watching the test fail:
+removing the keypad/lock mappings produces `SDLK_KP_0 translates to 256, got 0`,
+and restoring the reversed name translation produces `key name for engine key
+273 is "", expected "Up"`. The `INPUT` size change was checked against Windows
+itself: 32 bytes returns 0 from `SendInput`, 40 bytes returns 1.
+
+Also on the Stage 2 commit: `Sdl2_ApplySwapInterval()` now reports the driver's
+answer (`video: vsync 1 set (driver reports 1)`) instead of recording success
+unconditionally, and prints on its own line so the reconstructed
+`Initializing graphics...` line stays byte-comparable with the SDL 1.2 baseline.
+
 ### Still open
 
 - `zoomSurface`'s non-indexed path is still `SDL_BlitScaled`; the differential
