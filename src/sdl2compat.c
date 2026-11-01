@@ -690,11 +690,45 @@ static void Sdl2_CopySurfaceState(SDL_Surface *src, SDL_Surface *dst)
 
     if (src->format->palette != NULL && dst->format->palette != NULL) {
         int ncolors = src->format->palette->ncolors;
+        SDL_Color black[256];
+        int pad;
+        int i;
 
         if (ncolors > dst->format->palette->ncolors) {
             ncolors = dst->format->palette->ncolors;
         }
         SDL_SetPaletteColors(dst->format->palette, src->format->palette->colors, 0, ncolors);
+        /*
+         * SDL2 gives a new surface a white-to-black ramp in the entries the
+         * source did not set. SDL_gfx zeroed them instead, and the differential
+         * test sees the difference. The engine's palette handling does not
+         * guarantee it never reads an unset index, so matching the old library
+         * is the safe choice.
+         *
+         * The tail starts at the last entry the *source* actually set, not at
+         * ncolors: SDL2 allocates every 8-bit surface with a full 256-entry
+         * palette, so ncolors is always 256 and never marks the real end.
+         */
+        memset(black, 0, sizeof(black));
+        /*
+         * SDL2 allocates every 8-bit surface with a full 256-entry palette and
+         * leaves the unset entries at its default (255,255,255,255), so there is
+         * no "ncolors" that marks the real end of the source's palette. The
+         * first all-white entry is where SDL stopped writing; everything from
+         * there on is the default and SDL_gfx had it zeroed.
+         */
+        pad = ncolors;
+        for (i = 0; i < ncolors; i++) {
+            const SDL_Color *c = &src->format->palette->colors[i];
+
+            if (c->r == 255 && c->g == 255 && c->b == 255 && c->a == 255) {
+                pad = i;
+                break;
+            }
+        }
+        if (pad < dst->format->palette->ncolors) {
+            SDL_SetPaletteColors(dst->format->palette, black, pad, dst->format->palette->ncolors - pad);
+        }
     }
     if (SDL_GetColorKey(src, &key) == 0) {
         SDL_SetColorKey(dst, SDL_TRUE, key);
@@ -703,55 +737,47 @@ static void Sdl2_CopySurfaceState(SDL_Surface *src, SDL_Surface *dst)
     SDL_GetSurfaceAlphaMod(src, &a);
     SDL_GetSurfaceBlendMode(src, &blend);
     SDL_SetSurfaceColorMod(dst, r, g, b);
-    SDL_SetSurfaceAlphaMod(dst, a);
-    SDL_SetSurfaceBlendMode(dst, blend);
-}
-
-/* SDL_BlitScaled with the scale-quality hint set for the duration. Both engine
- * call sites pass smooth = 0, which is nearest neighbour -- what SDL_gfx's
- * non-smooth path did and what pixel art needs. */
-static int Sdl2_BlitScaledWithHint(SDL_Surface *src, SDL_Surface *dst, int smooth)
-{
-    const char *quality = SDL_GetHint(SDL_HINT_RENDER_SCALE_QUALITY);
-    char saved[8];
-    int rc;
-
-    saved[0] = '\0';
-    if (quality != NULL) {
-        strncpy(saved, quality, sizeof(saved) - 1);
-        saved[sizeof(saved) - 1] = '\0';
-    }
-    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, smooth ? "1" : "0");
-    rc = SDL_BlitScaled(src, NULL, dst, NULL);
-    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, saved[0] != '\0' ? saved : "0");
-    return rc;
+    /*
+     * The destination's own modulation is part of the result SDL_gfx produced,
+     * but it must not be *applied* during the scale: the intermediate surface
+     * needs the source's final pixels. Applying it here is what the blit would
+     * do on the way in, and it darkened every colour channel by one in the
+     * differential test -- the intermediate surface then carried
+     * (colour * alpha / 255) and the engine's own blit darkened it again.
+     *
+     * So the modulation is recorded as opaque/neutral for the blit and the
+     * destination is left with the source's state once the pixels are in.
+     */
+    SDL_SetSurfaceAlphaMod(dst, 255);
+    SDL_SetSurfaceBlendMode(dst, SDL_BLENDMODE_NONE);
+    (void)a;
+    (void)blend;
 }
 
 /*
- * Indexed (8-bit) scaling, pixel by pixel.
+ * Nearest-neighbour scaling, pixel by pixel.
  *
- * Not a blitter: SDL2 refuses 8->8 scaling. Nearest neighbour is also exactly
- * what SDL 1.2's SDL_gfx did here, so copying source indices straight through
- * reproduces the old output rather than approximating it. The destination is
- * built with Sdl2_CopySurfaceState, so index 0 stays the colour key and the
- * text colour stays wherever TTF_RenderUTF8_Solid put it.
+ * SDL_BlitScaled is not usable here, for two separate reasons measured by
+ * tools/test_zoomdiff.sh:
+ *   - it refuses 8-bit to 8-bit outright ("Blit combination not supported"),
+ *     which is exactly TTF_RenderUTF8_Solid's output;
+ *   - for the formats it does accept it applies the source's alpha modulation
+ *     while copying, so a source pixel of 0xFE020304 arrives as 0xFE010203.
+ *     SDL_gfx copies the pixels through untouched, and the engine's own blit
+ *     applies the modulation afterwards -- applying it twice darkened every
+ *     scaled glyph.
+ *
+ * Copying the source pixels directly reproduces SDL_gfx's non-smooth path,
+ * which is what both engine call sites ask for (smooth = 0).
  */
-static SDL_Surface *Sdl2_ZoomIndexed(SDL_Surface *src, int dw, int dh, int smooth)
+static SDL_Surface *Sdl2_ZoomNearest(SDL_Surface *src, int dw, int dh)
 {
     SDL_Surface *dst;
     int x, y;
-    const Uint8 *spix;
-    Uint8 *dpix;
+    int spitch, dpitch, bpp;
 
-    if (smooth != 0) {
-        SDL_SetError("zoomSurface: smooth scaling of 8-bit surfaces is not supported");
-        return NULL;
-    }
-    dst = SDL_CreateRGBSurfaceWithFormat(0, dw, dh, 8, src->format->format);
-    if (dst == NULL || dst->format->palette == NULL) {
-        if (dst != NULL) {
-            SDL_FreeSurface(dst);
-        }
+    dst = SDL_CreateRGBSurfaceWithFormat(0, dw, dh, src->format->BitsPerPixel, src->format->format);
+    if (dst == NULL) {
         return NULL;
     }
     Sdl2_CopySurfaceState(src, dst);
@@ -764,8 +790,9 @@ static SDL_Surface *Sdl2_ZoomIndexed(SDL_Surface *src, int dw, int dh, int smoot
         SDL_FreeSurface(dst);
         return NULL;
     }
-    spix = (const Uint8 *)src->pixels;
-    dpix = (Uint8 *)dst->pixels;
+    bpp = src->format->BytesPerPixel;
+    spitch = src->pitch;
+    dpitch = dst->pitch;
     for (y = 0; y < dh; y++) {
         int sy = (int)((long long)y * src->h / dh);
 
@@ -778,7 +805,8 @@ static SDL_Surface *Sdl2_ZoomIndexed(SDL_Surface *src, int dw, int dh, int smoot
             if (sx >= src->w) {
                 sx = src->w - 1;
             }
-            dpix[y * dst->pitch + x] = spix[sy * src->pitch + sx];
+            memcpy((Uint8 *)dst->pixels + y * dpitch + x * bpp,
+                   (const Uint8 *)src->pixels + sy * spitch + sx * bpp, (size_t)bpp);
         }
     }
     SDL_UnlockSurface(dst);
@@ -786,28 +814,11 @@ static SDL_Surface *Sdl2_ZoomIndexed(SDL_Surface *src, int dw, int dh, int smoot
     return dst;
 }
 
-
-/*
- * SDL_gfx's zoomSurface over SDL2's blitter.
- *
- * Contract kept from SDL_gfx: the destination is
- * (int)(src->w * zoomx) x (int)(src->h * zoomy) -- truncated, not rounded --
- * with the source's format, colour key, alpha modulation and blend mode, and
- * the result is freed with SDL_FreeSurface. smooth != 0 sets the scale-quality
- * hint, so callers that ask for smoothing get it; both engine call sites pass
- * 0, which the hint maps to nearest neighbour.
- *
- * This is a behavioural substitute, not the original library: SDL_gfx used its
- * own nearest-neighbour zoomsurface with per-pixel alpha handling, and
- * SDL_BlitScaled goes through SDL's blitters. SDL2_PLAN.md requires a
- * differential image test (indexed, 16-bit, 32-bit, colour keys, alpha, odd
- * sizes) before this counts as pixel-equivalent. Until then the risk is
- * confined to scaled TrueType text (src/font.c) and the Vita-only fallback.
- */
 SDL_Surface *zoomSurface(SDL_Surface *src, double zoomx, double zoomy, int smooth)
 {
     int dw, dh;
     SDL_Surface *dst;
+    Uint32 format;
 
     if (src == NULL) {
         return NULL;
@@ -816,8 +827,18 @@ SDL_Surface *zoomSurface(SDL_Surface *src, double zoomx, double zoomy, int smoot
         SDL_SetError("zoomSurface: zoom factors must be positive");
         return NULL;
     }
-    dw = (int)((double)src->w * zoomx);
-    dh = (int)((double)src->h * zoomy);
+    /*
+     * SDL_gfx rounds the destination size to nearest, it does not truncate.
+     * Measured against the kit's libSDL_gfx.a:
+     *   zoomSurfaceSize(13, 7, 1.5, 2.5) = 20x18   (19.5, 17.5)
+     *   zoomSurfaceSize(17, 1, 1.0, 0.5) = 17x1
+     *   zoomSurfaceSize(16, 16, 0.5, 0.5) = 8x8
+     * Truncating cost a row and a column on every fractional scale, which is
+     * exactly the case the engine hits when a font is drawn at a non-integer
+     * scale (src/font.c's zoomSurface call).
+     */
+    dw = (int)((double)src->w * zoomx + 0.5);
+    dh = (int)((double)src->h * zoomy + 0.5);
     if (dw <= 0 || dh <= 0) {
         SDL_SetError("zoomSurface: resulting size is empty");
         return NULL;
@@ -832,19 +853,36 @@ SDL_Surface *zoomSurface(SDL_Surface *src, double zoomx, double zoomy, int smoot
      * scales it.
      */
     if (src->format->BitsPerPixel == 8) {
-        return Sdl2_ZoomIndexed(src, dw, dh, smooth);
+        if (smooth != 0) {
+            SDL_SetError("zoomSurface: smooth scaling of 8-bit surfaces is not supported");
+            return NULL;
+        }
+        return Sdl2_ZoomNearest(src, dw, dh);
     }
 
-    dst = SDL_CreateRGBSurfaceWithFormat(0, dw, dh, src->format->BitsPerPixel, src->format->format);
-    if (dst == NULL) {
-        return NULL;
+    /*
+     * SDL_gfx promotes 16-bit sources to 32-bit output (measured: an RGB565
+     * 8x8 comes back as 32bpp). Matching that keeps the engine's blit path
+     * identical to the SDL 1.2 build instead of introducing a new surface
+     * format halfway through text drawing.
+     *
+     * Everything goes through Sdl2_ZoomNearest rather than SDL_BlitScaled: see
+     * the comment there. For the 16-bit case the source is converted first, so
+     * the copy loop still works on like formats.
+     */
+    /* BitsPerPixel is 15 or 16 for the two 16-bit formats (RGB555 and RGB565),
+     * so test the byte width instead of guessing at the bit count. */
+    if (src->format->BytesPerPixel == 2) {
+        SDL_Surface *promoted = SDL_ConvertSurfaceFormat(src, SDL_PIXELFORMAT_ARGB8888, 0);
+
+        if (promoted == NULL) {
+            return NULL;
+        }
+        dst = Sdl2_ZoomNearest(promoted, dw, dh);
+        SDL_FreeSurface(promoted);
+        return dst;
     }
-    Sdl2_CopySurfaceState(src, dst);
-    if (Sdl2_BlitScaledWithHint(src, dst, smooth) != 0) {
-        SDL_FreeSurface(dst);
-        return NULL;
-    }
-    return dst;
+    return Sdl2_ZoomNearest(src, dw, dh);
 }
 
 #endif /* MUGEN_SDL2 */
