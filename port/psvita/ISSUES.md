@@ -444,8 +444,13 @@ registers gives a moving target:
   through the preview: all scales `1.000x1.000`, zero `SUSPICIOUS` lines.
 - **The animation state machine** — the trace ran 970 lines across the character
   select, budget never exhausted, no `ChangeAnim … MISSING`.
-- **A stale render target** — the one-shot `soft: skipping scaled draw into a
-  stale target` diagnostic never fired.
+- **A stale render target** — downgraded to **not proven**. The one-shot `soft:
+  skipping scaled draw into a stale target` diagnostic never fired, but that
+  only shows the check did not trigger: it validates `w/h/pitch` ranges, not
+  whether the object is still alive, and a freed target can retain plausible
+  values. The identical-size path also diverts to `Soft_BlitVariant` before
+  the check. Lifetime (allocation, free, pointer swap) still needs tracing
+alongside the global-corruption checks below.
 - **stdout/stderr** — redirected to `ux0:data/mugen-std*.txt`; both stayed empty,
   so that path is not being used.
 
