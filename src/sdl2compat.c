@@ -709,7 +709,14 @@ static void Sdl2_CopySurfaceState(SDL_Surface *src, SDL_Surface *dst)
          * ncolors: SDL2 allocates every 8-bit surface with a full 256-entry
          * palette, so ncolors is always 256 and never marks the real end.
          */
-        memset(black, 0, sizeof(black));
+        /* SDL 1.2 has no per-entry alpha and reports 255 for every entry, so
+         * the pad colour is opaque black rather than transparent black. */
+        for (i = 0; i < 256; i++) {
+            black[i].r = 0;
+            black[i].g = 0;
+            black[i].b = 0;
+            black[i].a = 255;
+        }
         /*
          * SDL2 allocates every 8-bit surface with a full 256-entry palette and
          * leaves the unset entries at its default (255,255,255,255), so there is
@@ -737,21 +744,16 @@ static void Sdl2_CopySurfaceState(SDL_Surface *src, SDL_Surface *dst)
     SDL_GetSurfaceAlphaMod(src, &a);
     SDL_GetSurfaceBlendMode(src, &blend);
     SDL_SetSurfaceColorMod(dst, r, g, b);
+    SDL_SetSurfaceAlphaMod(dst, a);
     /*
-     * The destination's own modulation is part of the result SDL_gfx produced,
-     * but it must not be *applied* during the scale: the intermediate surface
-     * needs the source's final pixels. Applying it here is what the blit would
-     * do on the way in, and it darkened every colour channel by one in the
-     * differential test -- the intermediate surface then carried
-     * (colour * alpha / 255) and the engine's own blit darkened it again.
-     *
-     * So the modulation is recorded as opaque/neutral for the blit and the
-     * destination is left with the source's state once the pixels are in.
+     * The blend *mode* is copied as "does this surface blend at all", not as
+     * SDL2's enum value. SDL_gfx returns surfaces carrying SDL_SRCALPHA when the
+     * source had per-pixel alpha, and the engine's next blit composites
+     * differently depending on that. Inheriting BLENDMODE_NONE instead made
+     * scaled semi-transparent text opaque, which the differential test caught
+     * as a metadata difference once it started recording transparency.
      */
-    SDL_SetSurfaceAlphaMod(dst, 255);
-    SDL_SetSurfaceBlendMode(dst, SDL_BLENDMODE_NONE);
-    (void)a;
-    (void)blend;
+    SDL_SetSurfaceBlendMode(dst, blend);
 }
 
 /*
@@ -874,12 +876,19 @@ SDL_Surface *zoomSurface(SDL_Surface *src, double zoomx, double zoomy, int smoot
      * so test the byte width instead of guessing at the bit count. */
     if (src->format->BytesPerPixel == 2) {
         SDL_Surface *promoted = SDL_ConvertSurfaceFormat(src, SDL_PIXELFORMAT_ARGB8888, 0);
+        int had_alpha = src->format->Amask != 0;
 
         if (promoted == NULL) {
             return NULL;
         }
         dst = Sdl2_ZoomNearest(promoted, dw, dh);
         SDL_FreeSurface(promoted);
+        if (dst != NULL && !had_alpha) {
+            /* The promotion gives the intermediate an alpha channel the source
+             * never had. SDL_gfx's result keeps the source's (absent) alpha, so
+             * clear the blend state the promotion introduced. */
+            SDL_SetSurfaceBlendMode(dst, SDL_BLENDMODE_NONE);
+        }
         return dst;
     }
     return Sdl2_ZoomNearest(src, dw, dh);
