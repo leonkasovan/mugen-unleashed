@@ -83,7 +83,7 @@ triple. See `docs/BUILD-LINUX.md` for the dependency list.
 
 ```sh
 make -j8              # build/linux-x64/mugen-linux-x64
-make install
+make install          # → install/mugen-linux-x64 (not a .exe)
 ```
 
 `mugen.log` from the Linux build is identical to the Windows build's, so the
@@ -108,8 +108,10 @@ libresample from source). The result needs no `Elecbyte.MUGEN.libs` — only
 Windows system DLLs and `msvcrt.dll`. The CMake/MSVC build still links the
 game's DLLs; the two are not the same link step.
 
-`make check-toolchain` refuses a non-`i686-w64-mingw32` compiler and checks the
-static archives exist (not just `.pc` files). `make DEBUG=1
+`make check-toolchain` (Windows) refuses a non-`i686-w64-mingw32` compiler,
+verifies `pkg-config` resolves every package in `STATIC_PKGS`, and checks the
+static archives exist (not just `.pc` files). Under a Linux target it checks
+that triple instead and skips the archive/`windres` checks. `make DEBUG=1
 BUILD=build/mingw-debug` for an unoptimised build. Details:
 `docs/BUILD-MINGW.md`.
 

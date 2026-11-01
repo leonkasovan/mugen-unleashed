@@ -8,17 +8,22 @@
 # The static counterpart to the CMake/MSVC build in CMakeLists.txt, which still
 # links the game's DLLs. Same sources, different link step.
 #
-# The target is a 32-bit Windows GUI executable. It must be built with an
+# The Windows target is a 32-bit GUI executable. It must be built with an
 # i686-w64-mingw32 toolchain (x86_64-w64-mingw32 will not do: the engine is a
 # 32-bit binary reconstruction, its struct layouts and pointers are 4 bytes).
 #
-#   make              build $(BUILD)/mugen-static.exe
+# The same Makefile also builds a Linux target, chosen from uname and the
+# compiler's triple (docs/BUILD-LINUX.md). There the distro's shared SDL is
+# linked instead of the kit's static archives, so the executable is
+# mugen-linux-<arch> and both checks below follow the platform being built.
+#
+#   make              build $(TARGET): mugen-static.exe or mugen-linux-<arch>
 #   make -j8          parallel build
 #   make install      strip and copy the executable into install/
 #   make V=1          show the full command lines
 #   make clean        remove the object files of $(BUILD)
 #   make distclean    remove $(BUILD) entirely
-#   make check-toolchain   verify the toolchain is 32-bit MinGW and the static libs exist
+#   make check-toolchain   verify the compiler and the libraries this target needs
 #
 # Optional:
 #   make MUGEN_GAME_DIR=C:/mugen-1.1b1    embed the original's window icon
@@ -29,7 +34,13 @@
 
 # ---------------------------------------------------------------- configuration
 
-CC       ?= gcc
+# GNU Make predefines CC=cc with origin "default", so `CC ?= gcc` never took
+# effect: the build silently used whatever `cc` happened to be. Pick gcc only
+# when nobody else chose, so CC=... on the command line or in the environment
+# (the cross-compile case) still wins.
+ifeq ($(origin CC),default)
+  CC := gcc
+endif
 AR       ?= ar
 WINDRES  ?= windres
 STRIP    ?= strip
@@ -93,6 +104,22 @@ else
   MUGEN_FAMILY := linux
   BUILD    ?= build/$(MUGEN_TARGET)
   TARGET   := $(BUILD)/mugen-$(MUGEN_TARGET)
+endif
+
+# What check-toolchain expects `$(CC) -dumpmachine` to start with. Detection
+# above already rejects a mismatched pair, but an explicit MUGEN_TARGET skips
+# detection, and a wrong CC then silently builds for the wrong machine -- the
+# one mistake worth catching. Empty means "no expectation" (unknown target).
+ifeq ($(MUGEN_TARGET),win32)
+  TRIPLE_RE := ^i686-w64-mingw32
+else ifeq ($(MUGEN_TARGET),linux-x64)
+  TRIPLE_RE := ^x86_64-
+else ifeq ($(MUGEN_TARGET),linux-arm64)
+  TRIPLE_RE := ^aarch64-
+else ifeq ($(MUGEN_TARGET),linux-x86)
+  TRIPLE_RE := ^i686-
+else
+  TRIPLE_RE :=
 endif
 
 V        ?= 0
@@ -309,10 +336,18 @@ endif
 
 # --------------------------------------------------------------------- rules
 
-.PHONY: all clean distclean check-toolchain check-libs help install
+.PHONY: all clean distclean check-toolchain check-libs check-pkgconfig help install
 .DELETE_ON_ERROR:
 
-all: $(TARGET)
+# check-pkgconfig runs first so a missing .pc file is reported as such instead
+# of as the several hundred undefined Mix_*/TTF_*/SDL_* symbols it causes at
+# link time. Supplying PKG_LIBS yourself on the command line skips it.
+ALL_DEPS := $(TARGET)
+ifneq ($(origin PKG_LIBS),command line)
+  ALL_DEPS := check-pkgconfig $(TARGET)
+endif
+
+all: $(ALL_DEPS)
 
 # Static link. -Wl,--gc-sections drops the archive members nothing references;
 # without it a static link of SDL_mixer pulls in every codec whether the game
@@ -406,46 +441,89 @@ $(RC_OBJ): $(ALL_RC)
 
 # --- install ----------------------------------------------------------------
 # Strips the executable and copies it into the game directory, where it stays.
-# install/ is the shipped M.U.G.E.N 1.1b1 tree (git-ignored); the executable is
-# named mugen-static.exe so it never shadows the original mugen.exe.
+# install/ is the shipped M.U.G.E.N 1.1b1 tree (git-ignored). The installed
+# name follows $(TARGET), so it is never the original's mugen.exe and never a
+# Windows name on Linux: mugen-static.exe on Windows, mugen-linux-<arch> on
+# Linux (an ELF binary called .exe was the old behaviour here).
 
-INSTALL_DIR ?= install
-STRIPPED    := $(BUILD)/mugen-static-stripped.exe
+INSTALL_DIR  ?= install
+INSTALL_NAME ?= $(notdir $(TARGET))
+STRIPPED     := $(BUILD)/$(basename $(INSTALL_NAME))-stripped$(suffix $(INSTALL_NAME))
 
 $(STRIPPED): $(TARGET)
 	@echo "  STRIP   $@"
 	$(Q)$(STRIP) -o $@ $(TARGET)
 
 install: $(STRIPPED)
-	@echo "  INSTALL $(INSTALL_DIR)/mugen-static.exe"
+	@echo "  INSTALL $(INSTALL_DIR)/$(INSTALL_NAME)"
 	$(Q)mkdir -p $(INSTALL_DIR)
-	$(Q)cp $(STRIPPED) $(INSTALL_DIR)/mugen-static.exe
-	@echo "  done: run it from $(INSTALL_DIR) (no Elecbyte.MUGEN.libs needed)"
+	$(Q)cp $(STRIPPED) $(INSTALL_DIR)/$(INSTALL_NAME)
+	@echo "  done: run it from $(INSTALL_DIR)"
+ifeq ($(MUGEN_FAMILY),win32)
+	@echo "        (no Elecbyte.MUGEN.libs needed)"
+endif
 
-# --- housekeeping -----------------------------------------------------------
+# --- toolchain and dependency checks ----------------------------------------
+# The two platforms need different things, and these targets say which is
+# which rather than assuming Windows. check-toolchain runs the set that
+# belongs to the platform being built; the other checks remain callable.
 
-check-toolchain: check-libs
-	@$(CC) -dumpmachine | grep -q '^i686-w64-mingw32' \
-	  || { echo "error: $(CC) targets '$$($(CC) -dumpmachine)', need i686-w64-mingw32 (32-bit)"; exit 1; }
-	@for t in $(AR) $(WINDRES) $(STRIP) $(PKG_CONFIG); do \
+check-toolchain: check-pkgconfig $(if $(filter win32,$(MUGEN_FAMILY)),check-libs)
+	@triple=$$($(CC) -dumpmachine 2>/dev/null); \
+	if [ -z "$$triple" ]; then \
+	  echo "error: '$(CC) -dumpmachine' produced nothing; is $(CC) installed?"; exit 1; \
+	fi; \
+	if [ -n '$(TRIPLE_RE)' ] && ! printf '%s\n' "$$triple" | grep -q '$(TRIPLE_RE)'; then \
+	  echo "error: $(CC) targets '$$triple', but MUGEN_TARGET=$(MUGEN_TARGET) needs '$(TRIPLE_RE)'"; \
+	  echo "       pass CC=<compiler for that target>, or MUGEN_TARGET=<the target $(CC) builds>"; \
+	  exit 1; \
+	fi; \
+	for t in $(AR) $(STRIP) $(if $(filter win32,$(MUGEN_FAMILY)),$(WINDRES)); do \
 	  command -v $$t >/dev/null 2>&1 \
 	    || { echo "error: $$t not found in PATH"; exit 1; }; \
-	done
-	@echo "toolchain ok: $$($(CC) --version | head -1) / $$($(CC) -dumpmachine)"
-	@echo "python: $(if $(strip $(PYTHON3)),$$($(PYTHON3) --version),not found (only needed for MUGEN_GAME_DIR))"
+	done; \
+	echo "toolchain ok: $$($(CC) --version | head -1) / $$triple"; \
+	echo "python: $(if $(strip $(PYTHON3)),$$($(PYTHON3) --version),not found (only needed for MUGEN_GAME_DIR))"
 
-# The static SDL stack must be present as archives, not just .pc files: a
-# pkg-config hit with only a DLL behind it would link but not be static.
+# pkg-config's stderr is suppressed when $(STATIC_PKGS) is expanded, so a
+# missing .pc file leaves PKG_LIBS/PKG_CFLAGS empty and the build only fails
+# much later, at the link, on undefined Mix_*/TTF_*/SDL_* symbols. Name the
+# packages instead. Both platforms use pkg-config (Linux for the distro's
+# shared libraries, Windows for the kit's static ones).
+check-pkgconfig:
+	@command -v $(PKG_CONFIG) >/dev/null 2>&1 \
+	  || { echo "error: $(PKG_CONFIG) not found in PATH"; \
+	       echo "       install pkg-config, or pass PKG_LIBS=... PKG_CFLAGS=... yourself"; \
+	       exit 1; }
+	@missing=; for pkg in $(STATIC_PKGS); do \
+	  $(PKG_CONFIG) --exists $$pkg 2>/dev/null || missing="$$missing $$pkg"; \
+	done; \
+	if [ -n "$$missing" ]; then \
+	  echo "error: pkg-config cannot find:$$missing"; \
+	  echo "       install those development packages (docs/BUILD-MINGW.md,"; \
+	  echo "       docs/BUILD-LINUX.md), or pass PKG_LIBS=... PKG_CFLAGS=... yourself"; \
+	  exit 1; \
+	fi; \
+	echo "pkg-config ok: $(STATIC_PKGS)"
+
+# The Windows static link needs real archives, not just .pc files: a pkg-config
+# hit with only a DLL behind it links but is not static. Linux links the
+# distro's shared libraries, so on that target there is nothing to look for and
+# the target says so rather than reporting SDL archives as "missing".
 check-libs:
-	@for pkg in $(STATIC_PKGS) zlib libmpg123; do \
-	  $(PKG_CONFIG) --exists $$pkg \
-	    || { echo "error: pkg-config cannot find '$$pkg'; install the $(1) static libraries"; exit 1; }; \
-	done
+ifneq ($(MUGEN_FAMILY),win32)
+	@echo "check-libs: Windows static build only; $(MUGEN_TARGET) links shared libraries"
+else
+	@test -n "$(SDK_LIB_DIR)" \
+	  || { echo "error: pkg-config reports no libdir for 'sdl'; is the static SDL stack installed?"; exit 1; }
 	@for lib in SDL SDL_gfx SDL_mixer SDL_ttf z mpg123; do \
 	  test -f "$(SDK_LIB_DIR)/lib$$lib.a" \
 	    || { echo "error: $(SDK_LIB_DIR)/lib$$lib.a missing (need static archives, not DLLs)"; exit 1; }; \
 	done
-	@echo "static libraries ok: $(STATIC_PKGS) zlib mpg123"
+	@echo "static libraries ok: SDL SDL_gfx SDL_mixer SDL_ttf z mpg123 in $(SDK_LIB_DIR)"
+endif
+
+# --- housekeeping -----------------------------------------------------------
 
 clean:
 	rm -rf $(OBJ_DIR) $(LIB_DIR) $(ICON_DIR) $(TARGET) $(STRIPPED)
@@ -453,7 +531,10 @@ clean:
 distclean:
 	rm -rf $(BUILD)
 
+# Prints the header comment block: everything after the first line up to the
+# first blank line. Not a line range, so the header can grow without help
+# silently truncating or spilling into the rules.
 help:
-	@sed -n '2,33p' Makefile | sed 's/^# \{0,1\}//'
+	@awk 'NR > 1 { if (/^#/) { sub(/^# ?/, ""); print } else exit }' Makefile
 
 -include $(shell find $(OBJ_DIR) -name '*.d' 2>/dev/null)

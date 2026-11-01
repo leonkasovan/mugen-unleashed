@@ -6,10 +6,18 @@ from `uname` and the compiler's own triple. This page covers the Linux side;
 
 ```sh
 make -j8
-make install          # strips and copies into install/
+make install          # strips and copies into install/mugen-linux-x64
 ```
 
-→ `build/linux-x64/mugen-linux-x64` (or `build/linux-arm64/…`)
+→ `build/linux-x64/mugen-linux-x64` (or `build/linux-arm64/…`), installed under
+the same name so an ELF binary never ends up called `.exe`.
+
+Checks follow the platform: `make check-toolchain` verifies the compiler's
+triple against `MUGEN_TARGET` (`^x86_64-` for `linux-x64`, and so on) and that
+`ar`/`strip` are present — no `libSDL.a` or `windres`, those are Windows-only.
+`make check-pkgconfig` names every missing `.pc` file; a plain `make` runs it
+first, so a missing `-dev` package is reported before compiling rather than as
+undefined `Mix_*`/`TTF_*` symbols at the link.
 
 ## Target detection
 

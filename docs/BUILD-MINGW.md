@@ -49,6 +49,13 @@ and MSVC's 32-bit type sizes, so the build is `-m32` and must use an
 `i686-w64-mingw32` toolchain. A 64-bit MinGW (`x86_64-w64-mingw32`) cannot
 produce this program. `make check-toolchain` refuses anything else.
 
+`make check-toolchain` also requires `pkg-config` to resolve every package in
+`STATIC_PKGS` and names the ones it cannot (that check, `check-pkgconfig`, is a
+prerequisite of `make`, so a missing `-dev`/`.pc` file fails before compiling
+rather than as undefined `Mix_*`/`TTF_*` symbols at the link). The archive check
+(`check-libs`) is Windows-only: the whole target branches on the platform being
+built, so a Linux host is not asked for `libSDL.a` or `windres`.
+
 Two other MSVC behaviours are reproduced with flags:
 
 | MSVC (original build) | GCC here | Why |
