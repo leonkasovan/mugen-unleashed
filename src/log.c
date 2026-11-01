@@ -15,6 +15,21 @@ int Log_Init(void)
     TextRing *mirror;
 
     fp = fopen("mugen.log", "wt");
+#ifdef MUGEN_VITA_GL
+    /*
+     * PS Vita port (port/psvita): the launch directory is not always writable
+     * -- a LiveArea start can leave the process in a read-only mount -- and
+     * when it is not, this fopen failed, Log_Init returned 0, every subsequent
+     * Log_Printf became a no-op and the port's only diagnostic vanished. The
+     * engine ignores Log_Init's return value (as the original does), so nothing
+     * reported it. ux0:data is always writable for a homebrew.
+     *
+     * The handle is kept, so Log_Close closes it like any other.
+     */
+    if (fp == NULL) {
+        fp = fopen("ux0:data/mugen.log", "wt");
+    }
+#endif
     if (fp == NULL) {
         return 0;
     }

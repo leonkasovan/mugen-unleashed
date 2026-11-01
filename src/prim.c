@@ -1042,7 +1042,7 @@ void Gfx_GlInvertPixel(int x, int y)
     Gl_ResetModelview();
     glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
     Prim_GlBlend(GL_LOGIC_OP);
-    glLogicOp(GL_XOR);
+    g_glewLogicOp(GL_XOR);
     glBegin(GL_POINTS);
     glVertex2f((float)x, (float)y);
     glEnd();

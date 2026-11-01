@@ -38,6 +38,15 @@
 
 /* ---- helpers ---- */
 
+#ifdef MUGEN_VITA_GL
+/*
+ * PS Vita port (port/psvita): byte size of the current render target's pixels,
+ * used to bound scaled/rotated rows. See the row check in Soft_Scale.
+ */
+static long g_softDstBytes;
+static int g_softLogged;   /* one diagnostic line, not one per frame */
+#endif
+
 static Sprite *Soft_SpriteAt(const SpriteSet *set, int index)
 {
     const KeyedArray *a = set->sprites;
@@ -309,6 +318,21 @@ static void Soft_Scale(SpriteSet *set, int sprite, float x, float y, float sw, f
     if (sw <= 0.0f || sh <= 0.0f) {
         return;
     }
+#ifdef MUGEN_VITA_GL
+    /*
+     * PS Vita port (port/psvita): reject non-finite draw parameters.
+     *
+     * Quirk of the original, documented at the top of this file: "a NaN y
+     * (scaled drawing)... overflows the pixel counts and writes outside the
+     * target". Every comparison against NaN is false, so the clamps below are
+     * skipped entirely and the row pointer is computed from a garbage index.
+     * On Windows that corrupts whatever follows the surface; on the Vita it is
+     * a hard crash.
+     */
+    if (!isfinite(x) || !isfinite(y) || !isfinite(sw) || !isfinite(sh)) {
+        return;
+    }
+#endif
     w = spr->w;
     h = spr->h;
     fw = (float)w;
@@ -397,13 +421,110 @@ static void Soft_Scale(SpriteSet *set, int sprite, float x, float y, float sw, f
         return;
     }
     dst = Sprite_GetPixels(g_renderTarget, g_renderTargetSprite);
+#ifdef MUGEN_VITA_GL
+    /*
+     * PS Vita port (port/psvita): the NULL check this file's own header says is
+     * missing -- "SpriteSet_GetPaletteConverted's result is used without a NULL
+     * check". SpriteSet_GetPalette returns NULL when pal_index is out of range
+     * or the palette remap finds no match, and the original then dereferences
+     * it: address 0 on Windows, fatal on the Vita.
+     *
+     * Core dump 1793496230 (delta 0x35000) faulted inside Soft_Put reading
+     * `pal[index]` with r2 = 0x82a535f8 and r1 = 236 -- the palette's rgb565
+     * pointer plus 472 bytes fell outside mapped memory. A palette that is not
+     * the 256-entry array this drawer assumes cannot be used.
+     */
+    {
+        Palette *found = SpriteSet_GetPaletteConverted(set, spr->pal_index);
+
+        /*
+         * Only the NULL case can be checked here: rgb565 is an inline array, so
+         * its address is always non-NULL -- the dump value 0x82a535f8 IS
+         * &found->rgb565, which means `found` itself pointed outside the
+         * palette array (a freed sprite set, most likely). That case cannot be
+         * detected from here without knowing the array's bounds, so it is left
+         * as the next thing to instrument rather than papered over.
+         */
+        if (found == NULL) {
+            static int logged;
+
+            if (logged == 0) {
+                logged = 1;
+                Log_Printf("soft: sprite %d has no usable palette (pal_index %d); draw skipped\n", sprite,
+                           spr->pal_index);
+            }
+            return;
+        }
+        pal = found->rgb565;
+    }
+#else
     pal = SpriteSet_GetPaletteConverted(set, spr->pal_index)->rgb565;
+#endif
+#ifdef MUGEN_VITA_GL
+    /*
+     * PS Vita port (port/psvita): bound every row against the target surface.
+     *
+     * Clamping the span to the clip rectangle is not sufficient: g_clipX1/X2 are
+     * only correct while the clip matches the surface being drawn into, and
+     * tspr->rows[iy] is only meaningful once the sprite's row table has been
+     * built. Drawing a sprite that has not been decoded leaves the entry
+     * arbitrary. On hardware that was `strh r2, [r0]` with r0 around
+     * 0x818ce6c2 -- roughly 96 MB past the module -- three dumps running, always
+     * reaching Soft_Put from Soft_Scale via BgElem_DrawTiled.
+     *
+     * A row whose offset lands outside the target's pixel buffer is skipped
+     * rather than written through. Per row, not per pixel.
+     */
+    {
+        SDL_Surface *dsurf = SpriteSet_GetSurface(g_renderTarget, g_renderTargetSprite);
+
+        g_softDstBytes = 0;
+        if (dsurf != NULL) {
+            /*
+             * Sanity-check the surface's own fields, not just the product.
+             *
+             * Bounding the row offset against pitch*h only helps while the
+             * surface is the one actually being drawn into. The five dumps
+             * collected from hardware all show the same wild destination
+             * (around 0x818bf94c), and they kept happening with the offset
+             * check in place -- so the offset was "in range" of a surface whose
+             * fields were themselves stale, i.e. a render target that had been
+             * freed by the stage change and not yet re-pointed.
+             *
+             * A live 480x272 16-bit target has pitch 960 and h 272; a 960x544
+             * one has pitch 1920. Anything outside a generous window is stale,
+             * and drawing into it is skipped rather than trusted.
+             */
+            if (dsurf->pitch > 0 && dsurf->pitch <= 8192 && dsurf->h > 0 && dsurf->h <= 4096 &&
+                dsurf->w > 0 && dsurf->w <= 4096) {
+                g_softDstBytes = (long)dsurf->pitch * (long)dsurf->h;
+            }
+            if (g_softDstBytes > 16L * 1024L * 1024L) {
+                g_softDstBytes = 0;     /* implausible target: treat as stale */
+            }
+            if (g_softDstBytes == 0 && g_softLogged++ == 0) {
+                Log_Printf("soft: skipping scaled draw into a stale target "
+                           "(surface %p %ix%i pitch %i)\n", (void *)dsurf, dsurf->w, dsurf->h,
+                           dsurf->pitch);
+            }
+        }
+    }
+    if (dst == NULL || g_softDstBytes <= 0) {
+        return;
+    }
+#endif
     for (iy = iy0; nrows > 0; nrows--, iy++) {
         const unsigned char *s;
         unsigned short *d = (unsigned short *)(dst + tspr->rows[iy] + ix0 * 2);
         int u = u0;
         int row, n;
 
+#ifdef MUGEN_VITA_GL
+        if ((long)tspr->rows[iy] + (long)ix0 * 2 < 0 ||
+            (long)tspr->rows[iy] + (long)ix0 * 2 + (long)ncols * 2 > g_softDstBytes) {
+            continue;   /* row table not (yet) valid for this sprite */
+        }
+#endif
         if (row_clamp && (v0 >> 16) + sy_int >= h) {
             v0 -= 0x10000;
         }

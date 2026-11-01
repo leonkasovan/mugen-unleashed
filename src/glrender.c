@@ -35,6 +35,10 @@
 
 #include "mugen.h"
 
+#ifdef MUGEN_VITA_GL
+/* port/psvita/src/vita_gl_shim.h is included by mugen.h; nothing extra here. */
+#endif
+
 /* GL constants newer than GL 1.1. */
 #define GLR_CLAMP_TO_EDGE               0x812F
 #define GLR_TEXTURE0                    0x84C0
@@ -563,7 +567,16 @@ int Gl_Init(int framebuffers)
      * anyway, so the value is not treated as fatal -- same as the original,
      * which ignored glewInit's status.
      */
+#ifdef MUGEN_VITA_GL
+    /*
+     * PS Vita port (port/psvita): there is no loader to run. vitaGL links its
+     * GL 2.1 entry points directly and fills the same capability flags from
+     * glGetString, which is all gladLoadGL() did for this code.
+     */
+    VitaGl_Probe();
+#else
     gladLoadGL();
+#endif
     if ((s = glGetString(GL_VERSION)) != NULL) {
         MatchLog_Printf(7, "Version: %s\n", s);
     }

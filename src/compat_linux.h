@@ -22,6 +22,12 @@
 #ifndef MUGEN_COMPAT_LINUX_H
 #define MUGEN_COMPAT_LINUX_H
 
+/*
+ * Used by the non-Windows targets: Linux (glibc, native) and the PS Vita
+ * (newlib, cross-compiled with VitaSDK). __vita__ is predefined by the VitaSDK
+ * toolchain's target headers and SDL_config_vita.h; the Vita is newlib, not
+ * glibc, so anything glibc-specific below is kept behind a check.
+ */
 #ifndef _WIN32
 
 #include <math.h>
@@ -51,7 +57,15 @@
 #define __int64   __INT64_TYPE__
 #define __cdecl
 #define __stdcall
+#ifndef __fastcall
+/*
+ * newlib (VitaSDK) already defines __fastcall in <sys/cdefs.h>, which arrives
+ * through <math.h> below. Only that one: __int64, __cdecl and __stdcall are not
+ * newlib's, so they are defined above for every non-Windows target. Redefining
+ * __fastcall would be a "redefined" warning on every file.
+ */
 #define __fastcall
+#endif
 
 /* ------------------------------------------------------------ Windows types */
 
@@ -147,7 +161,16 @@ char *_strlwr(char *s);
 
 /* --------------------------------- Win32 calls implemented in compat_linux.c */
 
-/* Library loading: LoadLibraryA / GetProcAddress / FreeLibrary over dlopen. */
+/*
+ * Library loading: LoadLibraryA / GetProcAddress / FreeLibrary.
+ *
+ * On Linux they are dlopen / dlsym / dlclose. The PS Vita has no dynamic
+ * loader for homebrew (SDL_config_vita.h sets SDL_LOADSO_DISABLED), but the
+ * engine only ever opens BGM plugin DLLs through these three, and every call
+ * site already treats a NULL handle as "plugin not available" -- which is the
+ * truth on the Vita. compat_linux.c therefore implements them as "always
+ * fail" there, rather than pulling in dlopen.
+ */
 HMODULE LoadLibraryA(LPCSTR name);
 void *  GetProcAddress(HMODULE module, LPCSTR name);
 BOOL    FreeLibrary(HMODULE module);
@@ -157,6 +180,9 @@ BOOL    FreeLibrary(HMODULE module);
  * unit, and QueryPerformanceCounter/Frequency keep their 64-bit counter
  * contract, because src/timer.c and src/matchload.c do arithmetic on those
  * values and the original's log output depends on the units.
+ *
+ * newlib on the Vita provides clock_gettime(CLOCK_MONOTONIC) and nanosleep
+ * (SDL_config_vita.h sets HAVE_NANOSLEEP), so the same code serves both.
  */
 DWORD   timeGetTime(void);
 BOOL    QueryPerformanceCounter(int64_t *count);

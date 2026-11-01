@@ -54,8 +54,14 @@
 
 #if HAVE_INTTYPES_H
   #include <inttypes.h>
+/*
+ * newlib (PS Vita) already defines both of these in <sys/types.h>; see
+ * config.h, LIBRESAMPLE_NEWLIB_TYPES.
+ */
+  #ifndef LIBRESAMPLE_NEWLIB_TYPES
   typedef char           BOOL;
   typedef int32_t        WORD;
+  #endif
   typedef uint32_t       UWORD;
 #else
   typedef char           BOOL;

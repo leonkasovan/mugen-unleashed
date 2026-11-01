@@ -19,5 +19,17 @@ its own license; the license files and notices are in the directories and header
 | `libresample/` | libresample 0.1.3 by Dominic Mazzoni, vendored and ported to multi-channel to match Elecbyte's ABI. See `libresample/VENDORED.md` | BSD / LGPL |
 | `sdk/def/*.def` | export lists of the game's DLLs, from which the build makes import libraries | — |
 
+```
+missing lib in ArkOS R36S:
+libinstpatch-1.0.so.2.0.1
+libfluidsynth.so.2.3.1
+libmikmod.so.3.3.0
+libSDL_mixer-1.2.so.0.12.0
+libSDL_gfx.so.15.9.1
+libSDL_ttf-2.0.so.0.10.1
+```
+
+pi-bolt --session 01a19114-997e-7770-a598-3d0d77ae3169
+
 The DLLs themselves are not included. At run time the executable uses the copies in the game's
 `Elecbyte.MUGEN.libs` folder.

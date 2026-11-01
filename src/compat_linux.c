@@ -1,21 +1,31 @@
 /*
- * Win32 calls the engine makes, implemented over POSIX for the Linux build.
+ * Win32 calls the engine makes, implemented over POSIX for the non-Windows
+ * builds: Linux (glibc) and the PS Vita (newlib, VitaSDK).
  *
  * Only calls with a faithful equivalent live here. Window handling, the error
  * dialog and the window icon are Windows-specific by nature and are handled
  * with #ifdef at their call sites (see src/compat_linux.h).
  *
  * Compiled to an empty object on Windows; the Makefile/CMake only build it for
- * the Linux targets.
+ * the Linux targets, and the Vita port for its own.
  */
 #include "mugen.h"
 
 #ifndef _WIN32
 
-#include <dlfcn.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+
+/*
+ * The Vita has no dynamic loader for homebrew: SDL_config_vita.h sets
+ * SDL_LOADSO_DISABLED, and there is no <dlfcn.h> in the VitaSDK sysroot. The
+ * three library-loading calls below therefore become "no such plugin" there;
+ * see the header comment above their declarations.
+ */
+#ifndef __vita__
+#include <dlfcn.h>
+#endif
 
 /* ---------------------------------------------------------------------- misc */
 
@@ -39,6 +49,47 @@ char *_strlwr(char *s)
 }
 
 /* ------------------------------------------------------------ library loading */
+
+#ifdef __vita__
+
+/*
+ * PS Vita: no dynamic loader, so every plugin load fails.
+ *
+ * This is the truthful answer rather than a degradation: the only consumers are
+ * the BGM plugin loader in src/bgmplugins.c and src/bgm.c's plugin table, and
+ * both already treat a NULL handle as "this plugin is not installed".
+ * Configuring a .dll plugin in mugen.cfg on the Vita therefore logs the same
+ * "could not load" path as a missing file does on Windows, instead of
+ * pretending to succeed. The built-in SDL_mixer subsystems are what works.
+ * Recorded in PLANS.md and port/psvita/README.md.
+ */
+HMODULE LoadLibraryA(LPCSTR name)
+{
+    (void)name;
+    return NULL;
+}
+
+void *GetProcAddress(HMODULE module, LPCSTR name)
+{
+    (void)module;
+    (void)name;
+    return NULL;
+}
+
+BOOL FreeLibrary(HMODULE module)
+{
+    (void)module;
+    return FALSE;
+}
+
+/* The executable itself. Nothing on the Vita looks at it; see the Linux note. */
+HMODULE GetModuleHandleA(LPCSTR name)
+{
+    (void)name;
+    return NULL;
+}
+
+#else /* !__vita__ */
 
 /*
  * LoadLibraryA / GetProcAddress / FreeLibrary map to dlopen / dlsym / dlclose.
@@ -86,6 +137,8 @@ HMODULE GetModuleHandleA(LPCSTR name)
     (void)name;
     return (HMODULE)RTLD_DEFAULT;
 }
+
+#endif /* __vita__ */
 
 /* --------------------------------------------------------------------- timers */
 
@@ -186,8 +239,20 @@ UINT timeEndPeriod(UINT ms)
 const char *Compat_FontsDir(void)
 {
     static const char *dirs[] = {
+#ifdef __vita__
+        /*
+         * The Vita has no system font database and no font directory of its
+         * own; a homebrew carries whatever it needs. ux0:data/mugen/font is
+         * where a Vita user is expected to put system fonts (the game's own
+         * TTF/FNT files live under the data directory anyway). Missing here
+         * simply means the system-font search finds nothing, exactly as on
+         * Windows without the CSIDL_FONTS lookup, which the engine tolerates.
+         */
+        "ux0:data/mugen/font",
+#else
         "/usr/share/fonts",
         "/usr/local/share/fonts",
+#endif
         NULL
     };
     int i;
