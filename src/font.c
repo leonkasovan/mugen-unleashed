@@ -117,6 +117,33 @@ have_palette:
         b = 0x100;
     }
     saved = g_palFxCur;
+#ifdef MUGEN_VITA_GL
+    /*
+     * PS Vita port (port/psvita): reject an impossible g_palFxCur.
+     *
+     * `saved` is handed to PalFx_Init, which dereferences it. Core dump
+     * 1793495369 (module delta 0x29000) faulted in
+     * `Font_DrawLine+0x110`, the instruction after `bl PalFx_Init`, with
+     * r1 = 0x8199 -- r1 is `saved` at the call site, and 0x8199 cannot be a
+     * PalFx: the module is mapped at 0x81000000 upward and the heap above it.
+     * So g_palFxCur had been corrupted into a small integer before this draw.
+     *
+     * On Windows a dereference of 0x8199 segfaults only if nothing is mapped
+     * there; on the Vita it is reliably fatal. Treating an implausible value as
+     * NULL restores the "no PalFX saved" path, which is what the first draw of
+     * a frame sees anyway, and the log line names the culprit.
+     */
+    if (saved != NULL && (unsigned long)(uintptr_t)saved < 0x10000UL) {
+        static int logged;
+
+        if (logged == 0) {
+            logged = 1;
+            Log_Printf("font: g_palFxCur was %p (not a pointer); treating as none, font %p type %d bank %d\n",
+                       (void *)saved, (void *)font, font->type, bank);
+        }
+        saved = NULL;
+    }
+#endif
     g_palFxCur = PalFx_ScaleMul(PalFx_Init(&fx, saved), r, g, b);
     c = *text++;
     while (c != '\0' && c != '\n' && len != 0) {
@@ -203,7 +230,10 @@ void Font_DrawLineTTF(const char *text, const DrawParams *dp, int len, Font *fon
     color.r = (Uint8)r;
     color.g = (Uint8)g;
     color.b = (Uint8)b;
+#ifndef ANDROID_PORT
+    /* Android port: SDL2's SDL_Color has no fifth byte. */
     color.unused = 0;
+#endif
     blended = font->blend;
     if (g_fontTtfRender == FONT_TTF_SOLID) {
         blended = 0;

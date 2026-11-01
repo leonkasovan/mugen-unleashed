@@ -238,6 +238,28 @@ void Screen_EndFrame(void)
         Timer_WaitFrame();
     }
     Screen_Present();
+#ifdef ANDROID_PORT
+    /*
+     * Android port: end of frame, present at most once.
+     *
+     * SDL_UpdateRect is called from draw paths as well as from Gfx_Present, and
+     * each request uploads the whole surface. Android_PresentFrame marks the
+     * frame boundary so repeated requests inside one frame collapse into a
+     * single texture upload and SDL_RenderPresent. See android_video.c (M2 in
+     * port/android/REVIEW.md).
+     */
+    Android_PresentFrame();
+#endif
     Frame_ResetPalFx();
     Frame_UpdateSkip();
+#if defined(MUGEN_VITA_GL) && !defined(ANDROID_PORT)
+    /*
+     * PS Vita port: per-second tick/draw statistics.
+     *
+     * The Android port has no equivalent yet; its equivalent would live in
+     * port/android and is not written. Nothing is stubbed here, because a
+     * placeholder would imply a measurement that does not exist.
+     */
+    Vita_FrameLog();
+#endif
 }
