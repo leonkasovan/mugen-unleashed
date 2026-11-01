@@ -220,6 +220,15 @@ int Config_Load(void)
             strncpy(g_game->start_stage, value, sizeof(g_game->start_stage));
         }
         Ini_GetInt(ini, "HideDevelopmentBuildBanner", &g_game->hide_dev_banner);
+        /*
+         * [Debug] ShowFPS: the source comment on Game_DrawFps names this
+         * option, but it was never read anywhere -- only the console's "fps"
+         * command could turn the counter on, and the console needs a backquote
+         * key. On the Vita there is no keyboard, so the frame rate was
+         * effectively unmeasurable. Reading the option makes it reachable from
+         * mugen.cfg, which the Vita build can patch.
+         */
+        Ini_GetInt(ini, "showfps", &g_game->show_fps);
     }
 
     /* [Video] */
@@ -460,6 +469,67 @@ int Config_Load(void)
     Config_ReadKeys(ini, text, g_game->joy_keys[0]);
     sprintf(text, "P2 joystick");
     Config_ReadKeys(ini, text, g_game->joy_keys[1]);
+#ifdef MUGEN_VITA_GL
+    /*
+     * PS Vita port (port/psvita): replace the joystick bindings with the real
+     * button indices.
+     *
+     * The shipped mugen.cfg binds [P1 Joystick] to indices 9..24, which is a
+     * 24-button PC pad. SDL's Vita joystick driver reports only 12 buttons, and
+     * in a different order, so those bindings make Right jump, Left crouch,
+     * Start walk left, and leave every attack button (13..20) pointing at a
+     * button that does not exist.
+     *
+     * Indices from SDL_sysjoystick.o in VitaSDK's libSDL.a, confirmed on
+     * hardware with port/psvita/input-mapper (12 buttons, 4 axes, 0 hats -- the
+     * d-pad is buttons, not a hat):
+     *
+     *   0 Triangle  1 Circle  2 Cross   3 Square  4 L    5 R
+     *   6 Down      7 Left    8 Up      9 Right  10 Select  11 Start
+     *
+     * Layout is the conventional PS one: Square/Triangle/Circle/Cross = A/B/C/X.
+     * Overriding here rather than rewriting the config keeps the patch
+     * deterministic and leaves the shipped file's [P1 Joystick] text intact.
+     */
+    {
+        /*
+         * Written by name, not positionally: the KEY_* enum is
+         * JUMP, RIGHT, CROUCH, LEFT, A..Z, START -- note RIGHT before CROUCH,
+         * so an initializer written in reading order would silently swap the
+         * vertical and horizontal directions.
+         */
+        int player;
+
+        for (player = 0; player < 2; player++) {
+            int *jk = g_game->joy_keys[player];
+
+            memset(jk, JOY_NONE, sizeof(g_game->joy_keys[player]));
+            jk[KEY_JUMP] = 8;      /* d-pad up */
+            jk[KEY_RIGHT] = 9;     /* d-pad right */
+            jk[KEY_CROUCH] = 6;    /* d-pad down */
+            jk[KEY_LEFT] = 7;      /* d-pad left */
+            /*
+             * Full six-button fight layout. The character select's own
+             * overrides (Cross/Square = back, L/R = nothing) are applied per
+             * screen in src/events.c, so nothing is lost in a fight.
+             */
+            jk[KEY_A] = 3;         /* Square */
+            jk[KEY_B] = 0;         /* Triangle */
+            /*
+             * Circle is C. The earlier revision left this unbound because
+             * Circle emitted Return, which is also the Start/pause action, so
+             * C on Circle would have paused the match mid-punch. Circle now
+             * emits the C key itself (see VitaInput_KeyForButton), giving the
+             * conventional Square/Triangle/Circle/Cross = A/B/C/X layout.
+             */
+            jk[KEY_C] = 1;
+            jk[KEY_X] = 2;         /* Cross */
+            jk[KEY_Y] = 4;         /* L */
+            jk[KEY_Z] = 5;         /* R */
+            jk[KEY_START] = 11;    /* Start */
+        }
+    }
+#endif
     g = g_game;
     memcpy(g->joy_keys_active[0], g->joy_keys[0], sizeof(g->joy_keys_active[0]));
     memcpy(g->joy_keys_active[1], g->joy_keys[1], sizeof(g->joy_keys_active[1]));
