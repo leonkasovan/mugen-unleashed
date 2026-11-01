@@ -93,6 +93,12 @@ void Keyboard_SyncState(void)
      * which says nothing about how many keycodes are set.
      */
     (void)count;
+#ifdef MUGEN_SDL2
+    /*
+     * Desktop SDL2 build: use the shim's inverse table, which is the exact
+     * inverse of the translation events.c applies, so resync and event
+     * delivery cannot disagree.
+     */
     memset(g_keyState, 0, sizeof(g_keyState));
     for (i = 1; i < INPUT_KEY_COUNT && i < (int)(sizeof(g_keyState)); i++) {
         SDL_Keycode sdl_key = Sdl2_SdlKeyForEngineKey(i);
@@ -106,6 +112,19 @@ void Keyboard_SyncState(void)
             g_keyState[i] = state[sc];
         }
     }
+#else
+    /*
+     * Android: the shim (src/sdl2compat.c) is not compiled into that build, so
+     * the lookup goes the other way round -- ask SDL2 for each engine keycode's
+     * scancode directly. Same result for the keys Android can produce, without
+     * depending on the desktop-only table.
+     */
+    for (i = 0; i < INPUT_KEY_COUNT && i < (int)(sizeof(g_keyState)); i++) {
+        SDL_Scancode sc = SDL_GetScancodeFromKey((SDL_Keycode)i);
+
+        g_keyState[i] = (sc != SDL_SCANCODE_UNKNOWN) ? state[sc] : 0;
+    }
+#endif
     return;
 #endif
     if (count > 0x143) {
