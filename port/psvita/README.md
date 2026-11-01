@@ -723,10 +723,19 @@ This is the decisive step, and it needs `taiHEN`. With
 the `kuio` sample installed, the kernel log shows the actual
 `sceKernelLoadStartModule` failure instead of the shell's generic code.
 
-Simpler, and enough for most cases: install **`VitaShell`** and look at
-`ux0:data/` — if the app started at all it will have written `mugen.log` next
-to its eboot (`ux0:app/MSDK00001/mugen.log`). No log means it never reached
-`main()`, which confirms a module-load failure rather than a game crash.
+Simpler, and enough for most cases: install **`VitaShell`** and check *both*
+`ux0:data/mugen.log` and `ux0:app/MSDK00001/mugen.log`. If the app started at
+all it will have written `mugen.log` next to its eboot; an absent log *usually*
+means it never reached `main()`, i.e. a module-load failure rather than a game
+crash. Three exceptions are recorded rather than assumed: (1) logging itself
+can fail (unwritable directory, logging initialised after the crash site); the
+build falls back to `ux0:data/mugen.log` for exactly this reason, so check
+there before concluding anything; (2) an immediate hardware exception can kill
+the process before the first flush; (3) a crash in `Error_Exit`'s teardown can
+destroy evidence of an earlier failure (see "Why Can't change video mode was
+really an audio problem" above). So: no log in *either* location *and* no core
+dump = likely never reached `main()`; anything else needs the table below
+and, for `C2-12828-1`, the dump in step 5.
 
 ### 4. Once it runs: read `mugen.log`
 
@@ -742,7 +751,7 @@ step it died in:
 | `Initializing graphics...` then nothing at all | Older builds without the Vita NULL-surface check: the same resolution problem, crashing before it could log. |
 | `GL: OpenGL version is below 2.0` | vitaGL did not initialise — check that `libvitaGL.a` was the version the SDK expects. |
 | `Initializing sound...` then a crash | Audio device problem; run once with `-nosound` to confirm. |
-| `Entering gameflow loop` | The engine is running. Anything after this is a game-data problem, not a port problem. |
+| `Entering gameflow loop` | The engine reached its main loop. Failures here are *often* game-data problems, but not by rule: the standing-preview crash under investigation in `ISSUES.md` reproduces after this line. Treat it as "the port got this far", not as "everything after is data". |
 
 To narrow a crash down, the command line options work as on any other target
 (pass them via a launcher, since the LiveArea bubble takes none):
