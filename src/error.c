@@ -248,12 +248,20 @@ static INT_PTR CALLBACK ErrorDialog_Proc(HWND dlg, UINT msg, WPARAM wparam, LPAR
 int Error_ShowDialog(const char *text, const char *title)
 {
 #ifdef _WIN32
+#ifndef MUGEN_SDL2
     SDL_SysWMinfo info;
+#endif
     ErrorDialogText data;
     HWND parent;
 
+#ifdef MUGEN_SDL2
+    /* SDL2 has no SDL_GetWMInfo; the shim reads the same HWND out of
+     * SDL_GetWindowWMInfo. */
+    parent = (HWND)Sdl2_GetWindowHandle();
+#else
     memset(&info, 0, sizeof(info));     /* the version is left at 0.0.0 */
     parent = SDL_GetWMInfo(&info) ? info.window : NULL;
+#endif
     data.text = text;
     data.title = title;
     DialogBoxParamA(GetModuleHandleA(NULL), MAKEINTRESOURCEA(ERROR_DIALOG_ID), parent, ErrorDialog_Proc,

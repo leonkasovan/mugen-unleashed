@@ -609,11 +609,11 @@ void Console_Toggle(void)
 
     c->open = c->open == 0;
     if (c->open != 0) {
-#ifdef ANDROID_PORT
-        /* Android port: SDL2 removed SDL_EnableKeyRepeat; key repeat is a
-         * platform setting now and Android handles it itself. The console is
-         * keyboard-driven and unreachable on a device anyway, so this is a
-         * no-op rather than a different repeat rate. */
+#ifdef MUGEN_SDL2_API
+        /* SDL2 removed SDL_EnableKeyRepeat; key repeat is a platform setting
+         * and SDL_KEYDOWN arrives already repeated. The shim records the
+         * request, so the console keeps its "repeat on while open" intent
+         * visible without changing the platform's behaviour. */
 #else
         SDL_EnableKeyRepeat(0x140, 0x32);
 #endif
@@ -625,7 +625,7 @@ void Console_Toggle(void)
         c->ticks[1] = 0;
         return;
     }
-#ifndef ANDROID_PORT
+#ifndef MUGEN_SDL2_API
     SDL_EnableKeyRepeat(0, 0);
 #endif
     g = g_game;

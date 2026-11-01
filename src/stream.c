@@ -394,10 +394,16 @@ static int SDLCALL StreamRW_Write(SDL_RWops *rw, const void *ptr, int size, int 
     return -1;
 }
 
-#ifdef ANDROID_PORT
+#ifdef MUGEN_SDL2_API
 /*
  * SDL2-signature adapters (see the assignment site). Each forwards to the
  * int-based callback the engine already implements.
+ *
+ * Android needed these first: SDL2 widened the RWops callbacks -- seek takes
+ * and returns Sint64 instead of int, read/write use size_t -- and added a
+ * `size` callback that SDL 1.2 did not have. The conversions are lossless in
+ * the direction that matters: a 32-bit M.U.G.E.N file/stream offset always
+ * fits in Sint64.
  */
 static Sint64 SDLCALL StreamRW_Seek64(SDL_RWops *rw, Sint64 offset, int whence)
 {
@@ -412,6 +418,22 @@ static size_t SDLCALL StreamRW_Read64(SDL_RWops *rw, void *ptr, size_t size, siz
 static size_t SDLCALL StreamRW_Write64(SDL_RWops *rw, const void *ptr, size_t size, size_t num)
 {
     return (size_t)StreamRW_Write(rw, ptr, (int)size, (int)num);
+}
+
+/* SDL2_mixer asks for the stream length when a music file is loaded (MOD
+ * seeking and loop points), so the RWops must answer it. -1 means "unknown". */
+static Sint64 SDLCALL StreamRW_Size64(SDL_RWops *rw)
+{
+    StreamRW *ctx = rw->hidden.unknown.data1;
+    long size = Stream_GetSize(ctx->stream);
+
+    if (size < 0) {
+        return -1;
+    }
+    if (ctx->stream->type == STREAM_MEMORY) {
+        size -= ctx->base;
+    }
+    return (Sint64)size;
 }
 #endif
 
@@ -446,17 +468,15 @@ SDL_RWops *Stream_ToRWops(Stream *s)
         SDL_FreeRW(rw);
         return NULL;
     }
-#ifdef ANDROID_PORT
+#ifdef MUGEN_SDL2_API
     /*
-     * Android port: SDL2 widened the RWops callbacks -- seek takes and returns
-     * Sint64 instead of int, and read/write use size_t. The engine's Stream
-     * layer is the original's int-based interface, so the three callbacks are
-     * adapted here rather than changing the reconstruction.
-     *
-     * The conversions are lossless in the direction that matters: a 32-bit
-     * M.U.G.E.N file/stream offset always fits in Sint64.
+     * SDL2's RWops struct has the same four-or-five-callback shape with wider
+     * types. `size` is new and must be set: SDL2_mixer queries it when a music
+     * file is loaded, and a garbage or missing callback turns into a read past
+     * the end of the stream.
      */
     rw->type = STREAM_RW_TYPE;
+    rw->size = StreamRW_Size64;
     rw->close = StreamRW_Close;
     rw->seek = StreamRW_Seek64;
     rw->write = StreamRW_Write64;

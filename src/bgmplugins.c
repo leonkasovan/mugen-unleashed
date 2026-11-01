@@ -923,12 +923,12 @@ int Sdlmix_Open(void *instance, const BgmPluginIo *io, BgmInfo *info, BgmOpenRes
     if (rw == NULL) {
         return 4;
     }
-#ifdef ANDROID_PORT
+#ifdef MUGEN_SDL2_API
     /*
-     * Android port: SDL_mixer 2 added a second parameter to Mix_LoadMUS_RW,
-     * saying whether the RWops is freed with the music. The SDL 1.2 call took
-     * one argument and never took ownership; the caller below closes the
-     * RWops itself for types 1 and 2, so ownership must stay with the caller.
+     * SDL2_mixer 2 takes a second argument saying whether the RWops is freed
+     * with the music. The SDL 1.2 call took one argument and never took
+     * ownership; the caller below closes the RWops itself for types 1 and 2,
+     * so ownership must stay with the caller.
      *
      * freesrc = 0 reproduces the SDL_mixer 1.2 behaviour exactly.
      */

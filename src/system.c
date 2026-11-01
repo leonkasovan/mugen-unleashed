@@ -36,12 +36,18 @@ void System_SetWindowIcon(void)
 {
 #ifdef _WIN32
     HMODULE module = GetModuleHandleA(NULL);
+#ifndef MUGEN_SDL2
     SDL_SysWMinfo info;
+#endif
     HWND window;
     HICON icon;
 
+#ifdef MUGEN_SDL2
+    window = (HWND)Sdl2_GetWindowHandle();
+#else
     memset(&info, 0, sizeof(info));     /* the version is left at 0.0.0 */
     window = SDL_GetWMInfo(&info) ? info.window : NULL;
+#endif
     icon = LoadIconA(module, MAKEINTRESOURCEA(WINDOW_ICON_ID));
     if (icon != NULL) {
         SetClassLongA(window, GCL_HICON, (LONG)icon);
@@ -535,6 +541,30 @@ static const int input_builtin_keys[2][INPUT_KEYS] = {
     { SDLK_w, SDLK_s, SDLK_a, SDLK_d, SDLK_f, SDLK_g, SDLK_h, SDLK_r, SDLK_t, SDLK_y, SDLK_u },
 };
 
+/*
+ * A built-in key in the index space the input engine uses.
+ *
+ * The tables above are the original's .rdata and hold SDL 1.2 keycodes: the
+ * arrow keys are SDLK_UP == 273 and so on. SDL2 renumbered those to
+ * scancode|0x40000000, and the engine indexes g_keyState/g_keyMap by keycode, so
+ * feeding an SDL2 keycode into the table writes far outside the arrays (SDL2's
+ * SDLK_UP is 1073741906). SDL 1.2's 273 is SDL2's SDL_SCANCODE_UP, so the
+ * translation is the scancode -- the number that was always there.
+ *
+ * Printable keys are unaffected (their keycode is their ASCII value), which is
+ * why the tables above stay readable and the correction happens at the single
+ * point where a table entry becomes an engine key.
+ */
+static int Input_EngineKey(int key)
+{
+#ifdef MUGEN_SDL2
+    if (key & SDLK_SCANCODE_MASK) {
+        return (int)SDL_GetScancodeFromKey((SDL_Keycode)key);
+    }
+#endif
+    return key;
+}
+
 /* Gives the unassigned (0) entries 1..12 of a key map the "none" value. */
 static void Input_FillUnassigned(int *keys, int none)
 {
@@ -597,7 +627,7 @@ void Input_Init(void)
 
     for (p = 0; p < 2; p++) {
         for (i = 0; i < INPUT_KEYS; i++) {
-            keys[p][input_key_slots[i]] = input_builtin_keys[p][i];
+            keys[p][input_key_slots[i]] = Input_EngineKey(input_builtin_keys[p][i]);
         }
     }
 }
@@ -626,7 +656,7 @@ int Input_Remap(void)
 
             for (i = 0; i < INPUT_KEYS; i++) {
                 /* The translation of the built-in key is Input_TranslateKey, inlined. */
-                int builtin = input_builtin_keys[p][i];
+                int builtin = Input_EngineKey(input_builtin_keys[p][i]);
                 int code = builtin & ~KEYMAP_KEY_SHIFT;
 
                 if (code == KEY_NONE || code == 0) {

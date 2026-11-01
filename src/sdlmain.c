@@ -232,8 +232,19 @@ static int console_main(int argc, char *argv[])
     }
     atexit(cleanup_output);
     atexit(cleanup);
+#ifdef MUGEN_SDL2
+    /*
+     * SDL2 has no SDL_SetModuleHandle (it finds the module itself) and no
+     * SDL_main: the build defines SDL_MAIN_HANDLED and does not link
+     * SDL2main, so `main` below is the engine's own entry point rather than a
+     * renamed symbol. Calling it directly is what this reconstructed WinMain
+     * did with SDL_main under SDL 1.2 -- same argc/argv, same exit status.
+     */
+    exit(main(argc, argv));
+#else
     SDL_SetModuleHandle(GetModuleHandleA(NULL));
     exit(SDL_main(argc, argv));
+#endif
     return 0;
 }
 

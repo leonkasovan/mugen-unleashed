@@ -68,10 +68,10 @@ void Keyboard_SyncState(void)
     const Uint8 *state = SDL_GetKeyState(&count);
     int i;
 
-#ifdef ANDROID_PORT
+#ifdef MUGEN_SDL2_API
     /*
-     * Android port: SDL2 indexes its key-state array by SCANCODE, SDL 1.2 by
-     * KEYCODE, and the two numbering schemes are unrelated --
+     * SDL2 indexes its key-state array by SCANCODE, SDL 1.2 by KEYCODE, and
+     * the two numbering schemes are unrelated --
      *
      *     SDLK_a            = 97 ('a')
      *     SDL_SCANCODE_A    = 4

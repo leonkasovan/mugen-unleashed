@@ -63,6 +63,60 @@
 #include <unzip.h>
 #include <png.h>
 
+/*
+ * "Compiled against SDL2" as opposed to SDL 1.2. The Android port was the
+ * first SDL2 consumer, so its #ifdef predates this macro; the SDL2 desktop
+ * build (MUGEN_SDL2, Makefile SDL_BACKEND=2) needs exactly the same API
+ * adaptations, so the two are named once here and the SDL2-semantics sites
+ * test this instead of ANDROID_PORT directly. Android-only behaviour (its
+ * lifecycle events, its no-GL renderer) keeps testing ANDROID_PORT.
+ */
+#if defined(MUGEN_SDL2) || defined(ANDROID_PORT)
+#define MUGEN_SDL2_API 1
+#endif
+
+#ifdef MUGEN_SDL2
+/*
+ * The removed SDL 1.2 entry points, reimplemented over SDL2 (src/sdl2compat.c).
+ */
+#include "sdl2compat.h"
+
+#ifndef SDL_putenv
+/*
+ * SDL 1.2 had SDL_putenv(const char *"NAME=value"); SDL2 replaced it with
+ * SDL_setenv(name, value, overwrite). The three reconstructed call sites pass
+ * complete "NAME=value" strings, so the split happens here. A change to SDL's
+ * own environment matters here in one real case: [Video] DirectX sets
+ * SDL_VIDEODRIVER before SDL_Init, which is what still selects the driver.
+ * (SDL2 chooses its video driver through SDL_VIDEODRIVER read at init; the
+ * SDL_VIDEO_CENTERED hint is superseded by SDL_WINDOWPOS_CENTERED, which the
+ * shim already uses.)
+ */
+static inline int Sdl2_putenv_inline(const char *kv)
+{
+    char name[64];
+    const char *eq;
+    size_t n;
+
+    if (kv == NULL) {
+        return -1;
+    }
+    eq = strchr(kv, '=');
+    if (eq == NULL) {
+        return SDL_setenv(kv, "", 1);
+    }
+    n = (size_t)(eq - kv);
+    if (n >= sizeof(name)) {
+        n = sizeof(name) - 1;
+    }
+    memcpy(name, kv, n);
+    name[n] = '\0';
+    return SDL_setenv(name, eq + 1, 1);
+}
+#define SDL_putenv Sdl2_putenv_inline
+#endif
+#endif
+
 #include "crt.h"
 #include "ftol.h"
 

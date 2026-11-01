@@ -26,6 +26,18 @@ int Pads_Init(void)
     int found = 0;
     int i;
 
+#ifdef MUGEN_SDL2
+    /*
+     * SDL2: the joystick and game-controller subsystems are separate services
+     * and SDL_NumJoysticks/SDL_JoystickOpen return 0 with "Joystick system not
+     * initialized" unless SDL_INIT_JOYSTICK was requested. SDL 1.2 folded them
+     * into SDL_INIT_VIDEO, which is why the original never had to ask. The
+     * request goes here, at the one place that opens joysticks, so the
+     * reconstructed SDL_Init calls elsewhere stay as they are.
+     */
+    SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER);
+#endif
+
     g_padCount = SDL_NumJoysticks();
     if (g_padCount == 0) {
         return 0;
@@ -78,11 +90,11 @@ void Input_DeinitPads(void)
     g_padQueueRead = 0;
     SDL_JoystickEventState(SDL_IGNORE);
     for (i = 0; i < g_padCount; i++) {
-#ifdef ANDROID_PORT
+#ifdef MUGEN_SDL2_API
         /*
-         * Android port: SDL_JoystickOpened was removed. The engine keeps its own
-         * handle per pad slot, which is the same test -- a non-NULL handle means
-         * the slot is open.
+         * SDL2 removed SDL_JoystickOpened. The engine keeps its own handle per
+         * pad slot, which is the same test -- a non-NULL handle means the slot
+         * is open.
          */
         if (g_pads[i].joystick != NULL) {
 #else
@@ -124,13 +136,60 @@ static void pad_set_flag(int code, int value)
  * against PAD_BUTTONS, so high axis numbers write past g_padButtonState
  * (axis buttons of one pad may overlap the next pad's).
  */
+/*
+ * The pad slot an event belongs to.
+ *
+ * SDL 1.2's `which` was the device index, which is the slot. SDL2 replaced it
+ * with an instance id that is unrelated to the slot, so the engine's handle is
+ * matched back to its slot here. Hot-plug (SDL_JOYDEVICEADDED/REMOVED) is not
+ * handled: SDL 1.2 had none, so the pad table is fixed at start-up.
+ *
+ * -1 means "not one of ours" and the caller drops the event. The original's
+ * unchecked indexing below is preserved for the events that do match.
+ */
+static int Pads_EventSlot(const SDL_Event *ev)
+{
+#ifdef MUGEN_SDL2_API
+    SDL_JoystickID id;
+    int i;
+
+    if (ev->type == SDL_JOYHATMOTION) {
+        id = ev->jhat.which;
+    } else if (ev->type == SDL_JOYAXISMOTION) {
+        id = ev->jaxis.which;
+    } else {
+        id = ev->jbutton.which;
+    }
+    for (i = 0; i < g_padCount; i++) {
+        if (g_pads[i].joystick != NULL && SDL_JoystickInstanceID(g_pads[i].joystick) == id) {
+            return i;
+        }
+    }
+    return -1;
+#else
+    if (ev->type == SDL_JOYHATMOTION) {
+        return ev->jhat.which;
+    }
+    if (ev->type == SDL_JOYAXISMOTION) {
+        return ev->jaxis.which;
+    }
+    return ev->jbutton.which;
+#endif
+}
+
 void Pads_HandleEvent(const SDL_Event *ev)
 {
+    int slot;
+
     if (g_padsActive == 0) {
         return;
     }
+    slot = Pads_EventSlot(ev);
+    if (slot < 0) {
+        return;
+    }
     if (ev->type == SDL_JOYHATMOTION) {
-        int base = ev->jhat.which * PAD_BUTTONS + g_pads[ev->jhat.which].hat_base + 1;
+        int base = slot * PAD_BUTTONS + g_pads[slot].hat_base + 1;
 
         pad_set_flag(base, ev->jhat.value & SDL_HAT_UP);
         pad_set_flag(base + 1, ev->jhat.value & SDL_HAT_DOWN);
@@ -139,7 +198,7 @@ void Pads_HandleEvent(const SDL_Event *ev)
     }
     if (ev->type == SDL_JOYAXISMOTION) {
         int axis = ev->jaxis.axis;
-        int pad = ev->jaxis.which;
+        int pad = slot;
         int dir, first;
 
         /* The first two axes are swapped: vertical, then horizontal. */
@@ -171,14 +230,14 @@ void Pads_HandleEvent(const SDL_Event *ev)
         return;
     }
     if (ev->type == SDL_JOYBUTTONDOWN || ev->type == SDL_JOYBUTTONUP) {
-        int button = g_pads[ev->jbutton.which].button_base + 1 + ev->jbutton.button;
+        int button = g_pads[slot].button_base + 1 + ev->jbutton.button;
         int pressed = ev->type == SDL_JOYBUTTONDOWN;
         int code;
 
         if (button >= PAD_BUTTONS) {
             return;
         }
-        code = ev->jbutton.which * PAD_BUTTONS + button;
+        code = slot * PAD_BUTTONS + button;
         if ((signed char)g_padButtonState[code] != pressed) {
             Pads_SetButton(code, pressed);
         }

@@ -230,8 +230,12 @@ void Font_DrawLineTTF(const char *text, const DrawParams *dp, int len, Font *fon
     color.r = (Uint8)r;
     color.g = (Uint8)g;
     color.b = (Uint8)b;
-#ifndef ANDROID_PORT
-    /* Android port: SDL2's SDL_Color has no fifth byte. */
+#ifdef MUGEN_SDL2_API
+    /*
+     * SDL2: SDL_Color has no fifth byte, and the shim keeps the SDL 1.2 call
+     * sequence below unchanged.
+     */
+#else
     color.unused = 0;
 #endif
     blended = font->blend;

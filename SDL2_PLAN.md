@@ -286,3 +286,68 @@ against your distribution if you build with something other than this kit.
   fallback) — those are the only two.
 - **`src/stream.c` RWops adapters:** they exist (under `ANDROID_PORT`) but do
   not set the new `size` callback; now a verified gap, not a maybe.
+
+## Stage 0-1 implemented (SDL_BACKEND=2)
+
+The build switch and the compatibility layer are in. `make SDL_BACKEND=2` builds
+`build/mingw-sdl2/mugen-static-sdl2.exe` from the same `src/`, and
+`make SDL_BACKEND=1` (the default) still builds the reference executable.
+
+### How it is wired
+
+- `SDL_BACKEND=1|2` (Makefile) selects the packages (`sdl2 SDL2_mixer SDL2_ttf`
+  instead of `sdl SDL_gfx SDL_mixer SDL_ttf`), adds `-DMUGEN_SDL2
+  -DSDL_MAIN_HANDLED`, and suffixes the output directory and executable name, so
+  the two backends can never share objects.
+- `-Dmain=SDL_main` and `-lSDL2main` are filtered out of the pkg-config output:
+  this build keeps the reconstructed `WinMain` in `src/sdlmain.c` and calls
+  `main()` itself, which is exactly what `SDL_MAIN_HANDLED` means. A second
+  WinMain from SDL2main would not link.
+- `src/mugen.h` maps `ANDROID_PORT || MUGEN_SDL2` to `MUGEN_SDL2_API`. The 13
+  sites that had to change for SDL2's semantics (no `SDL_Keysym.unicode`,
+  no `SDL_EnableKeyRepeat`, no `SDL_JoystickOpened`, RWops signature widening,
+  no `SDL_JA_*`/`SDL_SetAlpha`, opaque `TTF_Font`/`Mix_Music` tags) now test
+  that macro; Android-only behaviour keeps testing `ANDROID_PORT`.
+- `src/sdl2compat.c` + `src/sdl2compat.h` supply the removed entry points
+  (`SDL_SetVideoMode`, `SDL_Flip`, `SDL_UpdateRect`, `SDL_WM_SetCaption`,
+  `SDL_WM_ToggleFullScreen`, `SDL_GL_SwapBuffers`, `SDL_GL_SWAP_CONTROL`,
+  `SDL_AudioDriverName`, `SDL_GetKeyState`, `SDL_EnableKeyRepeat`,
+  `SDL_EnableUNICODE`, `SDL_GetWMInfo`'s one field, `zoomSurface`) so the
+  reconstructed call sites keep their shape and their address comments.
+- One window, one backend at a time: a GL window + context for
+  `RENDER_OPENGL`/`RENDER_OPENGL_SCREEN`, and for `RENDER_SYSTEM` a plain
+  software surface (the engine writes `surface->pixels` and never locks) that is
+  uploaded to a streaming texture and drawn with `SDL_RenderCopy`. Never both,
+  because `SDL_Renderer` and a GL context cannot share a window.
+
+### Input: one bug worth recording
+
+SDL2 renumbered the non-printable `SDLK_*` values to `scancode |
+SDLK_SCANCODE_MASK` (`SDLK_UP` is 1073741906, not 273). The original's built-in
+key tables in `system.c` hold SDL 1.2 *keycodes*, and the engine indexes
+`g_keyState`/`g_keyMap` by keycode, so the first SDL2 build wrote far outside
+`g_inputState` and died silently during `Input_Remap` — no crash dialog, no log
+line, just a truncated `mugen.log`. `Input_EngineKey()` now converts a table
+entry through `SDL_GetScancodeFromKey` before it becomes an engine key, which is
+the same number SDL 1.2 held there. `gameloop.c` and `video.c` had the same
+pattern for the held-modifier tests and are translated the same way.
+
+### Validation so far
+
+`mugen.log` for `-nosound -p1 kfm -p2 kfm` from the SDL2 build is **identical**
+to the SDL 1.2 build's after numeric normalisation (`tools/compare_logs.py`,
+exit 0, 102 fragments); the log ends at `Match loop init`, i.e. the match is
+running, not merely loading. The SDL 1.2 executable is unchanged by this work
+(`build/mingw/mugen-static.exe` is byte-identical with `sdl2compat.c` excluded
+from its build).
+
+### Still open
+
+- Stage 2+: the shim presents System mode through a streaming texture; the
+  GL renderer path has not been exercised on this desktop build yet
+  (the test environment reports `render mode 2`, i.e. System).
+- `zoomSurface` is the `SDL_BlitScaled` substitute, still awaiting the
+  differential image test listed under "SDL_gfx" above.
+- Joystick hot-plug, text input on the desktop console, and audio (the test
+  runs use `-nosound`) are unverified.
+- The Linux target has not been built with `SDL_BACKEND=2`.

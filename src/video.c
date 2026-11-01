@@ -429,9 +429,25 @@ void Video_HandleFullscreenKey(int *key)
     GameVars *g;
     int mode;
 
+    /*
+     * SDL2: SDLK_LALT / SDLK_RALT carry SDLK_SCANCODE_MASK (0x40000000) and are
+     * not usable as g_keyState indexes, which is keycode-indexed on SDL 1.2.
+     * Translate through the scancode, as keyboard.c does; the SDL 1.2 build
+     * keeps indexing directly, as the original did.
+     */
+#ifdef MUGEN_SDL2
+    if (SDL_GetScancodeFromKey(SDLK_LALT) >= sizeof(g_keyState) ||
+        SDL_GetScancodeFromKey(SDLK_RALT) >= sizeof(g_keyState)) {
+        return;
+    }
+    if (!g_keyState[SDL_GetScancodeFromKey(SDLK_LALT)] && !g_keyState[SDL_GetScancodeFromKey(SDLK_RALT)]) {
+        return;
+    }
+#else
     if (!g_keyState[SDLK_LALT] && !g_keyState[SDLK_RALT]) {
         return;
     }
+#endif
     if (*key != SDLK_RETURN) {
         return;
     }
@@ -465,16 +481,27 @@ void Video_HandleFullscreenKey(int *key)
 int Video_SetFullscreen(int fullscreen)
 {
 #ifdef _WIN32
+#ifndef MUGEN_SDL2
     SDL_SysWMinfo info;
+#endif
     HWND hwnd;
     HWND after;
     int x, y, w, h;
 
+#ifdef MUGEN_SDL2
+    /* SDL2 has no SDL_GetWMInfo; the shim asks SDL_GetWindowWMInfo for the
+     * HWND, which is the only field this function ever read. */
+    hwnd = (HWND)Sdl2_GetWindowHandle();
+    if (hwnd == NULL) {
+        return 0;
+    }
+#else
     memset(&info, 0, sizeof(info));     /* the version is left at 0.0.0 */
     if (!SDL_GetWMInfo(&info) || info.window == NULL) {
         return 0;
     }
     hwnd = info.window;
+#endif
     if (g_videoFullscreen == fullscreen) {
         return 1;
     }
@@ -874,9 +901,9 @@ SDL_Surface *Surface_ToRGBA32(SDL_Surface *src)
     if (dst == NULL) {
         return NULL;
     }
-#ifdef ANDROID_PORT
+#ifdef MUGEN_SDL2_API
     /*
-     * Android port: SDL2 keeps per-surface alpha outside SDL_PixelFormat
+     * SDL2 keeps per-surface alpha outside SDL_PixelFormat
      * (SDL_GetSurfaceAlphaMod / SDL_SetSurfaceAlphaMod), and dropped
      * SDL_RLEACCELOK (RLE is automatic). The intent here is "temporarily make
      * the source opaque, blit, then restore", which maps directly onto the

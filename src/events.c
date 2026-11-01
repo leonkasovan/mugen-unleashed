@@ -259,6 +259,37 @@ void Events_Poll(void)
                 g_onActivate(1);
             }
             break;
+#elif defined(MUGEN_SDL2)
+        /*
+         * SDL2 desktop: SDL_ACTIVEEVENT and SDL_VIDEORESIZE became
+         * SDL_WINDOWEVENT sub-types. The focus case reproduces the SDL 1.2
+         * block below exactly -- mod state, cursor visibility, the engine
+         * callback -- because those are what the original reacts to; the resize
+         * case feeds the same Video_OnResize the original's resize event did.
+         */
+        case SDL_WINDOWEVENT:
+            switch (ev.window.event) {
+            case SDL_WINDOWEVENT_RESIZED:
+            case SDL_WINDOWEVENT_SIZE_CHANGED:
+                Video_OnResize(ev.window.data1, ev.window.data2);
+                break;
+            case SDL_WINDOWEVENT_FOCUS_GAINED:
+            case SDL_WINDOWEVENT_FOCUS_LOST: {
+                int gain = ev.window.event == SDL_WINDOWEVENT_FOCUS_GAINED;
+
+                if (gain) {
+                    g_keyModState = SDL_GetModState();
+                }
+                SDL_ShowCursor((g_videoSdlFlags & SDL_FULLSCREEN) && gain ? SDL_DISABLE : SDL_ENABLE);
+                if (g_onActivate != NULL) {
+                    g_onActivate(gain);
+                }
+                break;
+            }
+            default:
+                break;
+            }
+            break;
 #else
         case SDL_ACTIVEEVENT:
             if (ev.active.state & SDL_APPINPUTFOCUS) {
@@ -277,15 +308,24 @@ void Events_Poll(void)
         case SDL_KEYUP:
             Keyboard_HandleKey(ev.key.keysym.sym, ev.type == SDL_KEYDOWN);
             if (g_keyEventHandler != NULL) {
-#ifdef ANDROID_PORT
+#if defined(MUGEN_SDL2_API)
                 /*
-                 * Android port: SDL2 moved the unicode character out of
-                 * SDL_Keysym into the SDL_TextInputEvent, and SDL_KEYDOWN no
-                 * longer carries it. The console is the only consumer, and it
-                 * is unreachable on a device (keyboard-driven), so 0 is passed
-                 * rather than synthesising a text-input path nothing uses.
+                 * SDL2 moved the unicode character out of SDL_Keysym into
+                 * SDL_TextInputEvent, and SDL_KEYDOWN no longer carries it.
+                 * Feeding the console twice would double every typed
+                 * character, so the two halves are kept apart: control keys
+                 * (everything outside printable ASCII) are delivered here, and
+                 * printable characters arrive through SDL_TEXTINPUT below.
+                 *
+                 * SDL 1.2 delivered both in one event; for ASCII,
+                 * keysym.sym == unicode, which is why the text-input branch
+                 * passes the codepoint as the key too.
                  */
-                g_keyEventHandler(0, ev.key.keysym.sym, ev.type == SDL_KEYDOWN);
+                int sym = ev.key.keysym.sym;
+
+                if (sym < 0x20 || sym > 0x7E) {
+                    g_keyEventHandler(0, sym, ev.type == SDL_KEYDOWN);
+                }
 #else
                 /* The original passes the dword at the unicode field, padding included. */
                 unsigned int unicode;
@@ -294,6 +334,41 @@ void Events_Poll(void)
 #endif
             }
             break;
+#ifdef MUGEN_SDL2
+        /*
+         * SDL2 delivers typed text separately from the key event. Decoding the
+         * first UTF-8 sequence reproduces what SDL 1.2 put in keysym.unicode:
+         * a single codepoint, which is what the console indexes by
+         * (Console_HandleKey truncates it to 16 bits for its line buffer).
+         */
+        case SDL_TEXTINPUT:
+            if (g_keyEventHandler != NULL) {
+                const unsigned char *s = (const unsigned char *)ev.text.text;
+                unsigned int cp = 0;
+                int extra = 0;
+                int i;
+
+                if (s[0] < 0x80) {
+                    cp = s[0];
+                } else if ((s[0] & 0xE0) == 0xC0) {
+                    cp = s[0] & 0x1F;
+                    extra = 1;
+                } else if ((s[0] & 0xF0) == 0xE0) {
+                    cp = s[0] & 0x0F;
+                    extra = 2;
+                } else if ((s[0] & 0xF8) == 0xF0) {
+                    cp = s[0] & 0x07;
+                    extra = 3;
+                }
+                for (i = 1; i <= extra; i++) {
+                    cp = (cp << 6) | (unsigned int)(s[i] & 0x3F);
+                }
+                if (cp != 0) {
+                    g_keyEventHandler(cp, (int)cp, 1);
+                }
+            }
+            break;
+#endif
         case SDL_JOYAXISMOTION:
         case SDL_JOYHATMOTION:
             Pads_HandleEvent(&ev);
@@ -324,9 +399,10 @@ void Events_Poll(void)
         case SDL_QUIT:
             g_quitRequested = 1;
             break;
-#ifndef ANDROID_PORT
+#if !defined(ANDROID_PORT) && !defined(MUGEN_SDL2)
         /* Android has no resizable window: SDL_VIDEORESIZE does not exist and
-         * the surface size is fixed by SetVideoMode. */
+         * the surface size is fixed by SetVideoMode. SDL2 has SDL_WINDOWEVENT
+         * instead, handled at the top of this loop. */
         case SDL_VIDEORESIZE:
             Video_OnResize(ev.resize.w, ev.resize.h);
             break;
@@ -491,7 +567,6 @@ int Input_CodePending(void)
 int Input_TranslateKey(int key)
 {
     int code = key & ~0x200;
-
     if (code == 0x200 || code == 0) {   /* the first test can never hold */
         return INPUT_NONE;
     }

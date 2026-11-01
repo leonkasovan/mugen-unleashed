@@ -56,6 +56,16 @@ DEBUG    ?=
 
 MUGEN_GAME_DIR ?=
 
+# SDL backend: 1 = SDL 1.2 (the default and the reference), 2 = SDL2 with
+# SDL2_mixer/SDL2_ttf. See SDL2_PLAN.md. The backend changes the include path,
+# the packages linked, the object/output directory and the engine's -D flags,
+# so a build of one backend can never reuse the other's objects.
+SDL_BACKEND ?= 1
+ifneq ($(filter 1 2,$(SDL_BACKEND)),$(SDL_BACKEND))
+  $(error SDL_BACKEND must be 1 or 2, not "$(SDL_BACKEND)")
+endif
+SDL2_SUFFIX := $(if $(filter 2,$(SDL_BACKEND)),-sdl2)
+
 # ------------------------------------------------------- platform detection
 #
 # uname -s decides the OS family; the compiler's own target triple decides the
@@ -98,12 +108,12 @@ endif
 # One family per target: win32 / linux.
 ifeq ($(MUGEN_TARGET),win32)
   MUGEN_FAMILY := win32
-  BUILD    ?= build/mingw
-  TARGET   := $(BUILD)/mugen-static.exe
+  BUILD    ?= build/mingw$(SDL2_SUFFIX)
+  TARGET   := $(BUILD)/mugen-static$(SDL2_SUFFIX).exe
 else
   MUGEN_FAMILY := linux
-  BUILD    ?= build/$(MUGEN_TARGET)
-  TARGET   := $(BUILD)/mugen-$(MUGEN_TARGET)
+  BUILD    ?= build/$(MUGEN_TARGET)$(SDL2_SUFFIX)
+  TARGET   := $(BUILD)/mugen-$(MUGEN_TARGET)$(SDL2_SUFFIX)
 endif
 
 # What check-toolchain expects `$(CC) -dumpmachine` to start with. Detection
@@ -247,6 +257,36 @@ else
   # _GNU_SOURCE: strcasecmp/alloca and the POSIX extensions used here.
   PLAT_LDFLAGS  := -Wl,--gc-sections
   ENGINE_DEFS += -D_GNU_SOURCE
+endif
+
+# --- SDL backend selection --------------------------------------------------
+#
+# SDL_BACKEND=2 swaps the SDL 1.2 packages for SDL2 and its add-ons and turns
+# on MUGEN_SDL2, which makes mugen.h pull in src/sdl2compat.h: the removed SDL
+# 1.2 entry points (SDL_SetVideoMode, SDL_Flip, SDL_WM_*, ...) are reimplemented
+# over SDL2 there, so the reconstructed call sites in src/ keep their shape.
+#
+# Two pkg-config outputs must be edited, not used verbatim:
+#   -Dmain=SDL_main  sdl2.pc renames main; this build keeps the reconstructed
+#                    WinMain in src/sdlmain.c, which calls main() itself, so the
+#                    rename must not happen (SDL_MAIN_HANDLED semantics).
+#   -lSDL2main       the same reasoning: SDL2main's WinMain would clash with the
+#                    reconstructed one.
+# Everything else (the -mwindows flag, SDL2's own transitive imports) is kept.
+ifeq ($(SDL_BACKEND),2)
+  ifeq ($(MUGEN_FAMILY),win32)
+    STATIC_PKGS := sdl2 SDL2_mixer SDL2_ttf zlib libpng16
+    PKG_LIBS    := $(filter-out -mwindows -lSDL2main,$(shell $(PKG_CONFIG) --libs --static $(STATIC_PKGS) 2>/dev/null))
+  else
+    STATIC_PKGS := sdl2 SDL2_mixer SDL2_ttf zlib libpng
+    PKG_LIBS    := $(shell $(PKG_CONFIG) --libs $(STATIC_PKGS) 2>/dev/null) -lGL -lGLU -ldl -lm
+  endif
+  PKG_CFLAGS := $(filter-out -Dmain=SDL_main,$(shell $(PKG_CONFIG) --cflags $(STATIC_PKGS) 2>/dev/null))
+  SDL_CFLAGS := $(shell $(PKG_CONFIG) --cflags sdl2 2>/dev/null)
+  # SDL_MAIN_HANDLED: told before <SDL.h>, so SDL2 leaves main() alone. The
+  # engine keeps its own entry points (src/sdlmain.c on Windows, src/main.c on
+  # Linux) exactly as the SDL 1.2 build does.
+  ENGINE_DEFS += -DMUGEN_SDL2 -DSDL_MAIN_HANDLED
 endif
 
 # SANITIZE=address (or undefined,thread) instruments the engine and links the

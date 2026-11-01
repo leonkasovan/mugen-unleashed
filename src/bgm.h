@@ -368,7 +368,11 @@ enum {
 
 /* The instance of the sdlmix plugin (only one at a time: g_sdlmixInstance). */
 typedef struct SdlmixInstance {
+#ifdef MUGEN_SDL2
+    struct Mix_Music *music;    /* 0x00 (SDL_mixer 2 renamed the opaque tag) */
+#else
     struct _Mix_Music *music;   /* 0x00 */
+#endif
     int loop;                   /* 0x04 */
     int loop_start;             /* 0x08 kept, not used */
     int loop_end;               /* 0x0C */

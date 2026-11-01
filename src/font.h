@@ -7,7 +7,13 @@
  * ("[FNT v2]" .def files naming an SFF of glyph sprites or a TrueType file)
  * and the text drawing and measuring functions.
  */
+#ifdef MUGEN_SDL2
+struct TTF_Font;            /* SDL_ttf 2 renamed the opaque tag */
+#define TTF_FONT_TAG TTF_Font
+#else
 struct _TTF_Font;           /* SDL_ttf */
+#define TTF_FONT_TAG _TTF_Font
+#endif
 
 /* Font.type */
 #define FONT_TYPE_BITMAP    0
@@ -43,7 +49,7 @@ typedef struct Font {
     int spacing_y;              /* 0x20 */
     int blend;                  /* 0x24 FNT v2 "blend": TrueType text is rendered blended */
     SpriteSet *sprites;         /* 0x28 bitmap font glyphs, or NULL */
-    struct _TTF_Font *ttf;      /* 0x2C TrueType font, or NULL */
+    struct TTF_FONT_TAG *ttf;   /* 0x2C TrueType font, or NULL */
     char name[0x40];            /* 0x30 FNT v2 "name", not terminated when 64 characters long */
 } Font;
 MUGEN_ASSERT_OFFSET(Font, sprites, 0x28);
