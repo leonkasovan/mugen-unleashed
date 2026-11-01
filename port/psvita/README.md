@@ -117,13 +117,23 @@ in a copy that goes into the VPK:
 
 ```ini
 [Config]
-GameWidth  = 960        ; was 1280
-GameHeight = 544        ; was 720
+GameWidth  = 480        ; was 1280
+GameHeight = 272        ; was 720
 
 [Video]
-RenderMode = OpenGL     ; was perhaps system
+RenderMode = system    ; the shipped default; see "The OpenGL renderer" below
 FullScreen = 1          ; was 0
 ```
+
+The values above are what the build actually packs: `MUGEN_VITA_VIDEO_WIDTH`
+(480), `MUGEN_VITA_VIDEO_HEIGHT` (272), `MUGEN_VITA_FULLSCREEN` (ON) and
+`MUGEN_VITA_RENDERMODE` (`system`). Do not set `RenderMode = OpenGL` in a
+normal build: VitaSDK's SDL 1.2 has no GL support — its Vita video driver
+(`SDL_vitavideo.o`) is a SceGxm 2D blitter with no context API — and
+`src/system.c` falls back to `RENDER_SYSTEM` when the GL surface has no
+context. An `OpenGL` value in the packed config only costs a failed attempt on
+every launch. See "The OpenGL renderer" below for what `opengl` actually
+requires and what is still unimplemented.
 
 `GameWidth`/`GameHeight` matter most. vitaGL has exactly **one** framebuffer —
 the Vita's 960x544 — and the engine asks for a GL surface of `GameWidth x
@@ -179,8 +189,8 @@ cmake -S port/psvita -B build/psvita -G Ninja \
 | `MUGEN_VITA_DATA_DIR` | *(empty)* | M.U.G.E.N directory to pack into the VPK as `/data` |
 | `MUGEN_VITA_TITLEID` | `MSDK00001` | 9-character title ID |
 | `MUGEN_VITA_VERSION` | `01.00` | `APP_VER`, format `##.##` |
-| `MUGEN_VITA_MEMSIZE` | `0x12000` | `vita-make-fself -m`; must be `0` or `0x1000`–`0x12800` KiB |
-| `MUGEN_VITA_HEAP_MIB` | `56` | newlib heap; must fit inside `MUGEN_VITA_MEMSIZE` |
+| `MUGEN_VITA_MEMSIZE` | `0` | `vita-make-fself -m`: `0` for a normal app (recommended), `0x1000`–`0x12800` KiB for system mode |
+| `MUGEN_VITA_HEAP_MIB` | `64` | newlib heap; SDL's Vita video driver needs process memory for GXM too, so an oversized heap starves `sceGxmInitialize` |
 | `MUGEN_VITA_VIDEO_WIDTH` | `480` | `GameWidth` (render size; the panel is 960) |
 | `MUGEN_VITA_VIDEO_HEIGHT` | `272` | `GameHeight` (render size; the panel is 544) |
 | `MUGEN_VITA_FULLSCREEN` | `ON` | Write `FullScreen = 1` into the packed `mugen.cfg` |
@@ -279,19 +289,20 @@ display; the Vita panel is 60 Hz, so the default is right.
 
 The engine reads SDL 1.2 keyboard, joystick and — on Windows — DirectInput. On
 the Vita, SDL 1.2's `SDL_JOYSTICK_VITA` driver exposes the physical buttons as
-a single joystick, so map them in `data/mugen.cfg` under `[Input]`:
+a single joystick (12 buttons, 4 axes, 0 hats — the d-pad is buttons, not a
+hat). The engine reads bindings from the `[P1 Joystick]` / `[P2 Joystick]`
+groups, gated by `P1.UseKeyboard` and `P1.Joystick.Type` — there is no
+`P1.Keyboard`, `P1.Joystick` or `P1.Joy.Bn` key, so the engine ignores an
+`[Input]` block written that way.
 
-```ini
-[Input]
-P1.Keyboard = 0
-P1.Joystick = 0
-P1.Joy.B1 = 2      # ...
-```
-
-The Vita's analog stick appears as joystick axes. The d-pad and face buttons
-appear as buttons. Use the engine's own input configuration screen
-(`OPTIONS -> INPUT`) to bind them in-game rather than hand-editing the file —
-it writes the same `mugen.cfg` keys.
+The values are also **engine button codes, not SDL indices**: `hat_base = 4*2 =
+8`, so Triangle (raw 0) arrives as code 9. The C code in `src/config.c`
+installs the correct codes for this pad on startup and therefore overwrites
+whatever is saved, which means a remap written to the file does not survive
+the next launch. Until that precedence is fixed, treat the startup override
+as the binding of record (see `port/psvita/PLAN.md` M2). Use the hardware
+test in `tools/test_vita_pad.sh` — which asserts all 11 delivered codes —
+rather than trusting the raw indices from the input mapper.
 
 ---
 
@@ -456,7 +467,13 @@ undefined. `vita-make-fself -m` caps the whole process budget at `0x12800` KiB
 first allocation in the program happens to be that C++ constructor's.
 
 `port/psvita/src/vita_newlib.c` defines `_newlib_heap_size_user` so the heap
-fits inside the budget, and `MUGEN_VITA_HEAP_MIB` (default 56 MiB) sets it.
+fits inside the budget, and `MUGEN_VITA_HEAP_MIB` (default 64 MiB) sets it.
+The diagnosis above describes the old system-mode configuration
+(`MUGEN_VITA_MEMSIZE=0x12000`, 74 MiB hard cap), not the current default:
+`MUGEN_VITA_MEMSIZE=0` means "normal app, let the system size it", which is
+what the VitaSDK samples do. Passing an explicit `0x12000` capped the process
+at a system-mode budget and `sceGxmInitialize` then failed with
+`SCE_GXM_ERROR_OUT_OF_MEMORY` — a graphics error that is really a memory one.
 CMake refuses to configure if the heap would not fit, because the failure is
 otherwise silent at build time.
 
