@@ -540,11 +540,43 @@ with `tools/contheme_stub.c` standing in for the debug command table, the font
 and the player helpers `console.c` also contains. It exercises the real key
 handler and line buffer, not the debug commands themselves.
 
+### Stage 4: zoomSurface rebuilt to match SDL_gfx
+
+`tools/test_zoomdiff.sh` builds one source file twice -- once against SDL 1.2 +
+the kit's `libSDL_gfx.a`, once against SDL2 + `src/sdl2compat.c` -- and compares
+the resulting images byte for byte across 14 cases. Running it first against the
+`SDL_BlitScaled` substitute showed the substitute was **not** equivalent; four
+distinct defects, all fixed:
+
+| Difference | SDL_gfx | Old substitute |
+|---|---|---|
+| Destination size | rounds to nearest (13x1.5 -> 20, 7x2.5 -> 18) | truncated (19, 17) |
+| 8-bit sources | indexed scaling, palette and colour key carried | `SDL_BlitScaled` refuses 8->8 outright |
+| Pixel values | copies pixels through untouched | applies the surface's alpha modulation, `0xFE020304` -> `0xFE010203` |
+| Unused palette entries | zeroed | SDL2's default white ramp |
+
+The replacement is now an explicit nearest-neighbour copy loop for every format,
+with 16-bit sources promoted to 32-bit first (SDL_gfx does the same). 11 of the
+14 cases are byte-identical.
+
+The three 16-bit cases still differ, and that is a finding rather than a
+regression: SDL_gfx's own 16->32 conversion is lossy and byte-swapped. Measured
+directly, pure green `0x07E0` comes back as `0xFE00` on a surface whose masks
+are `R=00FF, B=FF0000`, and a 565 blue of 5 decodes to 0 instead of 41. The SDL2
+path converts through `SDL_ConvertSurfaceFormat`, which agrees with SDL's own
+`SDL_BlitSurface` (`R=00 G=04 B=0x28` for the same pixel). Reproducing SDL_gfx
+here would mean reproducing a bug, so `tools/test_zoomdiff.sh` reports those
+three as expected differences and fails on anything else.
+
+`smooth != 0` is still refused for indexed surfaces rather than silently
+approximated: no engine call site asks for it.
+
 ### Still open
 
-- `zoomSurface`'s non-indexed path is still `SDL_BlitScaled`; the differential
-  image test listed under "SDL_gfx" above is still outstanding for 16/32-bit
-  surfaces. The indexed path (solid TrueType text) is now explicit and tested.
+- `zoomSurface` reproduces SDL_gfx for 8- and 32-bit sources. Its 16-bit path
+  deliberately does not (SDL_gfx's is lossy and byte-swapped); the engine's only
+  `zoomSurface` call sites are scaled text, which is 8-bit or 32-bit, so the
+  difference is not reachable from font.c today.
 - Windowed/fullscreen *transitions* at runtime (rather than starts) and display
   selection have not been exercised.
 - **Console editing and command submission** are covered against the handler
