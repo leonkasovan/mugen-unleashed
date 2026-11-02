@@ -220,23 +220,50 @@ int VitaGl_Probe(void)
     extensions = (const char *)glGetString(GL_EXTENSIONS);
 
     /*
-     * GL_VERSION starts with "<major>.<minor>", optionally followed by vendor
-     * text. Hand-parsed rather than with sscanf: the engine's CRT shim renames
-     * the _snprintf family around, and this file stays free of <stdio.h>.
+     * GL_VERSION normally starts with "<major>.<minor>", optionally followed by
+     * vendor text -- that is what desktop GL guarantees.
+     *
+     * Fix (port change): VitaGL reports "OpenGL ES 2.0 VitaGL", where the
+     * version is NOT at the start. The old parser read the leading digits, found
+     * none, and left major at 0, so MugenVita_GLVersion20 stayed false and every
+     * GL 2.0-only path was disabled on a context that reports ES 2.0. Scan for
+     * the first "<digits>.<digits>" pair instead, and treat the ES 2.0 string as
+     * satisfying the 2.0 check.
+     *
+     * Hand-parsed rather than with sscanf: the engine's CRT shim renames the
+     * _snprintf family around, and this file stays free of <stdio.h>.
      */
     if (version != NULL) {
         const char *p = version;
 
-        while (*p >= '0' && *p <= '9') {
-            major = major * 10 + (*p - '0');
-            p++;
-        }
-        if (*p == '.') {
-            p++;
-            while (*p >= '0' && *p <= '9') {
-                minor = minor * 10 + (*p - '0');
-                p++;
+        while (*p != '\0') {
+            if (*p >= '0' && *p <= '9') {
+                int maj = 0;
+                int min = 0;
+                const char *q = p;
+
+                while (*q >= '0' && *q <= '9') {
+                    maj = maj * 10 + (*q - '0');
+                    q++;
+                }
+                if (*q == '.') {
+                    q++;
+                    if (*q >= '0' && *q <= '9') {
+                        while (*q >= '0' && *q <= '9') {
+                            min = min * 10 + (*q - '0');
+                            q++;
+                        }
+                        major = maj;
+                        minor = min;
+                        break;
+                    }
+                }
+                /* A bare number ("OpenGL ES 2.0" reads as 2 then 0): the pair
+                 * above already covered it. Skip this run and keep looking. */
+                p = q;
+                continue;
             }
+            p++;
         }
     }
 

@@ -105,41 +105,43 @@ typedef struct Case {
     Uint32 rmask, gmask, bmask, amask;
     double zx, zy;
     int indexed;                /* fill with a 2-entry palette + colour key */
+    int whiteidx;               /* palette entry 1 is white, not red */
     int colorkey;               /* the key index to set; 0 if unused */
 } Case;
 
 static const Case k_cases[] = {
-    {"rgba32_2x",        16, 16, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 2.0, 2.0, 0},
-    {"rgba32_0p5x",      16, 16, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 0.5, 0.5, 0},
-    {"rgba32_frac",      13,  7, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 1.5, 2.5, 0},
-    {"rgba32_odd",       11,  9, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 1.3, 0.7, 0},
-    {"rgb32_2x",         16, 16, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0x00000000, 2.0, 2.0, 0},
-    {"rgb565_2x",        16, 16, 16, 0xF800, 0x07E0, 0x001F, 0x0000, 2.0, 2.0, 0},
-    {"rgb565_0p75x",     16, 16, 16, 0xF800, 0x07E0, 0x001F, 0x0000, 0.75, 0.75, 0},
-    {"rgb555_1p5x",      10, 10, 16, 0x7C00, 0x03E0, 0x001F, 0x0000, 1.5, 1.5, 0},
-    {"indexed_2x",       16, 16,  8, 0, 0, 0, 0, 2.0, 2.0, 1, 0},
-    {"indexed_0p5x",     16, 16,  8, 0, 0, 0, 0, 0.5, 0.5, 1, 0},
-    {"indexed_frac",     13,  7,  8, 0, 0, 0, 0, 1.5, 2.5, 1, 0},
-    {"one_px_2x",         1,  1, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 2.0, 2.0, 0},
-    {"one_px_indexed",    1,  1,  8, 0, 0, 0, 0, 3.0, 3.0, 1, 0},
+    {"rgba32_2x",        16, 16, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 2.0, 2.0, 0, 0},
+    {"rgba32_0p5x",      16, 16, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 0.5, 0.5, 0, 0},
+    {"rgba32_frac",      13,  7, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 1.5, 2.5, 0, 0},
+    {"rgba32_odd",       11,  9, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 1.3, 0.7, 0, 0},
+    {"rgb32_2x",         16, 16, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0x00000000, 2.0, 2.0, 0, 0},
+    {"rgb565_2x",        16, 16, 16, 0xF800, 0x07E0, 0x001F, 0x0000, 2.0, 2.0, 0, 0},
+    {"rgb565_0p75x",     16, 16, 16, 0xF800, 0x07E0, 0x001F, 0x0000, 0.75, 0.75, 0, 0},
+    {"rgb555_1p5x",      10, 10, 16, 0x7C00, 0x03E0, 0x001F, 0x0000, 1.5, 1.5, 0, 0},
+    {"indexed_2x",       16, 16,  8, 0, 0, 0, 0, 2.0, 2.0, 1, 0, 0},
+    {"indexed_0p5x",     16, 16,  8, 0, 0, 0, 0, 0.5, 0.5, 1, 0, 0},
+    {"indexed_frac",     13,  7,  8, 0, 0, 0, 0, 1.5, 2.5, 1, 0, 0},
+    {"one_px_2x",         1,  1, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 2.0, 2.0, 0, 0},
+    {"one_px_indexed",    1,  1,  8, 0, 0, 0, 0, 3.0, 3.0, 1, 0, 0},
+    {"indexed_white1_2x", 16, 16,  8, 0, 0, 0, 0, 2.0, 2.0, 1, 0, 1},
     /*
      * A NONZERO colour key. Every other indexed case keys index 0, which is
      * indistinguishable from "the key was never read" -- the dump defaulted to
      * zero and nothing noticed. This one fails if the recorded value is not
      * carried across, or if the key is silently reset to 0.
      */
-    {"indexed_key1_2x",  16, 16,  8, 0, 0, 0, 0, 2.0, 2.0, 1, 1},
-    {"indexed_key1_0p5x", 16, 16,  8, 0, 0, 0, 0, 0.5, 0.5, 1, 1},
-    {"tall_thin",        1, 17, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 3.0, 0.5, 0},
+    {"indexed_key1_2x",  16, 16,  8, 0, 0, 0, 0, 2.0, 2.0, 1, 1, 0},
+    {"indexed_key1_0p5x", 16, 16,  8, 0, 0, 0, 0, 0.5, 0.5, 1, 1, 0},
+    {"tall_thin",        1, 17, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 3.0, 0.5, 0, 0},
     /*
      * The ratios that expose SDL_gfx's 16.16 fixed-point step. The behaviour
      * belongs to the RGBA sampler, so these are 32-bit: a 16-bit source only
      * reaches it after conversion. For 16 -> 12 the truncated step is 87381 and
      * output x=3 reads source 3, where exact arithmetic reads 4.
      */
-    {"rgba32_16to12",   16, 16, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 0.75, 0.75, 0},
-    {"rgba32_10to15",   10, 10, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 1.5, 1.5, 0},
-    {"rgba32_13to20",   13, 13, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 20.0 / 13.0, 20.0 / 13.0, 0},
+    {"rgba32_16to12",   16, 16, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 0.75, 0.75, 0, 0},
+    {"rgba32_10to15",   10, 10, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 1.5, 1.5, 0, 0},
+    {"rgba32_13to20",   13, 13, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 20.0 / 13.0, 20.0 / 13.0, 0, 0},
 };
 
 #define CASE_COUNT ((int)(sizeof(k_cases) / sizeof(k_cases[0])))
@@ -186,9 +188,18 @@ static SDL_Surface *make(const Case *c)
         pal[0].r = 10;
         pal[0].g = 20;
         pal[0].b = 30;
-        pal[1].r = 200;
-        pal[1].g = 150;
-        pal[1].b = 100;
+        if (c->whiteidx) {
+            /* SDL_ttf's solid renderers put their foreground colour at index 1;
+             * solid white text is the case a "first white entry ends the
+             * palette" heuristic destroyed. */
+            pal[1].r = 255;
+            pal[1].g = 255;
+            pal[1].b = 255;
+        } else {
+            pal[1].r = 200;
+            pal[1].g = 150;
+            pal[1].b = 100;
+        }
 #ifdef MUGEN_SDL2
         pal[0].a = 255;
         pal[1].a = 255;

@@ -13,7 +13,9 @@
  *   - OpenGL (RENDER_OPENGL / RENDER_OPENGL_SCREEN): a real window with
  *     SDL_WINDOW_OPENGL and a GL context; the engine's GL renderer draws
  *     straight into it and Sdl2_GL_SwapBuffers presents. The returned surface
- *     is a 1x1 placeholder, because the engine only checks it for NULL.
+ *     is a placeholder the engine never draws into, but it must carry the real
+ *     window size: the OpenGLScreen presenter reads its dimensions to size the
+ *     screen quad.
  *
  *   - System (RENDER_SYSTEM): the engine writes pixels directly into
  *     surface->pixels and never locks (the original never did either), so the
@@ -253,11 +255,22 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
             Sdl2_ApplySwapInterval(g_sdl2Video.swap_interval);
             g_sdl2Video.vsync_applied = 1;
         }
-        if (g_sdl2Video.placeholder == NULL) {
-            /* The GL renderer never blits into this; video.c only checks the
-             * surface it gets back for NULL. 1x1 keeps it honest. */
-            g_sdl2Video.placeholder =
-                SDL_CreateRGBSurfaceWithFormat(0, 1, 1, bpp, format);
+        /*
+         * Fix (port change): this used to be a 1x1 placeholder on the theory
+         * that the engine only checks the returned surface for NULL. It does
+         * more: Gfx_PresentGlScreen passes g_screenSurface->w/h to
+         * GlScreen_Draw, so the OpenGLScreen quad was drawn 1x1 in the corner
+         * of the window and the rest stayed black. The surface must therefore
+         * carry the real presentation size.
+         */
+        if (g_sdl2Video.placeholder == NULL || g_sdl2Video.placeholder->w != g_sdl2Video.width ||
+            g_sdl2Video.placeholder->h != g_sdl2Video.height) {
+            if (g_sdl2Video.placeholder != NULL) {
+                SDL_FreeSurface(g_sdl2Video.placeholder);
+                g_sdl2Video.placeholder = NULL;
+            }
+            g_sdl2Video.placeholder = SDL_CreateRGBSurfaceWithFormat(0, g_sdl2Video.width,
+                                                                     g_sdl2Video.height, bpp, format);
             if (g_sdl2Video.placeholder == NULL) {
                 return NULL;
             }
@@ -335,6 +348,29 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
 /* Uploads the engine's framebuffer into the texture and draws it. Both
  * SDL_UpdateRect and SDL_Flip land here: SDL 1.2 used them to say "now show
  * this", and there is nothing cheaper to do with a streaming texture. */
+/*
+ * Port addition: SDL_RENDER_DEVICE_RESET / SDL_RENDER_TARGETS_RESET mean the
+ * renderer's backing store is gone and every texture must be recreated. Android
+ * already handles this (Android_ResetRenderer); the desktop SDL2 backend kept
+ * using its cached texture and drew into a dead handle. Only the texture and the
+ * renderer are dropped: the window, the GL context and the software surface the
+ * engine draws into stay valid, and Sdl2_Present rebuilds both on the next call.
+ */
+void Sdl2_ResetRenderer(void)
+{
+    if (g_sdl2Video.texture != NULL) {
+        SDL_DestroyTexture(g_sdl2Video.texture);
+        g_sdl2Video.texture = NULL;
+    }
+    if (g_sdl2Video.renderer != NULL) {
+        SDL_DestroyRenderer(g_sdl2Video.renderer);
+        g_sdl2Video.renderer = NULL;
+    }
+    /* Force the next Sdl2_Present to allocate a new texture. */
+    g_sdl2Video.texture_w = 0;
+    g_sdl2Video.texture_h = 0;
+}
+
 static void Sdl2_Present(void)
 {
     if (g_sdl2Video.is_gl) {

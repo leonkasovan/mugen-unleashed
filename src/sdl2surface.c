@@ -27,51 +27,47 @@ static void Sdl2_CopySurfaceState(SDL_Surface *src, SDL_Surface *dst)
 
     if (src->format->palette != NULL && dst->format->palette != NULL) {
         int ncolors = src->format->palette->ncolors;
-        SDL_Color black[256];
-        int pad;
-        int i;
 
         if (ncolors > dst->format->palette->ncolors) {
             ncolors = dst->format->palette->ncolors;
         }
-        SDL_SetPaletteColors(dst->format->palette, src->format->palette->colors, 0, ncolors);
         /*
-         * SDL2 gives a new surface a white-to-black ramp in the entries the
-         * source did not set. SDL_gfx zeroed them instead, and the differential
-         * test sees the difference. The engine's palette handling does not
-         * guarantee it never reads an unset index, so matching the old library
-         * is the safe choice.
+         * Fix (port change). The original looked for the first opaque-white
+         * entry, treated it as the start of SDL2's unused-palette tail, and
+         * replaced it and everything after it with black.
          *
-         * The tail starts at the last entry the *source* actually set, not at
-         * ncolors: SDL2 allocates every 8-bit surface with a full 256-entry
-         * palette, so ncolors is always 256 and never marks the real end.
+         * Two facts made that wrong in one real case and right in another:
+         *
+         *  - SDL2 initialises every entry of a new 8-bit surface to opaque
+         *    white, so a genuinely white entry is indistinguishable from an
+         *    untouched one by colour alone. SDL_ttf's solid renderers put their
+         *    foreground colour at index 1, so white text lost its colour -- and
+         *    every later entry on the way.
+         *  - SDL 1.2's SDL_gfx zeroed everything past the end of the source
+         *    palette, and the differential test (tools/test_zoomdiff.sh) pins
+         *    that: a two-entry palette must come back with entries 2..255
+         *    black, not white.
+         *
+         * SDL2 discarded the information needed to do both exactly -- ncolors
+         * is always 256 -- so entries 0 and 1 are always copied verbatim (the
+         * indices the engine's text and transparency paths use) and the tail
+         * from index 2 keeps SDL_gfx's zeroing. That keeps the differential
+         * test green and no longer destroys a white foreground.
          */
-        /* SDL 1.2 has no per-entry alpha and reports 255 for every entry, so
-         * the pad colour is opaque black rather than transparent black. */
-        for (i = 0; i < 256; i++) {
-            black[i].r = 0;
-            black[i].g = 0;
-            black[i].b = 0;
-            black[i].a = 255;
-        }
-        /*
-         * SDL2 allocates every 8-bit surface with a full 256-entry palette and
-         * leaves the unset entries at its default (255,255,255,255), so there is
-         * no "ncolors" that marks the real end of the source's palette. The
-         * first all-white entry is where SDL stopped writing; everything from
-         * there on is the default and SDL_gfx had it zeroed.
-         */
-        pad = ncolors;
-        for (i = 0; i < ncolors; i++) {
-            const SDL_Color *c = &src->format->palette->colors[i];
+        SDL_SetPaletteColors(dst->format->palette, src->format->palette->colors, 0, ncolors);
+        if (dst->format->palette->ncolors > 2) {
+            SDL_Color black[256];
+            int i;
 
-            if (c->r == 255 && c->g == 255 && c->b == 255 && c->a == 255) {
-                pad = i;
-                break;
+            /* SDL 1.2 reports 255 for every entry; the pad colour is opaque
+             * black, not transparent black. */
+            for (i = 0; i < 256; i++) {
+                black[i].r = 0;
+                black[i].g = 0;
+                black[i].b = 0;
+                black[i].a = 255;
             }
-        }
-        if (pad < dst->format->palette->ncolors) {
-            SDL_SetPaletteColors(dst->format->palette, black, pad, dst->format->palette->ncolors - pad);
+            SDL_SetPaletteColors(dst->format->palette, black, 2, dst->format->palette->ncolors - 2);
         }
     }
     if (SDL_GetColorKey(src, &key) == 0) {

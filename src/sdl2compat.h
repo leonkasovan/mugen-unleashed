@@ -94,6 +94,12 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags);
 void Sdl2_Flip(SDL_Surface *surface);
 void Sdl2_UpdateRect(SDL_Surface *surface, Sint32 x, Sint32 y, Uint32 w, Uint32 h);
 void Sdl2_VideoQuit(void);
+/* Drops the cached renderer and texture after SDL reports a device or targets
+ * reset, so the next Sdl2_Present recreates them. SDL requires every texture to
+ * be recreated; keeping the old one renders into a dead handle (a black or
+ * frozen window after a GPU driver reset, a remote-desktop session change or a
+ * display mode switch). */
+void Sdl2_ResetRenderer(void);
 void Sdl2_SetCaption(const char *title, const char *icon);
 int Sdl2_ToggleFullScreen(SDL_Surface *screen);
 int Sdl2_GL_SetAttribute(SDL_GLattr attr, int value);

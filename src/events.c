@@ -291,6 +291,17 @@ void Events_Poll(void)
             break;
 #elif defined(MUGEN_SDL2)
         /*
+         * SDL2 desktop: a device or targets reset invalidates the renderer's
+         * textures, which SDL requires the application to recreate. Android
+         * already did this; the desktop backend ignored the events and kept
+         * drawing into a dead texture, so the window stayed black after a GPU
+         * driver reset, a remote-desktop transition or a display change.
+         */
+        case SDL_RENDER_DEVICE_RESET:
+        case SDL_RENDER_TARGETS_RESET:
+            Sdl2_ResetRenderer();
+            break;
+        /*
          * SDL2 desktop: SDL_ACTIVEEVENT and SDL_VIDEORESIZE became
          * SDL_WINDOWEVENT sub-types. The focus case reproduces the SDL 1.2
          * block below exactly -- mod state, cursor visibility, the engine

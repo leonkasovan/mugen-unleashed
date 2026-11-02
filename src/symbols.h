@@ -1837,7 +1837,7 @@ int __cdecl Con_CmdLuaExec(CmdTable *ctx, char *name, char *args);
 /* 0x0048c730 */ int __cdecl Rle8_PutRun(int count, GrowBufWriter *w, int value);
 /* 0x0048c7b0 */ DecompBuffer *__cdecl DecompBuffer_Create(unsigned int size);
 /* 0x0048c830 */ int __cdecl DecompBuffer_Reset(DecompBuffer *buf);
-/* 0x0048c890 */ unsigned __int64 __cdecl DecompBuffer_Get(const DecompRequest *req);
+/* 0x0048c890 */ void *__cdecl DecompBuffer_Get(const DecompRequest *req, int *hit);
 /* 0x0048c910 */ void *__cdecl DecompBuffer_Alloc(const DecompRequest *req);
 /* 0x0048caa0 */ DecompBlock *__cdecl DecompBuffer_FreeBlock(DecompBlock *blk, DecompBuffer *buf, DecompBlock *prev);
 /* 0x0048cb10 */ unsigned char *__cdecl Lz5_Encode(const void *pixels, int w, int h, int *size_out);

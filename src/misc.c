@@ -42,7 +42,7 @@ void SpriteCache_Remove(void *data)
 int SpriteCache_Get(void *data, int format, int size, void **out)
 {
     DecompRequest key;
-    unsigned __int64 r;
+    int hit;
     void *pixels;
 
     if (g_spriteDecompBuffer == NULL) {
@@ -52,12 +52,14 @@ int SpriteCache_Get(void *data, int format, int size, void **out)
     key.size = *(const unsigned int *)data;
     key.key = data;
     key.cost = *(const int *)data;
-    r = DecompBuffer_Get(&key);
-    pixels = (void *)(uintptr_t)(unsigned int)r;
+    /* The pointer comes back at full width; "hit" says whether it is already
+     * decoded. (It used to be packed into the pointer's upper 32 bits -- see
+     * DecompBuffer_Get.) */
+    pixels = DecompBuffer_Get(&key, &hit);
     if (pixels == NULL) {
         return 0;
     }
-    if ((unsigned int)(r >> 32) != 0) {
+    if (hit != 0) {
         *out = pixels;
         return 1;
     }

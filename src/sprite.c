@@ -247,7 +247,20 @@ int Sprite_InitRows(Sprite *spr)
     if (rows == NULL) {
         return 0;
     }
-    stride = ((spr->bpp + 7) >> 3) * spr->w;
+    /*
+     * Fix (port change): the original derived the stride from the width, which
+     * assumes tightly packed rows. A surface-backed sprite lives in an
+     * SDL_Surface whose pitch may include padding -- an odd-width RGB565
+     * surface is padded to a 4-byte boundary -- so the row table pointed into
+     * the middle of the previous row and software blitting came out shifted.
+     * The 640x480 RGB565 display surface happens to be unpadded, which is why
+     * this never showed there.
+     */
+    if (spr->format == SPRITE_FORMAT_SURFACE && spr->pixels != NULL) {
+        stride = ((SDL_Surface *)spr->pixels)->pitch;
+    } else {
+        stride = ((spr->bpp + 7) >> 3) * spr->w;
+    }
     spr->owns_rows = 1;
     for (i = 0; i < spr->h; i++) {
         rows[i] = offset;

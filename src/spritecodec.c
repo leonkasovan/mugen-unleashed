@@ -908,10 +908,24 @@ static DecompBlock *DecompBlock_Next(const DecompBlock *blk)
     return (DecompBlock *)((unsigned char *)blk + blk->size);
 }
 
-/* Bytes a block needs for size payload bytes (the original's rounding). */
+/*
+ * Bytes a block needs for size payload bytes.
+ *
+ * Fix (port change): the original's expression, ((size + 0xF) & ~3) + 4, encodes
+ * a 16-byte header with the payload rounded to 4 bytes: it reserves 12 bytes of
+ * padding over the header and then adds 4 more, which only works out because
+ * the header is exactly 16 bytes and 4-byte aligned. DecompBlock carries a
+ * void *, so on LP64 it is 24 bytes: the same expression then reserved 32 bytes
+ * for a 16-byte request, leaving 8, and writing the payload overwrote the next
+ * block's key. Compute from sizeof(DecompBlock) instead, rounding the payload
+ * to the header's alignment so every block stays aligned for the pointer it
+ * begins with.
+ */
+#define DECOMP_ALIGN ((unsigned int)sizeof(void *))
+
 static unsigned int DecompBlock_Need(unsigned int size)
 {
-    return ((size + 0xF) & ~3u) + 4;
+    return ((size + (DECOMP_ALIGN - 1)) & ~(DECOMP_ALIGN - 1)) + (unsigned int)sizeof(DecompBlock);
 }
 
 /*
@@ -1094,7 +1108,13 @@ void *DecompBuffer_Alloc(const DecompRequest *req)
     }
     buf->clock = best_sum;
     rest = best_start->size - need;
-    if (rest >= 0x14) {
+    /*
+     * Split when the remainder can hold a header plus at least one aligned
+     * payload unit. The original compared against 0x14 (its 16-byte header + 4)
+     * which is a header-size assumption, not a constant; deriving it keeps the
+     * free list consistent when DecompBlock grows.
+     */
+    if (rest >= (unsigned int)sizeof(DecompBlock) + DECOMP_ALIGN) {
         DecompBlock *split = (DecompBlock *)((unsigned char *)best_start + need);
         best_start->size = need;
         split->size = rest;
@@ -1118,16 +1138,24 @@ void *DecompBuffer_Alloc(const DecompRequest *req)
  * 1 when the block was there (its expire value is renewed), 0 when a new
  * block was allocated (a block too small for req is freed first; payload
  * NULL when nothing fits).
+ *
+ * Fix (port change): this used to return an unsigned __int64 packing the block
+ * pointer in the low 32 bits and a cache-hit flag in bit 32, and the caller
+ * rebuilt the pointer with (void *)(unsigned int)r. That truncates on LP64 --
+ * lazy decoding of compressed SFF sprites would then write through an invalid
+ * address on Windows x64, Linux x64 and Android arm64. The pointer is returned
+ * at full width and the hit is reported through *hit.
  */
-unsigned __int64 DecompBuffer_Get(const DecompRequest *req)
+void *DecompBuffer_Get(const DecompRequest *req, int *hit)
 {
     DecompBuffer *buf = req->pool;
     unsigned int need = DecompBlock_Need(req->size);
     DecompBlock *prev = NULL;
     DecompBlock *blk;
 
+    *hit = 0;
     if (need > buf->size) {
-        return 0;
+        return NULL;
     }
     blk = buf->data;
     if (blk->size != 0) {
@@ -1136,17 +1164,18 @@ unsigned __int64 DecompBuffer_Get(const DecompRequest *req)
             blk = DecompBlock_Next(blk);
             if (blk->size == 0) {
                 buf->misses++;
-                return (unsigned int)DecompBuffer_Alloc(req);
+                return DecompBuffer_Alloc(req);
             }
         }
         if (blk->size >= need) {
             blk->cost = req->cost;
             blk->expire = buf->clock + req->cost;
             buf->hits++;
-            return (unsigned int)(blk + 1) | (unsigned __int64)1 << 32;
+            *hit = 1;
+            return blk + 1;
         }
         DecompBuffer_FreeBlock(blk, buf, prev);
     }
     buf->misses++;
-    return (unsigned int)DecompBuffer_Alloc(req);
+    return DecompBuffer_Alloc(req);
 }
