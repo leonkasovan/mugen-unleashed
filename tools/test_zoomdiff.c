@@ -109,45 +109,108 @@ typedef struct Case {
     int npal;                   /* palette entries the case defines */
     int colorkey;               /* the key index to set; 0 if unused */
     int multipal;               /* use the 4-colour palette from make() */
+    int want_alpha;             /* the case intends to exercise transparency */
 } Case;
 
 static const Case k_cases[] = {
-    {.name = "rgba32_2x", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0xFF000000, .w = 16, .h = 16, .bpp = 32, .zx = 2.0, .zy = 2.0, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
-    {.name = "rgba32_0p5x", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0xFF000000, .w = 16, .h = 16, .bpp = 32, .zx = 0.5, .zy = 0.5, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
-    {.name = "rgba32_frac", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0xFF000000, .w = 13, .h = 7, .bpp = 32, .zx = 1.5, .zy = 2.5, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
-    {.name = "rgba32_odd", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0xFF000000, .w = 11, .h = 9, .bpp = 32, .zx = 1.3, .zy = 0.7, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
-    {.name = "rgb32_2x", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0x00000000, .w = 16, .h = 16, .bpp = 32, .zx = 2.0, .zy = 2.0, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
-    {.name = "rgb565_2x", .rmask = 0xF800, .gmask = 0x07E0, .bmask = 0x001F, .amask = 0x0000, .w = 16, .h = 16, .bpp = 16, .zx = 2.0, .zy = 2.0, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
-    {.name = "rgb565_0p75x", .rmask = 0xF800, .gmask = 0x07E0, .bmask = 0x001F, .amask = 0x0000, .w = 16, .h = 16, .bpp = 16, .zx = 0.75, .zy = 0.75, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
-    {.name = "rgb555_1p5x", .rmask = 0x7C00, .gmask = 0x03E0, .bmask = 0x001F, .amask = 0x0000, .w = 10, .h = 10, .bpp = 16, .zx = 1.5, .zy = 1.5, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
-    {.name = "indexed_2x", .w = 16, .h = 16, .bpp = 8, .zx = 2.0, .zy = 2.0, .indexed = 1, .whiteidx = 0, .npal = 2, .colorkey = 0, .multipal = 0},
-    {.name = "indexed_0p5x", .w = 16, .h = 16, .bpp = 8, .zx = 0.5, .zy = 0.5, .indexed = 1, .whiteidx = 0, .npal = 2, .colorkey = 0, .multipal = 0},
-    {.name = "indexed_frac", .w = 13, .h = 7, .bpp = 8, .zx = 1.5, .zy = 2.5, .indexed = 1, .whiteidx = 0, .npal = 2, .colorkey = 0, .multipal = 0},
-    {.name = "one_px_2x", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0xFF000000, .w = 1, .h = 1, .bpp = 32, .zx = 2.0, .zy = 2.0, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
-    {.name = "one_px_indexed", .w = 1, .h = 1, .bpp = 8, .zx = 3.0, .zy = 3.0, .indexed = 1, .whiteidx = 0, .npal = 2, .colorkey = 0, .multipal = 0},
-    {.name = "indexed_white1_2x", .w = 16, .h = 16, .bpp = 8, .zx = 2.0, .zy = 2.0, .indexed = 1, .whiteidx = 1, .npal = 2, .colorkey = 0, .multipal = 0},
-    {.name = "indexed_multi_2x", .w = 16, .h = 16, .bpp = 8, .zx = 2.0, .zy = 2.0, .indexed = 1, .whiteidx = 0, .npal = 4, .colorkey = 0, .multipal = 1},
+    {.name = "rgba32_2x", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0xFF000000, .w = 16, .h = 16, .bpp = 32, .zx = 2.0, .zy = 2.0, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0, .want_alpha = 1},
+    {.name = "rgba32_0p5x", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0xFF000000, .w = 16, .h = 16, .bpp = 32, .zx = 0.5, .zy = 0.5, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0, .want_alpha = 1},
+    {.name = "rgba32_frac", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0xFF000000, .w = 13, .h = 7, .bpp = 32, .zx = 1.5, .zy = 2.5, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0, .want_alpha = 1},
+    {.name = "rgba32_odd", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0xFF000000, .w = 11, .h = 9, .bpp = 32, .zx = 1.3, .zy = 0.7, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0, .want_alpha = 1},
+    {.name = "rgb32_2x", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0x00000000, .w = 16, .h = 16, .bpp = 32, .zx = 2.0, .zy = 2.0, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0, .want_alpha = 0},
+    {.name = "rgb565_2x", .rmask = 0xF800, .gmask = 0x07E0, .bmask = 0x001F, .amask = 0x0000, .w = 16, .h = 16, .bpp = 16, .zx = 2.0, .zy = 2.0, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0, .want_alpha = 0},
+    {.name = "rgb565_0p75x", .rmask = 0xF800, .gmask = 0x07E0, .bmask = 0x001F, .amask = 0x0000, .w = 16, .h = 16, .bpp = 16, .zx = 0.75, .zy = 0.75, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0, .want_alpha = 0},
+    {.name = "rgb555_1p5x", .rmask = 0x7C00, .gmask = 0x03E0, .bmask = 0x001F, .amask = 0x0000, .w = 10, .h = 10, .bpp = 16, .zx = 1.5, .zy = 1.5, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0, .want_alpha = 0},
+    {.name = "indexed_2x", .w = 16, .h = 16, .bpp = 8, .zx = 2.0, .zy = 2.0, .indexed = 1, .whiteidx = 0, .npal = 2, .colorkey = 0, .multipal = 0, .want_alpha = 0},
+    {.name = "indexed_0p5x", .w = 16, .h = 16, .bpp = 8, .zx = 0.5, .zy = 0.5, .indexed = 1, .whiteidx = 0, .npal = 2, .colorkey = 0, .multipal = 0, .want_alpha = 0},
+    {.name = "indexed_frac", .w = 13, .h = 7, .bpp = 8, .zx = 1.5, .zy = 2.5, .indexed = 1, .whiteidx = 0, .npal = 2, .colorkey = 0, .multipal = 0, .want_alpha = 0},
+    {.name = "one_px_2x", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0xFF000000, .w = 1, .h = 1, .bpp = 32, .zx = 2.0, .zy = 2.0, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0, .want_alpha = 1},
+    {.name = "one_px_indexed", .w = 1, .h = 1, .bpp = 8, .zx = 3.0, .zy = 3.0, .indexed = 1, .whiteidx = 0, .npal = 2, .colorkey = 0, .multipal = 0, .want_alpha = 0},
+    {.name = "indexed_white1_2x", .w = 16, .h = 16, .bpp = 8, .zx = 2.0, .zy = 2.0, .indexed = 1, .whiteidx = 1, .npal = 2, .colorkey = 0, .multipal = 0, .want_alpha = 0},
+    {.name = "indexed_multi_2x", .w = 16, .h = 16, .bpp = 8, .zx = 2.0, .zy = 2.0, .indexed = 1, .whiteidx = 0, .npal = 4, .colorkey = 0, .multipal = 1, .want_alpha = 0},
     /*
      * A NONZERO colour key. Every other indexed case keys index 0, which is
      * indistinguishable from "the key was never read" -- the dump defaulted to
      * zero and nothing noticed. This one fails if the recorded value is not
      * carried across, or if the key is silently reset to 0.
      */
-    {.name = "indexed_key1_2x", .w = 16, .h = 16, .bpp = 8, .zx = 2.0, .zy = 2.0, .indexed = 1, .whiteidx = 0, .npal = 2, .colorkey = 1, .multipal = 0},
-    {.name = "indexed_key1_0p5x", .w = 16, .h = 16, .bpp = 8, .zx = 0.5, .zy = 0.5, .indexed = 1, .whiteidx = 0, .npal = 2, .colorkey = 1, .multipal = 0},
-    {.name = "tall_thin", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0xFF000000, .w = 1, .h = 17, .bpp = 32, .zx = 3.0, .zy = 0.5, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
+    {.name = "indexed_key1_2x", .w = 16, .h = 16, .bpp = 8, .zx = 2.0, .zy = 2.0, .indexed = 1, .whiteidx = 0, .npal = 2, .colorkey = 1, .multipal = 0, .want_alpha = 0},
+    {.name = "indexed_key1_0p5x", .w = 16, .h = 16, .bpp = 8, .zx = 0.5, .zy = 0.5, .indexed = 1, .whiteidx = 0, .npal = 2, .colorkey = 1, .multipal = 0, .want_alpha = 0},
+    {.name = "tall_thin", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0xFF000000, .w = 1, .h = 17, .bpp = 32, .zx = 3.0, .zy = 0.5, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0, .want_alpha = 1},
     /*
      * The ratios that expose SDL_gfx's 16.16 fixed-point step. The behaviour
      * belongs to the RGBA sampler, so these are 32-bit: a 16-bit source only
      * reaches it after conversion. For 16 -> 12 the truncated step is 87381 and
      * output x=3 reads source 3, where exact arithmetic reads 4.
      */
-    {.name = "rgba32_16to12", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0xFF000000, .w = 16, .h = 16, .bpp = 32, .zx = 0.75, .zy = 0.75, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
-    {.name = "rgba32_10to15", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0xFF000000, .w = 10, .h = 10, .bpp = 32, .zx = 1.5, .zy = 1.5, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
-    {.name = "rgba32_13to20", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0xFF000000, .w = 13, .h = 13, .bpp = 32, .zx = 20.0 / 13.0, .zy = 20.0 / 13.0, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
+    {.name = "rgba32_16to12", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0xFF000000, .w = 16, .h = 16, .bpp = 32, .zx = 0.75, .zy = 0.75, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0, .want_alpha = 1},
+    {.name = "rgba32_10to15", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0xFF000000, .w = 10, .h = 10, .bpp = 32, .zx = 1.5, .zy = 1.5, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0, .want_alpha = 1},
+    {.name = "rgba32_13to20", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0xFF000000, .w = 13, .h = 13, .bpp = 32, .zx = 20.0 / 13.0, .zy = 20.0 / 13.0, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0, .want_alpha = 1},
 };
 
 #define CASE_COUNT ((int)(sizeof(k_cases) / sizeof(k_cases[0])))
+
+/*
+ * Sanity checks over the fixture table.
+ *
+ * These read k_cases, so they cannot drift from it -- which is the point. The
+ * table is hand-maintained literals and a wrong or missing field silences a case
+ * instead of failing it. That has happened: in 4ad9e3d one_px_2x and tall_thin
+ * lost their four RGBA masks, so amask became 0, dump() received
+ * src_had_alpha = 0, the blend field was suppressed, and both cases kept
+ * reporting "identical" while verifying nothing about transparency. Only human
+ * review caught it.
+ *
+ * C11 cannot assert over an element of a static const array at compile time
+ * ("expression in static assertion is not constant"), so this runs first in
+ * main() and fails the run rather than emitting a case that pretends to pass.
+ *
+ * want_alpha is the case's own declaration of intent. Deriving it from the
+ * fixture's name does not work -- one_px_2x and tall_thin are RGBA fixtures
+ * without "rgba" in their names, which is exactly how the regression slipped
+ * through -- so every case states it and the masks are checked against it.
+ */
+static int check_cases(void)
+{
+    int bad = 0;
+    int i;
+
+    for (i = 0; i < CASE_COUNT; i++) {
+        const Case *c = &k_cases[i];
+
+        if (c->want_alpha && c->amask == 0) {
+            fprintf(stderr, "%s: declares want_alpha but has no amask, so the blend check is disabled\n",
+                    c->name);
+            bad = 1;
+        }
+        if (c->bpp == 32 && (c->rmask == 0 || c->gmask == 0 || c->bmask == 0)) {
+            fprintf(stderr, "%s: 32-bit fixture is missing a channel mask\n", c->name);
+            bad = 1;
+        }
+        if (c->bpp == 16 && (c->rmask == 0 || c->amask != 0)) {
+            fprintf(stderr, "%s: 16-bit fixture needs channel masks and no alpha mask\n", c->name);
+            bad = 1;
+        }
+        if (c->bpp == 16 && c->want_alpha) {
+            fprintf(stderr, "%s: a 16-bit fixture cannot carry an alpha mask\n", c->name);
+            bad = 1;
+        }
+        if (c->bpp == 8 && (!c->indexed || c->npal < 2)) {
+            fprintf(stderr, "%s: 8-bit fixture must be indexed and define a palette\n", c->name);
+            bad = 1;
+        }
+        if (c->bpp == 32 && c->npal != 0) {
+            fprintf(stderr, "%s: a 32-bit fixture builds no palette, npal must be 0\n", c->name);
+            bad = 1;
+        }
+        if (c->npal != 0 && c->colorkey >= c->npal) {
+            fprintf(stderr, "%s: colour key %d is outside the %d-entry palette\n", c->name, c->colorkey,
+                    c->npal);
+            bad = 1;
+        }
+    }
+    return bad;
+}
 
 /* A deterministic pattern that exercises every palette index and a spread of
  * channel values, so a wrong filter or a lost palette shows up immediately. */
@@ -342,6 +405,11 @@ int main(int argc, char **argv)
     char path[512];
     int i;
 
+    if (check_cases() != 0) {
+        /* A malformed fixture would emit a case that "passes" while verifying
+         * nothing, so refuse to run at all. */
+        return 2;
+    }
     if (SDL_Init(0) != 0) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 2;

@@ -31,7 +31,10 @@ $CC -m32 -std=gnu11 -O1 -g -mconsole \
     -o "$OUT/sdl1/test_zoomdiff.exe" \
     "$SDLKIT/lib/libSDL.a" "$SDLKIT/lib/libSDL_gfx.a" \
     -lm -lkernel32 -luser32 -lgdi32 -lwinmm -limm32 -lole32 -loleaut32 -lversion -luuid -ladvapi32 -lshell32
-"$OUT/sdl1/test_zoomdiff.exe" "$OUT/sdl1"
+"$OUT/sdl1/test_zoomdiff.exe" "$OUT/sdl1" || {
+    echo "result: the sdl1 generator rejected the fixture table" >&2
+    exit 1
+}
 
 echo "== SDL2 + src/sdl2surface.c =="
 # shellcheck disable=SC2086
@@ -44,7 +47,10 @@ $CC -m32 -std=gnu11 -O1 -g -mconsole \
     -o "$OUT/sdl2/test_zoomdiff.exe" \
     $(pkg-config --libs --static sdl2 | sed 's/-lSDL2main//;s/-mwindows//') \
     -lopengl32 -lglu32 -lwinmm -lshell32 -luser32 -lgdi32 -lm
-"$OUT/sdl2/test_zoomdiff.exe" "$OUT/sdl2"
+"$OUT/sdl2/test_zoomdiff.exe" "$OUT/sdl2" || {
+    echo "result: the sdl2 generator rejected the fixture table" >&2
+    exit 1
+}
 
 echo "== compare =="
 # No case is exempt. Every comparison must be byte-identical: the fixed-point
