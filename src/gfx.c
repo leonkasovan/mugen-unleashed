@@ -496,7 +496,7 @@ void Gfx_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
             SDL_UpdateRect(g_screenSurface, 0, 0, 0, 0);
         }
     }
-#if defined(MUGEN_VITA_GL) && !defined(ANDROID_PORT)
+#ifdef MUGEN_VITA_GL
     /*
      * PS Vita port (port/psvita): present with SDL_Flip.
      *
