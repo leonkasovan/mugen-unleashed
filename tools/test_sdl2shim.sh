@@ -29,7 +29,7 @@ $CC -m32 -std=gnu11 -O1 -g -Wall \
     -DMUGEN_SDL2 -DSDL_MAIN_HANDLED \
     -Isrc -Ithird_party/glad-2.1 -Ithird_party/minizip-0.15 -Ithird_party/lua-5.1.4/src -Ithird_party/sdk/include \
     $(pkg-config --cflags $PKGS | sed 's/-Dmain=SDL_main//') \
-    tools/test_sdl2shim.c src/sdl2compat.c \
+    tools/test_sdl2shim.c src/sdl2compat.c src/sdl2keys.c src/sdl2surface.c \
     -o "$OUT/test_sdl2shim" \
     $(pkg-config --libs --static $PKGS) \
     -lopengl32 -lglu32 -lwinmm -lshell32 -luser32 -lgdi32 -lm
