@@ -769,7 +769,17 @@ const char *Mpg123_StrError(void *instance, int err)
 /* 0x0048BA70: the sdlmix plugin's default extension list. */
 const char *Sdlmix_Extensions(void)
 {
+#ifdef ANDROID_PORT
+    /*
+     * Android port: the companion SDL2_mixer is built with STB-vorbis and
+     * drMP3 (WAV/OGG/MP3) and without tracker/MIDI decoders (PLAN B5). The
+     * desktop list below would route every common music asset to a decoder
+     * this mixer cannot load; advertise what this mixer actually decodes.
+     */
+    return "wav,mp3,ogg,vorbis";
+#else
     return "669,amf,apun,dsm,far,gdm,it,imf,mod,med,mtm,okt,s3m,stm,stx,ult,uni,xm,mid,midi";
+#endif
 }
 
 /* Is ext (lower-case) the first entry of list it is found in? (strstr's first match only.) */
@@ -915,10 +925,22 @@ int Sdlmix_Open(void *instance, const BgmPluginIo *io, BgmInfo *info, BgmOpenRes
         Sdlmix_FreeMusic(inst);
     }
     inst->type = Sdlmix_Classify(g_sdlmixHost.get_extension(info->path));
+#ifdef ANDROID_PORT
+    /*
+     * Android port: accept exactly what the companion mixer decodes
+     * (WAV/OGG/MP3 via STB-vorbis and drMP3) and refuse the tracker/MIDI
+     * types the desktop route serves -- this mixer was built with those
+     * decoders off. The desktop keeps the original refusal below.
+     */
+    if (inst->type != SDLMIX_TYPE_WAV && inst->type != SDLMIX_TYPE_MP3 && inst->type != SDLMIX_TYPE_OGG) {
+        return 4;
+    }
+#else
     if (inst->type == 0 || inst->type == SDLMIX_TYPE_WAV || inst->type == SDLMIX_TYPE_MP3 ||
         inst->type == SDLMIX_TYPE_OGG) {
         return 4;
     }
+#endif
     rw = Stream_ToRWops((Stream *)io->handle);
     if (rw == NULL) {
         return 4;
