@@ -1,112 +1,124 @@
 # mugen-unleashed
 
-A C reconstruction of the M.U.G.E.N 1.1 Beta 1 engine (`mugen.exe` 1.1.0 Beta 1 P1,
-built on 2013-08-11 by Elecbyte), recovered from the original executable. It builds into a
-native `mugen.exe` that runs the game the way the original does.
+A source-level reconstruction of **M.U.G.E.N 1.1.0 Beta 1 P1** (Elecbyte, built
+2013-08-11): the original 32-bit Windows binary, rewritten as C and rebuilt from
+those sources.
 
-This repository contains **no game data and none of Elecbyte's files**. To run what it builds,
-you need your own copy of M.U.G.E.N 1.1 Beta 1.
+The project aims for *behavioural* fidelity with the original — gameplay, timing,
+file formats, log output — not merely a similar-looking game. Where the
+reconstruction knowingly deviates, the deviation is marked in the source as a
+port change and recorded in the notes under `docs/`.
 
-## Status
+## What you get
 
-- **The whole engine is reconstructed.** Every function of the game code is in C. The
-  libraries the original linked statically (Lua 5.1.4, libpng 1.2.38, GLEW 1.5.4 and minizip
-  0.15) are built from their original sources, in the same versions.
-- **It behaves like the original.** Each function was checked against the original binary with
-  differential tests. The rebuilt executable writes the same `mugen.log` as the original on:
-  - the title screen;
-  - a quick VS match and AI vs AI matches;
-  - the character select demo;
-  - the options screen and its menus;
-  - storyboards;
-  - `-nosound` and `-nomusic`;
-  - the error dialog of a missing character.
+Two Windows builds are supported, and they differ in how they ship:
 
-  This holds for both the Debug and the optimised builds.
-- **It reproduces the original's quirks and bugs.** Fixes and new features are left for later
-  and should be marked as such in the code.
+| Build | Executable | Runtime requirements |
+|---|---|---|
+| **GNU Make + MinGW (static)** | `mugen-static.exe` | Nothing but Windows system DLLs |
+| **MSVC + CMake** | `mugen_unleashed.exe` | The game's `Elecbyte.MUGEN.libs` folder (SDL, SDL_mixer, SDL_ttf, SDL_gfx, zlib, libresample, pthreads) |
+
+The static build is self-contained: SDL2, SDL2_mixer, SDL2_ttf, zlib, pthreads,
+Lua 5.1.4, libpng, glad, minizip and libresample are all linked in. Because
+SDL2_mixer carries mpg123 and vorbisfile internally, WAV, MP3 and Ogg Vorbis
+play without any external decoder DLL — including without Elecbyte's
+`libmpg123-0.dll`, `vorbisplug.dll` or `waveplug.dll`.
+
+The engine also builds on Linux from the same `Makefile` (x86, x64, arm64), and
+there are Android and PS Vita ports under `port/`.
 
 ## Building
 
-GitHub Actions builds the release executable on every push. To get it without building:
-- download the `mugen-unleashed-x86` artifact of the latest run (the Actions tab);
-- or download the zip attached to a GitHub release. Releases are tagged after the engine
-  version they reconstruct, starting with `v1.1b1`.
+### Static Windows build (recommended)
 
-To build it yourself, you need:
+Requires `i686-w64-mingw32` GCC, GNU Make, and the static SDL2 stack discoverable
+through `pkg-config` (`sdl2`, `SDL2_mixer`, `SDL2_ttf`, `zlib`, `libpng16`).
 
-- Windows with Visual Studio 2022, including the x86 C++ tools. The CMake and Ninja that come
-  with it are enough.
-- Optional: Python 3 with `pefile` (`pip install pefile`). The build uses it to take the window
-  icon from your original `mugen.exe`.
+```sh
+make check-toolchain     # verifies the compiler and the static archives
+make -j8                 # build/mingw/mugen-static.exe
+make install             # strip it and copy it into install/
+```
 
-From a regular command prompt:
+`install/` is a M.U.G.E.N 1.1b1 tree; drop the executable in and run it. No
+`Elecbyte.MUGEN.libs` folder is needed.
+
+The SDL2 backend is the default. `make SDL_BACKEND=1` builds the older SDL 1.2
+backend instead (`build/mingw-sdl1/mugen-static-sdl1.exe`), which exists for the
+differential comparisons against the original binary, not as the normal target.
+
+See **[docs/BUILD-MINGW.md](docs/BUILD-MINGW.md)** for the dependency list,
+toolchain versions and the variables `make` accepts.
+
+### MSVC 2022
 
 ```bat
 tools\msvc_env.bat cmake --preset x86-release
 tools\msvc_env.bat cmake --build --preset x86-release
 ```
 
-The `x86-debug` preset builds an unoptimised executable instead. The executable ends up in
-`build\<preset>\mugen_unleashed.exe` (with `mugen_unleashed.pdb` next to it).
+Produces `build/x86-release/mugen_unleashed.exe`. This build links the game's
+original DLLs rather than static copies. See
+**[docs/BUILD-MSVC.md](docs/BUILD-MSVC.md)**.
 
-To embed the original window icon, point the configure step at your M.U.G.E.N directory:
-
-```bat
-tools\msvc_env.bat cmake --preset x86-release -DMUGEN_GAME_DIR=C:/path/to/mugen-1.1b1
-```
-
-### With GNU Make and GCC
-
-A `Makefile` builds the same executable with GNU Make and a 32-bit MinGW-w64 GCC, from an
-MSYS2 bash.
+### Linux
 
 ```sh
-make check-toolchain
 make -j8
 ```
 
-The executable ends up in `build/mingw/mugen.exe`. `make DEBUG=1 BUILD=build/mingw-debug`
-builds it unoptimised, and `make MUGEN_GAME_DIR=C:/path/to/mugen-1.1b1` embeds the original's
-window icon. See [docs/BUILD-MINGW.md](docs/BUILD-MINGW.md) for the toolchain requirements and
-the dependency list.
+The target (`linux-x64`, `linux-x86`, `linux-arm64`) is chosen from the host and
+the compiler's own triple. See **[docs/BUILD-LINUX.md](docs/BUILD-LINUX.md)**.
 
-## Running
+### Other platforms
 
-1. Copy `mugen_unleashed.exe` into your M.U.G.E.N 1.1 Beta 1 directory. It does not shadow the
-   original `mugen.exe`, so both can stay side by side.
-2. Run it from there.
+- **Android** — `port/android/`, native SDL2, arm64.
+- **PS Vita** — `port/psvita/`.
 
-It needs the `Elecbyte.MUGEN.libs` folder of the game, which holds SDL, SDL_mixer, SDL_ttf,
-SDL_gfx, zlib, libresample and pthreads. The executable's manifest finds those DLLs there, as
-the original's does. Like the original, it writes `stdout.txt` and `stderr.txt` next to itself
-and deletes them when they stay empty.
+## Requirements on the machine
 
-## Layout
+The engine is a faithful reconstruction of a 2013 binary, so it inherits its
+platform expectations:
 
+- **32-bit is the reference.** The struct layouts, offsets and assertions in
+  `src/` describe the original 32-bit binary. 64-bit builds work for the parts
+  that have been ported, but the fidelity checks are compiled out there (see
+  `MUGEN_LAYOUT_32BIT` in `src/mugen.h`).
+- **x87 float semantics on x86.** The original ran with `/arch:IA32` at 53-bit
+  precision; the MinGW builds pass `-mfpmath=387 -fexcess-precision=standard`
+  so float rounding matches. Changing this alters gameplay-visible arithmetic.
+- **A game directory.** The engine reads `mugen.cfg`, `data/system.def`, fonts,
+  stages and characters from the working directory.
+
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [docs/ANALYSIS.md](docs/ANALYSIS.md) | The original binary: module map, addresses, calling conventions |
+| [docs/BUILD-MINGW.md](docs/BUILD-MINGW.md) | The static Windows build in detail |
+| [docs/BUILD-MSVC.md](docs/BUILD-MSVC.md) | The MSVC/CMake build in detail |
+| [docs/BUILD-LINUX.md](docs/BUILD-LINUX.md) | The Linux build |
+| [docs/LUA.md](docs/LUA.md) | The embedded Lua 5.1.4 layer |
+| [SDL2_PLAN.md](SDL2_PLAN.md) | The SDL 1.2 → SDL2 migration |
+| [PLANS.md](PLANS.md) | Working plan and open items |
+| [AGENTS.md](AGENTS.md) | Conventions for working on the code |
+| [third_party/README.md](third_party/README.md) | Third-party code, versions and licences |
+
+## Testing
+
+```sh
+make check-toolchain         # toolchain and static archives present
+bash tools/test_zoomdiff.sh  # SDL2 scaler vs SDL_gfx, byte for byte
 ```
-src/            the engine, one .c file per module of the original (see docs/ANALYSIS.md)
-  mugen.h       common header; the type headers it includes describe the original's structs
-  symbols.h     prototypes and globals of the whole program
-  globals.c     the globals, with their initial values from the original's .data
-  sdlmain.c     SDL 1.2's SDLmain (WinMain), rebuilt from the original
-  lookup3.c     Bob Jenkins' hashlittle, as specialised by the original's linker
-third_party/    Lua, libpng, GLEW, minizip, headers and import definitions of the game's DLLs
-cmake/          build helpers
-tools/          msvc_env.bat (Visual Studio environment), extract_icon.py
-Makefile        GNU Make + GCC build (docs/BUILD-MINGW.md)
-docs/           notes on the original binary and how the code reproduces it
-```
 
-Each function carries a comment with the address of its counterpart in the original
-executable, so you can compare the two in a disassembler.
+`tools/test_zoomdiff.sh` builds the same 21 scaling cases against the SDL 1.2
+SDL_gfx and the SDL2 replacement and requires every result to be identical. It is
+the guard against silent divergence in software rendering.
 
 ## Legal
 
-M.U.G.E.N is a trademark of Elecbyte. The original engine is © 1999-2013 Elecbyte. The code
-in `src/` was reconstructed from their binary for preservation and study. It is not affiliated
-with or endorsed by Elecbyte, and no license is granted for it beyond what applicable law
-allows.
-
-The libraries in `third_party/` are distributed under their own licenses (see
-`third_party/README.md`).
+M.U.G.E.N is © Elecbyte. This is an unofficial, non-commercial reconstruction
+made for study and preservation. It ships no copyrighted game assets: the
+characters, stages, fonts and sound files under `install/` belong to their
+respective authors. Third-party libraries keep their own licences, listed in
+[third_party/README.md](third_party/README.md).

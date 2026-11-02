@@ -28,7 +28,7 @@ Corollaries learned the hard way:
 ## What this is
 
 A C reconstruction of the M.U.G.E.N 1.1 Beta 1 engine, rebuilt from the original
-`mugen.exe` (32-bit PE, MSVC 2008). 78 modules in `src/`, one per module of the
+`mugen.exe` (32-bit PE, MSVC 2008). 83 modules in `src/`, one per module of the
 original. See `docs/ANALYSIS.md` for the binary analysis and the module map.
 
 **Fidelity is the product.** The goal is the original's behaviour *including its
@@ -39,15 +39,19 @@ in the code.
 ## Layout
 
 ```
-src/            78 .c + 47 .h — the engine, one file per original module
+src/            83 .c + 52 .h — the engine, one file per original module
   mugen.h       common header; type headers describe the original's structs
   symbols.h     every prototype and global, with the original's addresses
   globals.c     the globals, with their initial values from the original .data
   sdlmain.c     SDL 1.2's SDLmain (WinMain), rebuilt
+  sdl2compat.c  SDL 1.2 entry points over SDL2 (only with SDL_BACKEND=2)
+  sdl2surface.c shared SDL2 scaler, proven against SDL_gfx by test_zoomdiff
   mugen.rc      error dialog (200), version info, optional icon
-third_party/    Lua 5.1.4, libpng 1.2.38, glad 2.1, minizip 0.15, sdk, libresample
+third_party/    Lua 5.1.4, libpng 1.2.38, glad 2.1, minizip 0.15, sdk,
+                libresample, glew-1.5.4 (reference only, no longer built), vitagl
 cmake/          build helpers (MugenSdk.cmake, ThirdParty.cmake)
-tools/          msvc_env.bat, extract_icon.py, compare_logs.py
+tools/          msvc_env.bat, extract_icon.py, compare_logs.py, test_*.sh
+port/           android/ and psvita/ — the mobile ports
 docs/           ANALYSIS.md, BUILD-MSVC.md, BUILD-MINGW.md, BUILD-LINUX.md, LUA.md
 install/        a real M.U.G.E.N 1.1b1 installation (untracked, for testing)
 build/          all build output (git-ignored) — layout below
@@ -81,11 +85,19 @@ Two rules follow from the "keep temporary files inside the project" rule above:
 
 ## Building
 
-The target is **32-bit x86 only**. Every struct in `src/` has the original's
-field offsets, checked at compile time with `MUGEN_ASSERT_SIZE`. A 64-bit build
-is not a supported configuration and is rejected.
+**32-bit x86 is the reference.** Every struct in `src/` has the original's field
+offsets, checked at compile time with `MUGEN_ASSERT_SIZE` / `MUGEN_ASSERT_OFFSET`.
+Those assertions describe the original binary, so `MUGEN_LAYOUT_32BIT`
+(`src/mugen.h`) compiles them out when pointers are not 4 bytes; nothing reads a
+struct by absolute offset, so the relayout is functionally safe.
 
-Output name is `mugen_unleashed.exe` in both build systems.
+The CMake/MSVC build still hard-rejects anything but 32-bit MSVC. The Makefile
+builds Linux x64/arm64 and an experimental `win64` target (`MUGEN_TARGET=win64`,
+needs a 64-bit static kit) — see `PLANS.md` for what is still outstanding there.
+
+Output names differ by build: `mugen_unleashed.exe` (MSVC),
+`mugen-static.exe` (MinGW/SDL2), `mugen-static-sdl1.exe` (MinGW/SDL 1.2),
+`mugen-linux-<arch>` (Linux).
 
 ### MSVC 2022 (primary)
 
@@ -128,13 +140,28 @@ make install                            # strips and copies into install/
 → `build/mingw/mugen-static.exe`, and `install/mugen-static.exe` after
 `make install`.
 
-This build links **everything statically** (SDL 1.2, SDL_gfx, SDL_mixer,
-SDL_ttf, zlib, pthread, mpg123 from the kit; Lua, libpng, glad, minizip,
-libresample from source). The result needs no `Elecbyte.MUGEN.libs` — only
-Windows system DLLs and `msvcrt.dll`. The CMake/MSVC build still links the
-game's DLLs; the two are not the same link step.
+This build links **everything statically** (SDL2, SDL2_mixer, SDL2_ttf, zlib,
+pthread from the kit; Lua, libpng, glad, minizip, libresample from source). The
+result needs no `Elecbyte.MUGEN.libs` — only Windows system DLLs and
+`msvcrt.dll`. The CMake/MSVC build still links the game's DLLs; the two are not
+the same link step.
 
-`make check-toolchain` (Windows) refuses a non-`i686-w64-mingw32` compiler,
+`SDL_BACKEND` selects the SDL stack. **2 is the default** and is the normal
+target; `SDL_BACKEND=1` builds the older SDL 1.2 backend into
+`build/mingw-sdl1/mugen-static-sdl1.exe`, which exists for the differential
+comparisons against the original binary. Switching the variable in an existing
+build directory is safe: `$(OBJ_DIR)/.config` records the backend and target,
+every object depends on it, and it is only rewritten when the configuration
+changes, so a switch recompiles the tree and a repeat build recompiles nothing.
+
+Because SDL2_mixer carries mpg123 and vorbisfile, WAV, MP3 and Ogg Vorbis play
+with no external decoder DLL (`MUGEN_SDLMIX_NATIVE_CODECS`, `src/mugen.h`). A
+`mugen.cfg` that still lists `mpg123` or `vorbisplug` is harmless: a plugin whose
+DLL is absent is skipped rather than aborting BGM start-up. Android advertises a
+narrower list, matching what its SDL2_mixer is built with.
+
+`make check-toolchain` (Windows) refuses a compiler whose triple does not match
+the target (unless `MUGEN_TARGET` is given explicitly),
 verifies `pkg-config` resolves every package in `STATIC_PKGS`, and checks the
 static archives exist (not just `.pc` files). Under a Linux target it checks
 that triple instead and skips the archive/`windres` checks. `make DEBUG=1
@@ -218,9 +245,33 @@ is the tool's own state, not ours.
 
 ## Testing
 
-The project has no unit tests. Behaviour is validated by **running both binaries
-on the same scenario and diffing `mugen.log`** (`docs/ANALYSIS.md`,
-"Validation").
+There are two kinds of check, and they answer different questions.
+
+**1. Differential tests — does the port match the original?**
+
+`tools/test_zoomdiff.sh` builds the same 21 scaling cases against the SDL 1.2
+SDL_gfx (`SDL_BACKEND=1`) and the SDL2 replacement, and requires every result to
+be byte-identical. It is the guard against silent divergence in software
+rendering and it has caught real regressions, so run it after touching
+`src/sdl2surface.c` or anything that feeds it:
+
+```sh
+bash tools/test_zoomdiff.sh
+```
+
+When a case legitimately cannot match — SDL2 discarded a piece of state SDL 1.2
+had, such as the real palette length — narrow what the dump records *and say why
+in the comment*. Do not weaken the comparison wholesale; the pixel data must stay
+fully compared.
+
+The Android port has its own suite under `port/android/tests/` (native SDL2,
+present host, manifest hashes, plus `test_build.py`); the Vita port has
+`port/psvita/validation/`. Those cover pieces the desktop build cannot reach.
+
+**2. Log comparison — does it behave like the original?**
+
+Behaviour is validated by **running both binaries on the same scenario and
+diffing `mugen.log`** (`docs/ANALYSIS.md`, "Validation").
 
 `install/` holds a real M.U.G.E.N 1.1b1 tree, so tests can be run end to end.
 `make install` puts the static executable there for you:
@@ -232,7 +283,9 @@ cd install
 ```
 
 For the MSVC build, copy `build/x86-release/mugen_unleashed.exe` into `install/`
-by hand; it needs the `Elecbyte.MUGEN.libs` folder, the static one does not.
+by hand; it needs the `Elecbyte.MUGEN.libs` folder, the static one does not. An
+`SDL_BACKEND=1` static build installs as `mugen-static-sdl1.exe` and does not
+overwrite the default one.
 
 Copy the original `mugen.exe` log out of the way first, then compare:
 
