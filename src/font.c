@@ -117,7 +117,7 @@ have_palette:
         b = 0x100;
     }
     saved = g_palFxCur;
-#ifdef MUGEN_VITA_GL
+#if defined(MUGEN_VITA_GL) || defined(MUGEN_ANDROID_SW)
     /*
      * PS Vita port (port/psvita): reject an impossible g_palFxCur.
      *

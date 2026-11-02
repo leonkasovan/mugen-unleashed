@@ -30,7 +30,7 @@
 
 #include "mugen.h"
 
-#ifndef MUGEN_VITA_GL
+#if !defined(MUGEN_VITA_GL) && !defined(MUGEN_ANDROID_SW)
 #include <GL/glu.h>
 #else
 /*

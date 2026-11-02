@@ -152,11 +152,13 @@ target_include_directories(main PRIVATE ${ANDROID_INCLUDES})
 # ---------------------------------------------------------------------------
 # Compile definitions
 #
-# MUGEN_VITA_GL is the engine's existing "non-desktop / software renderer" guard
-# and is reused deliberately: it already selects the System rendering path and
-# the guarded platform fixes, and inventing a second macro would mean auditing
-# every occurrence for the Android case. It is named for the first port that
-# needed it, not for the platform.
+# MUGEN_ANDROID_SW selects the generic software-renderer hardening shared with
+# the Vita (NaN guards, stale-target bounds, palette NULL checks, proportional
+# infobox sizing). It must NOT enable MUGEN_VITA_GL: that guard carries
+# Vita-device policy (stdout/stderr paths, joystick overrides, message box,
+# 960x544 panel surface, Vita trace) which has no meaning on Android. The B1
+# audit in PLAN.md categorized every MUGEN_VITA_GL site; only the (b) generic
+# sites respond to MUGEN_ANDROID_SW.
 # ---------------------------------------------------------------------------
 # android_main.h is force-included into every translation unit: it supplies the
 # SDL 1.2 names SDL2 removed (SDL_SetVideoMode, SDL_Flip, SDL_UpdateRect and
@@ -165,7 +167,7 @@ set_source_files_properties(${MUGEN_ENGINE_SOURCES} PROPERTIES
     COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/android_main.h")
 
 target_compile_definitions(main PRIVATE
-    MUGEN_VITA_GL=1
+    MUGEN_ANDROID_SW=1
     ANDROID_PORT=1
     PNG_ARM_NEON_OPT=0
     PNG_ARM_NEON_CHECK_SUPPORTED=0

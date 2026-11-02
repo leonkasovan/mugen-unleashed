@@ -162,7 +162,19 @@ extern int g_exprStackTop; /* 0x00500f40 */
  * glGetString exactly as GLEW did. glad.h is not included there, so name them
  * directly instead of through it.
  */
-#ifndef MUGEN_VITA_GL
+#if defined(ANDROID_PORT)
+/*
+ * Android port: no GL on this target. The System renderer is the only draw
+ * path (glrender.c/gldetect.c are excluded from the build), so the GL
+ * capability flags are constant 0 -- any GL draw function is unreachable.
+ * This keeps prim.c compiling without dragging in glad or vitaGL.
+ */
+#define g_glewVersion20                  0
+#define g_glewArbFragmentProgram         0
+#define g_glewArbTextureNpot             0
+#define g_glewExtBlendLogicOp            0
+#define g_glewExtFramebufferObject       0
+#elif !defined(MUGEN_VITA_GL)
 #define g_glewVersion20                  GLAD_GL_VERSION_2_0                          /* 0x00502ac1 */
 #define g_glewArbFragmentProgram         GLAD_GL_ARB_fragment_program                 /* 0x00502af1 */
 #define g_glewArbTextureNpot             GLAD_GL_ARB_texture_non_power_of_two         /* 0x00502b24 */

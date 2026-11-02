@@ -38,7 +38,7 @@
 
 /* ---- helpers ---- */
 
-#ifdef MUGEN_VITA_GL
+#if defined(MUGEN_VITA_GL) || defined(MUGEN_ANDROID_SW)
 /*
  * PS Vita port (port/psvita): byte size of the current render target's pixels,
  * used to bound scaled/rotated rows. See the row check in Soft_Scale.
@@ -318,7 +318,7 @@ static void Soft_Scale(SpriteSet *set, int sprite, float x, float y, float sw, f
     if (sw <= 0.0f || sh <= 0.0f) {
         return;
     }
-#ifdef MUGEN_VITA_GL
+#if defined(MUGEN_VITA_GL) || defined(MUGEN_ANDROID_SW)
     /*
      * PS Vita port (port/psvita): reject non-finite draw parameters.
      *
@@ -421,7 +421,7 @@ static void Soft_Scale(SpriteSet *set, int sprite, float x, float y, float sw, f
         return;
     }
     dst = Sprite_GetPixels(g_renderTarget, g_renderTargetSprite);
-#ifdef MUGEN_VITA_GL
+#if defined(MUGEN_VITA_GL) || defined(MUGEN_ANDROID_SW)
     /*
      * PS Vita port (port/psvita): the NULL check this file's own header says is
      * missing -- "SpriteSet_GetPaletteConverted's result is used without a NULL
@@ -460,7 +460,7 @@ static void Soft_Scale(SpriteSet *set, int sprite, float x, float y, float sw, f
 #else
     pal = SpriteSet_GetPaletteConverted(set, spr->pal_index)->rgb565;
 #endif
-#ifdef MUGEN_VITA_GL
+#if defined(MUGEN_VITA_GL) || defined(MUGEN_ANDROID_SW)
     /*
      * PS Vita port (port/psvita): bound every row against the target surface.
      *
@@ -519,7 +519,7 @@ static void Soft_Scale(SpriteSet *set, int sprite, float x, float y, float sw, f
         int u = u0;
         int row, n;
 
-#ifdef MUGEN_VITA_GL
+#if defined(MUGEN_VITA_GL) || defined(MUGEN_ANDROID_SW)
         if ((long)tspr->rows[iy] + (long)ix0 * 2 < 0 ||
             (long)tspr->rows[iy] + (long)ix0 * 2 + (long)ncols * 2 > g_softDstBytes) {
             continue;   /* row table not (yet) valid for this sprite */
