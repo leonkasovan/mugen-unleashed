@@ -42,6 +42,24 @@
  * layout-neutral.
  */
 static SDL_RWops *g_sdlmixRwops;
+
+/* Takes ownership of rw, closing any wrapper a previous open left behind. */
+static void Sdlmix_TrackRwops(SDL_RWops *rw)
+{
+    if (g_sdlmixRwops != NULL) {
+        g_sdlmixRwops->close(g_sdlmixRwops);
+    }
+    g_sdlmixRwops = rw;
+}
+
+/* Closes the tracked wrapper, if any. */
+static void Sdlmix_DropRwops(void)
+{
+    if (g_sdlmixRwops != NULL) {
+        g_sdlmixRwops->close(g_sdlmixRwops);
+        g_sdlmixRwops = NULL;
+    }
+}
 #endif
 
 /* 0x0048AB60: resolves the libmpg123 functions. Returns 0 when all were found. */
@@ -973,10 +991,7 @@ static void Sdlmix_FreeMusic(SdlmixInstance *inst)
      * Mix_FreeMusic: the mpg123 and vorbisfile music decoders stream from it
      * while the track plays, so closing any earlier frees memory still in use.
      */
-    if (g_sdlmixRwops != NULL) {
-        g_sdlmixRwops->close(g_sdlmixRwops);
-        g_sdlmixRwops = NULL;
-    }
+    Sdlmix_DropRwops();
 #endif
 }
 
@@ -1040,27 +1055,22 @@ int Sdlmix_Open(void *instance, const BgmPluginIo *io, BgmInfo *info, BgmOpenRes
      */
     inst->music = Mix_LoadMUS_RW(rw, 1);
 #else
+    /*
+     * SDL 1.2: Mix_LoadMUS_RW takes one argument and never takes ownership, so
+     * this build records the wrapper before loading. Taking it up front covers
+     * both leak paths: a failed load returns below without any other cleanup,
+     * and a previous open that never produced music leaves inst->music NULL so
+     * Sdlmix_FreeMusic has nothing to free.
+     */
+    Sdlmix_TrackRwops(rw);
     inst->music = Mix_LoadMUS_RW(rw);
 #endif
     if (inst->music == NULL) {
+#if !defined(ANDROID_PORT) && !defined(MUGEN_SDL2_API)
+        Sdlmix_DropRwops();
+#endif
         return 4;
     }
-#if !defined(ANDROID_PORT) && !defined(MUGEN_SDL2_API)
-    /*
-     * SDL 1.2 build: Mix_LoadMUS_RW takes one argument and no ownership, so the
-     * instance keeps the RWops and Sdlmix_FreeMusic closes it. It must not be
-     * closed here: the mpg123 and vorbisfile music decoders stream from it while
-     * the track plays. (The original closed it immediately for MOD and MIDI
-     * only, because those are fully loaded; now that WAV/MP3/OGG are accepted
-     * too, one lifetime for all of them is both correct and simpler.)
-     */
-    if (g_sdlmixRwops != NULL) {
-        /* A failed earlier load leaves inst->music NULL, so Sdlmix_FreeMusic had
-         * nothing to free: drop the stale wrapper here rather than leak it. */
-        g_sdlmixRwops->close(g_sdlmixRwops);
-    }
-    g_sdlmixRwops = rw;
-#endif
     inst->loop = info->loop;
     inst->loop_start = info->loop_start;
     inst->loop_end = info->loop_end;

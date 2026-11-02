@@ -489,6 +489,12 @@ $(TARGET): $(ENGINE_OBJS) $(RC_OBJ) $(TP_LIBS)
 # an unchanged configuration leaves every object's timestamp alone and nothing is
 # recompiled. This is what makes switching SDL_BACKEND (or the target/arch) in an
 # existing build directory safe.
+#
+# Every compiled artefact depends on it: the engine sources, Lua, libresample,
+# glad and minizip, and the windres output. Leaving any of them out meant a
+# BUILD= directory reused from win32 to win64 kept back the old objects (glad and
+# minizip are architecture-dependent like everything else) and the link failed on
+# incompatible objects instead of rebuilding.
 FORCE:
 .PHONY: FORCE
 
@@ -533,14 +539,14 @@ $(LRS_LIB): $(LRS_OBJS)
 # ARB_fragment_program, ARB_texture_non_power_of_two, EXT_blend_logic_op and
 # EXT_framebuffer_object. One self-contained .c, no import library.
 
-$(GLAD_OBJ): $(TP_DIR)/glad-2.1/glad.c
+$(GLAD_OBJ): $(TP_DIR)/glad-2.1/glad.c $(CONFIG_STAMP)
 	@echo "  CC      $<"
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(CC) $(TP_CFLAGS) -I$(TP_DIR)/glad-2.1 -c $< -o $@
 
 # --- minizip (unzip 0.15) ---------------------------------------------------
 
-$(MINIZIP_OBJ): $(TP_DIR)/minizip-0.15/unzip.c
+$(MINIZIP_OBJ): $(TP_DIR)/minizip-0.15/unzip.c $(CONFIG_STAMP)
 	@echo "  CC      $<"
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(CC) $(TP_CFLAGS) -I$(TP_DIR)/minizip-0.15 -I$(SDK_DIR)/include -c $< -o $@
@@ -565,7 +571,7 @@ endif
 	$(Q)printf '\n/* generated: the assembly manifest, RT_MANIFEST 1 */\n1 24 "%s"\n' \
 	    "$(CURDIR)/$(MANIFEST)" >> $@
 
-$(RC_OBJ): $(ALL_RC)
+$(RC_OBJ): $(ALL_RC) $(CONFIG_STAMP)
 	@echo "  WINDRES $<"
 	$(Q)$(WINDRES) -I$(SRC_DIR) -I$(ICON_DIR) -i $< -o $@
 

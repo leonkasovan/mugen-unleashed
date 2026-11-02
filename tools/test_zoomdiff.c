@@ -112,39 +112,39 @@ typedef struct Case {
 } Case;
 
 static const Case k_cases[] = {
-    {"rgba32_2x",        16, 16, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 2.0, 2.0, 0, 0, 0, 0},
-    {"rgba32_0p5x",      16, 16, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 0.5, 0.5, 0, 0, 0, 0},
-    {"rgba32_frac",      13,  7, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 1.5, 2.5, 0, 0, 0, 0},
-    {"rgba32_odd",       11,  9, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 1.3, 0.7, 0, 0, 0, 0},
-    {"rgb32_2x",         16, 16, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0x00000000, 2.0, 2.0, 0, 0, 0, 0},
-    {"rgb565_2x",        16, 16, 16, 0xF800, 0x07E0, 0x001F, 0x0000, 2.0, 2.0, 0, 0, 0, 0},
-    {"rgb565_0p75x",     16, 16, 16, 0xF800, 0x07E0, 0x001F, 0x0000, 0.75, 0.75, 0, 0, 0, 0},
-    {"rgb555_1p5x",      10, 10, 16, 0x7C00, 0x03E0, 0x001F, 0x0000, 1.5, 1.5, 0, 0, 0, 0},
-    {"indexed_2x",       16, 16,  8, 0, 0, 0, 0, 2.0, 2.0, 1, 0, 0, 2, 0},
-    {"indexed_0p5x",     16, 16,  8, 0, 0, 0, 0, 0.5, 0.5, 1, 0, 0, 2, 0},
-    {"indexed_frac",     13,  7,  8, 0, 0, 0, 0, 1.5, 2.5, 1, 0, 0, 2, 0},
-    {"one_px_2x",         1,  1, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 2.0, 2.0, 0, 0, 0, 0},
-    {"one_px_indexed",    1,  1,  8, 0, 0, 0, 0, 3.0, 3.0, 1, 0, 0, 2, 0},
-    {"indexed_white1_2x", 16, 16,  8, 0, 0, 0, 0, 2.0, 2.0, 1, 0, 1, 2, 0},
-    {"indexed_multi_2x",  16, 16,  8, 0, 0, 0, 0, 2.0, 2.0, 1, 0, 4, 0, 1},
+    {.name = "rgba32_2x", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0xFF000000, .w = 16, .h = 16, .bpp = 32, .zx = 2.0, .zy = 2.0, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
+    {.name = "rgba32_0p5x", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0xFF000000, .w = 16, .h = 16, .bpp = 32, .zx = 0.5, .zy = 0.5, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
+    {.name = "rgba32_frac", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0xFF000000, .w = 13, .h = 7, .bpp = 32, .zx = 1.5, .zy = 2.5, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
+    {.name = "rgba32_odd", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0xFF000000, .w = 11, .h = 9, .bpp = 32, .zx = 1.3, .zy = 0.7, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
+    {.name = "rgb32_2x", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0x00000000, .w = 16, .h = 16, .bpp = 32, .zx = 2.0, .zy = 2.0, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
+    {.name = "rgb565_2x", .rmask = 0xF800, .gmask = 0x07E0, .bmask = 0x001F, .amask = 0x0000, .w = 16, .h = 16, .bpp = 16, .zx = 2.0, .zy = 2.0, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
+    {.name = "rgb565_0p75x", .rmask = 0xF800, .gmask = 0x07E0, .bmask = 0x001F, .amask = 0x0000, .w = 16, .h = 16, .bpp = 16, .zx = 0.75, .zy = 0.75, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
+    {.name = "rgb555_1p5x", .rmask = 0x7C00, .gmask = 0x03E0, .bmask = 0x001F, .amask = 0x0000, .w = 10, .h = 10, .bpp = 16, .zx = 1.5, .zy = 1.5, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
+    {.name = "indexed_2x", .w = 16, .h = 16, .bpp = 8, .zx = 2.0, .zy = 2.0, .indexed = 1, .whiteidx = 0, .npal = 2, .colorkey = 0, .multipal = 0},
+    {.name = "indexed_0p5x", .w = 16, .h = 16, .bpp = 8, .zx = 0.5, .zy = 0.5, .indexed = 1, .whiteidx = 0, .npal = 2, .colorkey = 0, .multipal = 0},
+    {.name = "indexed_frac", .w = 13, .h = 7, .bpp = 8, .zx = 1.5, .zy = 2.5, .indexed = 1, .whiteidx = 0, .npal = 2, .colorkey = 0, .multipal = 0},
+    {.name = "one_px_2x", .w = 1, .h = 1, .bpp = 32, .zx = 2.0, .zy = 2.0, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
+    {.name = "one_px_indexed", .w = 1, .h = 1, .bpp = 8, .zx = 3.0, .zy = 3.0, .indexed = 1, .whiteidx = 0, .npal = 2, .colorkey = 0, .multipal = 0},
+    {.name = "indexed_white1_2x", .w = 16, .h = 16, .bpp = 8, .zx = 2.0, .zy = 2.0, .indexed = 1, .whiteidx = 1, .npal = 2, .colorkey = 0, .multipal = 0},
+    {.name = "indexed_multi_2x", .w = 16, .h = 16, .bpp = 8, .zx = 2.0, .zy = 2.0, .indexed = 1, .whiteidx = 0, .npal = 4, .colorkey = 0, .multipal = 1},
     /*
      * A NONZERO colour key. Every other indexed case keys index 0, which is
      * indistinguishable from "the key was never read" -- the dump defaulted to
      * zero and nothing noticed. This one fails if the recorded value is not
      * carried across, or if the key is silently reset to 0.
      */
-    {"indexed_key1_2x",  16, 16,  8, 0, 0, 0, 0, 2.0, 2.0, 1, 1, 0, 2, 0},
-    {"indexed_key1_0p5x", 16, 16,  8, 0, 0, 0, 0, 0.5, 0.5, 1, 1, 0, 2, 0},
-    {"tall_thin",        1, 17, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 3.0, 0.5, 0, 0, 0, 0},
+    {.name = "indexed_key1_2x", .w = 16, .h = 16, .bpp = 8, .zx = 2.0, .zy = 2.0, .indexed = 1, .whiteidx = 0, .npal = 2, .colorkey = 1, .multipal = 0},
+    {.name = "indexed_key1_0p5x", .w = 16, .h = 16, .bpp = 8, .zx = 0.5, .zy = 0.5, .indexed = 1, .whiteidx = 0, .npal = 2, .colorkey = 1, .multipal = 0},
+    {.name = "tall_thin", .w = 1, .h = 17, .bpp = 32, .zx = 3.0, .zy = 0.5, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
     /*
      * The ratios that expose SDL_gfx's 16.16 fixed-point step. The behaviour
      * belongs to the RGBA sampler, so these are 32-bit: a 16-bit source only
      * reaches it after conversion. For 16 -> 12 the truncated step is 87381 and
      * output x=3 reads source 3, where exact arithmetic reads 4.
      */
-    {"rgba32_16to12",   16, 16, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 0.75, 0.75, 0, 0, 0, 0},
-    {"rgba32_10to15",   10, 10, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 1.5, 1.5, 0, 0, 0, 0},
-    {"rgba32_13to20",   13, 13, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 20.0 / 13.0, 20.0 / 13.0, 0, 0, 0, 0},
+    {.name = "rgba32_16to12", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0xFF000000, .w = 16, .h = 16, .bpp = 32, .zx = 0.75, .zy = 0.75, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
+    {.name = "rgba32_10to15", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0xFF000000, .w = 10, .h = 10, .bpp = 32, .zx = 1.5, .zy = 1.5, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
+    {.name = "rgba32_13to20", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0xFF000000, .w = 13, .h = 13, .bpp = 32, .zx = 20.0 / 13.0, .zy = 20.0 / 13.0, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
 };
 
 #define CASE_COUNT ((int)(sizeof(k_cases) / sizeof(k_cases[0])))
@@ -173,7 +173,9 @@ static void fill(SDL_Surface *s, const Case *c)
 static SDL_Surface *make(const Case *c)
 {
     SDL_Surface *s;
-    SDL_Color pal[2];
+    /* Four, not two: the multipal case defines entries 0..3 below, and passing
+     * four entries to ZD_SET_COLORS reads all of them. */
+    SDL_Color pal[4];
 
     s = SDL_CreateRGBSurface(SDL_SWSURFACE, c->w, c->h, c->bpp, c->rmask, c->gmask, c->bmask, c->amask);
     if (s == NULL) {

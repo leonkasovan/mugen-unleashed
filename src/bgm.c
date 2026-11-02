@@ -462,6 +462,18 @@ int Bgm_Init(DynArray *plugins, int resample_method, int resample_quality, doubl
                 continue;
             }
         }
+        /*
+         * Validate first, before ANY plugin callback. extensions() is itself a
+         * callback: an unsupported or duplicate plugin used to reach it (and
+         * its calloc) before being refused, and a duplicate sdlmix entry could
+         * change global state first. Nothing below runs for a rejected plugin.
+         */
+        if (!Bgm_ValidateSubsystem(sub)) {
+            MatchLog_Printf(3, "Internal error while registering plugin: %s\n", e->name);
+            bgm_settings_free(e->settings);
+            e->settings = NULL;
+            continue;
+        }
         if (e->extensions == NULL) {
             const char *def = sub->extensions();
 
@@ -471,17 +483,6 @@ int Bgm_Init(DynArray *plugins, int resample_method, int resample_quality, doubl
                 g_outOfMemory = 1;
             }
             strcpy(e->extensions, def);
-        }
-        /*
-         * Validate before any plugin callback runs: an unsupported or duplicate
-         * plugin must not receive extensions()/init() and must not be able to
-         * change global state before being refused.
-         */
-        if (!Bgm_ValidateSubsystem(sub)) {
-            MatchLog_Printf(3, "Internal error while registering plugin: %s\n", e->name);
-            bgm_settings_free(e->settings);
-            e->settings = NULL;
-            continue;
         }
         config.format = g_bgmFormat;
         config.settings = e->settings;
