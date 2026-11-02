@@ -1,0 +1,58 @@
+# Final APK native closure (T03)
+APK sha256: 2d0ee99eb2b21c47a9dca81b24eda2ba8c51e385e018ea22e83a176c21cc31a4
+
+=== lib/arm64-v8a/libmain.so ===
+sha256: 6d10ef47b4a3bf1ede8724fea9d831aaf731a8254f9a388daa2ba8e95c2756d5
+  Class:                             ELF64
+  Type:                              DYN (Shared object file)
+  Machine:                           AArch64
+  0x0000000000000001 (NEEDED)       Shared library: [libSDL2.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libSDL2_mixer.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libSDL2_ttf.so]
+  0x0000000000000001 (NEEDED)       Shared library: [liblog.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libandroid.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libm.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libdl.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libz.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libc.so]
+  0x000000000000000e (SONAME)       Library soname: [libmain.so]
+
+=== lib/arm64-v8a/libSDL2.so ===
+sha256: 1dd28cf578c3e5113503a9d9db9acff7a530f8996a4a51d7354e8abafb2d844c
+  Class:                             ELF64
+  Type:                              DYN (Shared object file)
+  Machine:                           AArch64
+  0x0000000000000001 (NEEDED)       Shared library: [libm.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libOpenSLES.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libdl.so]
+  0x0000000000000001 (NEEDED)       Shared library: [liblog.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libandroid.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libGLESv1_CM.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libGLESv2.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libc.so]
+  0x000000000000000e (SONAME)       Library soname: [libSDL2.so]
+
+=== lib/arm64-v8a/libSDL2_mixer.so ===
+sha256: 78fb8ed8bd4d23e8881a16345e4fec1c8501a79da0af660f2e4a153aa8a35508
+  Class:                             ELF64
+  Type:                              DYN (Shared object file)
+  Machine:                           AArch64
+  0x0000000000000001 (NEEDED)       Shared library: [libSDL2.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libm.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libdl.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libc.so]
+  0x000000000000000e (SONAME)       Library soname: [libSDL2_mixer.so]
+
+=== lib/arm64-v8a/libSDL2_ttf.so ===
+sha256: a730bbb5a2f3125fc373f1478520a202722a28f20de87734fdf8e1fda1b36e41
+  Class:                             ELF64
+  Type:                              DYN (Shared object file)
+  Machine:                           AArch64
+  0x0000000000000001 (NEEDED)       Shared library: [libSDL2.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libm.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libdl.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libc.so]
+  0x000000000000000e (SONAME)       Library soname: [libSDL2_ttf.so]
+
+=== ABI directories packaged ===
+lib/arm64-v8a/

@@ -1,0 +1,24 @@
+=== T20 signature verification (apksigner 33.0.1) ===
+command: apksigner verify --verbose --print-certs mugen-unleashed-arm64-v8a.apk
+apk sha256: 2d0ee99eb2b21c47a9dca81b24eda2ba8c51e385e018ea22e83a176c21cc31a4
+
+Verifies
+Verified using v1 scheme (JAR signing): true
+Verified using v2 scheme (APK Signature Scheme v2): true
+Verified using v3 scheme (APK Signature Scheme v3): false
+Verified using v3.1 scheme (APK Signature Scheme v3.1): false
+Verified using v4 scheme (APK Signature Scheme v4): false
+Verified for SourceStamp: false
+Number of signers: 1
+Signer #1 certificate DN: C=US, O=Android, CN=Android Debug
+Signer #1 certificate SHA-256 digest: 123d835f1cb85a5b25061e275d59d7f9efe9e6fbb64ad3a5c4e9f5aa301f10d7
+Signer #1 certificate SHA-1 digest: 1a001aa89935fd13a66424fbf80e534b92025082
+Signer #1 certificate MD5 digest: 482eefcbd2ae3a84b8eec5ce0cdc9cc8
+Signer #1 key algorithm: RSA
+Signer #1 key size (bits): 2048
+Signer #1 public key SHA-256 digest: 3cf226026c8c733ea97272f3e0ed30be900f4d610e8a7a54ae58a3da07dba6ec
+Signer #1 public key SHA-1 digest: a895885caa0a82c87fde40a39510ac2f754590c5
+Signer #1 public key MD5 digest: 8d5bc5cef87c2eb70b3d313442038dfa
+WARNING: META-INF/com/android/build/gradle/app-metadata.properties not protected by signature. Unauthorized modifications to this JAR entry will not be detected. Delete or move the entry outside of META-INF/.
+
+exit status: 0  (0 = signature valid)
