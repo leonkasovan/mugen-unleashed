@@ -50,8 +50,33 @@ cmake/          build helpers (MugenSdk.cmake, ThirdParty.cmake)
 tools/          msvc_env.bat, extract_icon.py, compare_logs.py
 docs/           ANALYSIS.md, BUILD-MSVC.md, BUILD-MINGW.md, BUILD-LINUX.md, LUA.md
 install/        a real M.U.G.E.N 1.1b1 installation (untracked, for testing)
-build/          all build output (git-ignored)
+build/          all build output (git-ignored) — layout below
 ```
+
+### What lives under `build/`
+
+Each entry point owns its own subtree and never writes into another's.
+
+| Path | Written by | Contents |
+|---|---|---|
+| `build/mingw/` | root `Makefile` (Windows, default) | `obj/`, `lib/`, `mugen-static.exe`, `-stripped.exe` |
+| `build/<linux-target>/` | root `Makefile` (Linux) | same shape, `mugen-linux-<arch>` |
+| `build/mingw-debug/` | `make DEBUG=1 BUILD=build/mingw-debug` | an explicit `BUILD=` override |
+| `build/x86-release/`, `build/x86-debug/` | root `CMakeLists.txt` via `CMakePresets.json` | MSVC `mugen_unleashed.exe` + `.pdb` |
+| `build/psvita*/` | `port/psvita/CMakeLists.txt` (you choose the dir) | `mugen`, `mugen.self`, `mugen.vpk`, `vita-mugen.cfg` |
+| `build/android/` | `port/android/build.sh` | `toolchains/` (JDK/SDK/NDK/CMake, `env.sh`), `sdl2/<abi>/`, `android-deps/<abi>/`, `android-deps-src/`, `sources/`, `build-sdl2/`, `gradle-user-home/`, `asset-list.txt`, `mugen-unleashed-<abi>.apk` |
+| `build/baseline/` | hand-made, kept on purpose | SDL1 reference binary and log used by the log-comparison workflow |
+| `build/<test-name>/` | `tools/test_*.sh` | each test's scratch output |
+
+Two rules follow from the "keep temporary files inside the project" rule above:
+
+- Anything not in the table is a leftover. Delete it rather than leaving it to
+  accumulate; several debugging scripts, stub headers and stray `.exe`/`.log`
+  files once piled up in `build/` itself.
+- `port/android/build.sh` also writes `port/android/app/src/main/assets/`
+  (staging) and `port/android/app/build/`, `port/android/app/.cxx/` (Gradle's
+  own output). Those are Gradle-owned, are git-ignored, and are recreated from
+  `src/main/assets` and the NDK on every build.
 
 ## Building
 
