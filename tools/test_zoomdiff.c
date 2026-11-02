@@ -123,7 +123,7 @@ static const Case k_cases[] = {
     {.name = "indexed_2x", .w = 16, .h = 16, .bpp = 8, .zx = 2.0, .zy = 2.0, .indexed = 1, .whiteidx = 0, .npal = 2, .colorkey = 0, .multipal = 0},
     {.name = "indexed_0p5x", .w = 16, .h = 16, .bpp = 8, .zx = 0.5, .zy = 0.5, .indexed = 1, .whiteidx = 0, .npal = 2, .colorkey = 0, .multipal = 0},
     {.name = "indexed_frac", .w = 13, .h = 7, .bpp = 8, .zx = 1.5, .zy = 2.5, .indexed = 1, .whiteidx = 0, .npal = 2, .colorkey = 0, .multipal = 0},
-    {.name = "one_px_2x", .w = 1, .h = 1, .bpp = 32, .zx = 2.0, .zy = 2.0, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
+    {.name = "one_px_2x", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0xFF000000, .w = 1, .h = 1, .bpp = 32, .zx = 2.0, .zy = 2.0, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
     {.name = "one_px_indexed", .w = 1, .h = 1, .bpp = 8, .zx = 3.0, .zy = 3.0, .indexed = 1, .whiteidx = 0, .npal = 2, .colorkey = 0, .multipal = 0},
     {.name = "indexed_white1_2x", .w = 16, .h = 16, .bpp = 8, .zx = 2.0, .zy = 2.0, .indexed = 1, .whiteidx = 1, .npal = 2, .colorkey = 0, .multipal = 0},
     {.name = "indexed_multi_2x", .w = 16, .h = 16, .bpp = 8, .zx = 2.0, .zy = 2.0, .indexed = 1, .whiteidx = 0, .npal = 4, .colorkey = 0, .multipal = 1},
@@ -135,7 +135,7 @@ static const Case k_cases[] = {
      */
     {.name = "indexed_key1_2x", .w = 16, .h = 16, .bpp = 8, .zx = 2.0, .zy = 2.0, .indexed = 1, .whiteidx = 0, .npal = 2, .colorkey = 1, .multipal = 0},
     {.name = "indexed_key1_0p5x", .w = 16, .h = 16, .bpp = 8, .zx = 0.5, .zy = 0.5, .indexed = 1, .whiteidx = 0, .npal = 2, .colorkey = 1, .multipal = 0},
-    {.name = "tall_thin", .w = 1, .h = 17, .bpp = 32, .zx = 3.0, .zy = 0.5, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
+    {.name = "tall_thin", .rmask = 0x00FF0000, .gmask = 0x0000FF00, .bmask = 0x000000FF, .amask = 0xFF000000, .w = 1, .h = 17, .bpp = 32, .zx = 3.0, .zy = 0.5, .indexed = 0, .whiteidx = 0, .npal = 0, .colorkey = 0, .multipal = 0},
     /*
      * The ratios that expose SDL_gfx's 16.16 fixed-point step. The behaviour
      * belongs to the RGBA sampler, so these are 32-bit: a 16-bit source only
