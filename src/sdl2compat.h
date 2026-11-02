@@ -124,12 +124,10 @@ char *Sdl2_AudioDriverName(char *namebuf, int maxlen);
  * "ignore". Like SDL 1.2, the translation is applied per event and is not
  * remembered: a key down-translated by a layout change can stay up.
  */
-int Sdl2_EngineKey(int sdl_keycode);
-
-/* The inverse of Sdl2_EngineKey: the SDL2 keycode whose translation is
- * engine_key, or SDLK_UNKNOWN. Needed to answer "is this engine key held?"
- * from SDL2's scancode-indexed key state. */
-SDL_Keycode Sdl2_SdlKeyForEngineKey(int engine_key);
+/* Key translation (Sdl2_EngineKey, Sdl2_SdlKeyForEngineKey) lives in
+ * src/sdl2keys.h so SDL2 consumers without this file (Android, Vita SDL2)
+ * share the same tables. Include that header for them. */
+#include "sdl2keys.h"
 
 /* SDL 1.2's SDLKey. SDL2 renamed the type to SDL_Keycode and returns *its* key
  * names, so title.c's binding names go through the shim instead. */
@@ -141,14 +139,9 @@ const char *Sdl2_KeyName(int engine_key);
 int Sdl2_EnableKeyRepeat(int delay, int interval);
 int Sdl2_EnableUNICODE(int enable);
 
-/*
- * SDL_gfx's zoomSurface: SDL2_gfx is not part of the x86devkit, so the one
- * entry the engine uses is implemented here. Contract is SDL_gfx's: a new
- * surface of (src->w * zoomx, src->h * zoomy), the source's pixel format and
- * colour-key/alpha state preserved, freed by SDL_FreeSurface. smooth != 0 is
- * refused rather than silently approximated: no call site asks for it.
- */
-SDL_Surface *zoomSurface(SDL_Surface *src, double zoomx, double zoomy, int smooth);
+/* The zoomSurface sampler lives in src/sdl2surface.h so SDL2 consumers
+ * without this file (Android, Vita SDL2) scale identically. */
+#include "sdl2surface.h"
 
 #ifdef __cplusplus
 }

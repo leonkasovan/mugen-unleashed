@@ -50,10 +50,12 @@ file(GLOB MUGEN_ENGINE_SOURCES CONFIGURE_DEPENDS "${MUGEN_ROOT}/src/*.c")
 list(FILTER MUGEN_ENGINE_SOURCES EXCLUDE REGEX ".*/(sdlmain|glrender|gldetect)\\.c$")
 
 # The Android video layer replaces SDL 1.2's removed calls; it is added below.
+# zoomSurface comes from the shared proven scaler (src/sdl2surface.c), which is
+# already in MUGEN_ENGINE_SOURCES via the src/*.c glob -- not from a local
+# reimplementation. android_gfx.c was removed for that reason (PLAN B4).
 list(APPEND MUGEN_ENGINE_SOURCES
      "${CMAKE_CURRENT_SOURCE_DIR}/android_video.c"
      "${CMAKE_CURRENT_SOURCE_DIR}/android_main.c"
-     "${CMAKE_CURRENT_SOURCE_DIR}/android_gfx.c"
      "${CMAKE_CURRENT_SOURCE_DIR}/android_glstub.c")
 
 # ---------------------------------------------------------------------------
@@ -111,9 +113,10 @@ endif()
 #     libSDL2_mixer.so   SDL_mixer 2.x, API-compatible superset of 1.2
 #     libSDL2_ttf.so     SDL_ttf 2.x
 #
-# and SDL_gfx's single used entry point (zoomSurface) is provided by
-# android_gfx.c in this directory, because SDL_gfx has no upstream SDL2 port
-# that is safe to depend on.
+# and SDL_gfx's single used entry point (zoomSurface) is provided by the
+# shared proven scaler src/sdl2surface.c, because SDL_gfx has no upstream
+# SDL2 port that is safe to depend on and a local approximation would drift
+# from the 19 differential cases tools/test_zoomdiff.sh proves.
 #
 # Set SDL2_MIXER_TTF_DIR to the directory holding their headers and .so files.
 if(DEFINED sdl2MixerTtfDir AND NOT sdl2MixerTtfDir STREQUAL "")

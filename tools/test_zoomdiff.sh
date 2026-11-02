@@ -33,14 +33,14 @@ $CC -m32 -std=gnu11 -O1 -g -mconsole \
     -lm -lkernel32 -luser32 -lgdi32 -lwinmm -limm32 -lole32 -loleaut32 -lversion -luuid -ladvapi32 -lshell32
 "$OUT/sdl1/test_zoomdiff.exe" "$OUT/sdl1"
 
-echo "== SDL2 + src/sdl2compat.c =="
+echo "== SDL2 + src/sdl2surface.c =="
 # shellcheck disable=SC2086
 $CC -m32 -std=gnu11 -O1 -g -mconsole \
     -DMUGEN_SDL2 -DSDL_MAIN_HANDLED \
     -Isrc -Ithird_party/glad-2.1 -Ithird_party/minizip-0.15 \
     -Ithird_party/lua-5.1.4/src -Ithird_party/sdk/include \
     $(pkg-config --cflags sdl2 | sed 's/-Dmain=SDL_main//') \
-    tools/test_zoomdiff.c src/sdl2compat.c \
+    tools/test_zoomdiff.c src/sdl2surface.c src/sdl2keys.c \
     -o "$OUT/sdl2/test_zoomdiff.exe" \
     $(pkg-config --libs --static sdl2 | sed 's/-lSDL2main//;s/-mwindows//') \
     -lopengl32 -lglu32 -lwinmm -lshell32 -luser32 -lgdi32 -lm
