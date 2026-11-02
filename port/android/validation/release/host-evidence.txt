@@ -1,0 +1,30 @@
+=== pins (T02) ===
+Pkg.Revision = 27.1.12297006
+openjdk version "17.0.19" 2026-04-21
+platforms: android-34
+build-tools: 33.0.1
+cmake: 3.22.1
+
+=== NEEDED + arch + entry + signing (T03/T04/T20) ===
+  0x0000000000000001 (NEEDED)       Shared library: [libSDL2.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libSDL2_mixer.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libSDL2_ttf.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libGLESv1_CM.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libGLESv2.so]
+  0x0000000000000001 (NEEDED)       Shared library: [liblog.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libandroid.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libm.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libdl.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libz.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libc.so]
+  Class:                             ELF64
+  Machine:                           AArch64
+00000000000b0624 T Mugen_Main
+000000000010e1b0 T SDL_main
+    10656  1981-01-01 01:01   META-INF/CERT.SF
+     1167  1981-01-01 01:01   META-INF/CERT.RSA
+    10582  1981-01-01 01:01   META-INF/MANIFEST.MF
+
+=== APK (T02) ===
+54ccf452eb1eb0708acb3421dfe299c2398143c7a0894e0b18945a6a2ccfa350 *build/android/mugen-unleashed-arm64-v8a.apk
+8037443 bytes
