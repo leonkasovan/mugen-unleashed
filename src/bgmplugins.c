@@ -2,7 +2,7 @@
  * The built-in BGM plugins (original module 0x48AB60-0x48C3DF), whose
  * function tables are g_bgmMpg123Subsystem and g_bgmSdlmixSubsystem:
  *
- * - "mpg123": MP3 decoding with libmpg123-0.dll, loaded at init with
+ * - "mpg123": MP3 decoding with libmpg123, loaded at init with
  *   LoadLibrary / GetProcAddress (mpg123 itself is not linked into
  *   mugen.exe). Data is fed to mpg123 from the plugin's file callbacks
  *   (BgmPluginIo) in readbuffersize blocks; decoded data goes to the stream
@@ -215,8 +215,40 @@ int Mpg123_FeedRead(Mpg123Instance *inst, void *buf, unsigned int size, unsigned
 }
 
 /*
- * 0x0048B070: the plugin's init: keeps the mixer format, loads
- * libmpg123-0.dll and reads the settings: decoder, rva (track / album),
+ * Port addition: the shared library names of libmpg123, most specific first.
+ * Kept out of Mpg123_Init so the platform list reads as one block.
+ */
+static HMODULE Mpg123_LoadLibrary(void)
+{
+    /*
+     * Windows keeps the original's name first: it is the DLL mugen.cfg and the
+     * Elecbyte.MUGEN.libs folder ship. The rest are the usual sonames of a
+     * Linux install; dlopen() reports failure the same way LoadLibraryA does,
+     * so the loop is identical on both. The Vita has no dynamic loader at all
+     * (compat_linux.c returns NULL), so every candidate fails there and the
+     * plugin reports "not installed", which is the truthful answer.
+     */
+    static const char *const names[] = {
+        "libmpg123-0.dll",
+        "libmpg123.so.0",
+        "libmpg123.so",
+    };
+    int i;
+
+    for (i = 0; i < (int)(sizeof(names) / sizeof(names[0])); i++) {
+        HMODULE lib = LoadLibraryA(names[i]);
+
+        if (lib != NULL) {
+            return lib;
+        }
+    }
+    return NULL;
+}
+
+/*
+ * 0x0048B070: the plugin's init: keeps the mixer format, loads libmpg123
+ * (see Mpg123_LoadLibrary) and reads the settings: decoder, rva (track /
+ * album),
  * volume (percent, > 0; 1.0 when unreadable), ntom (loop points in source
  * samples) and readbuffersize. Returns 6 when the library cannot be used, 2
  * when mpg123_init fails. Quirk: an unreadable readbuffersize takes the
@@ -230,7 +262,15 @@ int Mpg123_Init(const BgmPluginConfig *config, const BgmHostCallbacks *host, Bgm
 
     g_mpg123Format = config->format;
     g_mpg123ReadBufferSize = 0x4000;
-    g_mpg123Lib = LoadLibraryA("libmpg123-0.dll");
+    /*
+     * The original loaded the Windows name unconditionally. On Linux that
+     * exact string went to dlopen(), which never matches a soname, and on the
+     * Vita LoadLibraryA() always returns NULL -- so the mpg123 plugin could
+     * never start on either, even with the library installed. Try the names
+     * of the platform first, then the original's, so Windows behaviour is
+     * unchanged and the other targets have a working route.
+     */
+    g_mpg123Lib = Mpg123_LoadLibrary();
     if (g_mpg123Lib == NULL || Mpg123_LoadSymbols() != 0) {
         return 6;
     }
@@ -911,6 +951,14 @@ void Sdlmix_Destroy(void *instance)
  * 0x0048BEF0: the plugin's open: loads MIDI and tracker files (the other
  * kinds are refused: 4) through SDL_mixer; the plugin plays them itself
  * (out stays zero: BGM_MODE_PLUGIN).
+ *
+ * The refusal of WAV/MP3/OGG is the original's behaviour and is kept on
+ * desktop: there mpg123 (MP3) and the decoded-stream route handle those, so
+ * sdlmix declining them costs nothing. It is the reason the Vita and a Linux
+ * build without libmpg123 have no route to those formats at all -- an
+ * inherited design limit, not a regression. The Android port is the one
+ * deliberate divergence (see the #ifdef below): it has no plugin DLLs, so its
+ * sdlmix *must* accept the three formats SDL2_mixer decodes natively.
  */
 int Sdlmix_Open(void *instance, const BgmPluginIo *io, BgmInfo *info, BgmOpenResult *out)
 {
@@ -1004,7 +1052,14 @@ int Sdlmix_Start(void *instance)
         return 3;
     }
 #else
-    Mix_PlayMusic(inst->music, inst->loop == 0 ? 1 : -1);
+    /*
+     * SDL2 fix (desktop SDL2 backend only): Mix_PlayMusic's second argument is
+     * the number of *extra* repetitions, so 0 means play once and stop. The
+     * SDL 1.2 call took the same meaning and the original passed 0; the SDL2
+     * Desktop path passed 1, playing a non-looping track twice. -1 is still
+     * "loop forever".
+     */
+    Mix_PlayMusic(inst->music, inst->loop == 0 ? 0 : -1);
     Mix_HookMusicFinished(Sdlmix_OnFinished);
     inst->ended = 0;
 #endif

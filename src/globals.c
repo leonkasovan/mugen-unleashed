@@ -387,3 +387,31 @@ char g_libraryErrorText[0x100]; /* 0x00505100 */
 char g_unused505200; /* 0x00505200 */
 int g_exprStackType[128]; /* 0x00505300 */
 ExprValue g_exprStackValue[128]; /* 0x00505500 */
+
+/*
+ * Port addition. The lock sites in bgm.c, bgmthread.c, gameloop.c, system.c,
+ * gameflow.c and matchload.c go through Bgm_MutexPtr() instead of casting
+ * &g_bgmMutex themselves, because the storage differs by configuration:
+ *
+ *  - 32-bit builds: g_bgmMutex is the 4-byte slot the original used to hold a
+ *    pthread_mutex_t by value, so its address is the mutex (unchanged here).
+ *  - BGM_NATIVE_PTHREAD builds (any 64-bit target): a native pthread_mutex_t
+ *    does not fit a void *, so it lives in s_bgmMutex below and g_bgmMutex
+ *    keeps the original's role of "there is a BGM mutex" without aliasing it.
+ *
+ * g_bgmMutex itself is untouched, so its address and initial value still match
+ * the original's .data.
+ */
+#ifdef BGM_NATIVE_PTHREAD
+static pthread_mutex_t s_bgmMutex;
+
+void *Bgm_MutexPtr(void)
+{
+    return &s_bgmMutex;
+}
+#else
+void *Bgm_MutexPtr(void)
+{
+    return &g_bgmMutex;
+}
+#endif

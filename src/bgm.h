@@ -279,6 +279,42 @@ MUGEN_ASSERT_SIZE(BgmEvent, 0x0C);
 
 #define BGM_EVENT_QUEUE_SIZE 16
 
+/*
+ * Thread handles and start-up handshake of the BGM thread.
+ *
+ * On the 32-bit reference builds these mirror the original binary: pthread_t
+ * is pthreads-win32's 8-byte { void *p; unsigned int x; } and pthread_cond_t /
+ * pthread_mutex_t are 4-byte pointers. The MUGEN_ASSERT_SIZE checks below pin
+ * that layout, which is the point.
+ *
+ * BGM_NATIVE_PTHREAD (derived in mugen.h whenever pointers are wider than 4
+ * bytes) makes the fields the real pthread_t / pthread_cond_t /
+ * pthread_mutex_t instead, so no copy ever assumes a size or layout. There is deliberately no size assertion in
+ * that configuration: the types belong to the toolchain, not to the original
+ * binary, so there is no invariant of ours to pin. See PLANS.md.
+ */
+/*
+ * The BGM mutex lives behind g_bgmMutex, a void * in globals.c (which holds the
+ * only storage). This accessor returns its address in every configuration, so
+ * no lock site has to know which one it is building.
+ */
+void *Bgm_MutexPtr(void);
+
+#ifdef BGM_NATIVE_PTHREAD
+#include <pthread.h>
+typedef pthread_t BgmThreadId;
+
+typedef struct BgmThreadStart {
+    pthread_cond_t cond;
+    pthread_mutex_t mutex;
+} BgmThreadStart;
+
+#define BGM_MUTEX_LOCK()    pthread_mutex_lock((pthread_mutex_t *)Bgm_MutexPtr())
+#define BGM_MUTEX_UNLOCK()  pthread_mutex_unlock((pthread_mutex_t *)Bgm_MutexPtr())
+/* g_bgmThread *is* a pthread_t here, so storing one is assignment. */
+#define BGM_THREAD_STORE(t) (g_bgmThread = (t))
+#define BGM_THREAD_LOAD(t)  ((t) = g_bgmThread)
+#else
 /* pthreads-win32's pthread_t (g_bgmThread). */
 typedef struct BgmThreadId {
     void *p;                    /* 0x00 */
@@ -298,6 +334,17 @@ typedef struct BgmThreadStart {
 #endif
 } BgmThreadStart;
 MUGEN_ASSERT_SIZE(BgmThreadStart, 0x08);
+
+/*
+ * 32-bit builds: g_bgmMutex's storage is itself the pthread_mutex_t, and
+ * g_bgmThread is not a pthread_t but the original's 8-byte handle, so a
+ * pthread_t is copied into and out of it (exactly what the original did).
+ */
+#define BGM_MUTEX_LOCK()    pthread_mutex_lock((pthread_mutex_t *)Bgm_MutexPtr())
+#define BGM_MUTEX_UNLOCK()  pthread_mutex_unlock((pthread_mutex_t *)Bgm_MutexPtr())
+#define BGM_THREAD_STORE(t) memcpy(&g_bgmThread, &(t), sizeof(g_bgmThread))
+#define BGM_THREAD_LOAD(t)  memcpy(&(t), &g_bgmThread, sizeof(t))
+#endif
 
 /* ------------------------------------------------------------------ built-in plugins */
 

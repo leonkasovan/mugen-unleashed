@@ -19,6 +19,18 @@
 #endif
 
 /*
+ * Port addition: does the build use the native pthread_t/pthread_mutex_t/
+ * pthread_cond_t instead of the 32-bit pthreads-win32 shapes the original
+ * stored (see bgm.h)? The reconstructed layout only matches when pointers are
+ * 4 bytes wide, so anything else takes the native types. Derived here, in the
+ * one header every source includes, so globals.c, bgm.c and the lock sites in
+ * gameloop.c/system.c/matchload.c all agree without a shared -D.
+ */
+#if !defined(ANDROID_PORT) && defined(__SIZEOF_POINTER__) && __SIZEOF_POINTER__ > 4
+#define BGM_NATIVE_PTHREAD 1
+#endif
+
+/*
  * glad must come before <SDL.h>. SDL_opengl.h includes <GL/gl.h>, which defines
  * __gl_h_ -- and glad.h refuses to load if that happened first. Including glad
  * here defines __gl_h_ itself, so the system GL header then self-suppresses and

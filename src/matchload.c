@@ -1360,9 +1360,9 @@ void Match_Start(void)
         g->screen_right_target = e;
     }
     if ((g->demo_mode == 0 || g->demo_fight_playbgm == 1) && g_bgmActive) {
-        pthread_mutex_lock((pthread_mutex_t *)&g_bgmMutex);
+        BGM_MUTEX_LOCK();
         Bgm_QueueCommand(g_bgmGetHandle(), NULL, BGM_CMD_PREBUFFER, 0);
-        pthread_mutex_unlock((pthread_mutex_t *)&g_bgmMutex);
+        BGM_MUTEX_UNLOCK();
         g_bgmBackgroundChanged = 1;
     }
 }

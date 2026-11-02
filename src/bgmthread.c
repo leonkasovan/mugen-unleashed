@@ -26,8 +26,23 @@
 #define BGM_LOCK()   SDL_LockMutex((SDL_mutex *)g_bgmMutex)
 #define BGM_UNLOCK() SDL_UnlockMutex((SDL_mutex *)g_bgmMutex)
 #else
-#define BGM_LOCK()   pthread_mutex_lock((pthread_mutex_t *)&g_bgmMutex)
-#define BGM_UNLOCK() pthread_mutex_unlock((pthread_mutex_t *)&g_bgmMutex)
+#define BGM_LOCK()   BGM_MUTEX_LOCK()
+#define BGM_UNLOCK() BGM_MUTEX_UNLOCK()
+#endif
+
+/*
+ * The start-up handshake's cond/mutex come from BgmThreadStart, whose fields
+ * are the native pthread types with BGM_NATIVE_PTHREAD and void * (the
+ * original's 4-byte slots) otherwise. These accessors hide the difference;
+ * g_bgmMutex itself is reached through BGM_MUTEX_LOCK/UNLOCK in bgm.h, since
+ * its storage is not part of this struct.
+ */
+#ifdef BGM_NATIVE_PTHREAD
+#define BGM_COND_PTR(p)        (p)
+#define BGM_START_MUTEX_PTR(p) (p)
+#else
+#define BGM_COND_PTR(p)        ((pthread_cond_t *)(p))
+#define BGM_START_MUTEX_PTR(p) ((pthread_mutex_t *)(p))
 #endif
 
 /* Bgm_StreamRead statuses. */
@@ -161,7 +176,7 @@ fail:
         sample_size = chunk;
     }
     g_bgmChunkBytes = format->channels * sample_size * chunk;
-    err = pthread_mutex_init((pthread_mutex_t *)&g_bgmMutex, NULL);
+    err = pthread_mutex_init((pthread_mutex_t *)Bgm_MutexPtr(), NULL);
     if (err != 0) {
         return err;
     }
@@ -170,12 +185,12 @@ fail:
         g_outOfMemory = 1;
         return 1;
     }
-    err = pthread_cond_init((pthread_cond_t *)&start->cond, NULL);
+    err = pthread_cond_init(BGM_COND_PTR(&start->cond), NULL);
     if (err != 0) {
         free(start);
         return err;
     }
-    err = pthread_mutex_init((pthread_mutex_t *)&start->mutex, NULL);
+    err = pthread_mutex_init(BGM_START_MUTEX_PTR(&start->mutex), NULL);
     if (err != 0) {
         free(start);
         return err;
@@ -197,29 +212,45 @@ fail:
     g_bgmRing->paused = 1;
     g_bgmRing->stopped = 1;
     pthread_attr_destroy(&attr);
-    pthread_mutex_lock((pthread_mutex_t *)&start->mutex);
+    pthread_mutex_lock(BGM_START_MUTEX_PTR(&start->mutex));
     err = pthread_create(&thread, NULL, BgmThread_Main, start);
-    memcpy(&g_bgmThread, &thread, sizeof(g_bgmThread));
-    pthread_cond_wait((pthread_cond_t *)&start->cond, (pthread_mutex_t *)&start->mutex);
-    pthread_mutex_unlock((pthread_mutex_t *)&start->mutex);
-    pthread_mutex_destroy((pthread_mutex_t *)&start->mutex);
-    pthread_cond_destroy((pthread_cond_t *)&start->cond);
+    if (err != 0) {
+        /*
+         * Fix (port change): the original waited on the start-up condition
+         * even when pthread_create failed, and nothing was ever going to
+         * signal it -- an indefinite hang at startup. Tear the handshake down
+         * and report the error instead; Bgm_Init now fails on it.
+         */
+        pthread_mutex_unlock(BGM_START_MUTEX_PTR(&start->mutex));
+        pthread_mutex_destroy(BGM_START_MUTEX_PTR(&start->mutex));
+        pthread_cond_destroy(BGM_COND_PTR(&start->cond));
+        free(start);
+        return err;
+    }
+    BGM_THREAD_STORE(thread);
+    pthread_cond_wait(BGM_COND_PTR(&start->cond), BGM_START_MUTEX_PTR(&start->mutex));
+    pthread_mutex_unlock(BGM_START_MUTEX_PTR(&start->mutex));
+    pthread_mutex_destroy(BGM_START_MUTEX_PTR(&start->mutex));
+    pthread_cond_destroy(BGM_COND_PTR(&start->cond));
     free(start);
     return err;
 #endif
 }
 
-/* Two 32-bit command words have room for a native 64-bit Android pointer. */
+/*
+ * The queue's two data words hold a pointer on every architecture: 4 bytes of
+ * a 32-bit pointer, all 8 of a 64-bit one. Portable fix (was #ifdef
+ * ANDROID_PORT only): encode with memcpy into a zeroed array and decode the
+ * same way, so the upper word is defined (0) rather than stack garbage.
+ */
 static void *bgm_command_pointer(const BgmCommand *command)
 {
-#ifdef ANDROID_PORT
     void *pointer;
+
     _Static_assert(sizeof(pointer) <= sizeof(command->data), "BGM command pointer storage");
+    pointer = NULL;
     memcpy(&pointer, command->data, sizeof(pointer));
     return pointer;
-#else
-    return (void *)command->data[0];
-#endif
 }
 
 /* Runs one queued command (the switch of BgmThread_Main). */
@@ -411,7 +442,7 @@ void BgmThread_Cleanup(void)
 #ifdef ANDROID_PORT
     SDL_DestroyMutex((SDL_mutex *)g_bgmMutex);
 #else
-    pthread_mutex_destroy((pthread_mutex_t *)&g_bgmMutex);
+    pthread_mutex_destroy((pthread_mutex_t *)Bgm_MutexPtr());
 #endif
     g_bgmMutex = NULL;
     g_bgmEventCount = 0;
@@ -440,6 +471,16 @@ int Bgm_QueueCommand(int time, const int *data, int cmd, int owns_data)
     c = &g_bgmQueue[g_bgmQueueCount];
     c->cmd = cmd;
     c->time = time;
+    /*
+     * Fix (port change): the original copied both words from the caller, but
+     * several callers (Bgm_Pause, Bgm_Unpause, Bgm_QueueMute) only ever set
+     * data[0], so data[1] was read from uninitialised stack. That was
+     * harmless while the second word was never used, but with the portable
+     * pointer encoding it is the high half of a 64-bit pointer. Clear it and
+     * let the pointer-carrying callers (bgm_queue_info) overwrite both.
+     */
+    c->data[0] = 0;
+    c->data[1] = 0;
     if (data != NULL) {
         c->data[0] = data[0];
         c->data[1] = data[1];
@@ -473,18 +514,18 @@ void BgmQueue_Drop(int time)
 static int bgm_queue_info(int time, const BgmInfo *info, int cmd)
 {
     BgmInfo *copy = malloc(sizeof(BgmInfo));
-    int data[2];
+    /* Zeroed: on a 32-bit build the second word stays the stack garbage the
+     * original had, on 64-bit it is part of the pointer. Defining it is a
+     * portable fix and cannot change 32-bit behaviour, where only data[0] is
+     * ever read back (BgmThread checks BgmCommand.cmd, not data[1]). */
+    int data[2] = {0};
     int err;
 
     if (copy == NULL) {
         return 1;
     }
     memcpy(copy, info, sizeof(BgmInfo));
-#ifdef ANDROID_PORT
     memcpy(data, &copy, sizeof(copy));
-#else
-    data[0] = (int)copy;
-#endif
     err = Bgm_QueueCommand(time, data, cmd, 1);
     if (err != 0) {
         free(copy);
@@ -551,15 +592,20 @@ int BgmThread_Shutdown(void)
     memset(&g_bgmThread, 0, sizeof(g_bgmThread));
     return 0;
 #else
-    memcpy(&thread, &g_bgmThread, sizeof(thread));
+    BGM_THREAD_LOAD(thread);
     return pthread_join(thread, &result);
 #endif
 }
 
-/* 0x00489DC0: queues BGM_CMD_MUTE (the second data word is uninitialised, as in the original). */
+/*
+ * 0x00489DC0: queues BGM_CMD_MUTE. The original left the second data word
+ * uninitialised; it is zeroed here (fix) for the reason given in
+ * Bgm_QueueCommand -- with the portable pointer encoding that word is the high
+ * half of a pointer, so it must never be stack garbage.
+ */
 int Bgm_QueueMute(int muted, int time)
 {
-    int data[2];
+    int data[2] = {0};
 
     data[0] = muted;
     return Bgm_QueueCommand(time, data, BGM_CMD_MUTE, 0);
@@ -890,6 +936,13 @@ void BgmThread_UpdateHook(void)
  * 0x0048A5C0: SDL_mixer music hook (SDL audio thread): plays the next ring
  * block, or silence while paused, muted or starved.
  *
+ * Fix (port change): the original's producer added to "filled" but the
+ * consumer never subtracted from it, so once one block had been written the
+ * r->filled >= r->block test stayed true forever and a starved consumer kept
+ * replaying the last block instead of falling silent. The block is now given
+ * back to "filled" when it is consumed, mirroring the way "space" is given
+ * back to the producer, so the two counters describe the same ring.
+ *
  * Quirks kept: muted, a block's space is given back even when none was
  * played; while paused the length is used as the source pointer of a
  * 0-byte copy; the length check is skipped while muted.
@@ -926,6 +979,10 @@ void BgmThread_MixCallback(void *udata, Uint8 *stream, int len)
     if (g_bgmMuted) {
         if (!g_bgmRing->paused) {
             InterlockedExchangeAdd(&g_bgmRing->space, g_bgmRing->block);
+            /* Same asymmetry as the playing path: a block was taken above. */
+            if (src != NULL) {
+                InterlockedExchangeAdd(&g_bgmRing->filled, -(long)g_bgmRing->block);
+            }
         }
         memset(stream, bgm_silence(), len);
         return;
@@ -937,7 +994,9 @@ void BgmThread_MixCallback(void *udata, Uint8 *stream, int len)
         }
         memcpy(stream, src, n);
         if (!g_bgmRing->paused) {
+            /* One whole block was taken: return it to both counters. */
             InterlockedExchangeAdd(&g_bgmRing->space, g_bgmRing->block);
+            InterlockedExchangeAdd(&g_bgmRing->filled, -(long)g_bgmRing->block);
         }
     } else {
         n = 0;

@@ -84,9 +84,14 @@ ifeq ($(origin MUGEN_TARGET),undefined)
     ifneq (,$(findstring i686-w64-mingw32,$(TRIPLE)))
       MUGEN_TARGET := win32
     else ifneq (,$(findstring x86_64-w64-mingw32,$(TRIPLE)))
-      $(error $(TRIPLE) cannot link this 32-bit target (no 32-bit CRT in that kit); use the i686 kit)
+      # An explicit MUGEN_TARGET=win64 opts in; otherwise this is the i686
+      # build pointed at the wrong kit, which is a mistake worth naming.
+      ifeq ($(strip $(MUGEN_TARGET_ANNOUNCED)),)
+        $(error $(TRIPLE) is the 64-bit kit; the reference build is win32 (use the i686 kit), \
+                or ask for the experimental 64-bit target with MUGEN_TARGET=win64)
+      endif
     else
-      $(error unsupported Windows toolchain "$(TRIPLE)"; expected i686-w64-mingw32)
+      $(error unsupported Windows toolchain "$(TRIPLE)"; expected i686-w64-mingw32 or x86_64-w64-mingw32)
     endif
   else ifeq (Linux,$(UNAME_S))
     ifneq (,$(findstring x86_64-,$(TRIPLE)))
@@ -105,13 +110,29 @@ ifeq ($(origin MUGEN_TARGET),undefined)
   endif
 endif
 
-# One family per target: win32 / linux.
+# Two families: win32 covers every Windows target (the 32-bit reference build
+# and the experimental 64-bit one), linux covers every Linux target. The
+# per-target differences (pointer width, kit, output name) are selected by
+# MUGEN_TARGET below, never by the family: Windows targets still need the
+# Win32 sys_libs, the .rc/manifest resources, -mwindows and static archives.
+#
+# win64 is experimental and opt-in. It links a 64-bit static dependency kit
+# (SDL2, zlib, libpng16) with winpthreads instead of pthreadVC2, and the engine
+# has 64-bit-specific fixes in the BGM thread (native pthread storage, pointer
+# packing). See docs/BUILD-MINGW64.md.
 ifeq ($(MUGEN_TARGET),win32)
   MUGEN_FAMILY := win32
+  MUGEN_PTRBITS := 32
   BUILD    ?= build/mingw$(SDL2_SUFFIX)
   TARGET   := $(BUILD)/mugen-static$(SDL2_SUFFIX).exe
+else ifeq ($(MUGEN_TARGET),win64)
+  MUGEN_FAMILY := win32
+  MUGEN_PTRBITS := 64
+  BUILD    ?= build/mingw64$(SDL2_SUFFIX)
+  TARGET   := $(BUILD)/mugen-win64$(SDL2_SUFFIX).exe
 else
   MUGEN_FAMILY := linux
+  MUGEN_PTRBITS := $(if $(findstring 64,$(MUGEN_TARGET)),64,32)
   BUILD    ?= build/$(MUGEN_TARGET)$(SDL2_SUFFIX)
   TARGET   := $(BUILD)/mugen-$(MUGEN_TARGET)$(SDL2_SUFFIX)
 endif
@@ -122,6 +143,8 @@ endif
 # one mistake worth catching. Empty means "no expectation" (unknown target).
 ifeq ($(MUGEN_TARGET),win32)
   TRIPLE_RE := ^i686-w64-mingw32
+else ifeq ($(MUGEN_TARGET),win64)
+  TRIPLE_RE := ^x86_64-w64-mingw32
 else ifeq ($(MUGEN_TARGET),linux-x64)
   TRIPLE_RE := ^x86_64-
 else ifeq ($(MUGEN_TARGET),linux-arm64)
@@ -171,8 +194,17 @@ STATIC_PKGS := sdl SDL_gfx SDL_mixer SDL_ttf zlib libpng16
 # mean rebuilding SDL without its export directives.
 PKG_LIBS    := $(filter-out -mwindows,$(shell $(PKG_CONFIG) --libs --static $(STATIC_PKGS) 2>/dev/null))
 PKG_CFLAGS  := $(shell $(PKG_CONFIG) --cflags $(STATIC_PKGS) 2>/dev/null)
-# Where pkg-config's prefix puts the archives; only used by check-libs.
-SDK_LIB_DIR ?= $(shell $(PKG_CONFIG) --variable=libdir sdl 2>/dev/null)
+SDK_LIB_DIR ?= $(shell $(PKG_CONFIG) --variable=libdir $(firstword $(STATIC_PKGS)) 2>/dev/null)
+
+# The static archives check-libs looks for, per backend. SDL 1.2 keeps the
+# add-ons in separate libraries (SDL_gfx has no pkg-config libs of its own on
+# every kit); SDL2 has SDL2_mixer/SDL2_ttf. mpg123 comes in transitively and is
+# listed here because a kit missing it links but plays no MP3.
+ifeq ($(SDL_BACKEND),2)
+  CHECK_LIBS := SDL2 SDL2_mixer SDL2_ttf z mpg123
+else
+  CHECK_LIBS := SDL SDL_gfx SDL_mixer SDL_ttf z mpg123
+endif
 
 # ------------------------------------------------------------- compile flags
 
@@ -213,22 +245,40 @@ endif
 LRS_DEFS := -DLIBRESAMPLE_STATIC
 
 ifeq ($(MUGEN_FAMILY),win32)
-  ARCHFLAGS := -m32
+  ifeq ($(MUGEN_TARGET),win64)
+    ARCHFLAGS := -m64
+  else
+    ARCHFLAGS := -m32
+  endif
+  # The x87 still exists on x86-64, so the same FPU flags restore
+  # FLT_EVAL_METHOD == 2 and keep float rounding as the original MSVC 2008
+  # /arch:IA32 build did. Do not drop these on win64: the engine's float
+  # arithmetic (src/ftol.h) depends on x87 excess precision.
   FPUFLAGS  := -mfpmath=387 -fexcess-precision=standard
   # PTW32_STATIC_LIB: third_party/sdk/include/pthread.h declares the pthread
   # functions __declspec(dllimport) unless this is set; we link pthreadVC2 as a
   # static archive. LIBRESAMPLE_STATIC does the same for libresample.h.
-  ENGINE_DEFS := -D_CRT_SECURE_NO_WARNINGS -D_CRT_NONSTDC_NO_DEPRECATE \
-                 -DPTW32_STATIC_LIB $(LRS_DEFS)
+  #
+  # win64 has no pthreadVC2: winpthreads ships with the 64-bit toolchain, so
+  # -lpthread is added to SYS_LIBS instead and the 32-bit ABI SDK headers are
+  # kept off the include path (see PLAT_CPPFLAGS below).
+  ifeq ($(MUGEN_TARGET),win64)
+    ENGINE_DEFS := -D_CRT_SECURE_NO_WARNINGS -D_CRT_NONSTDC_NO_DEPRECATE $(LRS_DEFS)
+    SYS_LIBS    := -lopengl32 -lglu32 -lwinmm -lshell32 -luser32 -lgdi32 -lpthread
+    PLAT_CPPFLAGS :=
+  else
+    ENGINE_DEFS := -D_CRT_SECURE_NO_WARNINGS -D_CRT_NONSTDC_NO_DEPRECATE \
+                   -DPTW32_STATIC_LIB $(LRS_DEFS)
+    SYS_LIBS    := -lopengl32 -lglu32 -lwinmm -lshell32 -luser32 -lgdi32
+    # Windows paths: the MSVC SDK tree is part of the build, and the compat layer
+    # is not used at all.
+    PLAT_CPPFLAGS := -I$(SDK_DIR)/include
+  endif
   LINK_MODE   := -mwindows
   STATIC_PKGS := sdl SDL_gfx SDL_mixer SDL_ttf zlib libpng16
   PKG_LIBS    := $(filter-out -mwindows,$(shell $(PKG_CONFIG) --libs --static $(STATIC_PKGS) 2>/dev/null))
   PKG_CFLAGS  := $(shell $(PKG_CONFIG) --cflags $(STATIC_PKGS) 2>/dev/null)
   SDL_CFLAGS  :=
-  SYS_LIBS    := -lopengl32 -lglu32 -lwinmm -lshell32 -luser32 -lgdi32
-  # Windows paths: the MSVC SDK tree is part of the build, and the compat layer
-  # is not used at all.
-  PLAT_CPPFLAGS := -I$(SDK_DIR)/include
   FORCE_INCLUDE :=
   PLAT_LDFLAGS  :=
 else
@@ -550,17 +600,21 @@ check-pkgconfig:
 # hit with only a DLL behind it links but is not static. Linux links the
 # distro's shared libraries, so on that target there is nothing to look for and
 # the target says so rather than reporting SDL archives as "missing".
+#
+# The archive names follow the SDL backend and the pointer width: SDL 1.2 is
+# libSDL.a, SDL2 is libSDL2.a, and a 64-bit kit may keep them under a different
+# libdir. The names are checked exactly so a half-installed kit fails here.
 check-libs:
 ifneq ($(MUGEN_FAMILY),win32)
 	@echo "check-libs: Windows static build only; $(MUGEN_TARGET) links shared libraries"
 else
 	@test -n "$(SDK_LIB_DIR)" \
-	  || { echo "error: pkg-config reports no libdir for 'sdl'; is the static SDL stack installed?"; exit 1; }
-	@for lib in SDL SDL_gfx SDL_mixer SDL_ttf z mpg123; do \
+	  || { echo "error: pkg-config reports no libdir for '$(firstword $(STATIC_PKGS))'; is the static SDL stack installed?"; exit 1; }
+	@for lib in $(CHECK_LIBS); do \
 	  test -f "$(SDK_LIB_DIR)/lib$$lib.a" \
 	    || { echo "error: $(SDK_LIB_DIR)/lib$$lib.a missing (need static archives, not DLLs)"; exit 1; }; \
 	done
-	@echo "static libraries ok: SDL SDL_gfx SDL_mixer SDL_ttf z mpg123 in $(SDK_LIB_DIR)"
+	@echo "static libraries ok: $(CHECK_LIBS) in $(SDK_LIB_DIR)"
 endif
 
 # --- housekeeping -----------------------------------------------------------

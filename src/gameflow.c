@@ -178,9 +178,9 @@ void Gameflow_Run(void)
         }
     }
     if (g_bgmActive) {
-        pthread_mutex_lock((pthread_mutex_t *)&g_bgmMutex);
+        BGM_MUTEX_LOCK();
         BgmQueue_Unload(g_bgmGetHandle());
-        pthread_mutex_unlock((pthread_mutex_t *)&g_bgmMutex);
+        BGM_MUTEX_UNLOCK();
         g_bgmBackgroundChanged = 1;
     }
 }

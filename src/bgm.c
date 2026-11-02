@@ -20,8 +20,8 @@
 #define BGM_LOCK()   SDL_LockMutex((SDL_mutex *)g_bgmMutex)
 #define BGM_UNLOCK() SDL_UnlockMutex((SDL_mutex *)g_bgmMutex)
 #else
-#define BGM_LOCK()   pthread_mutex_lock((pthread_mutex_t *)&g_bgmMutex)
-#define BGM_UNLOCK() pthread_mutex_unlock((pthread_mutex_t *)&g_bgmMutex)
+#define BGM_LOCK()   BGM_MUTEX_LOCK()
+#define BGM_UNLOCK() BGM_MUTEX_UNLOCK()
 #endif
 
 typedef const BgmSubsystem *(__cdecl *BgmGetSubsystemFn)(void);
@@ -501,7 +501,25 @@ int Bgm_Init(DynArray *plugins, int resample_method, int resample_quality, doubl
             }
         }
 #else
-        MatchLog_Printf(9, "BGMThreadInit returned %d\n", BgmThread_Init(&g_bgmFormat, g_bgmChunk));
+        {
+            /*
+             * Fix (port change): the original only logged this result and then
+             * declared BGM initialized, so a failed thread start left the
+             * engine queueing commands nothing would ever run -- silently no
+             * music, or a deadlock the first time a command filled the queue.
+             * Treat it as an init failure like the Android branch does.
+             */
+            int thread_error = BgmThread_Init(&g_bgmFormat, g_bgmChunk);
+
+            MatchLog_Printf(9, "BGMThreadInit returned %d\n", thread_error);
+            if (thread_error != 0) {
+                free(g_bgmResampler->quality);
+                free(g_bgmResampler);
+                g_bgmResampler = NULL;
+                Bgm_FreeSubsystems();
+                return 0;
+            }
+        }
 #endif
         g_bgmInitialized = 1;
         g_bgmActive = 1;
@@ -589,7 +607,6 @@ int Bgm_ReadInfoKeys(BgmInfo *info, const char *key, Ini *ini, const char *volum
                      const char *start_key, const char *end_key)
 {
     const char *v;
-    char *p;
 
     info->path[0] = '\0';
     v = Ini_GetValue(ini, key);
@@ -601,9 +618,14 @@ int Bgm_ReadInfoKeys(BgmInfo *info, const char *key, Ini *ini, const char *volum
     if (info->path[0] == '\0') {
         return 0;
     }
-    for (p = info->path; *p != '\0'; p++) {
-        *p = (char)tolower(*p);
-    }
+    /*
+     * Fix (port change): the original lower-cased the whole path here. That
+     * only ever mattered for the extension lookup, and Bgm_ExtensionInList()
+     * lower-cases the extension itself, so the spelling is preserved now. On
+     * a case-sensitive filesystem (Linux, Android) lower-casing made
+     * "sound/StageTheme.ogg" unopenable even though the file existed. Windows
+     * is unaffected either way.
+     */
     v = Ini_GetValue(ini, loop_key);
     if (v == NULL || sscanf(v, "%d", &info->loop) != 1) {
         info->loop = 1;
@@ -613,8 +635,20 @@ int Bgm_ReadInfoKeys(BgmInfo *info, const char *key, Ini *ini, const char *volum
         info->loop_start = -1;
     }
     v = Ini_GetValue(ini, end_key);
-    if (v == NULL || sscanf(v, "%ld", (long *)&info->loop_end) != 1) {
+    /*
+     * Fix (port change): the original scanned "%ld" straight into
+     * (long *)&info->loop_end, a 4-byte int. On a 32-bit build long is 4
+     * bytes and it worked; on LP64 sscanf wrote 8 bytes over loop_end and the
+     * field after it, whatever that happened to be. Scan into a long and
+     * narrow, which is also what the original's intent was (it read a long).
+     */
+    if (v == NULL) {
         info->loop_end = -1;
+    } else {
+        long loop_end;
+        int scanned = sscanf(v, "%ld", &loop_end);
+
+        info->loop_end = (scanned == 1 && loop_end >= -1 && loop_end <= 0x7FFFFFFFL) ? (int)loop_end : -1;
     }
     if (info->loop_end <= info->loop_start) {
         info->loop_end = -1;
@@ -635,7 +669,7 @@ int Bgm_ReadInfoKeys(BgmInfo *info, const char *key, Ini *ini, const char *volum
 /* 0x00470A50: pauses the BGM (game pause; see BGM_STREAM_HELD). */
 void Bgm_Pause(void)
 {
-    int data[2];
+    int data[2] = {0};   /* fix: data[1] used to be uninitialised stack */
 
     if (g_bgmActive == 0) {
         return;
@@ -650,7 +684,7 @@ void Bgm_Pause(void)
 /* 0x00470AB0: undoes Bgm_Pause. */
 void Bgm_Unpause(void)
 {
-    int data[2];
+    int data[2] = {0};   /* fix: data[1] used to be uninitialised stack */
 
     if (g_bgmActive == 0) {
         return;

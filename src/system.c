@@ -1573,7 +1573,7 @@ void System_OnFocusLost(int gained)
         int time = g_bgmGetHandle();
         int data[2];
 
-        pthread_mutex_lock((pthread_mutex_t *)&g_bgmMutex);
+        BGM_MUTEX_LOCK();
         switch (g_bgmBackgroundMode) {
         case BGM_BG_PAUSE:
             if (!(g_bgmStream->flags & BGM_STREAM_PAUSED)) {
@@ -1590,7 +1590,7 @@ void System_OnFocusLost(int gained)
             }
             break;
         }
-        pthread_mutex_unlock((pthread_mutex_t *)&g_bgmMutex);
+        BGM_MUTEX_UNLOCK();
         g = g_game;
     }
     if (g->pause_on_defocus) {
@@ -1616,7 +1616,7 @@ void System_OnFocusGained(int gained)
         int time = g_bgmGetHandle();
         int data[2];
 
-        pthread_mutex_lock((pthread_mutex_t *)&g_bgmMutex);
+        BGM_MUTEX_LOCK();
         switch (g_bgmBackgroundMode) {
         case BGM_BG_PAUSE:
             if (g_bgmStream->flags & BGM_STREAM_PAUSED) {
@@ -1632,7 +1632,7 @@ void System_OnFocusGained(int gained)
             }
             break;
         }
-        pthread_mutex_unlock((pthread_mutex_t *)&g_bgmMutex);
+        BGM_MUTEX_UNLOCK();
     }
     if (g_game->pause_on_defocus && g_pauseToggled == 0) {
         g_game->defocus_paused = 0;

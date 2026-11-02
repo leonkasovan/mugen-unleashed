@@ -15,8 +15,10 @@
 
 #include "mugen.h"
 
-#define SCREEN_LOCK(m)      pthread_mutex_lock((pthread_mutex_t *)(m))
-#define SCREEN_UNLOCK(m)    pthread_mutex_unlock((pthread_mutex_t *)(m))
+/* The BGM mutex. BGM_MUTEX_LOCK takes no argument: see src/bgm.h for why the
+ * storage differs between the 32-bit reconstruct and 64-bit builds. */
+#define SCREEN_LOCK(m)      (BGM_MUTEX_LOCK())
+#define SCREEN_UNLOCK(m)    (BGM_MUTEX_UNLOCK())
 
 /* The global PalFX back to neutral, with a new serial (inlined by the original). */
 static void Gl_ResetPalFx(void)

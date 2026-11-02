@@ -231,10 +231,20 @@ void Snd_Free(Snd *snd)
         while (e != NULL) {
             if (e->type == SND_ENTRY_CHUNK && e->chunk != NULL) {
                 Mix_Chunk *chunk = e->chunk;
-                if (chunk->allocated == 0) {
-                    free(chunk->abuf);
-                }
+                Uint8 *pcm = chunk->allocated == 0 ? chunk->abuf : NULL;
+
+                /*
+                 * Fix (port change): the original freed the PCM first and the
+                 * chunk second. The mixer may still be reading that buffer
+                 * from the audio callback during Mix_FreeChunk, so the memory
+                 * must outlive the chunk. Mix_FreeChunk stops every channel
+                 * playing the chunk; only then is the separately owned PCM
+                 * released. The SDL_mixer 1.2 original got away with the old
+                 * order only because its callback read chunk->abuf directly
+                 * and the window was small.
+                 */
                 Mix_FreeChunk(chunk);
+                free(pcm);
             }
             i = map->iter;
             if (i >= map->last) {
@@ -928,10 +938,16 @@ fail:
  * the RIFF header, the "fmt " chunk and the "data" chunk, adding one frame of
  * silence when there is no sample data. NULL for non-PCM data or on errors.
  *
- * Quirks kept: the Wav_ReadInfo result is ignored, so after a failure the
- * (uninitialised) info decides; without a "fmt " chunk its offset and size
- * become the file size; the silent U8 frame is always two bytes, one past
- * the buffer for mono.
+ * Quirks kept: without a "fmt " chunk its offset and size become the file
+ * size.
+ *
+ * Fixes (port changes), recorded here because the original text above used to
+ * document them as quirks:
+ *  - the Wav_ReadInfo result is checked and info is zeroed first. The original
+ *    read the structure uninitialised after a failed parse, so a malformed
+ *    file decided the allocation size from stack garbage.
+ *  - the silent frame is now exactly Wav_FrameSize() bytes. The original
+ *    always wrote two 0x80 bytes for U8, one past the buffer for mono.
  */
 Stream *Snd_RepairWav(Stream *s)
 {
@@ -948,7 +964,12 @@ Stream *Snd_RepairWav(Stream *s)
     unsigned int at;
     Stream *out;
 
-    Wav_ReadInfo(s, &info);
+    memset(&info, 0, sizeof(info));
+    if (Wav_ReadInfo(s, &info) != 0) {
+        /* Fix: the original carried on with an uninitialised info. */
+        Stream_Seek(s, start, SEEK_SET);
+        return NULL;
+    }
     if (info.format_tag != WAV_TAG_PCM) {
         return NULL;
     }
@@ -1001,9 +1022,15 @@ Stream *Snd_RepairWav(Stream *s)
     Stream_Read(data + at, 1, info.data_size, s);
     at += info.data_size;
     if (pad) {
+        /*
+         * Fix (port change): the original wrote two 0x80 bytes for U8
+         * regardless of the channel count. 'total' reserves exactly one
+         * frame, so a mono U8 WAV wrote one byte past the allocation. Fill
+         * only the frame that was reserved, using the same silence value per
+         * sample size as the rest of the engine.
+         */
         if (info.format.format == AUDIO_FMT_U8) {
-            data[at] = 0x80;
-            data[at + 1] = 0x80;
+            memset(data + at, 0x80, Wav_FrameSize(info.format.format, info.format.channels));
         } else if (info.format.format == AUDIO_FMT_S16) {
             memset(data + at, 0, info.format.channels * 2);
         }
