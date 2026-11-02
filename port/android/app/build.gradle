@@ -164,7 +164,9 @@ task generateAssetManifest {
                 def bytes = f.bytes
                 long h = 0xcbf29ce484222325L
                 bytes.each { b -> h = ((h ^ (b & 0xFF)) * 0x100000001b3L) & 0xFFFFFFFFFFFFFFFFL }
-                lines << "${rel} ${bytes.length} ${String.format('%016x', h)}"
+                // size and hash first (neither contains spaces); the path runs
+                // to end-of-line so game content with spaces parses exactly.
+                lines << "${bytes.length} ${String.format('%016x', h)} ${rel}"
             }
         }
         lines.sort()

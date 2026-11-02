@@ -97,7 +97,9 @@ static int file_exists(const char *path)
 static void file_hash(const char *path, char out[17])
 {
     FILE *f = fopen(path, "rb");
-    unsigned long long h = 1469598103934665603ULL;
+    /* FNV-1a 64 basis 14695981039346656037 (0xcbf29ce484222325); this MUST
+     * match the Gradle manifest computation or every file hash-mismatches. */
+    unsigned long long h = 14695981039346656037ULL;
     unsigned char buf[16384];
     size_t n;
 
@@ -329,14 +331,35 @@ static void extract_assets(void)
             while (n > 0 && line[n - 1] == '\r') {
                 line[--n] = '\0';
             }
-            if (n > 0 && sscanf(line, "%1023s %ld %16s", rel, &expect_size, expect_hash) == 3) {
-                int r = extract_asset(rel, expect_size, expect_hash);
-                if (r < 0) {
+            {
+                /*
+                 * Record format is "size hash path-to-end-of-line": size and
+                 * hash contain no spaces, so paths with spaces parse exactly.
+                 * A record that does not parse fails the whole extraction
+                 * (ok = 0, no stamp) -- silently skipping it would report a
+                 * complete install with zero files extracted.
+                 */
+                int fields;
+                int path_off = 0;
+
+                fields = sscanf(line, "%ld %16s %n", &expect_size, expect_hash, &path_off);
+                if (n > 0 && fields == 2 && path_off > 0 && line[path_off] != '\0') {
+                    int r;
+
+                    strncpy(rel, line + path_off, sizeof(rel) - 1);
+                    rel[sizeof(rel) - 1] = '\0';
+                    r = extract_asset(rel, expect_size, expect_hash);
+                    if (r < 0) {
+                        ok = 0;
+                    } else if (r == 0) {
+                        skipped++;
+                    } else {
+                        count++;
+                    }
+                } else if (n > 0) {
+                    __android_log_print(ANDROID_LOG_ERROR, ALOG_TAG,
+                                        "bad manifest record: %.64s", line);
                     ok = 0;
-                } else if (r == 0) {
-                    skipped++;
-                } else {
-                    count++;
                 }
             }
             line = strtok(NULL, "\n");
