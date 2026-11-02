@@ -1482,6 +1482,9 @@ int __cdecl Con_CmdLuaExec(CmdTable *ctx, char *name, char *args);
 /* 0x0046f860 */ Stream *__cdecl Snd_RepairWav(Stream *s);
 /* 0x0046fb50 */ void __cdecl Bgm_FreeSubsystems(void);
 /* 0x0046fbb0 */ int __cdecl Bgm_RegisterSubsystem(const BgmSubsystem *sub);
+/* Port addition: the version/duplicate checks alone, so Bgm_Init can reject a plugin
+ * before calling its extensions()/init() callbacks. */
+int __cdecl Bgm_ValidateSubsystem(const BgmSubsystem *sub);
 /* 0x0046fc80 */ void __cdecl BgmPlugins_Free(DynArray *plugins);
 /* 0x0046fd30 */ DynArray *__cdecl BgmPlugins_Load(Ini *ini);
 /* 0x00470130 */ int __cdecl Bgm_ExtensionInList(const char *ext, const char *list);

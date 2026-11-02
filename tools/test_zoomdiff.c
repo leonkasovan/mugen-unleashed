@@ -106,42 +106,45 @@ typedef struct Case {
     double zx, zy;
     int indexed;                /* fill with a 2-entry palette + colour key */
     int whiteidx;               /* palette entry 1 is white, not red */
+    int npal;                   /* palette entries the case defines */
     int colorkey;               /* the key index to set; 0 if unused */
+    int multipal;               /* use the 4-colour palette from make() */
 } Case;
 
 static const Case k_cases[] = {
-    {"rgba32_2x",        16, 16, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 2.0, 2.0, 0, 0},
-    {"rgba32_0p5x",      16, 16, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 0.5, 0.5, 0, 0},
-    {"rgba32_frac",      13,  7, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 1.5, 2.5, 0, 0},
-    {"rgba32_odd",       11,  9, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 1.3, 0.7, 0, 0},
-    {"rgb32_2x",         16, 16, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0x00000000, 2.0, 2.0, 0, 0},
-    {"rgb565_2x",        16, 16, 16, 0xF800, 0x07E0, 0x001F, 0x0000, 2.0, 2.0, 0, 0},
-    {"rgb565_0p75x",     16, 16, 16, 0xF800, 0x07E0, 0x001F, 0x0000, 0.75, 0.75, 0, 0},
-    {"rgb555_1p5x",      10, 10, 16, 0x7C00, 0x03E0, 0x001F, 0x0000, 1.5, 1.5, 0, 0},
-    {"indexed_2x",       16, 16,  8, 0, 0, 0, 0, 2.0, 2.0, 1, 0, 0},
-    {"indexed_0p5x",     16, 16,  8, 0, 0, 0, 0, 0.5, 0.5, 1, 0, 0},
-    {"indexed_frac",     13,  7,  8, 0, 0, 0, 0, 1.5, 2.5, 1, 0, 0},
-    {"one_px_2x",         1,  1, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 2.0, 2.0, 0, 0},
-    {"one_px_indexed",    1,  1,  8, 0, 0, 0, 0, 3.0, 3.0, 1, 0, 0},
-    {"indexed_white1_2x", 16, 16,  8, 0, 0, 0, 0, 2.0, 2.0, 1, 0, 1},
+    {"rgba32_2x",        16, 16, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 2.0, 2.0, 0, 0, 0, 0},
+    {"rgba32_0p5x",      16, 16, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 0.5, 0.5, 0, 0, 0, 0},
+    {"rgba32_frac",      13,  7, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 1.5, 2.5, 0, 0, 0, 0},
+    {"rgba32_odd",       11,  9, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 1.3, 0.7, 0, 0, 0, 0},
+    {"rgb32_2x",         16, 16, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0x00000000, 2.0, 2.0, 0, 0, 0, 0},
+    {"rgb565_2x",        16, 16, 16, 0xF800, 0x07E0, 0x001F, 0x0000, 2.0, 2.0, 0, 0, 0, 0},
+    {"rgb565_0p75x",     16, 16, 16, 0xF800, 0x07E0, 0x001F, 0x0000, 0.75, 0.75, 0, 0, 0, 0},
+    {"rgb555_1p5x",      10, 10, 16, 0x7C00, 0x03E0, 0x001F, 0x0000, 1.5, 1.5, 0, 0, 0, 0},
+    {"indexed_2x",       16, 16,  8, 0, 0, 0, 0, 2.0, 2.0, 1, 0, 0, 2, 0},
+    {"indexed_0p5x",     16, 16,  8, 0, 0, 0, 0, 0.5, 0.5, 1, 0, 0, 2, 0},
+    {"indexed_frac",     13,  7,  8, 0, 0, 0, 0, 1.5, 2.5, 1, 0, 0, 2, 0},
+    {"one_px_2x",         1,  1, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 2.0, 2.0, 0, 0, 0, 0},
+    {"one_px_indexed",    1,  1,  8, 0, 0, 0, 0, 3.0, 3.0, 1, 0, 0, 2, 0},
+    {"indexed_white1_2x", 16, 16,  8, 0, 0, 0, 0, 2.0, 2.0, 1, 0, 1, 2, 0},
+    {"indexed_multi_2x",  16, 16,  8, 0, 0, 0, 0, 2.0, 2.0, 1, 0, 4, 0, 1},
     /*
      * A NONZERO colour key. Every other indexed case keys index 0, which is
      * indistinguishable from "the key was never read" -- the dump defaulted to
      * zero and nothing noticed. This one fails if the recorded value is not
      * carried across, or if the key is silently reset to 0.
      */
-    {"indexed_key1_2x",  16, 16,  8, 0, 0, 0, 0, 2.0, 2.0, 1, 1, 0},
-    {"indexed_key1_0p5x", 16, 16,  8, 0, 0, 0, 0, 0.5, 0.5, 1, 1, 0},
-    {"tall_thin",        1, 17, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 3.0, 0.5, 0, 0},
+    {"indexed_key1_2x",  16, 16,  8, 0, 0, 0, 0, 2.0, 2.0, 1, 1, 0, 2, 0},
+    {"indexed_key1_0p5x", 16, 16,  8, 0, 0, 0, 0, 0.5, 0.5, 1, 1, 0, 2, 0},
+    {"tall_thin",        1, 17, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 3.0, 0.5, 0, 0, 0, 0},
     /*
      * The ratios that expose SDL_gfx's 16.16 fixed-point step. The behaviour
      * belongs to the RGBA sampler, so these are 32-bit: a 16-bit source only
      * reaches it after conversion. For 16 -> 12 the truncated step is 87381 and
      * output x=3 reads source 3, where exact arithmetic reads 4.
      */
-    {"rgba32_16to12",   16, 16, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 0.75, 0.75, 0, 0},
-    {"rgba32_10to15",   10, 10, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 1.5, 1.5, 0, 0},
-    {"rgba32_13to20",   13, 13, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 20.0 / 13.0, 20.0 / 13.0, 0, 0},
+    {"rgba32_16to12",   16, 16, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 0.75, 0.75, 0, 0, 0, 0},
+    {"rgba32_10to15",   10, 10, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 1.5, 1.5, 0, 0, 0, 0},
+    {"rgba32_13to20",   13, 13, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, 20.0 / 13.0, 20.0 / 13.0, 0, 0, 0, 0},
 };
 
 #define CASE_COUNT ((int)(sizeof(k_cases) / sizeof(k_cases[0])))
@@ -188,6 +191,22 @@ static SDL_Surface *make(const Case *c)
         pal[0].r = 10;
         pal[0].g = 20;
         pal[0].b = 30;
+        if (c->multipal) {
+            /* Four distinct opaque colours, none of them white: the case that
+             * a "zero everything past index 1" tail destroyed. Exercises valid
+             * entries at indices 2 and 3. */
+            pal[0].r = 10;  pal[0].g = 20;  pal[0].b = 30;
+            pal[1].r = 200; pal[1].g = 150; pal[1].b = 100;
+            pal[2].r = 220; pal[2].g = 30;  pal[2].b = 40;
+            pal[3].r = 25;  pal[3].g = 180; pal[3].b = 90;
+#ifdef MUGEN_SDL2
+            pal[0].a = 255; pal[1].a = 255; pal[2].a = 255; pal[3].a = 255;
+#endif
+            ZD_SET_COLORS(s, pal, 0, 4);
+            SDL_SetColorKey(s, ZD_SRCCOLORKEY, (Uint32)c->colorkey);
+            fill(s, c);
+            return s;
+        }
         if (c->whiteidx) {
             /* SDL_ttf's solid renderers put their foreground colour at index 1;
              * solid white text is the case a "first white entry ends the
@@ -213,7 +232,7 @@ static SDL_Surface *make(const Case *c)
 
 /* Writes the pixels, the size and the palette, so a lost palette is visible
  * even when the indices came out right. */
-static int dump(SDL_Surface *s, const char *path, int src_had_alpha)
+static int dump(SDL_Surface *s, const char *path, int src_had_alpha, int npal)
 {
     FILE *f = fopen(path, "wb");
     int i;
@@ -258,7 +277,17 @@ static int dump(SDL_Surface *s, const char *path, int src_had_alpha)
             has_key ? 1 : 0, has_key ? (unsigned)key : 0u, ZD_ALPHA_MOD(s),
             (src_had_alpha && ZD_BLENDS(s)) ? 1 : 0);
     if (s->format->palette != NULL) {
-        for (i = 0; i < s->format->palette->ncolors && i < 256; i++) {
+        /*
+         * Only the entries the case actually defines are dumped.
+         *
+         * SDL 1.2 knows how many entries the caller set, so SDL_gfx could zero
+         * the rest and the dump saw 254 black entries. SDL2 initialises all 256
+         * of a new 8-bit surface to opaque white and exposes no equivalent
+         * count, so a faithful copy leaves the tail white. Comparing that tail
+         * would pin an SDL 1.2-only artefact rather than renderer behaviour --
+         * the pixels, which are what the engine draws, are compared in full.
+         */
+        for (i = 0; i < s->format->palette->ncolors && i < 256 && i < npal; i++) {
             fprintf(f, "%02x%02x%02x%02x ", s->format->palette->colors[i].r, s->format->palette->colors[i].g,
                     s->format->palette->colors[i].b, ZD_PAL_ALPHA(s->format->palette->colors[i]));
         }
@@ -328,7 +357,7 @@ int main(int argc, char **argv)
             return 2;
         }
         snprintf(path, sizeof(path), "%s/%s.raw", dir, k_cases[i].name);
-        if (!dump(dst, path, k_cases[i].amask != 0)) {
+        if (!dump(dst, path, k_cases[i].amask != 0, k_cases[i].npal)) {
             fprintf(stderr, "cannot write %s\n", path);
             return 2;
         }

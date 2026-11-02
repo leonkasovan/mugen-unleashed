@@ -34,41 +34,25 @@ static void Sdl2_CopySurfaceState(SDL_Surface *src, SDL_Surface *dst)
         /*
          * Fix (port change). The original looked for the first opaque-white
          * entry, treated it as the start of SDL2's unused-palette tail, and
-         * replaced it and everything after it with black.
+         * replaced it and everything after it with black. SDL2 initialises
+         * *every* entry of a new 8-bit surface to opaque white, so a genuinely
+         * white entry cannot be told apart from padding by colour: SDL_ttf's
+         * solid renderers put their foreground colour at index 1, so solid
+         * white text came out black.
          *
-         * Two facts made that wrong in one real case and right in another:
+         * Every entry the source has is therefore copied verbatim, with no
+         * heuristic. Colour cannot identify an unused entry, and an earlier
+         * attempt at this -- preserving entries 0 and 1 and blanking the rest --
+         * fixed the white text but destroyed valid colours at indices 2..255,
+         * including in palettes that contain no white at all.
          *
-         *  - SDL2 initialises every entry of a new 8-bit surface to opaque
-         *    white, so a genuinely white entry is indistinguishable from an
-         *    untouched one by colour alone. SDL_ttf's solid renderers put their
-         *    foreground colour at index 1, so white text lost its colour -- and
-         *    every later entry on the way.
-         *  - SDL 1.2's SDL_gfx zeroed everything past the end of the source
-         *    palette, and the differential test (tools/test_zoomdiff.sh) pins
-         *    that: a two-entry palette must come back with entries 2..255
-         *    black, not white.
-         *
-         * SDL2 discarded the information needed to do both exactly -- ncolors
-         * is always 256 -- so entries 0 and 1 are always copied verbatim (the
-         * indices the engine's text and transparency paths use) and the tail
-         * from index 2 keeps SDL_gfx's zeroing. That keeps the differential
-         * test green and no longer destroys a white foreground.
+         * SDL 1.2's SDL_gfx also zeroed the entries past the length the caller
+         * last set. SDL2 discarded that information (ncolors is always 256), so
+         * the tail cannot be reproduced; copying faithfully is the closest
+         * correct behaviour. tools/test_zoomdiff.sh compares only the entries a
+         * case defines for that reason, and compares every pixel in full.
          */
         SDL_SetPaletteColors(dst->format->palette, src->format->palette->colors, 0, ncolors);
-        if (dst->format->palette->ncolors > 2) {
-            SDL_Color black[256];
-            int i;
-
-            /* SDL 1.2 reports 255 for every entry; the pad colour is opaque
-             * black, not transparent black. */
-            for (i = 0; i < 256; i++) {
-                black[i].r = 0;
-                black[i].g = 0;
-                black[i].b = 0;
-                black[i].a = 255;
-            }
-            SDL_SetPaletteColors(dst->format->palette, black, 2, dst->format->palette->ncolors - 2);
-        }
     }
     if (SDL_GetColorKey(src, &key) == 0) {
         SDL_SetColorKey(dst, SDL_TRUE, key);

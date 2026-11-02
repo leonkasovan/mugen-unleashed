@@ -99,7 +99,17 @@ void Bgm_FreeSubsystems(void)
 }
 
 /* 0x0046FBB0: adds a plugin to the registry. 0 if it is already there, too old or out of memory. */
-int Bgm_RegisterSubsystem(const BgmSubsystem *sub)
+/*
+ * The checks Bgm_RegisterSubsystem performs, without registering anything.
+ *
+ * Port addition: Bgm_Init now has to reject a plugin before calling its
+ * extensions() and init() callbacks -- an unsupported plugin was being given
+ * engine callbacks before being refused, and a duplicate sdlmix entry
+ * overwrote the global volume settings before being discarded. Validation and
+ * publication are therefore two steps; Bgm_RegisterSubsystem stays as the
+ * combined form for the callers that want both at once.
+ */
+int Bgm_ValidateSubsystem(const BgmSubsystem *sub)
 {
     DynArray *subs = g_bgmSubsystems;
     unsigned int version;
@@ -114,6 +124,14 @@ int Bgm_RegisterSubsystem(const BgmSubsystem *sub)
     if (version < BGM_MIN_VERSION) {
         MatchLog_Printf(3, "Subsystem version %u.%u.%u.%u is too old for this version of M.U.G.E.N\n", version >> 24,
                         (version >> 16) & 0xFF, (version >> 8) & 0xFF, version & 0xFF);
+        return 0;
+    }
+    return 1;
+}
+
+int Bgm_RegisterSubsystem(const BgmSubsystem *sub)
+{
+    if (!Bgm_ValidateSubsystem(sub)) {
         return 0;
     }
     return dynarray_push(g_bgmSubsystems, &sub);
@@ -453,6 +471,17 @@ int Bgm_Init(DynArray *plugins, int resample_method, int resample_quality, doubl
                 g_outOfMemory = 1;
             }
             strcpy(e->extensions, def);
+        }
+        /*
+         * Validate before any plugin callback runs: an unsupported or duplicate
+         * plugin must not receive extensions()/init() and must not be able to
+         * change global state before being refused.
+         */
+        if (!Bgm_ValidateSubsystem(sub)) {
+            MatchLog_Printf(3, "Internal error while registering plugin: %s\n", e->name);
+            bgm_settings_free(e->settings);
+            e->settings = NULL;
+            continue;
         }
         config.format = g_bgmFormat;
         config.settings = e->settings;

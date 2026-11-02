@@ -183,6 +183,18 @@ TP_DIR    := third_party
 SDK_DIR   := $(TP_DIR)/sdk
 OBJ_DIR   := $(BUILD)/obj
 LIB_DIR   := $(BUILD)/lib
+# Records the configuration every object in $(OBJ_DIR) was compiled under.
+# $(BUILD) already differs per backend, but the backend a directory belongs to
+# has changed over time (SDL2 took over build/mingw when it became the default),
+# so an existing tree can hold objects built for the other backend. Several
+# SDL2-only sources (sdl2surface.c, sdl2keys.c) compile to empty objects under
+# SDL 1.2 and include no header that would notice the switch, so make considers
+# them up to date and the SDL2 link then fails on missing symbols. Touching this
+# stamp when the configuration changes forces them to be recompiled.
+CONFIG_STAMP := $(OBJ_DIR)/.config
+# $(MUGEN_TARGET) already distinguishes win32/win64/linux-<arch>, so it covers
+# the pointer width and architecture that ARCHFLAGS would add.
+CONFIG_ID    := backend=$(SDL_BACKEND) target=$(MUGEN_TARGET)
 ICON_DIR  := $(BUILD)/icon
 # TARGET is set per platform in the detection block above.
 
@@ -472,14 +484,27 @@ $(TARGET): $(ENGINE_OBJS) $(RC_OBJ) $(TP_LIBS)
 
 # --- the engine -------------------------------------------------------------
 
-$(OBJ_DIR)/src/%.o: $(SRC_DIR)/%.c
+# Writes $(CONFIG_STAMP) whenever $(CONFIG_ID) changes. FORCE forces the recipe
+# to run on every build; the file is rewritten only when the content differs, so
+# an unchanged configuration leaves every object's timestamp alone and nothing is
+# recompiled. This is what makes switching SDL_BACKEND (or the target/arch) in an
+# existing build directory safe.
+FORCE:
+.PHONY: FORCE
+
+$(CONFIG_STAMP): FORCE
+	$(Q)mkdir -p $(dir $@)
+	$(Q)printf '%s\n' '$(CONFIG_ID)' > $@.tmp
+	$(Q)cmp -s $@.tmp $@ 2>/dev/null && rm -f $@.tmp || mv -f $@.tmp $@
+
+$(OBJ_DIR)/src/%.o: $(SRC_DIR)/%.c $(CONFIG_STAMP)
 	@echo "  CC      $<"
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(CC) $(ENGINE_CFLAGS) $(CPPFLAGS) -c $< -o $@
 
 # --- Lua 5.1.4 --------------------------------------------------------------
 
-$(OBJ_DIR)/lua/%.o: $(TP_DIR)/lua-5.1.4/src/%.c
+$(OBJ_DIR)/lua/%.o: $(TP_DIR)/lua-5.1.4/src/%.c $(CONFIG_STAMP)
 	@echo "  CC      $<"
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(CC) $(TP_CFLAGS) -I$(TP_DIR)/lua-5.1.4/src -c $< -o $@
@@ -492,7 +517,7 @@ $(LUA_LIB): $(LUA_OBJS)
 # --- libresample 0.1.3 (vendored, multi-channel) ----------------------------
 # -DLIBRESAMPLE_STATIC turns off __declspec(dllimport) in the header.
 
-$(OBJ_DIR)/libresample/%.o: $(TP_DIR)/libresample/src/%.c
+$(OBJ_DIR)/libresample/%.o: $(TP_DIR)/libresample/src/%.c $(CONFIG_STAMP)
 	@echo "  CC      $<"
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(CC) $(TP_CFLAGS) -DLIBRESAMPLE_STATIC \

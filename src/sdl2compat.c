@@ -193,6 +193,48 @@ static void Sdl2_ApplySwapInterval(int interval)
 
 /* -------------------------------------------------------------------- video */
 
+/*
+ * Creates the renderer and the streaming texture the System backend presents
+ * through, if they are not there yet. Split out of Sdl2_SetVideoMode so
+ * Sdl2_ResetRenderer() can rebuild them after SDL invalidates the device: the
+ * sizes and the pixel format come from the state Sdl2_SetVideoMode already
+ * recorded, so no caller has to repeat that arithmetic. Returns 0 on success,
+ * -1 when the renderer or the texture cannot be created.
+ */
+static int Sdl2_CreateRendererAndTexture(void)
+{
+    if (g_sdl2Video.renderer == NULL) {
+        g_sdl2Video.renderer = SDL_CreateRenderer(g_sdl2Video.window, -1, SDL_RENDERER_ACCELERATED);
+        if (g_sdl2Video.renderer == NULL) {
+            g_sdl2Video.renderer = SDL_CreateRenderer(g_sdl2Video.window, -1, 0);
+        }
+        if (g_sdl2Video.renderer == NULL) {
+            return -1;
+        }
+        /* Logical size: the engine's coordinates stay at the game size whatever
+         * the window does, exactly as SDL 1.2's surface size did. */
+        SDL_RenderSetLogicalSize(g_sdl2Video.renderer, g_sdl2Video.width, g_sdl2Video.height);
+        SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");   /* nearest: pixel art */
+        SDL_RenderSetIntegerScale(g_sdl2Video.renderer, SDL_FALSE);
+        g_sdl2Video.logical_w = g_sdl2Video.width;
+        g_sdl2Video.logical_h = g_sdl2Video.height;
+    }
+    if (g_sdl2Video.texture == NULL) {
+        if (g_sdl2Video.texture_format == 0) {
+            return -1;      /* nothing was ever set up to rebuild from */
+        }
+        g_sdl2Video.texture = SDL_CreateTexture(g_sdl2Video.renderer, g_sdl2Video.texture_format,
+                                                SDL_TEXTUREACCESS_STREAMING, g_sdl2Video.width,
+                                                g_sdl2Video.height);
+        if (g_sdl2Video.texture == NULL) {
+            return -1;
+        }
+        g_sdl2Video.texture_w = g_sdl2Video.width;
+        g_sdl2Video.texture_h = g_sdl2Video.height;
+    }
+    return 0;
+}
+
 SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
 {
     Uint32 rmask, gmask, bmask, amask, format;
@@ -352,12 +394,21 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
  * Port addition: SDL_RENDER_DEVICE_RESET / SDL_RENDER_TARGETS_RESET mean the
  * renderer's backing store is gone and every texture must be recreated. Android
  * already handles this (Android_ResetRenderer); the desktop SDL2 backend kept
- * using its cached texture and drew into a dead handle. Only the texture and the
- * renderer are dropped: the window, the GL context and the software surface the
- * engine draws into stay valid, and Sdl2_Present rebuilds both on the next call.
+ * using its cached texture and drew into a dead handle.
+ *
+ * The resources are recreated here rather than dropped for the next
+ * Sdl2_Present() to rebuild: Sdl2_Present returns as soon as the renderer or
+ * the texture is NULL, so leaving them NULL froze the window until the next
+ * video-mode change -- which on a desktop that never changes mode means
+ * forever. Rebuilding immediately also keeps the logical size and scaling
+ * hints that Sdl2_SetVideoMode installs.
  */
 void Sdl2_ResetRenderer(void)
 {
+    if (g_sdl2Video.is_gl) {
+        /* The GL renderer owns its context; nothing SDL2-side to rebuild. */
+        return;
+    }
     if (g_sdl2Video.texture != NULL) {
         SDL_DestroyTexture(g_sdl2Video.texture);
         g_sdl2Video.texture = NULL;
@@ -366,9 +417,15 @@ void Sdl2_ResetRenderer(void)
         SDL_DestroyRenderer(g_sdl2Video.renderer);
         g_sdl2Video.renderer = NULL;
     }
-    /* Force the next Sdl2_Present to allocate a new texture. */
+    /* texture_format is deliberately KEPT: it is what the replacement texture
+     * must be created with. Zeroing it here made Sdl2_CreateRendererAndTexture()
+     * bail out and left the window frozen -- the very failure this function
+     * exists to prevent. Only the size markers are invalidated. */
     g_sdl2Video.texture_w = 0;
     g_sdl2Video.texture_h = 0;
+    if (Sdl2_CreateRendererAndTexture() != 0) {
+        Log_Printf("video: renderer reset failed: %s\n", SDL_GetError());
+    }
 }
 
 static void Sdl2_Present(void)
@@ -379,7 +436,18 @@ static void Sdl2_Present(void)
         }
         return;
     }
-    if (g_sdl2Video.renderer == NULL || g_sdl2Video.texture == NULL || g_sdl2Video.surface == NULL) {
+    /*
+     * Self-healing: a previous reset that failed (no new renderer available
+     * yet) must not freeze presentation for the rest of the session, which is
+     * what a bare early-return did. Retry the rebuild once per frame until it
+     * succeeds; the cost of a failed attempt is one SDL call pair.
+     */
+    if (g_sdl2Video.renderer == NULL || g_sdl2Video.texture == NULL) {
+        if (Sdl2_CreateRendererAndTexture() != 0) {
+            return;
+        }
+    }
+    if (g_sdl2Video.surface == NULL) {
         return;
     }
     if (SDL_UpdateTexture(g_sdl2Video.texture, NULL, g_sdl2Video.surface->pixels,

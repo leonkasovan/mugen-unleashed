@@ -32,6 +32,18 @@
 
 /* ------------------------------------------------------------------ mpg123 */
 
+#if !defined(ANDROID_PORT) && !defined(MUGEN_SDL2_API)
+/*
+ * Port addition, SDL 1.2 build only. Mix_LoadMUS_RW takes one argument there and
+ * never takes ownership of the RWops, so it has to be closed by us after
+ * Mix_FreeMusic. It cannot live in SdlmixInstance: that struct's size is pinned
+ * to the original binary's 0x38 by MUGEN_ASSERT_SIZE, and there is only ever one
+ * instance (g_sdlmixInstance), so a file-scope pointer is both sufficient and
+ * layout-neutral.
+ */
+static SDL_RWops *g_sdlmixRwops;
+#endif
+
 /* 0x0048AB60: resolves the libmpg123 functions. Returns 0 when all were found. */
 int Mpg123_LoadSymbols(void)
 {
@@ -809,15 +821,26 @@ const char *Mpg123_StrError(void *instance, int err)
 /* 0x0048BA70: the sdlmix plugin's default extension list. */
 const char *Sdlmix_Extensions(void)
 {
-#ifdef MUGEN_SDLMIX_NATIVE_CODECS
+#if defined(ANDROID_PORT)
     /*
-     * SDL_mixer decodes WAV, MP3 and Ogg Vorbis itself in these builds: both
-     * link lines carry mpg123, vorbisfile, FLAC, opus and wavpack statically
-     * (see `pkg-config --libs --static SDL_mixer`). Advertising the extensions
-     * here is what lets a static build play them without Elecbyte's
-     * libmpg123-0.dll / vorbisplug.dll / waveplug.dll -- the first registered
-     * plugin whose list matches an extension wins, and mpg123 cannot register
-     * at all when its DLL is absent. See MUGEN_SDLMIX_NATIVE_CODECS in mugen.h.
+     * Android advertises only what its SDL2_mixer was actually built with.
+     * port/android/tools/build_sdl2_companions.sh configures it with
+     * SDL2MIXER_MIDI=OFF and SDL2MIXER_MOD=OFF (OGG comes from stb_vorbis and
+     * MP3 from dr_mp3), so listing tracker and MIDI extensions would send those
+     * files to a decoder that is not linked in. port/android/tests/
+     * test_native_sdl2.c asserts this list rejects a .mid.
+     */
+    return "wav,mp3,ogg,vorbis";
+#elif defined(MUGEN_SDLMIX_NATIVE_CODECS)
+    /*
+     * Desktop SDL_mixer decodes WAV, MP3, Ogg and the tracker/MIDI formats
+     * itself: both link lines carry mpg123, vorbisfile, FLAC, opus, wavpack,
+     * xmp and gme statically (see `pkg-config --libs --static SDL2_mixer`).
+     * Advertising them here is what lets a static build play them without
+     * Elecbyte's libmpg123-0.dll / vorbisplug.dll / waveplug.dll -- the first
+     * registered plugin whose list matches an extension wins, and mpg123 cannot
+     * register at all when its DLL is absent. See MUGEN_SDLMIX_NATIVE_CODECS in
+     * mugen.h.
      */
     return "wav,mp3,ogg,vorbis,669,amf,apun,dsm,far,gdm,it,imf,mod,med,mtm,okt,s3m,stm,stx,ult,uni,xm,mid,midi";
 #else
@@ -942,6 +965,19 @@ static void Sdlmix_FreeMusic(SdlmixInstance *inst)
     inst->finished = 0;
     Mix_HookMusicFinished(NULL);
     inst->music = NULL;
+#if !defined(ANDROID_PORT) && !defined(MUGEN_SDL2_API)
+    /*
+     * Port fix: SDL 1.2's Mix_LoadMUS_RW borrows the RWops, so closing it is
+     * ours to do and was not being done. Every track replacement leaked the
+     * wrapper and its Stream context. It is closed only now, after
+     * Mix_FreeMusic: the mpg123 and vorbisfile music decoders stream from it
+     * while the track plays, so closing any earlier frees memory still in use.
+     */
+    if (g_sdlmixRwops != NULL) {
+        g_sdlmixRwops->close(g_sdlmixRwops);
+        g_sdlmixRwops = NULL;
+    }
+#endif
 }
 
 /* 0x0048BEB0: frees the instance. */
@@ -1011,20 +1047,19 @@ int Sdlmix_Open(void *instance, const BgmPluginIo *io, BgmInfo *info, BgmOpenRes
     }
 #if !defined(ANDROID_PORT) && !defined(MUGEN_SDL2_API)
     /*
-     * SDL 1.2 build: Mix_LoadMUS_RW takes one argument and no ownership.
-     *
-     * Only MOD and MIDI may be closed here, exactly as the original did, even
-     * though WAV/MP3/OGG are now accepted too: SDL_mixer's MP3 (mpg123) and
-     * Ogg (vorbisfile) music decoders stream from the RWops while the track
-     * plays, so closing it after a successful load leaves the decoder reading
-     * freed memory -- an immediate crash on the first storyboard BGM. The
-     * stream is closed on the next open/close instead (Sdlmix_FreeMusic /
-     * the next call here), which is the same lifetime the engine gives the
-     * underlying Stream.
+     * SDL 1.2 build: Mix_LoadMUS_RW takes one argument and no ownership, so the
+     * instance keeps the RWops and Sdlmix_FreeMusic closes it. It must not be
+     * closed here: the mpg123 and vorbisfile music decoders stream from it while
+     * the track plays. (The original closed it immediately for MOD and MIDI
+     * only, because those are fully loaded; now that WAV/MP3/OGG are accepted
+     * too, one lifetime for all of them is both correct and simpler.)
      */
-    if (inst->type - 1u <= 1u) {
-        rw->close(rw);
+    if (g_sdlmixRwops != NULL) {
+        /* A failed earlier load leaves inst->music NULL, so Sdlmix_FreeMusic had
+         * nothing to free: drop the stale wrapper here rather than leak it. */
+        g_sdlmixRwops->close(g_sdlmixRwops);
     }
+    g_sdlmixRwops = rw;
 #endif
     inst->loop = info->loop;
     inst->loop_start = info->loop_start;
