@@ -151,16 +151,28 @@ task generateAssetManifest {
     outputs.file manifest
 
     doLast {
+        // B6: the manifest carries size + FNV-1a per file so extraction can
+        // verify rather than trust `stat`. FNV-1a (not SHA-256) because the
+        // native side has no crypto library; 64 bits is plenty for
+        // accidental-truncation detection. payload.txt holds the generation
+        // hash; the native side re-extracts when it differs (upgrade) instead
+        // of trusting a static v1 stamp.
         def lines = []
         assetsDir.eachFileRecurse { f ->
-            if (f.isFile() && !f.name.equals("manifest.txt")) {
-                def rel = assetsDir.toPath().relativize(f.toPath()).toString()
-                lines << rel.replace('\\', '/')
+            if (f.isFile() && !f.name.equals("manifest.txt") && !f.name.equals("payload.txt")) {
+                def rel = assetsDir.toPath().relativize(f.toPath()).toString().replace('\\', '/')
+                def bytes = f.bytes
+                long h = 0xcbf29ce484222325L
+                bytes.each { b -> h = ((h ^ (b & 0xFF)) * 0x100000001b3L) & 0xFFFFFFFFFFFFFFFFL }
+                lines << "${rel} ${bytes.length} ${String.format('%016x', h)}"
             }
         }
         lines.sort()
         manifest.text = lines.join('\n') + (lines.isEmpty() ? '' : '\n')
-        println "manifest.txt: ${lines.size()} asset(s)"
+        def payloadMd = java.security.MessageDigest.getInstance("SHA-256")
+        def payload = payloadMd.digest(manifest.text.bytes).encodeHex().toString()
+        new File(assetsDir, "payload.txt").text = payload + '\n'
+        println "manifest.txt: ${lines.size()} asset(s), payload ${payload.take(12)}"
     }
 }
 

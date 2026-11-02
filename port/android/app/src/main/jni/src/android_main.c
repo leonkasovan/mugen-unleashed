@@ -28,10 +28,14 @@
  * from here instead of SDL_main. */
 int Mugen_Main(int argc, char *argv[]);
 
-/* Written by the Gradle build; lists every asset to extract, one path per line. */
+/*
+ * Written by the Gradle build; one "rel-path size sha256" record per line.
+ * Size + hash let extraction verify rather than trust `stat` (B6).
+ */
 #define ASSET_MANIFEST "manifest.txt"
-/* Bump when the asset payload changes, to force re-extraction on upgrade. */
-#define ASSET_STAMP    "mugen_assets_v1.stamp"
+/* Generation hash of the payload; re-extract when it differs (upgrade). */
+#define ASSET_PAYLOAD  "payload.txt"
+#define ASSET_STAMP    "mugen_assets.stamp"
 
 static const char *assets_dir(void)
 {
@@ -89,35 +93,85 @@ static int file_exists(const char *path)
     return stat(path, &st) == 0;
 }
 
+/* FNV-1a 64-bit over a file; empty string (not NULL) when unreadable. */
+static void file_hash(const char *path, char out[17])
+{
+    FILE *f = fopen(path, "rb");
+    unsigned long long h = 1469598103934665603ULL;
+    unsigned char buf[16384];
+    size_t n;
+
+    out[0] = '\0';
+    if (f == NULL) {
+        return;
+    }
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+        size_t i;
+        for (i = 0; i < n; i++) {
+            h ^= buf[i];
+            h *= 1099511628211ULL;
+        }
+    }
+    fclose(f);
+    snprintf(out, 17, "%016llx", h);
+}
+
+/*
+ * User-owned files that extraction must never overwrite. mugen.cfg holds
+ * remaps and FirstRun state the engine rewrites at runtime; clobbering it
+ * on every upgrade would destroy the player's configuration (B6).
+ */
+static int is_user_owned(const char *rel)
+{
+    return strcmp(rel, "data/mugen.cfg") == 0;
+}
+
 /*
  * Copies one asset, creating parent directories.
  *
- * Returns 1 when written, 0 when skipped, -1 on failure. A zero-byte result and
- * "file missing" are both failures worth logging individually: SDL's asset API
- * cannot list a directory, which is exactly why the build generates a manifest,
- * and a file listed there that does not open indicates a packaging problem
- * rather than a runtime one.
+ * B6: write to a sibling temp, verify size + FNV-1a against the manifest,
+ * then rename atomically. An existing destination with matching size+hash is
+ * skipped (verified, not `stat`-trusted). An existing file whose content
+ * matches NEITHER the manifest NOR nothing (i.e. user-modified) is preserved
+ * for user-owned paths (data/mugen.cfg) with a logged conflict; other stale
+ * files are replaced by the verified payload.
+ *
+ * Returns 1 when written, 0 when skipped, -1 on failure.
  */
-static int extract_asset(const char *rel)
+static int extract_asset(const char *rel, long expect_size, const char *expect_hash)
 {
     char dst[1024];
+    char tmp[1088];
     SDL_RWops *in;
     FILE *out;
     char chunk[16384];
-    Sint64 total;
-    int written = 0;
+    long written = 0;
+    char got[17];
 
-    snprintf(dst, sizeof(dst), "%s/%s", assets_dir(), rel);
-
-    /* A directory entry in the manifest is a no-op; the file copy creates it. */
-    if (rel[0] == '\0') {
-        return 0;
+    /* Reject escapes and absolute paths: the manifest is build-generated, but
+     * a crafted APK must not write outside the data dir. */
+    if (rel[0] == '\0' || rel[0] == '/' || strstr(rel, "..") != NULL || strchr(rel, '\\') != NULL) {
+        __android_log_print(ANDROID_LOG_ERROR, ALOG_TAG, "bad manifest entry: %s", rel);
+        return -1;
     }
+    snprintf(dst, sizeof(dst), "%s/%s", assets_dir(), rel);
     if (rel[strlen(rel) - 1] == '/') {
         return 0;
     }
     if (file_exists(dst)) {
-        return 0;
+        struct stat st;
+        stat(dst, &st);
+        if ((long)st.st_size == expect_size) {
+            file_hash(dst, got);
+            if (strcmp(got, expect_hash) == 0) {
+                return 0;
+            }
+        }
+        if (is_user_owned(rel)) {
+            __android_log_print(ANDROID_LOG_INFO, ALOG_TAG,
+                                "keeping user-modified %s (payload differs)", rel);
+            return 0;
+        }
     }
     {
         char dir[1024];
@@ -137,10 +191,10 @@ static int extract_asset(const char *rel)
         __android_log_print(ANDROID_LOG_ERROR, ALOG_TAG, "asset missing from APK: %s", rel);
         return -1;
     }
-    total = SDL_RWsize(in);
-    out = fopen(dst, "wb");
+    snprintf(tmp, sizeof(tmp), "%s.part", dst);
+    out = fopen(tmp, "wb");
     if (out == NULL) {
-        __android_log_print(ANDROID_LOG_ERROR, ALOG_TAG, "cannot write %s", dst);
+        __android_log_print(ANDROID_LOG_ERROR, ALOG_TAG, "cannot write %s", tmp);
         SDL_RWclose(in);
         return -1;
     }
@@ -150,21 +204,34 @@ static int extract_asset(const char *rel)
             break;
         }
         if (fwrite(chunk, 1, (size_t)n, out) != (size_t)n) {
-            __android_log_print(ANDROID_LOG_ERROR, ALOG_TAG, "short write on %s", dst);
+            __android_log_print(ANDROID_LOG_ERROR, ALOG_TAG, "short write on %s", tmp);
             written = -1;
             break;
         }
-        written += (int)n;
+        written += (long)n;
     }
     SDL_RWclose(in);
     fclose(out);
 
     if (written < 0) {
+        remove(tmp);
         return -1;
     }
-    if (total > 0 && written != (int)total) {
+    if (written != expect_size) {
         __android_log_print(ANDROID_LOG_ERROR, ALOG_TAG,
-                            "asset %s truncated: %d of %lld bytes", rel, written, (long long)total);
+                            "asset %s truncated: %ld of %ld bytes", rel, written, expect_size);
+        remove(tmp);
+        return -1;
+    }
+    file_hash(tmp, got);
+    if (strcmp(got, expect_hash) != 0) {
+        __android_log_print(ANDROID_LOG_ERROR, ALOG_TAG, "asset %s hash mismatch", rel);
+        remove(tmp);
+        return -1;
+    }
+    if (rename(tmp, dst) != 0) {
+        __android_log_print(ANDROID_LOG_ERROR, ALOG_TAG, "cannot install %s", dst);
+        remove(tmp);
         return -1;
     }
     return 1;
@@ -173,27 +240,56 @@ static int extract_asset(const char *rel)
 /*
  * Extracts the asset payload on first run (or after an upgrade).
  *
- * A stamp file records that extraction completed, so the (slow) copy happens
- * once. It is written only after every asset succeeded, so an interrupted first
- * run simply retries rather than leaving a half-populated tree that would fail
- * later in a confusing place.
+ * B6: the stamp holds the payload generation hash, not a static version.
+ * A differing payload (APK upgrade) re-extracts; a failed run leaves no
+ * stamp, so the next launch retries. The manifest is buffered in memory
+ * (no tmpfile: its directory may not be writable) and parsed as
+ * "rel-path size hash" records. Missing game data fails startup loudly
+ * in main(), not here with a misleading stamp.
  */
 static void extract_assets(void)
 {
     char stamp[1024];
+    char stamp_hash[64];
+    char payload_hash[64];
     SDL_RWops *manifest;
-    FILE *list;
-    char line[1024];
+    SDL_RWops *payload;
+    char *buf;
+    Sint64 size;
     int ok = 1;
     int count = 0;
     int skipped = 0;
 
-    snprintf(stamp, sizeof(stamp), "%s/%s", assets_dir(), ASSET_STAMP);
-    if (file_exists(stamp)) {
+    mkdir_p(assets_dir());
+
+    /* Read the payload generation first: it decides whether work is needed. */
+    payload = SDL_RWFromFile(ASSET_PAYLOAD, "rb");
+    if (payload == NULL) {
+        __android_log_print(ANDROID_LOG_ERROR, ALOG_TAG,
+                            "asset payload missing; the APK was built without one");
         return;
     }
+    if (SDL_RWread(payload, payload_hash, 1, sizeof(payload_hash) - 1) <= 0) {
+        SDL_RWclose(payload);
+        __android_log_print(ANDROID_LOG_ERROR, ALOG_TAG, "cannot read asset payload");
+        return;
+    }
+    SDL_RWclose(payload);
+    payload_hash[sizeof(payload_hash) - 1] = '\0';
 
-    mkdir_p(assets_dir());
+    snprintf(stamp, sizeof(stamp), "%s/%s", assets_dir(), ASSET_STAMP);
+    {
+        FILE *f = fopen(stamp, "rb");
+        if (f != NULL) {
+            if (fgets(stamp_hash, sizeof(stamp_hash), f) != NULL &&
+                strcmp(stamp_hash, payload_hash) == 0) {
+                fclose(f);
+                return;
+            }
+            fclose(f);
+        }
+    }
+
     __android_log_print(ANDROID_LOG_INFO, ALOG_TAG, "extracting assets to %s", assets_dir());
 
     manifest = SDL_RWFromFile(ASSET_MANIFEST, "rb");
@@ -202,43 +298,49 @@ static void extract_assets(void)
                             "asset manifest missing; the APK was built without one");
         return;
     }
-    /* SDL_RWops has no line reader; copy to a FILE so fgets can be used. */
-    list = tmpfile();
-    if (list != NULL) {
-        char chunk[4096];
-        Sint64 n;
-        while ((n = SDL_RWread(manifest, chunk, 1, sizeof(chunk))) > 0) {
-            fwrite(chunk, 1, (size_t)n, list);
-        }
-        rewind(list);
-    }
-    SDL_RWclose(manifest);
-
-    if (list == NULL) {
-        __android_log_print(ANDROID_LOG_ERROR, ALOG_TAG, "cannot buffer asset manifest");
+    size = SDL_RWsize(manifest);
+    if (size <= 0 || size > 1024 * 1024) {
+        SDL_RWclose(manifest);
+        __android_log_print(ANDROID_LOG_ERROR, ALOG_TAG, "bad asset manifest size");
         return;
     }
-    while (fgets(line, sizeof(line), list) != NULL) {
-        size_t n = strlen(line);
-
-        while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) {
-            line[--n] = '\0';
-        }
-        if (n == 0) {
-            continue;
-        }
-        {
-            int r = extract_asset(line);
-            if (r < 0) {
-                ok = 0;
-            } else if (r == 0) {
-                skipped++;
-            } else {
-                count++;
+    buf = malloc((size_t)size + 1);
+    if (buf == NULL) {
+        SDL_RWclose(manifest);
+        return;
+    }
+    if (SDL_RWread(manifest, buf, 1, size) != size) {
+        free(buf);
+        SDL_RWclose(manifest);
+        __android_log_print(ANDROID_LOG_ERROR, ALOG_TAG, "cannot read asset manifest");
+        return;
+    }
+    SDL_RWclose(manifest);
+    buf[size] = '\0';
+    {
+        char *line = strtok(buf, "\n");
+        while (line != NULL) {
+            char rel[1024];
+            long expect_size;
+            char expect_hash[17];
+            size_t n = strlen(line);
+            while (n > 0 && line[n - 1] == '\r') {
+                line[--n] = '\0';
             }
+            if (n > 0 && sscanf(line, "%1023s %ld %16s", rel, &expect_size, expect_hash) == 3) {
+                int r = extract_asset(rel, expect_size, expect_hash);
+                if (r < 0) {
+                    ok = 0;
+                } else if (r == 0) {
+                    skipped++;
+                } else {
+                    count++;
+                }
+            }
+            line = strtok(NULL, "\n");
         }
     }
-    fclose(list);
+    free(buf);
 
     __android_log_print(ANDROID_LOG_INFO, ALOG_TAG,
                         "assets: %d extracted, %d already present, %s",
@@ -247,7 +349,7 @@ static void extract_assets(void)
     if (ok) {
         FILE *f = fopen(stamp, "wb");
         if (f != NULL) {
-            fputs("ok\n", f);
+            fputs(payload_hash, f);
             fclose(f);
         }
     }
