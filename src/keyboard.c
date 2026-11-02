@@ -10,6 +10,7 @@
 /* <SDL.h> comes from mugen.h, which pulls it in after glad.h. */
 
 #include "mugen.h"
+#include "sdl2keys.h"
 
 /*
  * 0x0046E290: a key went down (pressed != 0) or up. Key 0 is ignored. The
@@ -93,11 +94,14 @@ void Keyboard_SyncState(void)
      * which says nothing about how many keycodes are set.
      */
     (void)count;
-#ifdef MUGEN_SDL2
+#if defined(MUGEN_SDL2) || defined(MUGEN_ANDROID_SW)
     /*
-     * Desktop SDL2 build: use the shim's inverse table, which is the exact
-     * inverse of the translation events.c applies, so resync and event
-     * delivery cannot disagree.
+     * Every SDL2 consumer uses the shared inverse table (src/sdl2keys.c),
+     * which is the exact inverse of the translation events.c applies, so
+     * resync and event delivery cannot disagree. The old Android fallback
+     * (SDL_GetScancodeFromKey on the engine keycode directly) is gone: for
+     * non-printable keys the engine numbering is not a valid SDL2 keycode,
+     * so every arrow/F-key/modifier resynced to 0.
      */
     memset(g_keyState, 0, sizeof(g_keyState));
     for (i = 1; i < INPUT_KEY_COUNT && i < (int)(sizeof(g_keyState)); i++) {
@@ -113,17 +117,7 @@ void Keyboard_SyncState(void)
         }
     }
 #else
-    /*
-     * Android: the shim (src/sdl2compat.c) is not compiled into that build, so
-     * the lookup goes the other way round -- ask SDL2 for each engine keycode's
-     * scancode directly. Same result for the keys Android can produce, without
-     * depending on the desktop-only table.
-     */
-    for (i = 0; i < INPUT_KEY_COUNT && i < (int)(sizeof(g_keyState)); i++) {
-        SDL_Scancode sc = SDL_GetScancodeFromKey((SDL_Keycode)i);
-
-        g_keyState[i] = (sc != SDL_SCANCODE_UNKNOWN) ? state[sc] : 0;
-    }
+    /* SDL 1.2 desktop below: key-state array is already keycode-indexed. */
 #endif
     return;
 #endif

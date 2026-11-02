@@ -34,7 +34,7 @@ message(STATUS "mugen-unleashed source: ${MUGEN_ROOT}")
 # The engine ships a software renderer, which is what this port uses; the GL
 # renderer stays out of the build exactly as it does on the Vita port.
 # ---------------------------------------------------------------------------
-file(GLOB MUGEN_ENGINE_SOURCES "${MUGEN_ROOT}/src/*.c")
+file(GLOB MUGEN_ENGINE_SOURCES CONFIGURE_DEPENDS "${MUGEN_ROOT}/src/*.c")
 
 # Entry points and platform back ends that must not be compiled here.
 # Excluded: sdlmain.c/main.c are the desktop entry points (android_main.c

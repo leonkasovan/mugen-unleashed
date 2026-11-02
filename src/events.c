@@ -9,6 +9,7 @@
 /* <SDL.h> comes from mugen.h, which pulls it in after glad.h. */
 
 #include "mugen.h"
+#include "sdl2keys.h"
 
 #ifdef MUGEN_VITA_GL
 /*
@@ -313,7 +314,7 @@ void Events_Poll(void)
              * hundreds of megabytes past the array. Sdl2_EngineKey() is the one
              * conversion, and 0 means "a key SDL 1.2 did not have".
              */
-#ifdef MUGEN_SDL2
+#if defined(MUGEN_SDL2) || defined(MUGEN_ANDROID_SW)
             int engine_key = Sdl2_EngineKey(ev.key.keysym.sym);
 #else
             int engine_key = ev.key.keysym.sym;
@@ -350,7 +351,7 @@ void Events_Poll(void)
             }
             break;
         }
-#ifdef MUGEN_SDL2
+#if defined(MUGEN_SDL2) || defined(MUGEN_ANDROID_SW)
         /*
          * SDL2 delivers typed text separately from the key event. Decoding the
          * first UTF-8 sequence reproduces what SDL 1.2 put in keysym.unicode:
