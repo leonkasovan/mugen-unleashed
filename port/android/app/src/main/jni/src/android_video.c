@@ -348,6 +348,12 @@ int Android_ToggleFullscreen(SDL_Surface *screen)
 
 void Android_VideoQuit(void)
 {
+    /*
+     * B7: full reset so a later SetVideoMode re-creates everything from
+     * scratch. Every pointer NULLed, every cached size/format cleared, dirty
+     * and counters zeroed. Partial init (window without renderer) is safe:
+     * each block guards its own pointer.
+     */
     if (s_texture != NULL) {
         SDL_DestroyTexture(s_texture);
         s_texture = NULL;
@@ -367,6 +373,14 @@ void Android_VideoQuit(void)
     __android_log_print(ANDROID_LOG_INFO, ALOG_TAG,
                         "video: %lu present requests, %lu uploads",
                         s_present_requests, s_present_uploads);
+    s_texture_format = 0;
+    s_texture_w = 0;
+    s_texture_h = 0;
+    s_created_w = 0;
+    s_created_h = 0;
+    s_dirty = 0;
+    s_present_requests = 0;
+    s_present_uploads = 0;
 }
 
 #endif /* __ANDROID__ */

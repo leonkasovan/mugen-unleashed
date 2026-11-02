@@ -102,16 +102,10 @@ int main(int argc, char *argv[])
         Log_Close();
         g_log = NULL;
     }
-#ifdef ANDROID_PORT
     /*
-     * Android port: release the window, renderer and texture. The process is
-     * about to exit and the OS would reclaim them anyway, but leaving an
-     * acquired window would matter if this path ever became reachable from an
-     * Android lifecycle pause instead of process death. Android_VideoQuit is
-     * declared in port/android/.../android_main.h, which is force-included.
+     * Android_VideoQuit runs inside Video_Deinit (before System_Deinit's
+     * SDL_Quit), not here: SDL_Destroy* after SDL_Quit is a use-after-shutdown.
      */
-    Android_VideoQuit();
-#endif
     return 0;
 }
 

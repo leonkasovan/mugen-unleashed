@@ -250,6 +250,16 @@ void Events_Poll(void)
          * are reproduced; SDL_ShowCursor has no meaning on a touch device.
          */
         case SDL_APP_WILLENTERBACKGROUND:
+            /*
+             * B7: release held keys/buttons on suspend. Without this a
+             * button held when the app backgrounds stays set across resume
+             * (Input_ResetState rebuilds from g_keyState/g_padButtonState),
+             * so the fighter keeps walking/punching with no finger down.
+             * The matching resync on foreground comes from
+             * Keyboard_SyncState via System_OnFocusGained.
+             */
+            memset(g_keyState, 0, sizeof(g_keyState));
+            memset(g_padButtonState, 0, sizeof(g_padButtonState));
             if (g_onActivate != NULL) {
                 g_onActivate(0);
             }

@@ -133,6 +133,18 @@ int Video_Deinit(void)
         Gl_Deinit();
 #endif
     }
+#ifdef ANDROID_PORT
+    /*
+     * Android port: destroy the window/renderer/texture while the SDL
+     * subsystem is still alive. System_Deinit calls SDL_Quit after this, and
+     * SDL_Destroy* after SDL_Quit is a use-after-shutdown. The old call in
+     * main() after System_Deinit is gone for that reason (B7).
+     * Declared here (not via android_main.h) so desktop builds that define
+     * ANDROID_PORT for syntax checks also see it.
+     */
+    extern void Android_VideoQuit(void);
+    Android_VideoQuit();
+#endif
     if (g_unusedSurface1 != NULL) {
         SDL_FreeSurface(g_unusedSurface1);
     }
