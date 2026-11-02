@@ -292,6 +292,12 @@ int Config_Load(void)
     Ini_GetInt(ini, "stagefit", &g_game->stage_fit);
     Ini_GetInt(ini, "systemfit", &g_game->system_fit);
     g = g_game;
+#ifdef ANDROID_PORT
+    if (g->render_mode != RENDER_SYSTEM) {
+        Log_Printf("Android: RenderMode requires System; using native SDL2 presentation.\n");
+        g->render_mode = RENDER_SYSTEM;
+    }
+#endif
     i = g->render_mode;
     if (i == RENDER_SYSTEM || i == RENDER_OPENGL_SCREEN) {
         g->depth = 16;

@@ -110,15 +110,15 @@ int Game_ReadInput(ScreenLoop *screen)
     if (g->console_open != 0) {
         return 1;
     }
-    if (screen->kind != 8 && screen->kind != 7 && g->defocus_paused == 0 && key == SDLK_PAUSE &&
+    if (screen->kind != 8 && screen->kind != 7 && g->defocus_paused == 0 && key == ENGINE_KEY_PAUSE &&
         screen->ticks > 0) {
         g->defocus_paused = 1;
         key = 0;
     }
-    if (g->defocus_paused != 0 && key != 0 && !(key & 0x200) && key != SDLK_F12) {
-        if (key == SDLK_PAUSE || (g->any_key_unpauses != 0 && g->training_menu == 0) || key == SDLK_SCROLLOCK) {
+    if (g->defocus_paused != 0 && key != 0 && !(key & 0x200) && key != ENGINE_KEY_F12) {
+        if (key == ENGINE_KEY_PAUSE || (g->any_key_unpauses != 0 && g->training_menu == 0) || key == ENGINE_KEY_SCROLLOCK) {
             g->defocus_paused = 0;
-            if (key == SDLK_SCROLLOCK) {
+            if (key == ENGINE_KEY_SCROLLOCK) {
                 g->frame_step = 1;
                 Game_DebugKeys(screen);
                 return 1;
@@ -151,14 +151,8 @@ int Game_DebugKeys(ScreenLoop *screen)
      * the engine's own value; events.c converts every key to that numbering
      * before it reaches g_keyState.
      */
-#ifdef MUGEN_SDL2
-#define GAME_KEY_RCTRL 305      /* SDL 1.2 SDLK_RCTRL */
-#define GAME_KEY_LCTRL 306      /* SDL 1.2 SDLK_LCTRL */
-#else
-#define GAME_KEY_RCTRL SDLK_RCTRL
-#define GAME_KEY_LCTRL SDLK_LCTRL
-#endif
-    if (!g_keyState[GAME_KEY_RCTRL] && !g_keyState[GAME_KEY_LCTRL]) {
+
+    if (!g_keyState[ENGINE_KEY_RCTRL] && !g_keyState[ENGINE_KEY_LCTRL]) {
         return 1;
     }
     if (keys) {
@@ -167,7 +161,9 @@ int Game_DebugKeys(ScreenLoop *screen)
             g->vretrace_on = v;
             if (g_vretrace != v) {
                 if (g_renderMode == 2 || g_renderMode == 1) {
+#ifndef ANDROID_PORT
                     SDL_GL_SetAttribute(SDL_GL_SWAP_CONTROL, v != 0);
+#endif
                     g = g_game;
                 }
                 g_vretrace = v;
@@ -196,7 +192,7 @@ int Game_DebugKeys(ScreenLoop *screen)
             g->sound_enabled = 1;
         }
     }
-    if (!g_keyState[GAME_KEY_RCTRL] && !g_keyState[GAME_KEY_LCTRL]) {
+    if (!g_keyState[ENGINE_KEY_RCTRL] && !g_keyState[ENGINE_KEY_LCTRL]) {
         return 1;
     }
     if (key == 'd' && g->allow_debug_mode != 0) {
@@ -520,9 +516,12 @@ int Game_Draw(ScreenLoop *screen)
                     g_palFxCur = it->palfx;
                     g_palRemapCur = it->remap;
                     if (it->sprites != NULL) {
+#ifndef ANDROID_PORT
                         if (g_renderMode == 2) {
                             Sprite_DrawGL(it->sprites, it->sprite, &it->dp);
-                        } else {
+                        } else
+#endif
+                        {
                             Sprite_DrawSoft(it->sprites, it->sprite, &it->dp);
                         }
                     }
@@ -825,7 +824,7 @@ int Screen_ReadInput(ScreenLoop *screen)
     if (key == 27) {
         screen->done = 1;
     }
-    if (key == SDLK_F12) {
+    if (key == ENGINE_KEY_F12) {
         g->screenshot_requested = 1;
         g->skip_draw = 0;
     }

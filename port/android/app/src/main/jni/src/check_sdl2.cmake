@@ -1,0 +1,13 @@
+if(NOT EXISTS "${READELF}")
+    message(FATAL_ERROR "readelf is required to verify Android SDL2 linkage")
+endif()
+foreach(lib IN LISTS LIBRARIES)
+    execute_process(COMMAND "${READELF}" -d "${lib}"
+                    OUTPUT_VARIABLE dynamic RESULT_VARIABLE result ERROR_VARIABLE error)
+    if(NOT result EQUAL 0)
+        message(FATAL_ERROR "Cannot inspect ${lib}: ${error}")
+    endif()
+    if(dynamic MATCHES "\\[(libSDL(-1\\.2)?\\.so[^]]*|libSDL_(gfx|ttf|mixer)\\.so[^]]*)\\]")
+        message(FATAL_ERROR "SDL 1.2 runtime dependency in ${lib}: ${dynamic}")
+    endif()
+endforeach()

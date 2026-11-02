@@ -101,6 +101,7 @@ int Pal_Init(Palette *pal, int count, void *colors, int flags)
     if (colors == NULL || count == 0) {
         return 1;
     }
+#ifndef ANDROID_PORT
     if (!(flags & PAL_NO_TEXTURE) && gl) {
         pal->is_texture = 1;
         tex = GlTex_Create();
@@ -127,7 +128,9 @@ int Pal_Init(Palette *pal, int count, void *colors, int flags)
         if (take) {
             free(colors);
         }
-    } else {
+    } else
+#endif
+    {
         pal->is_texture = 0;
         if (flags & PAL_COPY) {
             void *copy = calloc(1, count * 4);
@@ -156,12 +159,15 @@ void Pal_Free(Palette *pal)
 {
     pal_cache_drop(pal);
     if (pal->owns) {
+#ifndef ANDROID_PORT
         if (pal->is_texture == 1 && pal->data != NULL) {
             /* A texture that is still in use is not released (nor freed). */
             if (GlTex_Delete(pal->data)) {
                 free(pal->data);
             }
-        } else if (pal->data != NULL) {
+        } else
+#endif
+        if (pal->data != NULL) {
             free(pal->data);
         }
     }
@@ -177,7 +183,7 @@ void Pal_Free(Palette *pal)
  * loses its color.
  */
 PalFx *PalFx_Init(PalFx *fx, const PalFx *src)
-{
+        {
     fx->color = 0;
     if (src != NULL) {
         int *d = (int *)fx;

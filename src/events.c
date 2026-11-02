@@ -9,7 +9,9 @@
 /* <SDL.h> comes from mugen.h, which pulls it in after glad.h. */
 
 #include "mugen.h"
+#ifdef MUGEN_SDL2_API
 #include "sdl2keys.h"
+#endif
 
 #ifdef MUGEN_VITA_GL
 /*
@@ -249,26 +251,43 @@ void Events_Poll(void)
          * SDL_APP_TERMINATING. Only the focus callback and the mod-state refresh
          * are reproduced; SDL_ShowCursor has no meaning on a touch device.
          */
-        case SDL_APP_WILLENTERBACKGROUND:
-            /*
-             * B7: release held keys/buttons on suspend. Without this a
-             * button held when the app backgrounds stays set across resume
-             * (Input_ResetState rebuilds from g_keyState/g_padButtonState),
-             * so the fighter keeps walking/punching with no finger down.
-             * The matching resync on foreground comes from
-             * Keyboard_SyncState via System_OnFocusGained.
-             */
-            memset(g_keyState, 0, sizeof(g_keyState));
-            memset(g_padButtonState, 0, sizeof(g_padButtonState));
+        case SDL_APP_WILLENTERBACKGROUND: {
+            int key;
+            Android_SetBackground(1);
+            /* Release held engine inputs before Android suspends the SDL thread. */
+            for (key = 1; key < INPUT_KEY_COUNT; key++) {
+                if (g_keyState[key]) {
+                    Keyboard_HandleKey(key, 0);
+                }
+            }
+            /* Preserve B7's pad-release behavior and notify active mappings. */
+            for (key = 1; key < INPUT_PAD_COUNT; key++) {
+                if (g_padButtonState[key]) {
+                    Pads_SetButton(key, 0);
+                }
+            }
             if (g_onActivate != NULL) {
                 g_onActivate(0);
             }
             break;
+        }
         case SDL_APP_DIDENTERFOREGROUND:
+            Android_SetBackground(0);
             g_keyModState = SDL_GetModState();
             if (g_onActivate != NULL) {
                 g_onActivate(1);
             }
+            break;
+        case SDL_JOYDEVICEADDED:
+        case SDL_JOYDEVICEREMOVED:
+            Android_PadDeviceEvent(&ev);
+            break;
+        case SDL_RENDER_DEVICE_RESET:
+        case SDL_RENDER_TARGETS_RESET:
+            Android_ResetRenderer();
+            break;
+        case SDL_APP_TERMINATING:
+            g_quitRequested = 1;
             break;
 #elif defined(MUGEN_SDL2)
         /*
@@ -324,7 +343,13 @@ void Events_Poll(void)
              * hundreds of megabytes past the array. Sdl2_EngineKey() is the one
              * conversion, and 0 means "a key SDL 1.2 did not have".
              */
-#if defined(MUGEN_SDL2) || defined(MUGEN_ANDROID_SW)
+#ifdef ANDROID_PORT
+            int engine_key = Sdl2_EngineKey(ev.key.keysym.sym);
+            if (ev.type == SDL_KEYDOWN && ev.key.repeat && !g_keyboardKeepRepeat &&
+                (g_console == NULL || !g_console->open)) {
+                break;
+            }
+#elif defined(MUGEN_SDL2)
             int engine_key = Sdl2_EngineKey(ev.key.keysym.sym);
 #else
             int engine_key = ev.key.keysym.sym;
@@ -361,7 +386,7 @@ void Events_Poll(void)
             }
             break;
         }
-#if defined(MUGEN_SDL2) || defined(MUGEN_ANDROID_SW)
+#ifdef MUGEN_SDL2_API
         /*
          * SDL2 delivers typed text separately from the key event. Decoding the
          * first UTF-8 sequence reproduces what SDL 1.2 put in keysym.unicode:

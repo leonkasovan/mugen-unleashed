@@ -343,6 +343,7 @@ int Stream_ReadU32(Stream *s, unsigned int *out)
 
 /* ---- SDL_RWops over a stream ---- */
 
+#ifndef ANDROID_PORT
 /*
  * 0x00467300. For memory streams SEEK_CUR computes an absolute position but
  * still passes SEEK_CUR to Stream_Seek, and SEEK_END is refused; kept as is.
@@ -450,9 +451,17 @@ static int SDLCALL StreamRW_Close(SDL_RWops *rw)
     return 0;
 }
 
+#endif /* !ANDROID_PORT */
+
 /* 0x00467420: RWops that reads through the stream (file and memory streams only). */
 SDL_RWops *Stream_ToRWops(Stream *s)
 {
+#ifdef ANDROID_PORT
+    /* Native SDL2 RWops already implement size, 64-bit seek and ownership.
+     * Keep the Stream alive until the decoder and its RWops are destroyed. */
+    return Stream_ToSDLRWops(s);
+#else
+
     SDL_RWops *rw;
     StreamRW *ctx;
 
@@ -496,6 +505,7 @@ SDL_RWops *Stream_ToRWops(Stream *s)
     }
     rw->hidden.unknown.data1 = ctx;
     return rw;
+#endif
 }
 
 /* 0x004674C0: plain SDL RWops over the remaining data (file and memory streams only). */

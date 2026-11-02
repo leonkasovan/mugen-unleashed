@@ -26,7 +26,7 @@ int Pads_Init(void)
     int found = 0;
     int i;
 
-#ifdef MUGEN_SDL2
+#ifdef MUGEN_SDL2_API
     /*
      * SDL2: the joystick and game-controller subsystems are separate services
      * and SDL_NumJoysticks/SDL_JoystickOpen return 0 with "Joystick system not
@@ -81,9 +81,11 @@ void Input_DeinitPads(void)
 {
     int i;
 
+#ifndef ANDROID_PORT
     if (g_padsActive == 0) {
         return;
     }
+#endif
     g_padHandler = NULL;
     memset(g_padButtonState, 0, INPUT_PAD_COUNT + 1);
     g_padQueueWrite = 0;
@@ -101,6 +103,9 @@ void Input_DeinitPads(void)
         if (SDL_JoystickOpened(i) && g_pads[i].joystick != NULL) {
 #endif
             SDL_JoystickClose(g_pads[i].joystick);
+#ifdef ANDROID_PORT
+            g_pads[i].joystick = NULL;
+#endif
         }
     }
     g_padsActive = 0;
@@ -188,6 +193,13 @@ void Pads_HandleEvent(const SDL_Event *ev)
     if (slot < 0) {
         return;
     }
+#ifdef ANDROID_PORT
+    /* Android devices may report more controls than the engine's pad slot. */
+    if ((ev->type == SDL_JOYAXISMOTION && (int)ev->jaxis.axis * 2 + 2 >= PAD_BUTTONS) ||
+        (ev->type == SDL_JOYHATMOTION && g_pads[slot].hat_base + 4 >= PAD_BUTTONS)) {
+        return;
+    }
+#endif
     if (ev->type == SDL_JOYHATMOTION) {
         int base = slot * PAD_BUTTONS + g_pads[slot].hat_base + 1;
 
@@ -325,3 +337,64 @@ long long Input_FindKey(int *const *maps, int count, int code)
     }
     return 0;
 }
+
+#ifdef ANDROID_PORT
+/* Native SDL2 hotplug. Keep existing pad slots stable when a device leaves. */
+void Android_PadDeviceEvent(const SDL_Event *event)
+{
+    int i, slot = -1;
+    SDL_Joystick *joystick;
+    SDL_JoystickID id;
+    Pad *pad;
+
+    if (g_game != NULL && g_game->nojoy) {
+        return;
+    }
+    if (event->type == SDL_JOYDEVICEREMOVED) {
+        for (i = 0; i < g_padCount; i++) {
+            int button;
+            if (g_pads[i].joystick == NULL ||
+                SDL_JoystickInstanceID(g_pads[i].joystick) != event->jdevice.which) {
+                continue;
+            }
+            for (button = 1; button < PAD_BUTTONS; button++) {
+                int code = i * PAD_BUTTONS + button;
+                if (g_padButtonState[code]) {
+                    Pads_SetButton(code, 0);
+                }
+            }
+            SDL_JoystickClose(g_pads[i].joystick);
+            memset(&g_pads[i], 0, sizeof(Pad));
+        }
+        return;
+    }
+    id = SDL_JoystickGetDeviceInstanceID(event->jdevice.which);
+    if (id < 0) {
+        return;
+    }
+    for (i = 0; i < PAD_MAX; i++) {
+        if (g_pads[i].joystick != NULL && SDL_JoystickInstanceID(g_pads[i].joystick) == id) {
+            return; /* already opened at startup */
+        }
+        if (slot < 0 && g_pads[i].joystick == NULL) {
+            slot = i;
+        }
+    }
+    if (slot < 0 || (joystick = SDL_JoystickOpen(event->jdevice.which)) == NULL) {
+        return;
+    }
+    pad = &g_pads[slot];
+    pad->joystick = joystick;
+    pad->hat_base = SDL_JoystickNumAxes(joystick) * 2;
+    pad->button_base = pad->hat_base + SDL_JoystickNumHats(joystick) * 4;
+    pad->button_count = pad->button_base + SDL_JoystickNumButtons(joystick);
+    if (pad->button_count > PAD_BUTTONS) {
+        pad->button_count = PAD_BUTTONS;
+    }
+    if (g_padCount <= slot) {
+        g_padCount = slot + 1;
+    }
+    g_padsActive = 1;
+    SDL_JoystickEventState(SDL_ENABLE);
+}
+#endif

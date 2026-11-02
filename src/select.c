@@ -1483,9 +1483,12 @@ int Charsel_Draw(ScreenLoop *screen, CharselState *st)
                 g_palFxCur = it->palfx;
                 g_palRemapCur = it->remap;
                 if (it->sprites != NULL) {
+#ifndef ANDROID_PORT
                     if (g_renderMode == 2) {
                         Sprite_DrawGL(it->sprites, it->sprite, &it->dp);
-                    } else {
+                    } else
+#endif
+                    {
                         Sprite_DrawSoft(it->sprites, it->sprite, &it->dp);
                     }
                 }

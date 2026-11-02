@@ -268,18 +268,9 @@ int Error_ShowDialog(const char *text, const char *title)
                     (LPARAM)&data);
     return 0;
 #elif defined(ANDROID_PORT)
-    /*
-     * Android port: report through logcat.
-     *
-     * There is no stderr to read on a device (stdout/stderr go nowhere unless a
-     * developer attaches `adb logcat`), so writing the message to SDL's stream
-     * was as invisible here as it was on the Vita -- the exact failure this
-     * #elif chain exists to avoid on each target. __android_log_print reaches
-     * `adb logcat -s mugen`.
-     */
+    /* Native SDL2 logging reaches Android logcat and the host test logger. */
     {
-        extern int __android_log_print(int prio, const char *tag, const char *fmt, ...);
-        __android_log_print(6 /* ANDROID_LOG_ERROR */, "mugen", "error: %s",
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "mugen: %s",
                             (text != NULL && text[0] != '\0') ? text
                             : (title != NULL ? title : "(no message)"));
     }

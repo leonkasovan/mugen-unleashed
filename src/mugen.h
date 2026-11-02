@@ -26,19 +26,7 @@
  * included (it is generated with the compatibility profile).
  */
 #ifdef ANDROID_PORT
-/*
- * Android port (port/android): no GL loader at all.
- *
- * The port builds the software (System) renderer only -- glrender.c is excluded
- * from the Android build -- so nothing in the compiled engine references a GL
- * symbol. Including glad here would require the desktop GL loader machinery
- * (generated for wglGetProcAddress / glXGetProcAddressARB), which does not
- * exist on Android; the device has GLES, not desktop GL.
- *
- * The engine's SDL CALLS are supplied by port/android/app/src/main/jni/src/
- * android_main.h, which the Android CMakeLists force-includes; that header
- * reimplements the SDL 1.2 video subset over SDL2.
- */
+/* Android uses native SDL2 rendering; desktop GL is not compiled. */
 #elif defined(MUGEN_VITA_GL)
 /*
  * PS Vita port (port/psvita): glad is not part of that build. It is generated
@@ -60,6 +48,10 @@
 #endif
 
 #include <SDL.h>
+#include "engine_keys.h"
+#ifdef ANDROID_PORT
+#include "android_platform.h"
+#endif
 #include <unzip.h>
 #include <png.h>
 

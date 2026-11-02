@@ -10,7 +10,9 @@
 /* <SDL.h> comes from mugen.h, which pulls it in after glad.h. */
 
 #include "mugen.h"
+#ifdef MUGEN_SDL2_API
 #include "sdl2keys.h"
+#endif
 
 /*
  * 0x0046E290: a key went down (pressed != 0) or up. Key 0 is ignored. The
@@ -19,7 +21,12 @@
  */
 void Keyboard_HandleKey(int key, int pressed)
 {
+    /* Android port fix: OS keycodes must never escape the configuration ID space. */
+#ifdef ANDROID_PORT
+    if (key <= 0 || key >= INPUT_KEY_COUNT || key >= (int)sizeof(g_keyState)) {
+#else
     if (key == 0) {
+#endif
         return;
     }
     g_keyModState = SDL_GetModState();
@@ -51,7 +58,9 @@ int Keyboard_Init(void)
     g_keyHandler = NULL;
     if (g_keyboardKeepRepeat == 0) {
         g_keyboardKeepRepeat = 0;
+#ifndef ANDROID_PORT
         SDL_EnableKeyRepeat(0, 0);
+#endif
     }
     g_keyboardQueueWrite = 0;
     g_keyboardQueueRead = 0;
@@ -66,59 +75,25 @@ int Keyboard_Init(void)
 void Keyboard_SyncState(void)
 {
     int count;
+#ifdef ANDROID_PORT
+    const Uint8 *state = SDL_GetKeyboardState(&count);
+#else
     const Uint8 *state = SDL_GetKeyState(&count);
+#endif
     int i;
 
 #ifdef MUGEN_SDL2_API
-    /*
-     * SDL2 indexes its key-state array by SCANCODE, SDL 1.2 by KEYCODE, and the
-     * two numbering schemes are unrelated --
-     *
-     *     SDLK_a         = 97 ('a', the same in both)
-     *     SDL_SCANCODE_A = 4
-     *     SDL 1.2 SDLK_UP   = 273
-     *     SDL2  SDLK_UP     = scancode|0x40000000
-     *     SDL2  SCANCODE_UP = 82
-     *
-     * The generic loop below would therefore copy scancode-indexed data into a
-     * keycode-indexed array, clobbering the values Keyboard_HandleKey writes
-     * correctly from the translated event. This runs on System_OnFocusGained,
-     * i.e. every time the app returns to the foreground, so it is not an edge
-     * case.
-     *
-     * The conversion is the inverse of events.c's: for each engine key
-     * identifier i, find the SDL2 keycode that translates to i
-     * (Sdl2_SdlKeyForEngineKey), and read that key's current scancode.
-     *
-     * `count` is unused on this path: SDL2's array length is a scancode count,
-     * which says nothing about how many keycodes are set.
-     */
-    (void)count;
-#if defined(MUGEN_SDL2) || defined(MUGEN_ANDROID_SW)
-    /*
-     * Every SDL2 consumer uses the shared inverse table (src/sdl2keys.c),
-     * which is the exact inverse of the translation events.c applies, so
-     * resync and event delivery cannot disagree. The old Android fallback
-     * (SDL_GetScancodeFromKey on the engine keycode directly) is gone: for
-     * non-printable keys the engine numbering is not a valid SDL2 keycode,
-     * so every arrow/F-key/modifier resynced to 0.
-     */
+    /* Both SDL2 targets use the shared inverse config-ID table. Native SDL2
+     * keyboard state is indexed by scancode, never by the engine key number. */
     memset(g_keyState, 0, sizeof(g_keyState));
-    for (i = 1; i < INPUT_KEY_COUNT && i < (int)(sizeof(g_keyState)); i++) {
-        SDL_Keycode sdl_key = Sdl2_SdlKeyForEngineKey(i);
-        SDL_Scancode sc;
+    for (i = 1; i < INPUT_KEY_COUNT && i < (int)sizeof(g_keyState); i++) {
+        SDL_Keycode key = Sdl2_SdlKeyForEngineKey(i);
+        SDL_Scancode sc = SDL_GetScancodeFromKey(key);
 
-        if (sdl_key == SDLK_UNKNOWN) {
-            continue;
-        }
-        sc = SDL_GetScancodeFromKey(sdl_key);
-        if (sc != SDL_SCANCODE_UNKNOWN && (int)sc < SDL_NUM_SCANCODES) {
+        if (sc != SDL_SCANCODE_UNKNOWN && (int)sc < count) {
             g_keyState[i] = state[sc];
         }
     }
-#else
-    /* SDL 1.2 desktop below: key-state array is already keycode-indexed. */
-#endif
     return;
 #endif
     if (count > 0x143) {
@@ -143,9 +118,20 @@ int Keyboard_SetEventHandler(KeyEventFn fn)
         return 0;
     }
     g_keyEventHandler = fn;
+#ifdef ANDROID_PORT
+    if (fn != NULL) {
+        /* Keep physical text/debug bindings active without opening the mobile
+         * IME at startup. Console_Toggle enables it while editing. */
+        SDL_SetHint(SDL_HINT_ENABLE_SCREEN_KEYBOARD, "0");
+        SDL_StartTextInput();
+    } else {
+        SDL_StopTextInput();
+    }
+#else
     if (fn != NULL) {
         SDL_EnableUNICODE(1);
     }
+#endif
     return 1;
 }
 

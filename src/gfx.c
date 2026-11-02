@@ -21,7 +21,9 @@
 #include "mugen.h"
 
 /* SDL_gfx, as in src/font.c: the header is not in the SDK. */
+#ifndef ANDROID_PORT
 extern SDL_Surface *__cdecl zoomSurface(SDL_Surface *src, double zoomx, double zoomy, int smooth);
+#endif
 
 #define GL_FRAMEBUFFER_EXT 0x8D40
 
@@ -118,13 +120,16 @@ SpriteSet *Screen_Create(int depth, int width, int height)
         return NULL;
     }
     for (i = 0; i < 1; i++) {
+#ifndef ANDROID_PORT
         if (g_renderMode == RENDER_OPENGL) {
             void *vbuf = GlVbuf_Alloc(depth, width, height);
             if (!Sprite_Init(SPRITE_INIT_OWN, &spr, SPRITE_FORMAT_TEXTURE, vbuf, 0x1C, width, height, depth, 0, 0)) {
                 SpriteSet_Free(set);
                 return NULL;
             }
-        } else {
+        } else
+#endif
+        {
             const SDL_PixelFormat *fmt = g_videoSurface->format;
             SDL_Surface *surface = SDL_CreateRGBSurface(0, width, height, depth, fmt->Rmask, fmt->Gmask, fmt->Bmask,
                                                         fmt->Amask);
@@ -190,7 +195,11 @@ int Gfx_SetRenderTarget(SpriteSet *target, int index)
     g_targetBpp = spr->bpp;
     g_targetBytesPerPixel = (spr->bpp + 7) >> 3;
     g_clipRowSkip = 0;
+#ifdef ANDROID_PORT
+    if (spr->format == SPRITE_FORMAT_TEXTURE) {
+#else
     if (spr->format == SPRITE_FORMAT_TEXTURE && (spr->pixels == NULL || !GlVbuf_Bind(spr->pixels))) {
+#endif
         return 0;
     }
     Gfx_SetClipRect(0, 0, g_targetWidth, g_targetHeight);
@@ -240,6 +249,7 @@ SDL_Surface *Gfx_GetScreenSurface(void)
     return NULL;
 }
 
+#ifndef ANDROID_PORT
 /* Smallest power of two >= n, computed as the original does (0 for n <= 1). */
 static int Gfx_NextPow2(int n)
 {
@@ -292,6 +302,7 @@ static void Gfx_PresentGlScreen(const SDL_Surface *surface)
     free(rgba);
 }
 
+#endif
 /*
  * 0x0046BCF0: g_gfxPresent of the System and OpenGLScreen renderers: shows
  * the screen buffer (sprite `sprite` of set) at (x, y), then flips the video
@@ -411,6 +422,29 @@ static void Vita_ScaleToVideo(SDL_Surface *src, SDL_Surface *dst)
 
 void Gfx_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
 {
+#ifdef ANDROID_PORT
+    SDL_Surface *surface;
+    SDL_Rect dst;
+
+    if (g_gfxPrePresent != NULL) {
+        SpriteSet *target = g_renderTarget;
+        int target_sprite = g_renderTargetSprite;
+        g_gfxPrePresent(set, sprite);
+        Gfx_SetRenderTarget(target, target_sprite);
+    }
+    surface = SpriteSet_GetSurface(set, sprite);
+    if (surface == NULL || g_screenSurface == NULL) {
+        return;
+    }
+    dst.x = (int)x;
+    dst.y = (int)y;
+    dst.w = 0;
+    dst.h = 0;
+    if (SDL_BlitSurface(surface, NULL, g_screenSurface, &dst) == 0) {
+        Android_MarkDisplayDirty(g_screenSurface);
+    }
+#else
+
     SDL_Surface *surface = NULL;
 
     if (g_gfxPrePresent != NULL) {
@@ -556,6 +590,8 @@ void Gfx_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
         }
 #endif
     }
+
+#endif
 }
 
 /*
@@ -620,14 +656,17 @@ void Gfx_SetClipRect(int x1, int y1, int x2, int y2)
         rect.h = (Uint16)(y2 - y1);
         SDL_SetClipRect(spr->pixels, &rect);
     }
+#ifndef ANDROID_PORT
     if (g_renderMode == RENDER_OPENGL) {
         Gl_ApplyClipRect();
     }
+#endif
+
 }
 
 /* v * scale rounded to the nearest integer (halves up), with the original's float steps. */
 static int Gfx_ScaleRound(float v, float scale)
-{
+    {
     float scaled = v * scale;
     float rounded = (float)floor(scaled + 0.5);
 

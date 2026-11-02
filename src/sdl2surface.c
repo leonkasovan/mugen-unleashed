@@ -1,3 +1,4 @@
+#if defined(MUGEN_SDL2) || defined(ANDROID_PORT) || defined(MUGEN_ANDROID_SW)
 /*
  * Shared SDL2 nearest-neighbour scaler, proven against libSDL_gfx.
  *
@@ -10,6 +11,8 @@
  * renderer, texture or audio state here -- pure surface math.
  */
 #include "sdl2surface.h"
+#include <math.h>
+#include <limits.h>
 
 /* --------------------------------------------------------------- zoomSurface */
 
@@ -271,7 +274,7 @@ static SDL_Surface *Sdl2_ZoomNearest(SDL_Surface *src, int dw, int dh)
     return dst;
 }
 
-SDL_Surface *zoomSurface(SDL_Surface *src, double zoomx, double zoomy, int smooth)
+SDL_Surface *Sdl2_ScaleSurface(SDL_Surface *src, double zoomx, double zoomy, int smooth)
 {
     int dw, dh;
     SDL_Surface *dst;
@@ -279,7 +282,9 @@ SDL_Surface *zoomSurface(SDL_Surface *src, double zoomx, double zoomy, int smoot
     if (src == NULL) {
         return NULL;
     }
-    if (!(zoomx > 0.0) || !(zoomy > 0.0)) {
+    if (!(zoomx > 0.0) || !(zoomy > 0.0) || !isfinite(zoomx) || !isfinite(zoomy) ||
+        !isfinite((double)src->w * zoomx) || !isfinite((double)src->h * zoomy) ||
+        (double)src->w * zoomx + 0.5 > INT_MAX || (double)src->h * zoomy + 0.5 > INT_MAX) {
         SDL_SetError("zoomSurface: zoom factors must be positive");
         return NULL;
     }
@@ -361,3 +366,13 @@ SDL_Surface *zoomSurface(SDL_Surface *src, double zoomx, double zoomy, int smoot
     }
     return Sdl2_ZoomNearest(src, dw, dh);
 }
+
+#ifndef ANDROID_PORT
+/* Desktop SDL_gfx entry point retained for the reconstructed desktop path. */
+SDL_Surface *zoomSurface(SDL_Surface *src, double zoomx, double zoomy, int smooth)
+{
+    return Sdl2_ScaleSurface(src, zoomx, zoomy, smooth);
+}
+#endif
+
+#endif /* SDL2 consumers only */

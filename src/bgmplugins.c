@@ -770,12 +770,6 @@ const char *Mpg123_StrError(void *instance, int err)
 const char *Sdlmix_Extensions(void)
 {
 #ifdef ANDROID_PORT
-    /*
-     * Android port: the companion SDL2_mixer is built with STB-vorbis and
-     * drMP3 (WAV/OGG/MP3) and without tracker/MIDI decoders (PLAN B5). The
-     * desktop list below would route every common music asset to a decoder
-     * this mixer cannot load; advertise what this mixer actually decodes.
-     */
     return "wav,mp3,ogg,vorbis";
 #else
     return "669,amf,apun,dsm,far,gdm,it,imf,mod,med,mtm,okt,s3m,stm,stx,ult,uni,xm,mid,midi";
@@ -888,6 +882,10 @@ void *Sdlmix_Create(void)
 /* Frees inst's music and unhooks the end callback. */
 static void Sdlmix_FreeMusic(SdlmixInstance *inst)
 {
+#ifdef ANDROID_PORT
+    /* Unhook before freeing: SDL2_mixer may halt a playing stream here. */
+    Mix_HookMusicFinished(NULL);
+#endif
     if (inst->music != NULL) {
         Mix_FreeMusic(inst->music);
     }
@@ -926,26 +924,22 @@ int Sdlmix_Open(void *instance, const BgmPluginIo *io, BgmInfo *info, BgmOpenRes
     }
     inst->type = Sdlmix_Classify(g_sdlmixHost.get_extension(info->path));
 #ifdef ANDROID_PORT
-    /*
-     * Android port: accept exactly what the companion mixer decodes
-     * (WAV/OGG/MP3 via STB-vorbis and drMP3) and refuse the tracker/MIDI
-     * types the desktop route serves -- this mixer was built with those
-     * decoders off. The desktop keeps the original refusal below.
-     */
     if (inst->type != SDLMIX_TYPE_WAV && inst->type != SDLMIX_TYPE_MP3 && inst->type != SDLMIX_TYPE_OGG) {
-        return 4;
-    }
 #else
     if (inst->type == 0 || inst->type == SDLMIX_TYPE_WAV || inst->type == SDLMIX_TYPE_MP3 ||
         inst->type == SDLMIX_TYPE_OGG) {
+#endif
         return 4;
     }
-#endif
     rw = Stream_ToRWops((Stream *)io->handle);
     if (rw == NULL) {
         return 4;
     }
-#ifdef MUGEN_SDL2_API
+#ifdef ANDROID_PORT
+    /* Transfer the native SDL2 RWops to SDL2_mixer on both success and failure.
+     * The underlying Stream belongs to BgmStream and outlives the decoder. */
+    inst->music = Mix_LoadMUS_RW(rw, 1);
+#elif defined(MUGEN_SDL2_API)
     /*
      * SDL2_mixer 2 takes a second argument saying whether the RWops is freed
      * with the music. The SDL 1.2 call took one argument and never took
@@ -961,9 +955,11 @@ int Sdlmix_Open(void *instance, const BgmPluginIo *io, BgmInfo *info, BgmOpenRes
     if (inst->music == NULL) {
         return 4;
     }
+#ifndef ANDROID_PORT
     if (inst->type - 1u <= 1u) {
         rw->close(rw);
     }
+#endif
     inst->loop = info->loop;
     inst->loop_start = info->loop_start;
     inst->loop_end = info->loop_end;
@@ -999,9 +995,19 @@ int Sdlmix_Start(void *instance)
     }
     inst->finished = 0;
     Sdlmix_SetVolume(inst, inst->volume);
+#ifdef ANDROID_PORT
+    /* SDL2_mixer: zero repeats means one playback. Report decoder failures. */
+    inst->ended = 0;
+    Mix_HookMusicFinished(Sdlmix_OnFinished);
+    if (Mix_PlayMusic(inst->music, inst->loop == 0 ? 0 : -1) < 0) {
+        Mix_HookMusicFinished(NULL);
+        return 3;
+    }
+#else
     Mix_PlayMusic(inst->music, inst->loop == 0 ? 1 : -1);
     Mix_HookMusicFinished(Sdlmix_OnFinished);
     inst->ended = 0;
+#endif
     return 0;
 }
 

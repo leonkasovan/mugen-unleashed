@@ -239,16 +239,10 @@ void Screen_EndFrame(void)
     }
     Screen_Present();
 #ifdef ANDROID_PORT
-    /*
-     * Android port: end of frame, present at most once.
-     *
-     * SDL_UpdateRect is called from draw paths as well as from Gfx_Present, and
-     * each request uploads the whole surface. Android_PresentFrame marks the
-     * frame boundary so repeated requests inside one frame collapse into a
-     * single texture upload and SDL_RenderPresent. See android_video.c (M2 in
-     * port/android/REVIEW.md).
-     */
-    Android_PresentFrame();
+    /* Only the frame boundary uploads/presents; skipped frames stay skipped. */
+    if (!g_game->skip_draw && Android_PresentFrame() < 0) {
+        SDL_LogError(SDL_LOG_CATEGORY_RENDER, "MUGEN frame presentation: %s", SDL_GetError());
+    }
 #endif
     Frame_ResetPalFx();
     Frame_UpdateSkip();

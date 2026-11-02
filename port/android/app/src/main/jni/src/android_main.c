@@ -19,7 +19,7 @@
 #include <SDL.h>
 #include <SDL_main.h>
 
-#include "android_main.h"
+#include "android_platform.h"
 
 #define ALOG_TAG "mugen"
 
@@ -256,6 +256,7 @@ static void extract_assets(void)
     SDL_RWops *payload;
     char *buf;
     Sint64 size;
+    Sint64 payload_bytes;
     int ok = 1;
     int count = 0;
     int skipped = 0;
@@ -269,13 +270,14 @@ static void extract_assets(void)
                             "asset payload missing; the APK was built without one");
         return;
     }
-    if (SDL_RWread(payload, payload_hash, 1, sizeof(payload_hash) - 1) <= 0) {
+    payload_bytes = (Sint64)SDL_RWread(payload, payload_hash, 1, sizeof(payload_hash) - 1);
+    if (payload_bytes <= 0) {
         SDL_RWclose(payload);
         __android_log_print(ANDROID_LOG_ERROR, ALOG_TAG, "cannot read asset payload");
         return;
     }
     SDL_RWclose(payload);
-    payload_hash[sizeof(payload_hash) - 1] = '\0';
+    payload_hash[payload_bytes] = '\0';
 
     snprintf(stamp, sizeof(stamp), "%s/%s", assets_dir(), ASSET_STAMP);
     {

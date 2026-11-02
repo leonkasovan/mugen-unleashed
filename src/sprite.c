@@ -101,6 +101,7 @@ int Sprite_Init(unsigned int flags, Sprite *spr, int format, void *data, size_t 
     }
     spr->format = format;
 
+#ifndef ANDROID_PORT
     if (!(flags & SPRITE_INIT_NO_TEXTURE) && gl && format == SPRITE_FORMAT_RAW) {
         void *upload = data;
         void *scaled = NULL;
@@ -167,7 +168,9 @@ int Sprite_Init(unsigned int flags, Sprite *spr, int format, void *data, size_t 
         if (owns) {
             free(data);
         }
-    } else if (copy) {
+    } else
+#endif
+    if (copy) {
         spr->pixels = calloc(1, size);
         if (spr->pixels == NULL) {
             return 0;
@@ -202,7 +205,7 @@ int Sprite_Init(unsigned int flags, Sprite *spr, int format, void *data, size_t 
  * clears it. The pixels are dropped from the decoded sprite cache first.
  */
 void Sprite_Free(Sprite *spr)
-{
+    {
     if (spr == NULL) {
         return;
     }
@@ -212,8 +215,10 @@ void Sprite_Free(Sprite *spr)
     if (spr->owns_pixels && spr->pixels != NULL) {
         if (spr->format == SPRITE_FORMAT_SURFACE) {
             SDL_FreeSurface(spr->pixels);
+#ifndef ANDROID_PORT
         } else if (spr->format == SPRITE_FORMAT_TEXTURE) {
             GlTex_Free(spr->pixels);
+#endif
         } else {
             free(spr->pixels);
         }
@@ -463,9 +468,12 @@ void *Sprite_GetPixels(SpriteSet *set, int sprite)
 /* 0x004659D0: draws a sprite with the current renderer. */
 void Sprite_Draw(SpriteSet *set, int sprite, const DrawParams *dp)
 {
+#ifndef ANDROID_PORT
     if (g_renderMode == RENDER_MODE_GL) {
         Sprite_DrawGL(set, sprite, dp);
-    } else {
+    } else
+#endif
+    {
         Sprite_DrawSoft(set, sprite, dp);
     }
 }

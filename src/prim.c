@@ -192,7 +192,11 @@ void Gfx_SoftPutPixel(int x, int y, unsigned int color)
         break;
     }
     if (surface != NULL) {
+#ifdef ANDROID_PORT
+        Android_MarkDisplayDirty(surface);
+#else
         SDL_UpdateRect(surface, x, y, 1, 1);
+#endif
     }
 }
 
@@ -217,7 +221,11 @@ void Gfx_SoftAddPixel(int x, int y, unsigned int color)
     p = Prim_Pixel16(spr, pixels, x, y);
     *p = Prim_Add565(*p, PRIM_R(c), PRIM_G(c), PRIM_B(c));
     if (surface != NULL) {
+#ifdef ANDROID_PORT
+        Android_MarkDisplayDirty(surface);
+#else
         SDL_UpdateRect(surface, x, y, 1, 1);
+#endif
     }
 }
 
@@ -241,7 +249,11 @@ void Gfx_SoftInvertPixel(int x, int y)
     p = Prim_Pixel16(spr, pixels, x, y);
     *p = (unsigned short)~*p;
     if (surface != NULL) {
+#ifdef ANDROID_PORT
+        Android_MarkDisplayDirty(surface);
+#else
         SDL_UpdateRect(surface, x, y, 1, 1);
+#endif
     }
 }
 
@@ -899,6 +911,7 @@ void Gfx_SoftFillRectSub(int x1, int y1, int x2, int y2, unsigned int color)
     Prim_RectOp(PRIM_OP_SUB, x1, y1, x2, y2, color);
 }
 
+#ifndef ANDROID_PORT
 /* ---- OpenGL renderer ---- */
 
 /* PRIM_GL_CONSTANT_COLOR / _ALPHA are gone: see Prim_GlColor. */
@@ -1175,3 +1188,5 @@ void Gfx_GlFillRectSub(int x1, int y1, int x2, int y2, unsigned int color)
     glEnd();
     glDisable(GL_BLEND);
 }
+
+#endif /* !ANDROID_PORT */

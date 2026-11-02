@@ -8,13 +8,18 @@
 #include <SDL_ttf.h>
 
 #include "mugen.h"
+#ifdef ANDROID_PORT
+#include "sdl2surface.h"
+#endif
 
 #define FONT_LOG_ERROR      3
 #define FONT_PRINTF_SIZE    0x1000      /* Font_Printf buffer, not terminated on overflow */
 #define FONTS_MAX           10          /* font0 .. font9 of Fonts_Load */
 
 /* SDL_gfx (no header in the SDK). */
+#ifndef ANDROID_PORT
 extern SDL_Surface *__cdecl zoomSurface(SDL_Surface *src, double zoomx, double zoomy, int smooth);
+#endif
 
 /* The sprite in slot index of a keyed array of sprites (no check, as in the original). */
 static Sprite *Font_SpriteAt(const KeyedArray *sprites, int index)
@@ -231,10 +236,7 @@ void Font_DrawLineTTF(const char *text, const DrawParams *dp, int len, Font *fon
     color.g = (Uint8)g;
     color.b = (Uint8)b;
 #ifdef MUGEN_SDL2_API
-    /*
-     * SDL2: SDL_Color has no fifth byte, and the shim keeps the SDL 1.2 call
-     * sequence below unchanged.
-     */
+    color.a = 255;
 #else
     color.unused = 0;
 #endif
@@ -293,7 +295,11 @@ void Font_DrawLineTTF(const char *text, const DrawParams *dp, int len, Font *fon
     } else if (scale_x == 1.0f && scale_y == 1.0f) {
         SDL_UpperBlit(surface, NULL, SpriteSet_GetSurface(g_renderTarget, g_renderTargetSprite), &dst);
     } else {
+#ifdef ANDROID_PORT
+        SDL_Surface *zoomed = Sdl2_ScaleSurface(surface, scale_x, scale_y, 0);
+#else
         SDL_Surface *zoomed = zoomSurface(surface, scale_x, scale_y, 0);
+#endif
 
         if (zoomed != NULL) {
             SDL_UpperBlit(zoomed, NULL, SpriteSet_GetSurface(g_renderTarget, g_renderTargetSprite), &dst);

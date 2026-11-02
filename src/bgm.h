@@ -288,8 +288,14 @@ MUGEN_ASSERT_SIZE(BgmThreadId, 0x08);
 
 /* Start-up handshake of the BGM thread (BgmThread_Init): pthread_cond_t and pthread_mutex_t, both pointers. */
 typedef struct BgmThreadStart {
+#ifdef ANDROID_PORT
+    SDL_cond *cond;
+    SDL_mutex *mutex;
+    int ready;                 /* startup predicate, protected by mutex */
+#else
     void *cond;                 /* 0x00 */
     void *mutex;                /* 0x04 */
+#endif
 } BgmThreadStart;
 MUGEN_ASSERT_SIZE(BgmThreadStart, 0x08);
 

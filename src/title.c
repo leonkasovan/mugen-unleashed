@@ -15,6 +15,9 @@
 /* <SDL.h> comes from mugen.h, which pulls it in after glad.h. */
 
 #include "mugen.h"
+#ifdef MUGEN_SDL2_API
+#include "sdl2keys.h"
+#endif
 
 /* Gameflow states returned by Title_Run / Options_Run (see Gameflow_Run). */
 #define GAMEFLOW_TITLE      4
@@ -37,7 +40,7 @@ static const int keyconfig_slots[KEYCONFIG_ENTRIES] = {
 
 /* .rdata 0x4F2038: default keys of each player (also the built-in keys of Input_Init). */
 static const int keyconfig_default_keys[2][KEYCONFIG_ENTRIES] = {
-    { SDLK_UP, SDLK_DOWN, SDLK_LEFT, SDLK_RIGHT, SDLK_COMMA, SDLK_PERIOD, SDLK_SLASH, SDLK_l, SDLK_SEMICOLON,
+    { ENGINE_KEY_UP, ENGINE_KEY_DOWN, ENGINE_KEY_LEFT, ENGINE_KEY_RIGHT, SDLK_COMMA, SDLK_PERIOD, SDLK_SLASH, SDLK_l, SDLK_SEMICOLON,
       SDLK_QUOTE, SDLK_RETURN },
     { SDLK_w, SDLK_s, SDLK_a, SDLK_d, SDLK_f, SDLK_g, SDLK_h, SDLK_r, SDLK_t, SDLK_y, SDLK_u },
 };
@@ -281,7 +284,7 @@ int Title_Update(ScreenLoop *screen, TitleState *st)
      */
     if (st->show_info) {
 #else
-    if (key == SDLK_F1 || st->show_info) {
+    if (key == ENGINE_KEY_F1 || st->show_info) {
 #endif
         st->box_moving = 1;
         st->box_shown = st->box_shown == 0;
@@ -958,10 +961,10 @@ int Options_Update(ScreenLoop *screen, OptionsState *st)
                 cursor[side] = OPTIONS_RETURN;
                 st->accept = 1;
             }
-            if (key == SDLK_F1) {
+            if (key == ENGINE_KEY_F1) {
                 cursor[side] = OPTIONS_INPUT_CONFIG;
                 st->accept = 1;
-            } else if (key == SDLK_F2) {
+            } else if (key == ENGINE_KEY_F2) {
                 cursor[side] = OPTIONS_TEAM_CONFIG;
                 st->accept = 1;
             }
@@ -1027,11 +1030,11 @@ int Options_Update(ScreenLoop *screen, OptionsState *st)
             cursor[0] = 4;
             st->accept = 1;
         }
-        if (key == SDLK_F1) {
+        if (key == ENGINE_KEY_F1) {
             cursor[1] = 0;
             cursor[0] = 0;
             st->accept = 1;
-        } else if (key == SDLK_F2) {
+        } else if (key == ENGINE_KEY_F2) {
             cursor[1] = 2;
             cursor[0] = 2;
             st->accept = 1;
@@ -1456,7 +1459,9 @@ static void KeyConfig_KeyName(int joystick, int v, int none, char *text)
     if (v == none) {
         strcpy(text, "Not used");
     } else if (!joystick) {
-#ifdef MUGEN_SDL2
+#ifdef ANDROID_PORT
+        sprintf(text, "%s", (v > 0 && v < ENGINE_KEY_LIMIT) ? SDL_GetKeyName(Sdl2_SdlKeyForEngineKey(v)) : "");
+#elif defined(MUGEN_SDL2)
         /* v is an engine key (SDL 1.2 numbering); the shim names it. */
         sprintf(text, "%s", (v > 0 && v < SDLK_LAST) ? Sdl2_KeyName(v) : "");
 #else
@@ -1600,16 +1605,16 @@ int KeyConfig_Run(int joystick, int ticks)
         if (key == SDLK_RETURN || (unsigned int)(button - 5) <= 26) {
             accept = 1;
         }
-        if (key == SDLK_UP || button == 1) {
+        if (key == ENGINE_KEY_UP || button == 1) {
             up = 1;
         }
-        if (key == SDLK_DOWN || button == 2) {
+        if (key == ENGINE_KEY_DOWN || button == 2) {
             down = 1;
         }
-        if (key == SDLK_LEFT || button == 3) {
+        if (key == ENGINE_KEY_LEFT || button == 3) {
             left = 1;
         }
-        if (key == SDLK_RIGHT || button == 4) {
+        if (key == ENGINE_KEY_RIGHT || button == 4) {
             right = 1;
         }
         if (state != 0) {
@@ -1619,13 +1624,13 @@ int KeyConfig_Run(int joystick, int ticks)
             right = 0;
             accept = 0;
         }
-        if (key == SDLK_F1 || key == SDLK_F2) {
-            player = key != SDLK_F1;
+        if (key == ENGINE_KEY_F1 || key == ENGINE_KEY_F2) {
+            player = key != ENGINE_KEY_F1;
             item = 0;
             accept = 1;
         }
-        if (key == SDLK_F3 || key == SDLK_F4) {
-            player = key != SDLK_F3;
+        if (key == ENGINE_KEY_F3 || key == ENGINE_KEY_F4) {
+            player = key != ENGINE_KEY_F3;
             item = KEYCONFIG_DEFAULT;
             accept = 1;
         }

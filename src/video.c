@@ -30,7 +30,8 @@
 
 #include "mugen.h"
 
-#if !defined(MUGEN_VITA_GL) && !defined(MUGEN_ANDROID_SW)
+#ifndef ANDROID_PORT
+#ifndef MUGEN_VITA_GL
 #include <GL/glu.h>
 #else
 /*
@@ -48,6 +49,7 @@ static void gluOrtho2D(GLdouble left, GLdouble right, GLdouble bottom, GLdouble 
 }
 #endif
 
+#endif
 /* ---- coordinates ---- */
 
 /*
@@ -127,24 +129,17 @@ int Video_PreInit(void)
  */
 int Video_Deinit(void)
 {
+#ifdef ANDROID_PORT
+    Android_VideoQuit();
+    g_videoSurface = NULL;
+    g_screenSurface = NULL;
+#endif
     if (g_renderMode == RENDER_OPENGL || g_renderMode == RENDER_OPENGL_SCREEN) {
 #ifndef ANDROID_PORT
         /* Android port: no GL renderer is compiled in. */
         Gl_Deinit();
 #endif
     }
-#ifdef ANDROID_PORT
-    /*
-     * Android port: destroy the window/renderer/texture while the SDL
-     * subsystem is still alive. System_Deinit calls SDL_Quit after this, and
-     * SDL_Destroy* after SDL_Quit is a use-after-shutdown. The old call in
-     * main() after System_Deinit is gone for that reason (B7).
-     * Declared here (not via android_main.h) so desktop builds that define
-     * ANDROID_PORT for syntax checks also see it.
-     */
-    extern void Android_VideoQuit(void);
-    Android_VideoQuit();
-#endif
     if (g_unusedSurface1 != NULL) {
         SDL_FreeSurface(g_unusedSurface1);
     }
@@ -158,6 +153,11 @@ int Video_Deinit(void)
     if (g_sinTable != NULL) {
         free(g_sinTable);
     }
+#ifdef ANDROID_PORT
+    g_sinTable = NULL;
+    g_unusedSurface1 = NULL;
+    g_unusedSurface2 = NULL;
+#endif
     return 1;
 }
 
@@ -226,6 +226,22 @@ int Video_SetMode(int game_width, int game_height, int width, int height, int de
     g_screenSurface = NULL;
     g_unused504230 = 0;
     g_unused504234 = 0;
+#ifdef ANDROID_PORT
+    /* Deliberate Android port behavior: only native SDL2 software presentation.
+     * Renderer selection is validated before loading any sprites. */
+    if (g_renderMode != RENDER_SYSTEM) {
+        g_libraryError = LIBERR_VIDEO_MODE;
+        return 0;
+    }
+    surface = Android_CreateDisplay(sdl_width, sdl_height, depth, g_game->keep_aspect);
+    if (surface == NULL) {
+        Log_Printf("Android display creation failed: %s\n", SDL_GetError());
+        g_libraryError = LIBERR_VIDEO_MODE;
+        return 0;
+    }
+    g_videoSurface = surface;
+    sdl_flags = 0; /* No SDL 1.2 surface/window flags in the Android build. */
+#else
     if (g_renderMode == RENDER_OPENGL || g_renderMode == RENDER_OPENGL_SCREEN) {
         sdl_flags = SDL_OPENGL;
         SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8);
@@ -357,6 +373,7 @@ int Video_SetMode(int game_width, int game_height, int width, int height, int de
                (surface->pixels != NULL) ? "" : " pixels=NULL");
 
 #endif
+#endif /* ANDROID_PORT */
     g_videoGameWidth = game_width;
     g_videoGameHeight = game_height;
     g_videoGamePixels = game_width * game_height;
@@ -373,7 +390,9 @@ int Video_SetMode(int game_width, int game_height, int width, int height, int de
     g_targetBytesPerPixel = bytes;
     g_screenSurface = surface;
     g_unused50424C = 0;
+#ifndef ANDROID_PORT
     SDL_ShowCursor((sdl_flags & SDL_FULLSCREEN) ? SDL_DISABLE : SDL_ENABLE);
+#endif
 #ifdef ANDROID_PORT
     /*
      * Android port: glrender.c and gldetect.c are excluded from the build, so
@@ -402,6 +421,12 @@ int Video_SetMode(int game_width, int game_height, int width, int height, int de
  */
 void Video_OnResize(int width, int height)
 {
+#ifdef ANDROID_PORT
+    /* Android output size changes never change game coordinates or CPU buffers.
+     * SDL2's logical-size renderer adapts its viewport automatically. */
+    (void)width;
+    (void)height;
+#else
     MatchLog_Printf(9, "Video resize event %ix%i\n", width, height);
     switch (g_renderMode) {
     case RENDER_SYSTEM: {
@@ -429,6 +454,7 @@ void Video_OnResize(int width, int height)
         g_videoHeight = height;
         break;
     }
+#endif
 }
 
 /*
@@ -447,14 +473,8 @@ void Video_HandleFullscreenKey(int *key)
      * named SDLK_LALT are scancode|0x40000000 instead, so the index comes from
      * the engine's own value; events.c converts every key to that numbering.
      */
-#ifdef MUGEN_SDL2
-#define VIDEO_KEY_RALT 307      /* SDL 1.2 SDLK_RALT */
-#define VIDEO_KEY_LALT 308      /* SDL 1.2 SDLK_LALT */
-#else
-#define VIDEO_KEY_RALT SDLK_RALT
-#define VIDEO_KEY_LALT SDLK_LALT
-#endif
-    if (!g_keyState[VIDEO_KEY_LALT] && !g_keyState[VIDEO_KEY_RALT]) {
+
+    if (!g_keyState[ENGINE_KEY_LALT] && !g_keyState[ENGINE_KEY_RALT]) {
         return;
     }
     if (*key != SDLK_RETURN) {
@@ -489,6 +509,14 @@ void Video_HandleFullscreenKey(int *key)
  */
 int Video_SetFullscreen(int fullscreen)
 {
+#ifdef ANDROID_PORT
+    if (!Android_SetFullscreen(fullscreen)) {
+        return 0;
+    }
+    g_videoFullscreen = fullscreen;
+    return 1;
+#else
+
 #ifdef _WIN32
 #ifndef MUGEN_SDL2
     SDL_SysWMinfo info;
@@ -575,6 +603,7 @@ int Video_SetFullscreen(int fullscreen)
     }
     g_videoFullscreen = fullscreen;
     return 1;
+#endif
 #endif
 }
 
@@ -961,8 +990,10 @@ void Video_SetVRetrace(int vretrace)
     if (g_vretrace == vretrace) {
         return;
     }
+#ifndef ANDROID_PORT
     if (g_renderMode == RENDER_OPENGL || g_renderMode == RENDER_OPENGL_SCREEN) {
         SDL_GL_SetAttribute(SDL_GL_SWAP_CONTROL, vretrace != 0);
     }
+#endif
     g_vretrace = vretrace;
 }

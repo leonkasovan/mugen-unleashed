@@ -6,7 +6,8 @@
 #ifdef ANDROID_PORT
 /* clang rejects the int/void return mismatch MSVC allows; the slot is only ever
  * called through BgmPluginDeinitFn, so the cast is safe and local. */
-#define SDLMIX_DEINIT_SLOT (BgmPluginDeinitFn)(void (*)(void))Stub_ReturnZero
+static void Android_SdlmixDeinit(void) {}
+#define SDLMIX_DEINIT_SLOT Android_SdlmixDeinit
 #else
 #define SDLMIX_DEINIT_SLOT Stub_ReturnZero
 #endif
@@ -53,35 +54,99 @@ int g_keyboardKeepRepeat = 1; /* 0x00500178 */
 int g_keyboardNoReleases = 1; /* 0x0050017c */
 GfxClearFn g_gfxClear = (GfxClearFn)Gfx_SoftClear; /* 0x00500b8c */
 const char * g_fontDefaultDirs[2] = { "", NULL }; /* 0x00500d94 */
+#ifdef ANDROID_PORT
+GfxClearFn g_gfxClearFns[GFX_RENDERER_COUNT] = { (GfxClearFn)Gfx_SoftClear, (GfxClearFn)Gfx_SoftClear, NULL, (GfxClearFn)Stub_Nop }; /* 0x00500d9c */
+#else
 GfxClearFn g_gfxClearFns[GFX_RENDERER_COUNT] = { (GfxClearFn)Gfx_SoftClear, (GfxClearFn)Gfx_SoftClear, (GfxClearFn)Gfx_GlClear, (GfxClearFn)Stub_Nop }; /* 0x00500d9c */
+#endif
+#ifdef ANDROID_PORT
+GfxFn g_gfxPutPixelFns[GFX_RENDERER_COUNT] = { (GfxFn)Gfx_SoftPutPixel, (GfxFn)Gfx_SoftPutPixel, NULL, (GfxFn)Stub_Nop }; /* 0x00500dac */
+#else
 GfxFn g_gfxPutPixelFns[GFX_RENDERER_COUNT] = { (GfxFn)Gfx_SoftPutPixel, (GfxFn)Gfx_SoftPutPixel, (GfxFn)Gfx_GlPutPixel, (GfxFn)Stub_Nop }; /* 0x00500dac */
+#endif
 GfxFn g_gfxPutPixel = (GfxFn)Gfx_SoftPutPixel; /* 0x00500dbc */
+#ifdef ANDROID_PORT
+GfxFn g_gfxAddPixelFns[GFX_RENDERER_COUNT] = { (GfxFn)Gfx_SoftAddPixel, (GfxFn)Gfx_SoftAddPixel, NULL, (GfxFn)Stub_Nop }; /* 0x00500dc0 */
+#else
 GfxFn g_gfxAddPixelFns[GFX_RENDERER_COUNT] = { (GfxFn)Gfx_SoftAddPixel, (GfxFn)Gfx_SoftAddPixel, (GfxFn)Gfx_GlAddPixel, (GfxFn)Stub_Nop }; /* 0x00500dc0 */
+#endif
 GfxFn g_gfxAddPixel = (GfxFn)Gfx_SoftAddPixel; /* 0x00500dd0 */
+#ifdef ANDROID_PORT
+GfxFn g_gfxInvertPixelFns[GFX_RENDERER_COUNT] = { (GfxFn)Gfx_SoftInvertPixel, (GfxFn)Gfx_SoftInvertPixel, NULL, (GfxFn)Stub_Nop }; /* 0x00500dd4 */
+#else
 GfxFn g_gfxInvertPixelFns[GFX_RENDERER_COUNT] = { (GfxFn)Gfx_SoftInvertPixel, (GfxFn)Gfx_SoftInvertPixel, (GfxFn)Gfx_GlInvertPixel, (GfxFn)Stub_Nop }; /* 0x00500dd4 */
+#endif
 GfxFn g_gfxInvertPixel = (GfxFn)Gfx_SoftInvertPixel; /* 0x00500de4 */
+#ifdef ANDROID_PORT
+GfxFn g_gfxDrawLineFns[GFX_RENDERER_COUNT] = { (GfxFn)Gfx_SoftDrawLine, (GfxFn)Gfx_SoftDrawLine, NULL, (GfxFn)Stub_Nop }; /* 0x00500de8 */
+#else
 GfxFn g_gfxDrawLineFns[GFX_RENDERER_COUNT] = { (GfxFn)Gfx_SoftDrawLine, (GfxFn)Gfx_SoftDrawLine, (GfxFn)Gfx_GlDrawLine, (GfxFn)Stub_Nop }; /* 0x00500de8 */
+#endif
 GfxFn g_gfxDrawLine = (GfxFn)Gfx_SoftDrawLine; /* 0x00500df8 */
+#ifdef ANDROID_PORT
+GfxFn g_gfxDrawLineAddFns[GFX_RENDERER_COUNT] = { (GfxFn)Gfx_SoftDrawLineAdd, (GfxFn)Gfx_SoftDrawLineAdd, NULL, (GfxFn)Stub_Nop }; /* 0x00500dfc */
+#else
 GfxFn g_gfxDrawLineAddFns[GFX_RENDERER_COUNT] = { (GfxFn)Gfx_SoftDrawLineAdd, (GfxFn)Gfx_SoftDrawLineAdd, (GfxFn)Gfx_GlDrawLineAdd, (GfxFn)Stub_Nop }; /* 0x00500dfc */
+#endif
 GfxFn g_gfxDrawLineAdd = (GfxFn)Gfx_SoftDrawLineAdd; /* 0x00500e0c */
+#ifdef ANDROID_PORT
+GfxFn g_gfxDrawRectFns[GFX_RENDERER_COUNT] = { (GfxFn)Gfx_SoftDrawRect, (GfxFn)Gfx_SoftDrawRect, NULL, (GfxFn)Stub_Nop }; /* 0x00500e10 */
+#else
 GfxFn g_gfxDrawRectFns[GFX_RENDERER_COUNT] = { (GfxFn)Gfx_SoftDrawRect, (GfxFn)Gfx_SoftDrawRect, (GfxFn)Gfx_GlDrawRect, (GfxFn)Stub_Nop }; /* 0x00500e10 */
+#endif
 GfxFn g_gfxDrawRect = (GfxFn)Gfx_SoftDrawRect; /* 0x00500e20 */
+#ifdef ANDROID_PORT
+GfxFn g_gfxDrawRectAddFns[GFX_RENDERER_COUNT] = { (GfxFn)Gfx_SoftDrawRectAdd, (GfxFn)Gfx_SoftDrawRectAdd, NULL, (GfxFn)Stub_Nop }; /* 0x00500e24 */
+#else
 GfxFn g_gfxDrawRectAddFns[GFX_RENDERER_COUNT] = { (GfxFn)Gfx_SoftDrawRectAdd, (GfxFn)Gfx_SoftDrawRectAdd, (GfxFn)Gfx_GlDrawRectAdd, (GfxFn)Stub_Nop }; /* 0x00500e24 */
+#endif
 GfxFn g_gfxDrawRectAdd = (GfxFn)Gfx_SoftDrawRectAdd; /* 0x00500e34 */
+#ifdef ANDROID_PORT
+GfxFn g_gfxDrawRectBlendFns[GFX_RENDERER_COUNT] = { (GfxFn)Gfx_SoftDrawRectBlend, (GfxFn)Gfx_SoftDrawRectBlend, NULL, (GfxFn)Stub_Nop }; /* 0x00500e38 */
+#else
 GfxFn g_gfxDrawRectBlendFns[GFX_RENDERER_COUNT] = { (GfxFn)Gfx_SoftDrawRectBlend, (GfxFn)Gfx_SoftDrawRectBlend, (GfxFn)Gfx_GlDrawRectBlend, (GfxFn)Stub_Nop }; /* 0x00500e38 */
+#endif
 GfxFn g_gfxDrawRectBlend = (GfxFn)Gfx_SoftDrawRectBlend; /* 0x00500e48 */
+#ifdef ANDROID_PORT
+GfxFn g_gfxDrawRectSubFns[GFX_RENDERER_COUNT] = { (GfxFn)Gfx_SoftDrawRectSub, (GfxFn)Gfx_SoftDrawRectSub, NULL, (GfxFn)Stub_Nop }; /* 0x00500e4c */
+#else
 GfxFn g_gfxDrawRectSubFns[GFX_RENDERER_COUNT] = { (GfxFn)Gfx_SoftDrawRectSub, (GfxFn)Gfx_SoftDrawRectSub, (GfxFn)Gfx_GlDrawRectSub, (GfxFn)Stub_Nop }; /* 0x00500e4c */
+#endif
 GfxFn g_gfxDrawRectSub = (GfxFn)Gfx_SoftDrawRectSub; /* 0x00500e5c */
+#ifdef ANDROID_PORT
+GfxRectFn g_gfxFillRectFns[GFX_RENDERER_COUNT] = { (GfxRectFn)Gfx_SoftFillRect, (GfxRectFn)Gfx_SoftFillRect, NULL, (GfxRectFn)Stub_Nop }; /* 0x00500e60 */
+#else
 GfxRectFn g_gfxFillRectFns[GFX_RENDERER_COUNT] = { (GfxRectFn)Gfx_SoftFillRect, (GfxRectFn)Gfx_SoftFillRect, (GfxRectFn)Gfx_GlFillRect, (GfxRectFn)Stub_Nop }; /* 0x00500e60 */
+#endif
 GfxRectFn g_gfxFillRect = (GfxRectFn)Gfx_SoftFillRect; /* 0x00500e70 */
+#ifdef ANDROID_PORT
+GfxFillRectFn g_gfxFillRectColorFns[GFX_RENDERER_COUNT] = { (GfxFillRectFn)Gfx_SoftFillRectAdd, (GfxFillRectFn)Gfx_SoftFillRectAdd, NULL, (GfxFillRectFn)Stub_Nop }; /* 0x00500e74 */
+#else
 GfxFillRectFn g_gfxFillRectColorFns[GFX_RENDERER_COUNT] = { (GfxFillRectFn)Gfx_SoftFillRectAdd, (GfxFillRectFn)Gfx_SoftFillRectAdd, (GfxFillRectFn)Gfx_GlFillRectAdd, (GfxFillRectFn)Stub_Nop }; /* 0x00500e74 */
+#endif
 GfxFillRectFn g_gfxFillRectColor = (GfxFillRectFn)Gfx_SoftFillRectAdd; /* 0x00500e84 */
+#ifdef ANDROID_PORT
+GfxBlendRectFn g_gfxBlendRectFns[GFX_RENDERER_COUNT] = { (GfxBlendRectFn)Gfx_SoftBlendRect, (GfxBlendRectFn)Gfx_SoftBlendRect, NULL, (GfxBlendRectFn)Stub_Nop }; /* 0x00500e88 */
+#else
 GfxBlendRectFn g_gfxBlendRectFns[GFX_RENDERER_COUNT] = { (GfxBlendRectFn)Gfx_SoftBlendRect, (GfxBlendRectFn)Gfx_SoftBlendRect, (GfxBlendRectFn)Gfx_GlBlendRect, (GfxBlendRectFn)Stub_Nop }; /* 0x00500e88 */
+#endif
 GfxBlendRectFn g_gfxBlendRect = (GfxBlendRectFn)Gfx_SoftBlendRect; /* 0x00500e98 */
+#ifdef ANDROID_PORT
+GfxFn g_gfxFillRectSubFns[GFX_RENDERER_COUNT] = { (GfxFn)Gfx_SoftFillRectSub, (GfxFn)Gfx_SoftFillRectSub, NULL, (GfxFn)Stub_Nop }; /* 0x00500e9c */
+#else
 GfxFn g_gfxFillRectSubFns[GFX_RENDERER_COUNT] = { (GfxFn)Gfx_SoftFillRectSub, (GfxFn)Gfx_SoftFillRectSub, (GfxFn)Gfx_GlFillRectSub, (GfxFn)Stub_Nop }; /* 0x00500e9c */
+#endif
 GfxFn g_gfxFillRectSub = (GfxFn)Gfx_SoftFillRectSub; /* 0x00500eac */
+#ifdef ANDROID_PORT
+GfxCaptureFn g_gfxCaptureFns[GFX_RENDERER_COUNT] = { NULL, NULL, NULL, NULL }; /* 0x00500eb0 */
+#else
 GfxCaptureFn g_gfxCaptureFns[GFX_RENDERER_COUNT] = { NULL, NULL, (GfxCaptureFn)Gl_Capture, NULL }; /* 0x00500eb0 */
+#endif
+#ifdef ANDROID_PORT
+GfxPresentFn g_gfxPresentFns[GFX_RENDERER_COUNT] = { (GfxPresentFn)Gfx_Present, (GfxPresentFn)Gfx_Present, NULL, NULL }; /* 0x00500ec0 */
+#else
 GfxPresentFn g_gfxPresentFns[GFX_RENDERER_COUNT] = { (GfxPresentFn)Gfx_Present, (GfxPresentFn)Gfx_Present, (GfxPresentFn)Gl_Present, NULL }; /* 0x00500ec0 */
+#endif
 LONG g_savedWindowStyle = 0x10000000; /* 0x00500ed4 */
 double g_glNear = 1000.0; /* 0x00500ed8 */
 double g_glFar = 10000.0; /* 0x00500ee0 */

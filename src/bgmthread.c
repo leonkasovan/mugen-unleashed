@@ -22,8 +22,13 @@
 
 #include "mugen.h"
 
+#ifdef ANDROID_PORT
+#define BGM_LOCK()   SDL_LockMutex((SDL_mutex *)g_bgmMutex)
+#define BGM_UNLOCK() SDL_UnlockMutex((SDL_mutex *)g_bgmMutex)
+#else
 #define BGM_LOCK()   pthread_mutex_lock((pthread_mutex_t *)&g_bgmMutex)
 #define BGM_UNLOCK() pthread_mutex_unlock((pthread_mutex_t *)&g_bgmMutex)
+#endif
 
 /* Bgm_StreamRead statuses. */
 enum {
@@ -65,8 +70,77 @@ static int dynarray_push(DynArray *a, const void *elem)
  * failed pthread_create would wait forever. The original passes an
  * uninitialised sched_param to attributes it never uses; here it is zeroed.
  */
+#ifdef ANDROID_PORT
+static int SDLCALL Android_BgmThreadMain(void *arg)
+{
+    BgmThread_Main(arg);
+    return 0;
+}
+#endif
+
 int BgmThread_Init(const AudioFormat *format, int chunk)
 {
+#ifdef ANDROID_PORT
+    BgmThreadStart start;
+    SDL_Thread *thread;
+    int sample_size;
+
+    /* Native SDL2 objects replace pointer-sized Windows pthread storage. */
+    memset(&start, 0, sizeof(start));
+    g_bgmThreadFormat = *format;
+    sample_size = (format->format & 0x04) ? 1 : (format->format & 0x08) ? 2 :
+                  (format->format & 0x10) ? 4 : (format->format & 0x20) ? 8 : chunk;
+    g_bgmChunkBytes = format->channels * sample_size * chunk;
+    g_bgmMutex = SDL_CreateMutex();
+    start.mutex = SDL_CreateMutex();
+    start.cond = SDL_CreateCond();
+    if (g_bgmMutex == NULL || start.mutex == NULL || start.cond == NULL) {
+        goto fail;
+    }
+    g_bgmRing = BgmRing_Create(g_bgmChunkBytes + 4);
+    g_bgmScratch = Mem_Calloc(BGM_RING_BLOCKS, g_bgmChunkBytes);
+    if (g_bgmRing == NULL || g_bgmScratch == NULL) {
+        goto fail;
+    }
+    g_bgmStream = Bgm_StreamCreate();
+    if (g_bgmStream == NULL) {
+        goto fail;
+    }
+    g_bgmRing->paused = 1;
+    g_bgmRing->stopped = 1;
+    g_bgmThreadRunning = 1;
+    SDL_LockMutex(start.mutex);
+    thread = SDL_CreateThread(Android_BgmThreadMain, "mugen-bgm", &start);
+    if (thread == NULL) {
+        SDL_UnlockMutex(start.mutex);
+        g_bgmThreadRunning = 0;
+        Bgm_StreamFree();
+        goto fail;
+    }
+    g_bgmThread.p = thread;
+    g_bgmThread.x = 0;
+    while (!start.ready) {
+        SDL_CondWait(start.cond, start.mutex);
+    }
+    SDL_UnlockMutex(start.mutex);
+    SDL_DestroyCond(start.cond);
+    SDL_DestroyMutex(start.mutex);
+    return 0;
+fail:
+    if (g_bgmRing != NULL) {
+        free(g_bgmRing->buf);
+        free(g_bgmRing);
+        g_bgmRing = NULL;
+    }
+    free(g_bgmScratch);
+    g_bgmScratch = NULL;
+    SDL_DestroyCond(start.cond);
+    SDL_DestroyMutex(start.mutex);
+    SDL_DestroyMutex((SDL_mutex *)g_bgmMutex);
+    g_bgmMutex = NULL;
+    return 1;
+#else
+
     BgmThreadStart *start;
     pthread_attr_t attr;
     struct sched_param param;
@@ -132,6 +206,20 @@ int BgmThread_Init(const AudioFormat *format, int chunk)
     pthread_cond_destroy((pthread_cond_t *)&start->cond);
     free(start);
     return err;
+#endif
+}
+
+/* Two 32-bit command words have room for a native 64-bit Android pointer. */
+static void *bgm_command_pointer(const BgmCommand *command)
+{
+#ifdef ANDROID_PORT
+    void *pointer;
+    _Static_assert(sizeof(pointer) <= sizeof(command->data), "BGM command pointer storage");
+    memcpy(&pointer, command->data, sizeof(pointer));
+    return pointer;
+#else
+    return (void *)command->data[0];
+#endif
 }
 
 /* Runs one queued command (the switch of BgmThread_Main). */
@@ -141,10 +229,10 @@ static void bgm_run_command(const BgmCommand *c, int *running)
 
     switch (c->cmd) {
     case BGM_CMD_LOAD:
-        BgmThread_Load((const BgmInfo *)c->data[0]);
+        BgmThread_Load((const BgmInfo *)bgm_command_pointer(c));
         break;
     case BGM_CMD_PLAY:
-        BgmThread_Play((const BgmInfo *)c->data[0]);
+        BgmThread_Play((const BgmInfo *)bgm_command_pointer(c));
         break;
     case BGM_CMD_UNLOAD:
         BgmThread_Unload();
@@ -175,7 +263,7 @@ static void bgm_run_command(const BgmCommand *c, int *running)
     case BGM_CMD_SET_STREAM: {
         int muted;
 
-        g_bgmStream = (BgmStream *)c->data[0];
+        g_bgmStream = (BgmStream *)bgm_command_pointer(c);
         BgmThread_UpdateHook();
         muted = g_bgmMuted;
         s = g_bgmStream;
@@ -218,9 +306,16 @@ void *BgmThread_Main(void *arg)
     int running = g_bgmThreadRunning;
     int more = 0;               /* commands were left in the queue */
 
+#ifdef ANDROID_PORT
+    SDL_LockMutex(start->mutex);
+    start->ready = 1;
+    SDL_CondSignal(start->cond);
+    SDL_UnlockMutex(start->mutex);
+#else
     pthread_mutex_lock((pthread_mutex_t *)&start->mutex);
     pthread_cond_signal((pthread_cond_t *)&start->cond);
     pthread_mutex_unlock((pthread_mutex_t *)&start->mutex);
+#endif
     while (running) {
         BgmRing *r = g_bgmRing;
         unsigned int fill;
@@ -313,7 +408,11 @@ void BgmThread_Cleanup(void)
     memset(&g_bgmThreadFormat, 0, sizeof(g_bgmThreadFormat));
     BgmQueue_Drop(0x7FFFFFFF);
     memset(g_bgmQueue, 0, sizeof(g_bgmQueue));
+#ifdef ANDROID_PORT
+    SDL_DestroyMutex((SDL_mutex *)g_bgmMutex);
+#else
     pthread_mutex_destroy((pthread_mutex_t *)&g_bgmMutex);
+#endif
     g_bgmMutex = NULL;
     g_bgmEventCount = 0;
     memset(g_bgmEvents, 0, sizeof(g_bgmEvents));
@@ -357,11 +456,16 @@ void BgmQueue_Drop(int time)
     int i;
 
     for (i = 0; i < n && g_bgmQueue[i].time <= time; i++) {
-        if (g_bgmQueue[i].owns_data && g_bgmQueue[i].data[0] != 0) {
-            free((void *)g_bgmQueue[i].data[0]);
+        if (g_bgmQueue[i].owns_data && bgm_command_pointer(&g_bgmQueue[i]) != NULL) {
+            free(bgm_command_pointer(&g_bgmQueue[i]));
         }
     }
+#ifdef ANDROID_PORT
+    /* Android port fix: queue ranges can overlap. */
+    memmove(&g_bgmQueue[0], &g_bgmQueue[i], (n - i) * sizeof(BgmCommand));
+#else
     memcpy(&g_bgmQueue[0], &g_bgmQueue[i], (n - i) * sizeof(BgmCommand));
+#endif
     g_bgmQueueCount = n - i;
 }
 
@@ -376,7 +480,11 @@ static int bgm_queue_info(int time, const BgmInfo *info, int cmd)
         return 1;
     }
     memcpy(copy, info, sizeof(BgmInfo));
+#ifdef ANDROID_PORT
+    memcpy(data, &copy, sizeof(copy));
+#else
     data[0] = (int)copy;
+#endif
     err = Bgm_QueueCommand(time, data, cmd, 1);
     if (err != 0) {
         free(copy);
@@ -419,8 +527,10 @@ int BgmQueue_Unload(int time)
  */
 int BgmThread_Shutdown(void)
 {
+#ifndef ANDROID_PORT
     void *result = NULL;
     pthread_t thread;
+#endif
     BgmCommand *c;
 
     BGM_LOCK();
@@ -436,8 +546,14 @@ int BgmThread_Shutdown(void)
     }
     BGM_UNLOCK();
     g_bgmBackgroundChanged = 1;
+#ifdef ANDROID_PORT
+    SDL_WaitThread((SDL_Thread *)g_bgmThread.p, NULL);
+    memset(&g_bgmThread, 0, sizeof(g_bgmThread));
+    return 0;
+#else
     memcpy(&thread, &g_bgmThread, sizeof(thread));
     return pthread_join(thread, &result);
+#endif
 }
 
 /* 0x00489DC0: queues BGM_CMD_MUTE (the second data word is uninitialised, as in the original). */

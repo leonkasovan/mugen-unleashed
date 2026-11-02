@@ -550,9 +550,12 @@ void SysDraw_Update(SysDrawItem *e)
         Anim_Draw(e->anim, &dp, 1.0f, 1.0f);
         break;
     case SYSDRAW_SPRITE:
+#ifndef ANDROID_PORT
         if (g_renderMode == RENDER_MODE_GL) {
             Sprite_DrawGL(e->draw_sprites, e->sprite, &dp);
-        } else {
+        } else
+#endif
+        {
             Sprite_DrawSoft(e->draw_sprites, e->sprite, &dp);
         }
         break;

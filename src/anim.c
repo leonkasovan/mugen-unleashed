@@ -753,9 +753,12 @@ void Anim_Draw(AnimState *st, const DrawParams *dp, float sx, float sy)
 #endif
             if (st->sprite != -1) {
                 if (st->queue == NULL) {
+#ifndef ANDROID_PORT
                     if (g_renderMode == RENDER_MODE_GL) {
                         Sprite_DrawGL(st->sprites, st->sprite, &local);
-                    } else {
+                    } else
+#endif
+                    {
                         Sprite_DrawSoft(st->sprites, st->sprite, &local);
                     }
                 } else {

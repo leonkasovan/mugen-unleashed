@@ -1239,9 +1239,12 @@ void BgElem_DrawTiled(BgElem *e, const DrawParams *dp, Bg *bg)
             local.x = x;
             local.y = y;
             if (e->type == BG_TYPE_NORMAL) {
+#ifndef ANDROID_PORT
                 if (g_renderMode == RENDER_MODE_GL) {
                     Sprite_DrawGL(bg->sprites, e->sprite, &local);
-                } else {
+                } else
+#endif
+                {
                     Sprite_DrawSoft(bg->sprites, e->sprite, &local);
                 }
             } else if (e->type == BG_TYPE_ANIM) {
@@ -1405,9 +1408,12 @@ void BgElem_DrawParallaxGL(BgElem *e, Bg *bg, const DrawParams *dp)
             spr->x = spr->w / 2;
         }
     }
+#ifndef ANDROID_PORT
     if (g_renderMode == RENDER_MODE_GL) {
         Sprite_DrawGL(bg->sprites, sprite, &local);
-    } else {
+    } else
+#endif
+    {
         Sprite_DrawSoft(bg->sprites, sprite, &local);
     }
     spr->x = saved_x;

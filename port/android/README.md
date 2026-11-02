@@ -1,18 +1,22 @@
 # mugen-unleashed on Android
 
-The Android port already links **SDL2**, while a compatibility adapter supplies
-SDL 1.2-style engine calls. The remaining migration is about correct SDL2
-semantics and platform isolation, not replacing an Android SDL1 library.
+Android now uses **native SDL2 APIs**, **SDL2_ttf** and **SDL2_mixer**.
+There is no Android SDL1 API shim or SDL1 library dependency. The desktop
+`src/sdl2compat.c/.h` remains for desktop builds and is excluded from Android.
+`android_main.h`, `android_gfx.c` and `android_glstub.c` have been removed.
 
 Current target: **arm64-v8a**, minimum API 21, compile SDK 34, target SDK 29.
-Only the engine's **System/software renderer** is implemented. A streaming
-texture/SDL renderer presents its pixels; this is not the MUGEN OpenGL renderer.
+The engine's **System/software renderer** draws CPU pixels; a native SDL2
+window, renderer and streaming texture present them. SDL2 may use GLES
+internally. MUGEN's desktop `OpenGL`/`OpenGLScreen` sprite renderers remain
+unavailable on Android; selecting either logs a fallback to System before
+renderer tables or sprites are initialized.
 
-**Runtime qualification is incomplete.** The validated [review](REVIEW.md)
-documents open key-indexing, Vita-policy leakage, asset recovery, video lifetime,
-resizing, frame presentation, scaling and BGM-routing defects. A successful
-tool setup or APK build does not establish working gameplay.
-See [PLAN.md](PLAN.md) for the detailed migration and acceptance gates.
+The implementation and host tests are complete for the native API boundary.
+**An NDK/APK rebuild and device qualification have not been run for this change.**
+Asset-extraction device recovery tests, audible output, Android graphics/lifecycle,
+performance and additional codecs remain qualification work.
+See [REVIEW.md](REVIEW.md) for evidence and [PLAN.md](PLAN.md) for acceptance gates.
 
 ## Build entry points and layout
 
@@ -29,15 +33,18 @@ port/android/
     java/org/libsdl/app/            SDL2 Java integration (2.32.10)
     jni/src/
       CMakeLists.txt               libmain.so + engine/vendor sources
-      android_main.c/.h            entry, assets, legacy API aliases
-      android_video.c              software-surface/streaming presentation
-      android_gfx.c                current local scaling implementation
-      android_glstub.c             excluded-renderer symbols
+      android_main.c               SDL_main entry and APK asset extraction
+      android_platform.h           native SDL2 engine operations (no aliases)
+      android_video.c              window/renderer/streaming texture ownership
+      android_dependencies.c       SDL2/ttf/mixer header version checks
+      check_sdl2.cmake              reject SDL1 DT_NEEDED entries after linking
   tools/
     bootstrap_toolchains.sh        missing-tool installation
     toolchain_metadata.py          vendor metadata, checksums, extraction
     build_sdl2_companions.sh        SDL2_ttf / SDL2_mixer cross-build
   tests/test_build.py               offline bootstrap/orchestration fixtures
+  tests/CMakeLists.txt              host build of the actual Android engine paths
+  tests/test_native_sdl2.c           native SDL2 runtime tests
 ```
 
 ## 1. Toolchain setup
@@ -239,62 +246,89 @@ key or print signing credentials.
 
 ## 4. Runtime and configuration
 
-`android_main.c` extracts APK assets, changes the working directory, appends
-optional `cmdline` file tokens to SDLActivity's arguments, then calls
-`Mugen_Main`. The file tokenizer is whitespace-based, has bounded line/argument
-storage and does not implement shell quoting. Argument order is preserved;
-the engine parser determines the precedence of repeated options.
+The APK extracts game data into the app-specific external-storage `mugen/`
+directory, with internal-storage fallback, then starts `Mugen_Main` through
+SDLActivity's `SDL_main` entry. The upstream B6 changes are retained: sibling
+`.part` writes, size/FNV-1a verification, payload generation stamps and
+preservation of user-edited `data/mugen.cfg`. Storage failures, interrupted
+upgrades and user-data recovery still need device tests; see [REVIEW.md](REVIEW.md).
 
-The intended data directory is the app-specific external files directory plus
-`mugen`, often:
+Use `RenderMode = System`. Android preserves the configured game resolution
+(default 640x480), rather than requesting the Vita's 960x544 panel. `KeepAspect`
+uses SDL2 logical sizing/letterboxing; disabling it fills the physical output.
+The System rasterizer expects RGB565 and tightly packed rows. Android display
+creation rejects unsupported depths and incompatible pitch instead of uploading
+mismatched pixels. Offscreen indexed font surfaces remain supported. Text scaling uses the shared
+`src/sdl2surface.c` engine operation; Android does not export `zoomSurface`.
 
-```text
-/sdcard/Android/data/org.mugen_unleashed.mugen/files/mugen
-```
+Saved numeric key IDs remain compatible with `mugen.cfg`. These are engine
+configuration identifiers, not SDL2 keycodes or scancodes. Native SDL2 events
+are translated before array access; focus snapshots use the inverse mapping from the shared
+`src/sdl2keys.c` tables.
+Menus, debug bindings and Lua key diagnostics use the same engine IDs.
+`SDL_TEXTINPUT` supplies console UTF-8 separately. Gameplay ignores OS repeat;
+console editing accepts it. No SDL key constants are redefined.
 
-There is an internal-files fallback. Consult logcat for the actual path.
-App access to its directory does not imply every file manager can edit it on
-every Android version. Broad storage permission is not an import UI. A future
-SAF/import workflow is covered by PLAN.md.
+Native SDL2 joystick events use instance IDs and runtime topology. Controller
+insertion/removal preserves existing slots and releases removed-device inputs.
+Android no longer installs Vita pad defaults or its synthetic-key bridge.
+User P1/P2 bindings are retained; configure the actual Android controller in
+the key configuration menu. Touch-only play is not implemented.
 
-Assets currently use `manifest.txt` and a constant extraction stamp. Existing
-files are skipped, including potentially interrupted files; new payloads are
-not automatically reconciled. Do not delete user data blindly to “fix” an
-upgrade. Use backed-up test data while validating recovery behavior.
+Android BGM uses one built-in SDL2_mixer backend for **WAV, OGG/Vorbis and MP3**.
+Windows `[Music]` plugin DLL selections are replaced by that Android backend;
+the desktop configuration file is not rewritten. Native SDL2 RWops are owned
+by the mixer, with the underlying Stream kept alive until playback closes.
+BGM commands retain full 64-bit pointers; synchronization uses native SDL2
+mutexes, conditions and threads. Sound effects also use SDL2_mixer.
+Tracker/MOD and MIDI are not enabled by the current companion builder and are
+not advertised by the Android music route. Custom loop-point and decoder
+behavior still need per-format device qualification.
 
-Touch controls are not implemented. Keyboard/gamepad input also needs the
-domain/mapping fixes in REVIEW.md before it can be described as qualified.
-FPS, audio playback, background/resume, real display scaling and clean exit have
-not been verified on a device by this update.
+Video resources are destroyed by `Video_Deinit` before final `SDL_Quit`.
+Only the frame boundary uploads/presents; dirty marking does not present,
+and skipped/background frames do not trigger duplicate presentation.
+Renderer-reset events invalidate the texture and retain CPU pixels for upload.
 
-## 5. Validation and troubleshooting
+## 5. Verification
+
+Bootstrap/orchestration fixtures:
 
 ```sh
-bash -n port/android/build.sh
-bash -n port/android/tools/bootstrap_toolchains.sh
-bash -n port/android/tools/build_sdl2_companions.sh
+bash -n port/android/build.sh port/android/tools/bootstrap_toolchains.sh port/android/tools/build_sdl2_companions.sh
 python3 port/android/tests/test_build.py
 ```
 
-The tests cover bootstrap and orchestration with simulated vendors/tools,
-including paths with spaces and checksum/download failures. They are not
-real SDK downloads, native compilation or an APK/device test.
+Native Linux host tests require a C compiler, GNU-compatible linker,
+CMake 3.22.1+, zlib headers and native
+SDL2/SDL2_mixer/SDL2_ttf development packages. They compile **all** Android engine
+and vendor translation units except the Android-only JNI/asset entry. They
+link with no undefined symbols, no SDL compatibility implementation and no GL
+stubs. Run from the repository root:
 
-| Failure | Check |
-|---|---|
-| Missing JDK/SDK/NDK/CMake | Run `--setup` or supply the documented matching paths |
-| NDK revision mismatch | Read the reported `source.properties` revision; directory names are not a version check |
-| Download checksum/network failure | Nothing unverified is extracted; rerun setup after checking connectivity/vendor metadata |
-| sdkmanager fails | Read the vendor error/license prompt; do not treat an incomplete installation as success |
-| Missing SDL libraries/headers | Follow section 2 or set both dependency prefixes; tool setup alone is insufficient |
-| UnsatisfiedLinkError | Inspect ABI, SDL Java/native version match and every native `DT_NEEDED` dependency in the APK |
-| Black/blank renderer | Verify actual cfg says System; check the open panel-size/renderer-selection defects |
-| Input crash or wrong action | See A01/A02 in REVIEW.md; do not assume raw SDL2 keys/buttons are engine codes |
-| Extraction/upgrade problem | Preserve user data and investigate the stamp/partial-file issue (A04) |
-| Normal exit crash | Investigate cleanup ordering (A05), not just the last success log line |
+```sh
+cmake -S port/android/tests -B build/android-native-tests -DNATIVE_SDL2_SANITIZE=ON
+cmake --build build/android-native-tests -j4
+ctest --test-dir build/android-native-tests --output-on-failure
+```
 
-References: [validated review](REVIEW.md), [migration plan](PLAN.md),
-[AGP 8.1 requirements](https://developer.android.com/build/releases/agp-8-1-0-release-notes),
-[SDK manager](https://developer.android.com/tools/sdkmanager),
-[NDK configuration](https://developer.android.com/studio/projects/configure-agp-ndk),
-and [Adoptium installation API](https://adoptium.net/installation/ci-scripts/).
+CTest generates a WAV in its build directory, exercises the real BGM thread
+and effects, then removes it. DejaVuSans is used when installed; otherwise
+real TTF rendering is skipped and indexed/RGBA surface cases still run.
+Additional codec/font fixtures can be passed explicitly:
+
+```sh
+cd build/android-native-tests
+SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./test_native_sdl2 /path/font.ttf /path/music.wav /path/music.ogg /path/music.mp3
+```
+
+The Android CMake build checks companion header major versions and scans
+`libmain.so` plus imported SDL libraries for SDL1 `DT_NEEDED` entries. Compile
+errors reject SDL1 function aliases and accidental desktop/Vita backend flags.
+For release qualification inspect the **whole APK dependency closure**, not
+only the directly imported libraries. A caller-supplied prebuilt must also
+match arm64-v8a/API 21 and the pinned SDL Java/native integration.
+
+The root Makefile remains for Windows/Linux. Host dummy-driver tests do not
+qualify NDK compilation, the Android GPU, physical controllers, real sound
+output or suspend/resume behavior. Record those separately in [PLAN.md](PLAN.md).

@@ -16,8 +16,13 @@
 
 #include "mugen.h"
 
+#ifdef ANDROID_PORT
+#define BGM_LOCK()   SDL_LockMutex((SDL_mutex *)g_bgmMutex)
+#define BGM_UNLOCK() SDL_UnlockMutex((SDL_mutex *)g_bgmMutex)
+#else
 #define BGM_LOCK()   pthread_mutex_lock((pthread_mutex_t *)&g_bgmMutex)
 #define BGM_UNLOCK() pthread_mutex_unlock((pthread_mutex_t *)&g_bgmMutex)
+#endif
 
 typedef const BgmSubsystem *(__cdecl *BgmGetSubsystemFn)(void);
 
@@ -373,10 +378,37 @@ const BgmSubsystem *Bgm_FindSubsystem(const char *path)
 int Bgm_Init(DynArray *plugins, int resample_method, int resample_quality, double volume)
 {
     int i;
+#ifdef ANDROID_PORT
+    BgmPluginEntry native_entry;
+    BgmPluginEntry *native_entries[1];
+    DynArray native_plugins;
+#endif
 
+#ifdef ANDROID_PORT
+    if (g_bgmInitialized != 0) {
+#else
     if (plugins == NULL || g_bgmInitialized != 0) {
+#endif
         return 1;
     }
+#ifdef ANDROID_PORT
+    /* Deliberate port behavior: Windows plugin DLLs cannot run on Android.
+     * One native SDL2_mixer subsystem owns WAV/OGG/MP3 music playback. */
+    memset(&native_entry, 0, sizeof(native_entry));
+    native_entry.name = "sdlmix";
+    native_entry.extensions = (char *)Sdlmix_Extensions();
+    native_entry.settings = BgmSettings_New();
+    if (native_entry.settings == NULL) {
+        return 0;
+    }
+    native_entries[0] = &native_entry;
+    native_plugins.data = native_entries;
+    native_plugins.elem_size = sizeof(native_entries[0]);
+    native_plugins.capacity = 1;
+    native_plugins.count = 1;
+    plugins = &native_plugins;
+    Log_Printf("Android BGM: native SDL2_mixer WAV/OGG/MP3 backend\n");
+#endif
     g_bgmFormat = g_sndFormat;
     g_bgmChunk = g_sndChunkSize;
     if (volume < 0.0) {
@@ -456,7 +488,21 @@ int Bgm_Init(DynArray *plugins, int resample_method, int resample_quality, doubl
             MatchLog_Printf(3, "Couldn't initialize resampling.\n");
             return 0;
         }
+#ifdef ANDROID_PORT
+        {
+            int thread_error = BgmThread_Init(&g_bgmFormat, g_bgmChunk);
+            MatchLog_Printf(9, "BGMThreadInit returned %d\n", thread_error);
+            if (thread_error != 0) {
+                free(g_bgmResampler->quality);
+                free(g_bgmResampler);
+                g_bgmResampler = NULL;
+                Bgm_FreeSubsystems();
+                return 0;
+            }
+        }
+#else
         MatchLog_Printf(9, "BGMThreadInit returned %d\n", BgmThread_Init(&g_bgmFormat, g_bgmChunk));
+#endif
         g_bgmInitialized = 1;
         g_bgmActive = 1;
         g_bgmBackgroundMode = BGM_BG_PLAY;

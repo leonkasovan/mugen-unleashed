@@ -1,3 +1,4 @@
+#if defined(MUGEN_SDL2) || defined(ANDROID_PORT) || defined(MUGEN_ANDROID_SW)
 /*
  * SDL2 <-> engine key translation, shared by every SDL2 consumer.
  *
@@ -159,3 +160,5 @@ SDL_Keycode Sdl2_SdlKeyForEngineKey(int engine_key)
     default: return SDLK_UNKNOWN;
     }
 }
+
+#endif /* SDL2 consumers only */

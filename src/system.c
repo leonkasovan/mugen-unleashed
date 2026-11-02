@@ -126,8 +126,10 @@ void System_Init(void)
     GameVars *g;
     int mode;
 
+#ifndef ANDROID_PORT
     SDL_putenv("SDL_DISABLE_LOCK_KEYS=1");
-#ifdef MUGEN_VITA_GL
+#endif
+#if defined(MUGEN_VITA_GL) || defined(ANDROID_PORT)
     /*
      * PS Vita port (port/psvita): initialise video on its own.
      *
@@ -155,7 +157,9 @@ void System_Init(void)
     g_libraryError = LIBERR_NONE;
     g_unused505200 = 0;
     g_libraryErrorText[0] = '\0';
+#ifndef ANDROID_PORT
     SDL_WM_SetCaption("M.U.G.E.N", "MUGEN");
+#endif
     System_SetWindowIcon();
 
     Log_Printf("Allocating game variables\n");
@@ -230,7 +234,9 @@ void System_Init(void)
     g_keyboardQueueWrite = 0;
     g_keyboardQueueRead = 0;
     g_keyboardKeepRepeat = 0;
+#ifndef ANDROID_PORT
     SDL_EnableKeyRepeat(0, 0);
+#endif
     g_keyboardNoReleases = 0;
     g_unused503468 = 1;
     Log_Printf("OK\n");
@@ -534,29 +540,10 @@ static const int input_key_slots[INPUT_KEYS] = {
     KEY_JUMP, KEY_CROUCH, KEY_LEFT, KEY_RIGHT, KEY_A, KEY_B, KEY_C, KEY_X, KEY_Y, KEY_Z, KEY_START,
 };
 
-/*
- * .rdata 0x4F2038: built-in keys of each player (SDL key codes).
- *
- * These are the engine's key identifiers, i.e. SDL 1.2's numbering: the arrow
- * keys are 273-276, not SDL2's scancode|SDLK_SCANCODE_MASK. They stay spelled
- * SDLK_UP etc. because they are named after the SDL 1.2 constants, and every
- * key that reaches the engine (events, saved bindings, SDL's key state) has
- * already been converted to this numbering by Sdl2_EngineKey().
- */
-#ifdef MUGEN_SDL2
-#define ENGINE_SDLK_UP 273      /* SDL 1.2 SDLK_UP */
-#define ENGINE_SDLK_DOWN 274
-#define ENGINE_SDLK_RIGHT 275
-#define ENGINE_SDLK_LEFT 276
-#else
-#define ENGINE_SDLK_UP SDLK_UP
-#define ENGINE_SDLK_DOWN SDLK_DOWN
-#define ENGINE_SDLK_RIGHT SDLK_RIGHT
-#define ENGINE_SDLK_LEFT SDLK_LEFT
-#endif
-
+/* .rdata 0x4F2038: built-in bindings use the engine's saved key IDs.
+ * SDL2 keycodes are translated at the event boundary, never used as indices. */
 static const int input_builtin_keys[2][INPUT_KEYS] = {
-    { ENGINE_SDLK_UP, ENGINE_SDLK_DOWN, ENGINE_SDLK_LEFT, ENGINE_SDLK_RIGHT, SDLK_COMMA, SDLK_PERIOD, SDLK_SLASH,
+    { ENGINE_KEY_UP, ENGINE_KEY_DOWN, ENGINE_KEY_LEFT, ENGINE_KEY_RIGHT, SDLK_COMMA, SDLK_PERIOD, SDLK_SLASH,
       SDLK_l, SDLK_SEMICOLON, SDLK_QUOTE, SDLK_RETURN },
     { SDLK_w, SDLK_s, SDLK_a, SDLK_d, SDLK_f, SDLK_g, SDLK_h, SDLK_r, SDLK_t, SDLK_y, SDLK_u },
 };

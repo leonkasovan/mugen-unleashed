@@ -409,9 +409,9 @@ int LuaMugen_PadState(struct lua_State *L)
         static const struct {
             const char *name;
             int key;
-        } watch[] = { { "Up", SDLK_UP },   { "Down", SDLK_DOWN }, { "Left", SDLK_LEFT },
-                      { "Right", SDLK_RIGHT }, { "Return", SDLK_RETURN }, { "Escape", SDLK_ESCAPE },
-                      { "F1", SDLK_F1 },   { "F2", SDLK_F2 } };
+        } watch[] = { { "Up", ENGINE_KEY_UP },   { "Down", ENGINE_KEY_DOWN }, { "Left", ENGINE_KEY_LEFT },
+                      { "Right", ENGINE_KEY_RIGHT }, { "Return", SDLK_RETURN }, { "Escape", SDLK_ESCAPE },
+                      { "F1", ENGINE_KEY_F1 },   { "F2", ENGINE_KEY_F2 } };
         int n;
 
         for (n = 0; n < (int)(sizeof(watch) / sizeof(watch[0])); n++) {

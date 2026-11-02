@@ -672,9 +672,12 @@ int Stage_Activate(Stage *st)
     g_glFar = 10000.0;
     g_glProjection = 1;
     g_glZScale = 1.0;
+#ifndef ANDROID_PORT
     if (g_renderMode == 2) {
         Gl_SetupView();
     }
+#endif
+
     g = g_game;
     y = Ftol(g_gameCoord[0] / g->stage.unit * st->zoffset);
     g->draw_offset_y = y;
@@ -712,7 +715,7 @@ int Stage_Activate(Stage *st)
  * background behaviour. Returns 0 when the backgrounds cannot be loaded.
  */
 int Stage_LoadBg(Stage *st, Ini *ini)
-{
+    {
     char dir[0x200];
     const char *spr;
     Bg *bg;

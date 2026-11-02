@@ -6,14 +6,14 @@
 # the ikemen-droid reference build uses; see
 # ikemen-develop-update/tools/generate_android_via_native.sh.
 # =============================================================================
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.22.1)
 
 project(mugen_unleashed_android C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-# The engine tree is six levels up from port/android/app/src/main/jni/src:
+# The engine tree is seven levels up from port/android/app/src/main/jni/src:
 #   src -> jni -> main -> src -> app -> android -> port -> <root>
 set(MUGEN_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../../..")
 get_filename_component(MUGEN_ROOT "${MUGEN_ROOT}" ABSOLUTE)
@@ -47,16 +47,13 @@ file(GLOB MUGEN_ENGINE_SOURCES CONFIGURE_DEPENDS "${MUGEN_ROOT}/src/*.c")
 # main.c stays in: it holds Screen_IsSpecial, Camera_GetX/Y, Version_Parse and
 # Rng_Seed as well as the entry point; its main() is renamed Mugen_Main for this
 # target (see src/main.c) and android_main.c calls it.
-list(FILTER MUGEN_ENGINE_SOURCES EXCLUDE REGEX ".*/(sdlmain|glrender|gldetect)\\.c$")
+list(FILTER MUGEN_ENGINE_SOURCES EXCLUDE REGEX ".*/(sdlmain|glrender|gldetect|sdl2compat|sdlmixercompat)\\.c$")
 
-# The Android video layer replaces SDL 1.2's removed calls; it is added below.
-# zoomSurface comes from the shared proven scaler (src/sdl2surface.c), which is
-# already in MUGEN_ENGINE_SOURCES via the src/*.c glob -- not from a local
-# reimplementation. android_gfx.c was removed for that reason (PLAN B4).
+# Native SDL2 backend; no SDL 1.2 compatibility translation units.
 list(APPEND MUGEN_ENGINE_SOURCES
      "${CMAKE_CURRENT_SOURCE_DIR}/android_video.c"
      "${CMAKE_CURRENT_SOURCE_DIR}/android_main.c"
-     "${CMAKE_CURRENT_SOURCE_DIR}/android_glstub.c")
+     "${CMAKE_CURRENT_SOURCE_DIR}/android_dependencies.c")
 
 # ---------------------------------------------------------------------------
 # Third-party libraries, compiled from the copies in the engine tree so the
@@ -103,22 +100,12 @@ if(RESAMPLE_SRC)
     list(APPEND ANDROID_INCLUDES "${TP}/libresample/include" "${TP}/libresample/src")
 endif()
 
-# SDL_mixer, SDL_ttf, SDL_gfx and FreeType are NOT vendored in this repository:
-# third_party/SDL_mixer-1.2.12, SDL_ttf-2.0.11, SDL_gfx-2.0.26 and
-# freetype-2.10.4 are placeholder directories with no sources (the desktop
-# builds take them from the system via pkg-config -- see the Makefile's
-# STATIC_PKGS). Android cannot, so the build script compiles the SDL2-era
-# equivalents and stages them into jniLibs:
-#
-#     libSDL2_mixer.so   SDL_mixer 2.x, API-compatible superset of 1.2
-#     libSDL2_ttf.so     SDL_ttf 2.x
-#
-# and SDL_gfx's single used entry point (zoomSurface) is provided by the
-# shared proven scaler src/sdl2surface.c, because SDL_gfx has no upstream
-# SDL2 port that is safe to depend on and a local approximation would drift
-# from the 19 differential cases tools/test_zoomdiff.sh proves.
-#
+# Native SDL2_mixer and SDL2_ttf are required. SDL_gfx/SDL2_gfx are
+# unnecessary: font scaling uses the engine's SDL2 surface operation.
 # Set SDL2_MIXER_TTF_DIR to the directory holding their headers and .so files.
+if(NOT DEFINED sdl2MixerTtfDir OR sdl2MixerTtfDir STREQUAL "")
+    message(FATAL_ERROR "Native SDL2_mixer and SDL2_ttf prefix is required (sdl2MixerTtfDir)")
+endif()
 if(DEFINED sdl2MixerTtfDir AND NOT sdl2MixerTtfDir STREQUAL "")
     list(APPEND ANDROID_INCLUDES "${sdl2MixerTtfDir}/include" "${sdl2MixerTtfDir}/include/SDL2")
     link_directories("${sdl2MixerTtfDir}/lib")
@@ -146,32 +133,20 @@ else()
         "Pass -Dsdl2IncludeDir=<path containing SDL.h> (build.sh sets it).")
 endif()
 
-list(APPEND ANDROID_INCLUDES "${MUGEN_ROOT}/src")
+list(APPEND ANDROID_INCLUDES "${MUGEN_ROOT}/src" "${CMAKE_CURRENT_SOURCE_DIR}")
 
 add_library(main SHARED ${MUGEN_ENGINE_SOURCES})
 
 target_include_directories(main PRIVATE ${ANDROID_INCLUDES})
 
 # ---------------------------------------------------------------------------
-# Compile definitions
-#
-# MUGEN_ANDROID_SW selects the generic software-renderer hardening shared with
-# the Vita (NaN guards, stale-target bounds, palette NULL checks, proportional
-# infobox sizing). It must NOT enable MUGEN_VITA_GL: that guard carries
-# Vita-device policy (stdout/stderr paths, joystick overrides, message box,
-# 960x544 panel surface, Vita trace) which has no meaning on Android. The B1
-# audit in PLAN.md categorized every MUGEN_VITA_GL site; only the (b) generic
-# sites respond to MUGEN_ANDROID_SW.
-# ---------------------------------------------------------------------------
-# android_main.h is force-included into every translation unit: it supplies the
-# SDL 1.2 names SDL2 removed (SDL_SetVideoMode, SDL_Flip, SDL_UpdateRect and
-# friends) so the engine's call sites stay exactly as reconstructed.
-set_source_files_properties(${MUGEN_ENGINE_SOURCES} PROPERTIES
-    COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/android_main.h")
-
+# Compile definitions: Android identity is independent of the Vita port and
+# of the desktop SDL 1.2-over-SDL2 build. Never force-include a compatibility
+# header into either the engine or third-party translation units.
 target_compile_definitions(main PRIVATE
-    MUGEN_ANDROID_SW=1
     ANDROID_PORT=1
+    MUGEN_ANDROID_SW=1
+    LIBRESAMPLE_STATIC=1
     PNG_ARM_NEON_OPT=0
     PNG_ARM_NEON_CHECK_SUPPORTED=0
     PNG_SETJMP_SUPPORTED=1
@@ -184,6 +159,7 @@ target_compile_options(main PRIVATE
     # MINGW note), so this is not a new dependency, just the ARM spelling.
     -fdeclspec
     -Wall
+    -Werror=implicit-function-declaration
     -Wno-unused-parameter
     -Wno-unused-variable
     -Wno-unused-function
@@ -220,11 +196,20 @@ foreach(lib ${MUGEN_ANDROID_SHARED_LIBS})
 endforeach()
 message(STATUS "SDL2 libraries: ${MUGEN_ANDROID_SHARED_LIBS}")
 
+target_link_options(main PRIVATE -Wl,--no-undefined)
+
 target_link_libraries(main PRIVATE ${MUGEN_ANDROID_SHARED_LIBS}
-                      GLESv1_CM GLESv2 log android m dl z)
+                      log android m dl z)
 
 set_target_properties(main PROPERTIES
     OUTPUT_NAME "main"
     PREFIX "lib"
     POSITION_INDEPENDENT_CODE ON
 )
+
+# Reject accidental SDL 1.2 libraries from a caller-supplied prefix/APK inputs.
+add_custom_command(TARGET main POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" "-DREADELF=${CMAKE_READELF}"
+            "-DLIBRARIES=$<TARGET_FILE:main>;${MUGEN_ANDROID_SHARED_LIBS}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/check_sdl2.cmake"
+    VERBATIM)

@@ -28,10 +28,9 @@
  * window, context, renderer or texture.
  */
 #include "mugen.h"
+#ifdef MUGEN_SDL2
 #include "sdl2keys.h"
 #include "sdl2surface.h"
-
-#ifdef MUGEN_SDL2
 
 /* The header aliases SDL_GL_SetAttribute to the shim; inside this file the
  * real SDL2 entry point is the one that has to be called. */
@@ -43,7 +42,9 @@
 #include <math.h>
 /* SDL_syswm.h for Sdl2_GetWindowHandle's SDL_GetWindowWMInfo. The engine's own
  * modules include it separately; it has a proper include guard. */
+#ifdef _WIN32
 #include <SDL_syswm.h>
+#endif
 
 typedef struct Sdl2Video {
     SDL_Window *window;

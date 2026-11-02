@@ -1,21 +1,33 @@
 # Android SDL 1.2 semantics to SDL2: migration and qualification plan
 
-Date: 2026-11-02 (Asia/Jakarta).
-Native-source baseline: `d14b4e3b05bad838a1a44c3691b48edf35ab69f6`, branch `sdl2`.
+Updated: 2026-11-02 (Asia/Jakarta).
+Historical adapter baseline: `d14b4e3b05bad838a1a44c3691b48edf35ab69f6`.
+Native API implementation integrates upstream `2ab0dcd` on branch `sdl2`.
 Related documents: [README.md](README.md), [REVIEW.md](REVIEW.md),
 [desktop migration record](../../SDL2_PLAN.md).
 
 ## 1. Starting point and definition of completion
 
-**Android already links SDL2.** Its native CMake imports `libSDL2.so`,
-`libSDL2_mixer.so` and `libSDL2_ttf.so`. A force-included local adapter emulates
-SDL1 APIs for the reconstructed engine. This plan finishes the migration of
-those semantics and consolidates validated portable code; it does not pretend
-there is a currently supported Android SDL1 build.
+**The Android implementation is now native SDL2, without SDL1 API aliases or
+a compatibility shim.** SDL2_ttf and SDL2_mixer are native major-2 libraries.
+The adapter-based inventory in section 2 describes the earlier source baseline;
+the status table below and REVIEW.md describe the implemented result.
 
-The current change adds toolchain download/check orchestration and its host
-tests. It does not implement the native fixes below. A host fixture APK is not
-an Android build, and a buildable APK is not a qualified port.
+| Milestone | Current status |
+|---|---|
+| B0 setup | 23 bootstrap fixtures pass; real SDK/NDK/APK and supported-host qualification remain open |
+| B1 platform/renderer policy | Implemented: Android identity separated from Vita; unsupported engine GL modes fall back before table selection |
+| B2 input | Implemented/tested on host: key IDs, text, focus snapshots, repeat, joystick instance IDs and hotplug; physical/device/menu coverage remains open |
+| B3 System presentation | Implemented/tested on host: native window/renderer/texture, dimensions/depth, dirty batching, frame skip, reset and pre-SDL_Quit teardown |
+| B4 surfaces/fonts | Implemented/tested on host for INDEX8/32-bit text, solid/blended SDL2_ttf and alpha/key/palette state; shared scaler retained through its native engine API; no Android zoomSurface export |
+| B5 mixer/streams | Implemented/tested on host: native RWops, WAV/OGG/MP3 music/effects, BGM worker using SDL2 synchronization and full-width command pointers; per-format/device fidelity remains open |
+| B6 assets | Upstream atomic/generation-aware source fix retained; device recovery/upgrade/storage tests remain open |
+| B7 lifecycle/JNI | Native reset/background/teardown implemented; actual Android lifecycle/JNI/device tests remain open |
+| B8 release/performance | Open: real APK, devices, audible output, measurements and regression qualification |
+
+Checkboxes below are acceptance gates, including device-level work; a checked
+host implementation does not automatically satisfy the corresponding device gate.
+See REVIEW.md for exact versions, sanitizer constraints and tests performed.
 
 Completion means:
 
@@ -29,9 +41,9 @@ Completion means:
   meet their named acceptance gates on actual Android devices.
 - Packaging, signing identity and dependency/toolchain provenance can be
   reproduced from a manifest, with limitations stated explicitly.
-- A compatibility wrapper may retain SDL1-era function names where preserving
-  reconstruction fidelity requires them. Correct semantics and ownership,
-  not renaming every call site, define the migration.
+- Android must compile no SDL1 API aliases, fake SDL1 types/flags or SDL1-over-
+  SDL2 compatibility implementation. Shared source may retain legacy calls only
+  in non-Android preprocessor branches. Engine config IDs retain their file format.
 
 ### 1.1 Build ownership and constraints
 
@@ -54,7 +66,7 @@ display size, logical framebuffer size, orientation and letterbox viewport are
 different values. The Android build/bootstrap does not authorize editing the
 pristine reference installation or silently rewriting user configuration.
 
-## 2. Verified source inventory and blockers
+## 2. Original adapter-based inventory (historical baseline)
 
 | Area | Current behavior | Required outcome |
 |---|---|---|
@@ -97,21 +109,21 @@ baseline. Preserve historical observations as history, not current proof.
 
 ## 3. Architecture decisions
 
-### 3.1 Share SDL2 semantics, retain Android ownership
+### 3.1 Use native SDL2 APIs, retain Android ownership
 
-Extract reusable key and surface/scaling helpers from the desktop SDL2 bridge
-into small modules such as `src/sdl2keys.c/.h` and
-`src/sdl2surface.c/.h` (proposed names). Compile these for SDL2 consumers
-without also pulling in a desktop window/GL implementation.
+Android includes android_platform.h normally, with no forced header. It defines
+ANDROID_PORT and infers MUGEN_SDL2_API for SDL2 ABI branches, while rejecting
+MUGEN_SDL2 and MUGEN_VITA_GL. Its CMake excludes both sdl2compat.c and
+sdlmixercompat.c. The removed android_main.h, android_glstub.c and android_gfx.c
+must not be restored as renamed compatibility modules.
 
-Keep Android entry/activity, writable-storage selection and mobile lifecycle
-in `port/android`. Retain a thin Android video-policy adapter. Decide whether
-to share more presentation infrastructure only after its policy parameters
-are explicit and both platforms' tests pass.
-
-Do not simply add `-DMUGEN_SDL2` to the current Android CMake: this can enable
-`src/sdl2compat.c`'s independent window/present implementation and duplicate
-macros/symbols alongside `android_main.h`. Extract or split the modules first.
+Use SDL2 window/renderer/texture APIs for presentation, SDL_GetKeyboardState and
+SDL_TEXTINPUT for input, SDL2 surface/palette/alpha APIs for text pixels,
+SDL2_ttf for fonts, SDL2_mixer for music/effects, SDL_RWFromFP/SDL_RWFromMem for
+streams, and SDL2 thread/mutex/condition APIs for BGM concurrency. Narrow engine
+operations may own these resources, but must not redefine SDL1 names or flags.
+Stable mugen.cfg key IDs are an engine data schema, independently named in
+engine_keys.h; Android input translates at the OS boundary.
 
 ### 3.2 Make platform and renderer guards truthful
 
@@ -123,7 +135,7 @@ macros/symbols alongside `android_main.h`. Extract or split the modules first.
   Neither `MUGEN_VITA_GL` nor SDL2's internal renderer backend implies it exists.
 
 Audit every affected guard across sources and headers before removing the
-Android definition of `MUGEN_VITA_GL`. That definition currently also changes
+Android definition of `MUGEN_VITA_GL`. At the historical baseline that definition also changed
 symbol declarations and GL capability aliases; deleting only the CMake flag
 can leave unrelated compile/link failures. Preserve Windows/Linux/Vita branches.
 
@@ -150,8 +162,9 @@ The VitaGL implementation planned for Vita is not an Android library/back end.
 
 ## 4. Milestones and acceptance gates
 
-All native milestones below are pending. B0's host bootstrap implementation
-is present in this change; its real-distribution/native-build gate is pending.
+The status table in section 1 separates implemented native changes from
+remaining qualification. The detailed checklists below retain the full acceptance
+requirements; device gates remain pending even when host behavior is verified.
 
 ### B0 — Reproducible host setup and baseline evidence
 
@@ -193,7 +206,7 @@ from the recorded inputs. No device behavior is inferred from this gate.
 
 ### B1 — Isolate target policy and reject unavailable renderers
 
-Primary files: native CMake, `android_main.h`, `mugen.h` and the guarded engine
+Primary files: native CMake, `android_platform.h`, `mugen.h` and the guarded engine
 modules listed in the inventory.
 
 - [ ] Replace Android's reuse of Vita identity with explicit capability/platform
@@ -335,21 +348,22 @@ presentation matches the frame contract on device.
 
 ### B4 — Qualify surface conversion, SDL_gfx and SDL_ttf
 
-Primary files: `android_gfx.c`, proposed common surface/scaler module,
-`font.c` and the SDL2 dependency integration.
+Primary files: `src/sdl2surface.c`, `font.c` and the SDL2 dependency integration.
 
 #### Scaler selection
 
-Preferred initial choice: extract/reuse the shared SDL2 scaler whose desktop
-record includes 19 differential cases. Android's present adapter does not
-need to own a separate approximation of the same function. The result must
-be tested for the selected Android ABI/dependencies; desktop results do not
-automatically establish ARM equivalence.
+Implemented choice: Sdl2_ScaleSurface is a shared engine text-scaling operation
+using native SDL2 surfaces. Indexed fonts use integer-ratio sampling; 32-bit
+fonts retain 16.16 sampling. It preserves palette, color key, alpha/color
+modulation and blend mode without compositing during resampling. It rejects
+non-finite/overflowing scales. Android does not export
+zoomSurface or link SDL_gfx/SDL2_gfx. SDL2_ttf supplies actual solid/blended
+font surfaces. Do not activate the desktop compatibility scaler on Android.
 
-Alternative: use upstream SDL2_gfx's surface rotozoom implementation, with
-a pinned source/build and the same tests. There is no need to adopt its
-SDL_Renderer drawing primitives to replace this engine's rasterizer.
-Do not link both an upstream and local `zoomSurface` symbol.
+Native SDL2_gfx could be evaluated later only if an actual new feature needs
+it. It is not required by the current Android implementation. 16-bit fractional
+SDL_gfx equivalence remains outside the supported font path and must not be
+claimed from an invariant-only check.
 
 Required fixtures:
 
@@ -386,6 +400,16 @@ exemption for a format or font family. A successfully linked font/scaler symbol
 does not satisfy this gate.
 
 ### B5 — SDL2_mixer, RWops and actual BGM routing
+
+Implemented Android route: one built-in native SDL2_mixer subsystem for
+WAV/OGG/MP3. It replaces Windows DLL plugin selection without rewriting cfg.
+RWops ownership goes to SDL2_mixer; the underlying engine Stream outlives the
+decoder. The BGM worker now uses SDL2 mutex/condition/thread APIs, a guarded
+startup predicate and SDL_WaitThread. Its two-word command payload packs and
+unpacks whole native pointers instead of truncating to data[0]. Startup failure
+must not mark BGM initialized. Tracker/MIDI support remains disabled until real
+decoders and the tests below are supplied.
+
 
 Primary files: `sound.c`, `sdlmixercompat.c`, `bgmthread.c`, `bgmplugins.c`,
 `stream.c` and the Android companion builder/config.
@@ -662,12 +686,12 @@ keep evidence required to reproduce a review.
 |---|---|
 | `build.sh` and bootstrap helpers | Current implementation plus live-host qualification, stronger source lock/provenance and dependency validation |
 | App Gradle/CMake/manifest | Coherent pins, explicit dependency imports/closure, renderer capability and lifecycle configuration |
-| `src/sdl2keys.*` / `sdl2surface.*` (proposed) | Portable key translation and proven surface/scaling helpers |
-| `android_main.h` | Thin Android policy/API boundary; no competing aliases or Vita identity |
+| `src/sdl2keys.*` / `sdl2surface.*` | Retain upstream shared key/pixel algorithms and expose a native scaler operation |
+| `android_platform.h` | Native engine resource operations; old android_main.h removed |
 | `android_video.c` | Correct dimensions, allocation, frame policy, reset and lifetime |
-| `android_main.c` | Writable-root validation, atomic generation-aware assets and entry cleanup |
-| `android_gfx.c` | Replace approximation with qualified common/upstream scaling |
-| `android_glstub.c` | Unavailable-renderer contract; no successful silent draw path |
+| `android_main.c` | Preserve upstream atomic generation-aware extraction; qualify writable paths/recovery |
+| `android_gfx.c` | Already removed upstream; retain shared scaling implementation |
+| `android_glstub.c` | Removed; unavailable GL bodies and table slots excluded at compilation |
 | `src/events.c` / `keyboard.c` / `pads.c` / `config.c` | Unified SDL2 key/control domains and persistent mapping |
 | `src/video.c` / `gfx.c` / `frame.c` | Platform isolation and one presentation boundary |
 | `src/main.c` / `system.c` / `error.c` | Correct ownership order and platform-specific diagnostics |

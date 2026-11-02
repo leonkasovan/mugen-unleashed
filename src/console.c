@@ -609,7 +609,10 @@ void Console_Toggle(void)
 
     c->open = c->open == 0;
     if (c->open != 0) {
-#ifdef MUGEN_SDL2_API
+#ifdef ANDROID_PORT
+        SDL_SetHint(SDL_HINT_ENABLE_SCREEN_KEYBOARD, "1");
+        SDL_StartTextInput();
+#elif defined(MUGEN_SDL2_API)
         /* SDL2 removed SDL_EnableKeyRepeat; key repeat is a platform setting
          * and SDL_KEYDOWN arrives already repeated. The shim records the
          * request, so the console keeps its "repeat on while open" intent
@@ -625,7 +628,11 @@ void Console_Toggle(void)
         c->ticks[1] = 0;
         return;
     }
-#ifndef MUGEN_SDL2_API
+#ifdef ANDROID_PORT
+    SDL_StopTextInput();
+    SDL_SetHint(SDL_HINT_ENABLE_SCREEN_KEYBOARD, "0");
+    SDL_StartTextInput(); /* physical keyboard bindings remain active */
+#elif !defined(MUGEN_SDL2_API)
     SDL_EnableKeyRepeat(0, 0);
 #endif
     g = g_game;
@@ -964,7 +971,7 @@ void Console_Draw(void)
  */
 #define CONSOLE_KEY_ESCAPE 27       /* SDL 1.2 SDLK_ESCAPE */
 #define CONSOLE_KEY_DELETE 127      /* SDL 1.2 SDLK_DELETE */
-#define CONSOLE_KEY_UP 273          /* SDL 1.2 SDLK_UP */
+#define CONSOLE_KEY_UP 273          /* SDL 1.2 ENGINE_KEY_UP */
 #define CONSOLE_KEY_DOWN 274
 #define CONSOLE_KEY_RIGHT 275
 #define CONSOLE_KEY_LEFT 276
@@ -1728,10 +1735,10 @@ typedef struct ConKey {
 
 /* The default key bindings (Ctrl = 0xC0, Shift = 3, Ctrl+Alt = 0x3C0). */
 static const ConKey con_keys[] = {
-    { 0xC0, '`', "consoletoggle" }, { 0, ' ', "lifereset" }, { 0, SDLK_F1, "setlife 2 0" },
-    { 0xC0, SDLK_F1, "setlife 1 0" }, { 0, SDLK_F2, "setlife 2 1" }, { 0xC0, SDLK_F2, "setlife 1 1" },
-    { 0, SDLK_F3, "maxpower" }, { 0xC3, SDLK_F3, "maxpowermode" }, { 0, SDLK_F4, "roundreset" },
-    { 3, SDLK_F4, "matchreset" }, { 0, SDLK_F5, "setroundtime 1" }, { 0, SDLK_F8, "clearclipboard" },
+    { 0xC0, '`', "consoletoggle" }, { 0, ' ', "lifereset" }, { 0, ENGINE_KEY_F1, "setlife 2 0" },
+    { 0xC0, ENGINE_KEY_F1, "setlife 1 0" }, { 0, ENGINE_KEY_F2, "setlife 2 1" }, { 0xC0, ENGINE_KEY_F2, "setlife 1 1" },
+    { 0, ENGINE_KEY_F3, "maxpower" }, { 0xC3, ENGINE_KEY_F3, "maxpowermode" }, { 0, ENGINE_KEY_F4, "roundreset" },
+    { 3, ENGINE_KEY_F4, "matchreset" }, { 0, ENGINE_KEY_F5, "setroundtime 1" }, { 0, ENGINE_KEY_F8, "clearclipboard" },
     { 0xC0, 'c', "showclsn" }, { 0xC0, 'l', "togglelifebars" }, { 0xC0, 'i', "forcestand" },
     { 0xC0, 't', "toggletrainingmode" }, { 0xC0, '1', "toggleai 1" }, { 0xC0, '2', "toggleai 2" },
     { 0xC0, '3', "toggleai 3" }, { 0xC0, '4', "toggleai 4" }, { 0x3C0, '1', "toggleplayer 1" },
