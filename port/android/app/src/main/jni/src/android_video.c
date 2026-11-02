@@ -34,15 +34,22 @@ static SDL_Renderer *s_renderer;
 static SDL_Texture  *s_texture;
 static SDL_Surface  *s_surface;
 static Uint32        s_texture_format;
+static int           s_texture_w;
+static int           s_texture_h;
 static int           s_pref_w = 640;
 static int           s_pref_h = 480;
 static int           s_pref_bpp = 16;
 static int           s_created_w;
 static int           s_created_h;
 static int           s_inited;
-/* M2: present at most once per frame; a second request in the same frame is a
- * no-op. Set by Android_RequestPresent, cleared by present(). */
+/* Present at most once per frame; UpdateRect/Flip only mark dirty, and the
+ * frame-end flush in Android_PresentFrame is the single presenter. A second
+ * dirty mark in the same frame only re-arms. Counters below are the B3
+ * evidence: uploads must equal frame-end flushes with new pixels, and a
+ * skipped frame must not upload. */
 static int           s_dirty;
+static unsigned long s_present_requests;
+static unsigned long s_present_uploads;
 
 static void log_android_sdl_error(const char *what)
 {
@@ -169,9 +176,25 @@ SDL_Surface *Android_SetVideoMode(int width, int height, int bpp, Uint32 flags)
         SDL_RenderSetIntegerScale(s_renderer, SDL_FALSE);
     }
 
-    if (s_texture != NULL && s_texture_format != sdl_fmt) {
+    if (s_texture != NULL && (s_texture_format != sdl_fmt || s_texture_w != want_w || s_texture_h != want_h)) {
+        /*
+         * Recreate on format OR dimension change. A new size with the old
+         * texture would upload new-pitch pixels into an old-size texture.
+         * Allocate first, commit only on success, so OOM leaves the old
+         * texture (and its recorded size/format) intact instead of a NULL
+         * with stale dimensions.
+         */
+        SDL_Texture *replacement = SDL_CreateTexture(s_renderer, sdl_fmt, SDL_TEXTUREACCESS_STREAMING,
+                                                      want_w, want_h);
+        if (replacement == NULL) {
+            log_android_sdl_error("SDL_CreateTexture");
+            return NULL;
+        }
         SDL_DestroyTexture(s_texture);
-        s_texture = NULL;
+        s_texture = replacement;
+        s_texture_format = sdl_fmt;
+        s_texture_w = want_w;
+        s_texture_h = want_h;
     }
     if (s_texture == NULL) {
         s_texture = SDL_CreateTexture(s_renderer, sdl_fmt, SDL_TEXTUREACCESS_STREAMING,
@@ -181,6 +204,8 @@ SDL_Surface *Android_SetVideoMode(int width, int height, int bpp, Uint32 flags)
             return NULL;
         }
         s_texture_format = sdl_fmt;
+        s_texture_w = want_w;
+        s_texture_h = want_h;
     }
 
     if (s_surface != NULL && (s_surface->w != want_w || s_surface->h != want_h ||
@@ -217,31 +242,24 @@ SDL_Surface *Android_SetVideoMode(int width, int height, int bpp, Uint32 flags)
 /*
  * Uploads the software surface into the texture and draws it.
  *
- * This is the SDL2 replacement for "the back buffer now becomes the front
- * buffer". SDL_UpdateRect and SDL_Flip both land here; the engine distinguishes
- * them only as an optimisation, and there is nothing cheaper to do.
- */
-/*
- * Uploads the software surface into the texture and draws it.
- *
- * M2: guarded by s_dirty. The engine normally calls Gfx_Present once per frame,
- * but SDL_UpdateRect is also used from draw paths, and each pass here uploads
- * the WHOLE surface (~600 KB at 640x480x16) plus a clear and a copy. Presenting
- * once per dirty frame keeps that bounded; a second call in the same frame only
- * marks the surface dirty again.
- *
- * The frame boundary is Android_PresentFrame(), called from the point where the
- * engine has finished drawing and is about to pace itself.
+ * The single frame-end flush. SDL_UpdateRect and SDL_Flip only mark the
+ * framebuffer dirty; each of them uploading the WHOLE surface (~600 KB at
+ * 640x480x16) plus a clear and a copy would multiply one frame's cost by
+ * every draw-path call. Android_PresentFrame -- called from frame.c where
+ * the engine has finished drawing -- is the only path that presents.
+ * A skipped frame never reaches it, so it uploads nothing.
  */
 static void present(void)
 {
     if (s_renderer == NULL || s_texture == NULL || s_surface == NULL) {
         return;
     }
+    s_present_requests++;
     if (!s_dirty) {
         return;
     }
     s_dirty = 0;
+    s_present_uploads++;
     if (SDL_UpdateTexture(s_texture, NULL, s_surface->pixels, s_surface->pitch) != 0) {
         log_android_sdl_error("SDL_UpdateTexture");
         return;
@@ -290,8 +308,8 @@ const Uint8 *Android_GetKeyState(int *count)
 void Android_UpdateRectX(SDL_Surface *surf, Sint32 x, Sint32 y, Uint32 w, Uint32 h)
 {
     (void)surf; (void)x; (void)y; (void)w; (void)h;
+    /* Dirty only: the frame-end flush in Android_PresentFrame presents. */
     s_dirty = 1;
-    present();
 }
 
 /*
@@ -308,13 +326,14 @@ void Android_PresentFrame(void)
 void Android_UpdateRect(Sint32 x, Sint32 y, Uint32 w, Uint32 h)
 {
     (void)x; (void)y; (void)w; (void)h;
-    present();
+    /* Dirty only: the frame-end flush in Android_PresentFrame presents. */
+    s_dirty = 1;
 }
 
 void Android_Flip(void)
 {
+    /* Dirty only: the frame-end flush in Android_PresentFrame presents. */
     s_dirty = 1;
-    present();
 }
 
 int Android_ToggleFullscreen(SDL_Surface *screen)
@@ -345,6 +364,9 @@ void Android_VideoQuit(void)
         SDL_FreeSurface(s_surface);
         s_surface = NULL;
     }
+    __android_log_print(ANDROID_LOG_INFO, ALOG_TAG,
+                        "video: %lu present requests, %lu uploads",
+                        s_present_requests, s_present_uploads);
 }
 
 #endif /* __ANDROID__ */
