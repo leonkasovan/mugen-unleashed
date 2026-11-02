@@ -22,13 +22,9 @@
 
 #include "mugen.h"
 
-#ifdef ANDROID_PORT
-#define BGM_LOCK()   SDL_LockMutex((SDL_mutex *)g_bgmMutex)
-#define BGM_UNLOCK() SDL_UnlockMutex((SDL_mutex *)g_bgmMutex)
-#else
+/* The shared BGM lock; src/bgm.h picks SDL or pthread per platform. */
 #define BGM_LOCK()   BGM_MUTEX_LOCK()
 #define BGM_UNLOCK() BGM_MUTEX_UNLOCK()
-#endif
 
 /*
  * The start-up handshake's cond/mutex come from BgmThreadStart, whose fields
@@ -51,6 +47,23 @@ enum {
     BGM_READ_MORE = 1,
     BGM_READ_END = 2
 };
+
+/*
+ * Bytes at the start of every ring block that are not audio: the sequence
+ * number the producer stamps and the callback publishes in g_bgmPlayedSeq.
+ * A block is g_bgmRing->block bytes total, so its payload is block -
+ * BGM_BLOCK_HEADER. "filled" and "space" measure different things and must
+ * each be updated in their own unit:
+ *
+ *   space  - whole blocks the producer may fill (compared to r->block)
+ *   filled - payload bytes the consumer may play (compared to r->block,
+ *            which is conservative: it delays one block's worth of data)
+ *
+ * Fix (port change): the original never decremented "filled" at all, so a
+ * starved consumer replayed stale samples. Decrementing it by r->block gave
+ * the right idea with the wrong unit and made the ring look busy forever.
+ */
+#define BGM_BLOCK_HEADER 4
 
 /* Value of a silent sample byte in the BGM format. */
 static int bgm_silence(void)
@@ -848,7 +861,7 @@ void BgmThread_Silence(void *dst, unsigned int size)
 int BgmThread_FillBlock(void *dst, unsigned int size)
 {
     unsigned char *out = (unsigned char *)dst + 4;
-    unsigned int bytes = size - 4;
+    unsigned int bytes = size - BGM_BLOCK_HEADER;
     BgmStream *s;
     int status = BGM_READ_MORE;
     int ended = 1;
@@ -938,10 +951,15 @@ void BgmThread_UpdateHook(void)
  *
  * Fix (port change): the original's producer added to "filled" but the
  * consumer never subtracted from it, so once one block had been written the
- * r->filled >= r->block test stayed true forever and a starved consumer kept
- * replaying the last block instead of falling silent. The block is now given
- * back to "filled" when it is consumed, mirroring the way "space" is given
- * back to the producer, so the two counters describe the same ring.
+ * readiness test stayed true forever and a starved consumer replayed the last
+ * block instead of falling silent. A consumed block now gives its payload back
+ * to "filled" and the block itself back to "space".
+ *
+ * "filled" and "space" use different units and both sides of each now agree:
+ * the producer adds size - BGM_BLOCK_HEADER payload bytes and the callback
+ * subtracts the same, while "space" is counted in whole blocks on both sides.
+ * The readiness test therefore compares "filled" against the payload, not
+ * against r->block -- see BGM_BLOCK_HEADER.
  *
  * Quirks kept: muted, a block's space is given back even when none was
  * played; while paused the length is used as the source pointer of a
@@ -958,7 +976,14 @@ void BgmThread_MixCallback(void *udata, Uint8 *stream, int len)
     if (was_paused) {
         src = (const unsigned char *)(intptr_t)len;
         avail = 0;
-    } else if (r->filled >= r->block) {
+    } else if (r->filled >= r->block - BGM_BLOCK_HEADER) {
+        /*
+         * "filled" accumulates payload bytes (the producer adds size - header),
+         * so the readiness test must compare against the payload too. Using
+         * r->block here left the last block unplayable: after consuming one
+         * block "filled" sat exactly one payload below the threshold, so two
+         * queued blocks produced one callback of audio and then silence.
+         */
         src = r->buf + r->read;
         r->read += r->block;
         if (r->read >= r->size) {
@@ -969,34 +994,42 @@ void BgmThread_MixCallback(void *udata, Uint8 *stream, int len)
         src = NULL;
         avail = 0;
     }
-    if (avail < (unsigned int)(len + 4) && !was_paused && g_bgmPlayedSeq != 0) {
-        MatchLog_Printf(5, "possible read starvation detected (%ld/%ld)!\n", avail, len + 4);
+    if (avail < (unsigned int)(len + BGM_BLOCK_HEADER) && !was_paused && g_bgmPlayedSeq != 0) {
+        MatchLog_Printf(5, "possible read starvation detected (%ld/%ld)!\n", avail,
+                        len + BGM_BLOCK_HEADER);
     }
-    if (avail >= 4) {
+    if (avail >= (unsigned int)BGM_BLOCK_HEADER) {
         g_bgmPlayedSeq = *(const int *)src;
-        src += 4;
+        src += BGM_BLOCK_HEADER;
     }
     if (g_bgmMuted) {
         if (!g_bgmRing->paused) {
             InterlockedExchangeAdd(&g_bgmRing->space, g_bgmRing->block);
-            /* Same asymmetry as the playing path: a block was taken above. */
+            /*
+             * A whole block was taken above, so take its payload back off
+             * "filled" as well. Only when one was actually there: a starved
+             * callback must not push "filled" negative.
+             */
             if (src != NULL) {
-                InterlockedExchangeAdd(&g_bgmRing->filled, -(long)g_bgmRing->block);
+                InterlockedExchangeAdd(&g_bgmRing->filled,
+                                       -((long)g_bgmRing->block - BGM_BLOCK_HEADER));
             }
         }
         memset(stream, bgm_silence(), len);
         return;
     }
     if (src != NULL) {
-        n = avail >= 4 ? avail - 4 : 0;
+        n = avail >= (unsigned int)BGM_BLOCK_HEADER ? avail - BGM_BLOCK_HEADER : 0;
         if (n > (unsigned int)len) {
             n = len;
         }
         memcpy(stream, src, n);
         if (!g_bgmRing->paused) {
-            /* One whole block was taken: return it to both counters. */
+            /* Give the block back to the producer, and its payload back to
+             * "filled" -- see BGM_BLOCK_HEADER for why the units differ. */
             InterlockedExchangeAdd(&g_bgmRing->space, g_bgmRing->block);
-            InterlockedExchangeAdd(&g_bgmRing->filled, -(long)g_bgmRing->block);
+            InterlockedExchangeAdd(&g_bgmRing->filled,
+                                   -((long)g_bgmRing->block - BGM_BLOCK_HEADER));
         }
     } else {
         n = 0;

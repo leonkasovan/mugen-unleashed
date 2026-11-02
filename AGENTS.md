@@ -59,7 +59,8 @@ Each entry point owns its own subtree and never writes into another's.
 
 | Path | Written by | Contents |
 |---|---|---|
-| `build/mingw/` | root `Makefile` (Windows, default) | `obj/`, `lib/`, `mugen-static.exe`, `-stripped.exe` |
+| `build/mingw/` | root `Makefile` (Windows, default) | `obj/`, `lib/`, `mugen-static.exe`, `-stripped.exe` (SDL2 backend) |
+| `build/mingw-sdl1/` | `make SDL_BACKEND=1` (Windows) | the same shape, `mugen-static-sdl1.exe` |
 | `build/<linux-target>/` | root `Makefile` (Linux) | same shape, `mugen-linux-<arch>` |
 | `build/mingw-debug/` | `make DEBUG=1 BUILD=build/mingw-debug` | an explicit `BUILD=` override |
 | `build/x86-release/`, `build/x86-debug/` | root `CMakeLists.txt` via `CMakePresets.json` | MSVC `mugen_unleashed.exe` + `.pdb` |

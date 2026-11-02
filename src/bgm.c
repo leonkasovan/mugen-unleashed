@@ -16,13 +16,9 @@
 
 #include "mugen.h"
 
-#ifdef ANDROID_PORT
-#define BGM_LOCK()   SDL_LockMutex((SDL_mutex *)g_bgmMutex)
-#define BGM_UNLOCK() SDL_UnlockMutex((SDL_mutex *)g_bgmMutex)
-#else
+/* The shared BGM lock; src/bgm.h picks SDL or pthread per platform. */
 #define BGM_LOCK()   BGM_MUTEX_LOCK()
 #define BGM_UNLOCK() BGM_MUTEX_UNLOCK()
-#endif
 
 typedef const BgmSubsystem *(__cdecl *BgmGetSubsystemFn)(void);
 
@@ -448,10 +444,6 @@ int Bgm_Init(DynArray *plugins, int resample_method, int resample_quality, doubl
                 continue;
             }
         }
-        if (!Bgm_RegisterSubsystem(sub)) {
-            MatchLog_Printf(3, "Internal error while registering plugin: %s\n", e->name);
-            continue;
-        }
         if (e->extensions == NULL) {
             const char *def = sub->extensions();
 
@@ -462,7 +454,6 @@ int Bgm_Init(DynArray *plugins, int resample_method, int resample_quality, doubl
             }
             strcpy(e->extensions, def);
         }
-        DynArray_Push(g_bgmExtensions, &e->extensions);
         config.format = g_bgmFormat;
         config.settings = e->settings;
         host.get_extension = Bgm_GetExtension;
@@ -472,8 +463,37 @@ int Bgm_Init(DynArray *plugins, int resample_method, int resample_quality, doubl
         bgm_settings_free(e->settings);
         e->settings = NULL;
         if (err != 0) {
+#if defined(MUGEN_SDLMIX_NATIVE_CODECS) && !defined(ANDROID_PORT)
+            /*
+             * Static-build fix. The original stopped at the first plugin that
+             * failed to initialise, which is harmless when every plugin is a
+             * DLL the game ships: a missing one means a broken install. This
+             * build is meant to run with no plugin DLLs at all, and mugen.cfg
+             * lists mpg123 first, so a faithful abort made a perfectly usable
+             * sdlmix (which decodes WAV/MP3/OGG through SDL2_mixer)
+             * unreachable.
+             *
+             * Skipping is not enough on its own: the plugin must also not be
+             * registered, or Bgm_FindSubsystem() keeps handing .mp3 to the
+             * decoder whose init just failed and the file never reaches sdlmix.
+             * The registration and the extension entry are therefore deferred
+             * below, to after a successful init.
+             */
+            continue;
+#else
             return 0;
+#endif
         }
+        /*
+         * Registered only once init() has succeeded. The original registered
+         * first and initialised second; on the 32-bit reference build that is
+         * unobservable, because a failed init ends Bgm_Init there anyway.
+         */
+        if (!Bgm_RegisterSubsystem(sub)) {
+            MatchLog_Printf(3, "Internal error while registering plugin: %s\n", e->name);
+            continue;
+        }
+        DynArray_Push(g_bgmExtensions, &e->extensions);
     }
 
     switch (resample_method) {

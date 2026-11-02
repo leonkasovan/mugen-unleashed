@@ -389,15 +389,17 @@ int g_exprStackType[128]; /* 0x00505300 */
 ExprValue g_exprStackValue[128]; /* 0x00505500 */
 
 /*
- * Port addition. The lock sites in bgm.c, bgmthread.c, gameloop.c, system.c,
- * gameflow.c and matchload.c go through Bgm_MutexPtr() instead of casting
- * &g_bgmMutex themselves, because the storage differs by configuration:
+ * Port addition. BGM_MUTEX_LOCK()/UNLOCK() (src/bgm.h) lock the one shared BGM
+ * mutex from every site -- bgm.c, bgmthread.c, gameloop.c, system.c,
+ * gameflow.c, matchload.c. Its storage differs by configuration:
  *
- *  - 32-bit builds: g_bgmMutex is the 4-byte slot the original used to hold a
- *    pthread_mutex_t by value, so its address is the mutex (unchanged here).
- *  - BGM_NATIVE_PTHREAD builds (any 64-bit target): a native pthread_mutex_t
- *    does not fit a void *, so it lives in s_bgmMutex below and g_bgmMutex
- *    keeps the original's role of "there is a BGM mutex" without aliasing it.
+ *  - ANDROID_PORT: g_bgmMutex holds an SDL_mutex * and is locked with SDL;
+ *    Bgm_MutexPtr() is not used at all.
+ *  - BGM_NATIVE_PTHREAD (any 64-bit target): a native pthread_mutex_t does not
+ *    fit a void *, so it lives in s_bgmMutex below and g_bgmMutex keeps the
+ *    original's role of "there is a BGM mutex" without aliasing it.
+ *  - 32-bit Windows: g_bgmMutex is the 4-byte slot the original used to hold a
+ *    pthread_mutex_t by value, so its address is the mutex.
  *
  * g_bgmMutex itself is untouched, so its address and initial value still match
  * the original's .data.
@@ -409,9 +411,10 @@ void *Bgm_MutexPtr(void)
 {
     return &s_bgmMutex;
 }
-#else
+#elif !defined(ANDROID_PORT)
 void *Bgm_MutexPtr(void)
 {
+    /* 32-bit Windows: the mutex is stored in the slot itself. */
     return &g_bgmMutex;
 }
 #endif

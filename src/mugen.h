@@ -79,6 +79,25 @@
 #define MUGEN_SDL2_API 1
 #endif
 
+/*
+ * Does this build's SDL_mixer decode WAV, MP3 and Ogg Vorbis by itself?
+ *
+ * Both of this project's SDL_mixer link lines pull the codecs in statically --
+ * `pkg-config --libs --static SDL_mixer` and `... SDL2_mixer` each list
+ * -lmpg123 -lvorbisfile -lFLAC -lopus -lwavpack -- so neither needs Elecbyte's
+ * libmpg123-0.dll or vorbisplug.dll to play those files. The sdlmix plugin
+ * advertises the three extensions when this is set (bgmplugins.c), which is
+ * what lets a static build run with no plugin DLLs at all.
+ *
+ * Android has always done this; the desktop backends now do too. A build that
+ * linked a decoder-less SDL_mixer (a distro package compiled without
+ * --enable-music-mp3) can leave it undefined and fall back to the plugin-DLL
+ * route, at the cost of needing those DLLs present.
+ */
+#ifndef MUGEN_NO_SDLMIX_NATIVE_CODECS
+#define MUGEN_SDLMIX_NATIVE_CODECS 1
+#endif
+
 #ifdef MUGEN_SDL2
 /*
  * The removed SDL 1.2 entry points, reimplemented over SDL2 (src/sdl2compat.c).

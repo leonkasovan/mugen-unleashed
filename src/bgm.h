@@ -289,18 +289,46 @@ MUGEN_ASSERT_SIZE(BgmEvent, 0x0C);
  *
  * BGM_NATIVE_PTHREAD (derived in mugen.h whenever pointers are wider than 4
  * bytes) makes the fields the real pthread_t / pthread_cond_t /
- * pthread_mutex_t instead, so no copy ever assumes a size or layout. There is deliberately no size assertion in
- * that configuration: the types belong to the toolchain, not to the original
- * binary, so there is no invariant of ours to pin. See PLANS.md.
+ * pthread_mutex_t instead, so no copy ever assumes a size or layout. There is
+ * deliberately no size assertion in that configuration: the types belong to
+ * the toolchain, not to the original binary, so there is no invariant of ours
+ * to pin. See PLANS.md.
  */
 /*
- * The BGM mutex lives behind g_bgmMutex, a void * in globals.c (which holds the
- * only storage). This accessor returns its address in every configuration, so
- * no lock site has to know which one it is building.
+ * The BGM mutex. Every caller -- bgm.c, bgmthread.c, and the game-loop, focus,
+ * match-loading and game-flow sites -- locks and unlocks through
+ * BGM_MUTEX_LOCK()/BGM_MUTEX_UNLOCK(), so the storage and the locking
+ * primitive stay in step. Three configurations exist:
+ *
+ *  - ANDROID_PORT: g_bgmMutex is an SDL_mutex * (BgmThread_Init stores one
+ *    there), so it must be locked with SDL_LockMutex. Locking it with pthread
+ *    operations reinterpreted the pointer's storage as a pthread_mutex_t while
+ *    the BGM thread and Bgm_Pause held the real SDL mutex: two different
+ *    locks, no mutual exclusion at all.
+ *  - BGM_NATIVE_PTHREAD (any 64-bit target): the mutex does not fit the void *,
+ *    so it lives in globals.c and Bgm_MutexPtr() returns it.
+ *  - 32-bit Windows: g_bgmMutex's storage is itself the pthread_mutex_t.
  */
-void *Bgm_MutexPtr(void);
 
-#ifdef BGM_NATIVE_PTHREAD
+/* The address the pthread configurations take a pthread_mutex_t at. Not used
+ * by Android, which locks g_bgmMutex with SDL instead. */
+#if !defined(ANDROID_PORT)
+void *Bgm_MutexPtr(void);
+#endif
+
+#ifdef ANDROID_PORT
+/*
+ * Android uses SDL2's own sync objects throughout (see the BgmThreadStart
+ * below), so the shared BGM lock is the SDL mutex in g_bgmMutex rather than a
+ * pthread object. This branch must come first: Android is not
+ * BGM_NATIVE_PTHREAD, but it must not fall through to the pthread macros
+ * either.
+ */
+#define BGM_MUTEX_LOCK()    SDL_LockMutex((SDL_mutex *)g_bgmMutex)
+#define BGM_MUTEX_UNLOCK()  SDL_UnlockMutex((SDL_mutex *)g_bgmMutex)
+#endif
+
+#if defined(BGM_NATIVE_PTHREAD) && !defined(ANDROID_PORT)
 #include <pthread.h>
 typedef pthread_t BgmThreadId;
 
@@ -333,15 +361,22 @@ typedef struct BgmThreadStart {
     void *mutex;                /* 0x04 */
 #endif
 } BgmThreadStart;
+#ifndef ANDROID_PORT
+/* The reconstructed 8-byte layout. Android's carries an extra "ready" flag
+ * and the native SDL2 types, so it is deliberately a different size. */
 MUGEN_ASSERT_SIZE(BgmThreadStart, 0x08);
+#endif
 
 /*
  * 32-bit builds: g_bgmMutex's storage is itself the pthread_mutex_t, and
  * g_bgmThread is not a pthread_t but the original's 8-byte handle, so a
  * pthread_t is copied into and out of it (exactly what the original did).
+ * Android supplies its own BGM_MUTEX_LOCK above.
  */
+#ifndef ANDROID_PORT
 #define BGM_MUTEX_LOCK()    pthread_mutex_lock((pthread_mutex_t *)Bgm_MutexPtr())
 #define BGM_MUTEX_UNLOCK()  pthread_mutex_unlock((pthread_mutex_t *)Bgm_MutexPtr())
+#endif
 #define BGM_THREAD_STORE(t) memcpy(&g_bgmThread, &(t), sizeof(g_bgmThread))
 #define BGM_THREAD_LOAD(t)  memcpy(&(t), &g_bgmThread, sizeof(t))
 #endif

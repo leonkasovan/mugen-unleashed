@@ -2,8 +2,13 @@
 #
 # Produces a self-contained mugen-static.exe: the engine in src/, the libraries
 # in third_party/ built from their original sources, libresample vendored, and
-# SDL 1.2 + SDL_gfx + SDL_mixer + SDL_ttf + zlib + pthread + mpg123 linked
-# statically from the x86devkit. No Elecbyte.MUGEN.libs needed to run.
+# SDL2 + SDL2_mixer + SDL2_ttf + zlib + pthread linked statically from the
+# x86devkit (SDL2_mixer brings mpg123, vorbisfile, FLAC, opus and wavpack with
+# it, so MP3/Ogg playback needs no external decoder DLL). No
+# Elecbyte.MUGEN.libs and no plugin DLLs are needed to run.
+#
+# `make SDL_BACKEND=1` still builds the SDL 1.2 backend, which is what the
+# log-comparison workflow against the original binary uses.
 #
 # The static counterpart to the CMake/MSVC build in CMakeLists.txt, which still
 # links the game's DLLs. Same sources, different link step.
@@ -56,15 +61,23 @@ DEBUG    ?=
 
 MUGEN_GAME_DIR ?=
 
-# SDL backend: 1 = SDL 1.2 (the default and the reference), 2 = SDL2 with
-# SDL2_mixer/SDL2_ttf. See SDL2_PLAN.md. The backend changes the include path,
-# the packages linked, the object/output directory and the engine's -D flags,
-# so a build of one backend can never reuse the other's objects.
-SDL_BACKEND ?= 1
+# SDL backend: 2 = SDL2 with SDL2_mixer/SDL2_ttf (the default), 1 = SDL 1.2
+# with the game's SDL_mixer/SDL_ttf (kept as the reference backend for the
+# log-comparison workflow). See SDL2_PLAN.md. The backend changes the include
+# path, the packages linked, the object/output directory and the engine's -D
+# flags, so a build of one backend can never reuse the other's objects.
+#
+# SDL 1.2 is still buildable with `make SDL_BACKEND=1`.
+SDL_BACKEND ?= 2
 ifneq ($(filter 1 2,$(SDL_BACKEND)),$(SDL_BACKEND))
   $(error SDL_BACKEND must be 1 or 2, not "$(SDL_BACKEND)")
 endif
-SDL2_SUFFIX := $(if $(filter 2,$(SDL_BACKEND)),-sdl2)
+# The output name marks the non-default backend, not the default one: SDL2 is
+# the default, so it keeps the plain mugen-static.exe name that install/ and
+# the docs refer to, and an SDL 1.2 build gets -sdl1 appended. Object and
+# output directories follow the same split, so the two backends can be built
+# side by side without reusing each other's objects.
+SDL_BACKEND_SUFFIX := $(if $(filter 1,$(SDL_BACKEND)),-sdl1)
 
 # ------------------------------------------------------- platform detection
 #
@@ -123,18 +136,18 @@ endif
 ifeq ($(MUGEN_TARGET),win32)
   MUGEN_FAMILY := win32
   MUGEN_PTRBITS := 32
-  BUILD    ?= build/mingw$(SDL2_SUFFIX)
-  TARGET   := $(BUILD)/mugen-static$(SDL2_SUFFIX).exe
+  BUILD    ?= build/mingw$(SDL_BACKEND_SUFFIX)
+  TARGET   := $(BUILD)/mugen-static$(SDL_BACKEND_SUFFIX).exe
 else ifeq ($(MUGEN_TARGET),win64)
   MUGEN_FAMILY := win32
   MUGEN_PTRBITS := 64
-  BUILD    ?= build/mingw64$(SDL2_SUFFIX)
-  TARGET   := $(BUILD)/mugen-win64$(SDL2_SUFFIX).exe
+  BUILD    ?= build/mingw64$(SDL_BACKEND_SUFFIX)
+  TARGET   := $(BUILD)/mugen-win64$(SDL_BACKEND_SUFFIX).exe
 else
   MUGEN_FAMILY := linux
   MUGEN_PTRBITS := $(if $(findstring 64,$(MUGEN_TARGET)),64,32)
-  BUILD    ?= build/$(MUGEN_TARGET)$(SDL2_SUFFIX)
-  TARGET   := $(BUILD)/mugen-$(MUGEN_TARGET)$(SDL2_SUFFIX)
+  BUILD    ?= build/$(MUGEN_TARGET)$(SDL_BACKEND_SUFFIX)
+  TARGET   := $(BUILD)/mugen-$(MUGEN_TARGET)$(SDL_BACKEND_SUFFIX)
 endif
 
 # What check-toolchain expects `$(CC) -dumpmachine` to start with. Detection
@@ -311,10 +324,12 @@ endif
 
 # --- SDL backend selection --------------------------------------------------
 #
-# SDL_BACKEND=2 swaps the SDL 1.2 packages for SDL2 and its add-ons and turns
-# on MUGEN_SDL2, which makes mugen.h pull in src/sdl2compat.h: the removed SDL
+# SDL_BACKEND=2 (the default) uses SDL2 and its add-ons and turns on
+# MUGEN_SDL2, which makes mugen.h pull in src/sdl2compat.h: the removed SDL
 # 1.2 entry points (SDL_SetVideoMode, SDL_Flip, SDL_WM_*, ...) are reimplemented
 # over SDL2 there, so the reconstructed call sites in src/ keep their shape.
+# SDL_BACKEND=1 selects the older SDL 1.2 stack instead; it is kept for the
+# reference build and the log comparison, not as the normal target.
 #
 # Two pkg-config outputs must be edited, not used verbatim:
 #   -Dmain=SDL_main  sdl2.pc renames main; this build keeps the reconstructed
@@ -534,7 +549,8 @@ $(RC_OBJ): $(ALL_RC)
 # install/ is the shipped M.U.G.E.N 1.1b1 tree (git-ignored). The installed
 # name follows $(TARGET), so it is never the original's mugen.exe and never a
 # Windows name on Linux: mugen-static.exe on Windows, mugen-linux-<arch> on
-# Linux (an ELF binary called .exe was the old behaviour here).
+# Linux (an ELF binary called .exe was the old behaviour here). An SDL 1.2
+# build appends -sdl1, so installing one backend never clobbers the other.
 
 INSTALL_DIR  ?= install
 INSTALL_NAME ?= $(notdir $(TARGET))

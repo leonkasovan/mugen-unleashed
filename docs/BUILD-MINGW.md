@@ -15,14 +15,14 @@ The instructions below are for the environment this project was verified in:
 | Compiler | `gcc` (GCC) 16.1.0, target `i686-w64-mingw32` |
 | Make | GNU Make 4.4.1 |
 | Binutils | `i686-w64-mingw32-{ar,windres,strip}` from the same kit |
-| `pkg-config` | finds `sdl.pc`, `SDL_gfx.pc`, `SDL_mixer.pc`, `SDL_ttf.pc` |
+| `pkg-config` | finds `sdl2.pc`, `SDL2_mixer.pc`, `SDL2_ttf.pc`, `zlib.pc`, `libpng16.pc` (the default backend). For `make SDL_BACKEND=1`: `sdl.pc`, `SDL_gfx.pc`, `SDL_mixer.pc`, `SDL_ttf.pc` |
 | Shell | MSYS2 bash (or `sh` from the same kit) |
 | Python | any working `python3` / `python` / `py -3` — only for the optional icon |
 
 ```sh
 make check-toolchain     # verifies the 32-bit toolchain and that the static
                          # archives (not just .pc files) are present
-make -j8                 # build/mingw/mugen-static.exe
+make -j8                 # build/mingw/mugen-static.exe (SDL2 backend)
 make install             # strip it and copy it into install/
 ```
 
@@ -30,7 +30,8 @@ Targets and variables:
 
 | Command | Effect |
 |---|---|
-| `make` | build `$(BUILD)/mugen.exe` (`BUILD` defaults to `build/mingw`) |
+| `make` | build `$(TARGET)`; the SDL2 backend by default, so `build/mingw/mugen-static.exe` |
+| `make SDL_BACKEND=1` | the SDL 1.2 backend instead: `build/mingw-sdl1/mugen-static-sdl1.exe` |
 | `make -j8` | parallel build, from scratch in ~30 s on a recent machine |
 | `make V=1` | print the full command lines |
 | `make DEBUG=1` | `-O0 -g3` build, in its own directory with `BUILD=build/mingw-debug` |
@@ -73,15 +74,18 @@ from the game.
 
 ### Linked statically
 
+The SDL2 backend is the default. `make SDL_BACKEND=1` swaps the four SDL rows
+for their SDL 1.2 counterparts and drops the rest; nothing else changes.
+
 | Library | Version | How it gets in |
 |---|---|---|
-| **SDL** | 1.2.15 | `libSDL.a` from the kit, via `sdl.pc` |
-| **SDL_gfx** | — | `libSDL_gfx.a` via `SDL_gfx.pc` (`zoomSurface`) |
-| **SDL_mixer** | — | `libSDL_mixer.a` via `SDL_mixer.pc`, plus its own static deps |
-| **SDL_ttf** | — | `libSDL_ttf.a` via `SDL_ttf.pc` + freetype, bz2 |
-| **zlib** | — | `libz.a`, pulled in through `SDL_image`/`SDL_ttf`'s `.pc` |
+| **SDL2** | — | `libSDL2.a` from the kit, via `sdl2.pc` |
+| **SDL2_mixer** | 2.8.2 | `libSDL2_mixer.a` via `SDL2_mixer.pc`, plus its own static deps |
+| **SDL2_ttf** | — | `libSDL2_ttf.a` via `SDL2_ttf.pc` + freetype, bz2 |
+| *(SDL 1.2 only)* | | `libSDL.a` `libSDL_gfx.a` (`zoomSurface`) `libSDL_mixer.a` `libSDL_ttf.a` |
+| **zlib** | — | `libz.a`, via `zlib.pc` |
 | **pthreads-win32** | — | `libpthread.a` (the kit's static build) |
-| **mpg123** | — | `libmpg123.a`, via `SDL_mixer.pc` |
+| **mpg123** | — | `libmpg123.a`, via `SDL2_mixer.pc` / `SDL_mixer.pc` |
 | Lua | 5.1.4 | built from `third_party/lua-5.1.4/src` → `liblua.a` |
 | libpng | 1.2.38 | built from `third_party/libpng-1.2.38` → `libpng.a` |
 | **glad** | 2.1 | `third_party/glad-2.1/glad.c`, generated for this engine (GL 2.1 compatibility profile + 4 extensions). Replaced GLEW 1.5.4 |
@@ -89,10 +93,18 @@ from the game.
 | **libresample** | 0.1.3 | vendored in `third_party/libresample`, ported to multi-channel |
 
 The kit libraries are not hand-listed: the Makefile asks pkg-config for
-`--libs --static` on `sdl SDL_gfx SDL_mixer SDL_ttf`, which expands to the whole
-transitive set (freetype, bz2, ogg, vorbis, opus, FLAC, wavpack, gme, mpg123,
-zlib, pthread, stdc++). Hand-writing `-lSDL_mixer -lSDL_ttf` would miss about a
-dozen archives and fail at link.
+`--libs --static` on `sdl2 SDL2_mixer SDL2_ttf zlib libpng16`, which expands to
+the whole transitive set (freetype, bz2, ogg, vorbis, opus, FLAC, wavpack, gme,
+mpg123, zlib, pthread, stdc++). Hand-writing `-lSDL2_mixer -lSDL2_ttf` would
+miss about a dozen archives and fail at link.
+
+Because `SDL2_mixer` brings mpg123 and vorbisfile with it, **WAV, MP3 and Ogg
+Vorbis need no external decoder**: the `sdlmix` plugin decodes them through
+SDL_mixer (`MUGEN_SDLMIX_NATIVE_CODECS` in `src/mugen.h`). Neither
+`libmpg123-0.dll`, `vorbisplug.dll` nor `waveplug.dll` is required at run time,
+and `mugen.cfg` may keep listing them -- a plugin whose DLL is absent is now
+skipped instead of aborting BGM start-up, so the built-in `sdlmix` still plays
+the music.
 
 Two headers need a define to stop declaring `dllimport`:
 

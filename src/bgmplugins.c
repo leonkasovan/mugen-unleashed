@@ -809,8 +809,17 @@ const char *Mpg123_StrError(void *instance, int err)
 /* 0x0048BA70: the sdlmix plugin's default extension list. */
 const char *Sdlmix_Extensions(void)
 {
-#ifdef ANDROID_PORT
-    return "wav,mp3,ogg,vorbis";
+#ifdef MUGEN_SDLMIX_NATIVE_CODECS
+    /*
+     * SDL_mixer decodes WAV, MP3 and Ogg Vorbis itself in these builds: both
+     * link lines carry mpg123, vorbisfile, FLAC, opus and wavpack statically
+     * (see `pkg-config --libs --static SDL_mixer`). Advertising the extensions
+     * here is what lets a static build play them without Elecbyte's
+     * libmpg123-0.dll / vorbisplug.dll / waveplug.dll -- the first registered
+     * plugin whose list matches an extension wins, and mpg123 cannot register
+     * at all when its DLL is absent. See MUGEN_SDLMIX_NATIVE_CODECS in mugen.h.
+     */
+    return "wav,mp3,ogg,vorbis,669,amf,apun,dsm,far,gdm,it,imf,mod,med,mtm,okt,s3m,stm,stx,ult,uni,xm,mid,midi";
 #else
     return "669,amf,apun,dsm,far,gdm,it,imf,mod,med,mtm,okt,s3m,stm,stx,ult,uni,xm,mid,midi";
 #endif
@@ -971,8 +980,10 @@ int Sdlmix_Open(void *instance, const BgmPluginIo *io, BgmInfo *info, BgmOpenRes
         Sdlmix_FreeMusic(inst);
     }
     inst->type = Sdlmix_Classify(g_sdlmixHost.get_extension(info->path));
-#ifdef ANDROID_PORT
-    if (inst->type != SDLMIX_TYPE_WAV && inst->type != SDLMIX_TYPE_MP3 && inst->type != SDLMIX_TYPE_OGG) {
+#ifdef MUGEN_SDLMIX_NATIVE_CODECS
+    /* These are refused only by a decoder-less SDL_mixer build. See
+     * Sdlmix_Extensions and MUGEN_SDLMIX_NATIVE_CODECS. */
+    if (inst->type == 0) {
 #else
     if (inst->type == 0 || inst->type == SDLMIX_TYPE_WAV || inst->type == SDLMIX_TYPE_MP3 ||
         inst->type == SDLMIX_TYPE_OGG) {
@@ -983,27 +994,34 @@ int Sdlmix_Open(void *instance, const BgmPluginIo *io, BgmInfo *info, BgmOpenRes
     if (rw == NULL) {
         return 4;
     }
-#ifdef ANDROID_PORT
-    /* Transfer the native SDL2 RWops to SDL2_mixer on both success and failure.
-     * The underlying Stream belongs to BgmStream and outlives the decoder. */
-    inst->music = Mix_LoadMUS_RW(rw, 1);
-#elif defined(MUGEN_SDL2_API)
+#if defined(ANDROID_PORT) || defined(MUGEN_SDL2_API)
     /*
      * SDL2_mixer 2 takes a second argument saying whether the RWops is freed
-     * with the music. The SDL 1.2 call took one argument and never took
-     * ownership; the caller below closes the RWops itself for types 1 and 2,
-     * so ownership must stay with the caller.
-     *
-     * freesrc = 0 reproduces the SDL_mixer 1.2 behaviour exactly.
+     * along with the music. freesrc = 1 hands it over on success *and*
+     * failure, which is what the Android port already relied on and what keeps
+     * the newly accepted WAV/MP3/OGG types from leaking. The underlying Stream
+     * belongs to BgmStream and outlives the decoder either way.
      */
-    inst->music = Mix_LoadMUS_RW(rw, 0);
+    inst->music = Mix_LoadMUS_RW(rw, 1);
 #else
     inst->music = Mix_LoadMUS_RW(rw);
 #endif
     if (inst->music == NULL) {
         return 4;
     }
-#ifndef ANDROID_PORT
+#if !defined(ANDROID_PORT) && !defined(MUGEN_SDL2_API)
+    /*
+     * SDL 1.2 build: Mix_LoadMUS_RW takes one argument and no ownership.
+     *
+     * Only MOD and MIDI may be closed here, exactly as the original did, even
+     * though WAV/MP3/OGG are now accepted too: SDL_mixer's MP3 (mpg123) and
+     * Ogg (vorbisfile) music decoders stream from the RWops while the track
+     * plays, so closing it after a successful load leaves the decoder reading
+     * freed memory -- an immediate crash on the first storyboard BGM. The
+     * stream is closed on the next open/close instead (Sdlmix_FreeMusic /
+     * the next call here), which is the same lifetime the engine gives the
+     * underlying Stream.
+     */
     if (inst->type - 1u <= 1u) {
         rw->close(rw);
     }
