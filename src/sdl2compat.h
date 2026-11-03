@@ -110,6 +110,16 @@ void Sdl2_GL_SwapBuffers(void);
  * only ever read info.window. */
 void *Sdl2_GetWindowHandle(void);
 
+/* Diagnostic counters and the independent texture check, for the M0/M3
+ * harness. Only declared when the test build defines MUGEN_SDL2_DIAG; the
+ * engine never does. */
+void Sdl2_DiagReset(void);
+void Sdl2_DiagCounters(int *present, int *tex_create, int *tex_destroy);
+int Sdl2_DiagTextureSize(int *w, int *h, Uint32 *format);
+/* which: 1 = fail the next texture creation, 2 = fail the next surface
+ * creation. One-shot; consumed by the next creation call. */
+void Sdl2_DiagFailNext(int which);
+
 /* Audio: SDL 1.2's SDL_AudioDriverName; SDL2 only has the no-length form. */
 char *Sdl2_AudioDriverName(char *namebuf, int maxlen);
 

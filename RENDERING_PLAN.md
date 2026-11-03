@@ -170,6 +170,33 @@ SDL1 referensi tidak memerlukan header/library port atau GPU API baru.
 
 ## 4. M0 — Baseline dan regression harness
 
+Harness tinggal di `tools/test_render_baseline.c` (satu sumber, dua build:
+SDL1 + SDL_gfx seperti test_zoomdiff) dengan artefak di
+`build/render-baseline/<target>/`. Perintah: `tools/test_render_baseline.sh`,
+yang menulis `baseline.json` (item 1) dan `counters.json` (item 5) di samping
+capture biner. Semua scratch mengikuti aturan AGENTS.md: di dalam proyek,
+`build/` saja.
+
+Gate regresi R01–R05 tinggal di tiga harness (semua lolos pada implementasi
+saat ini, semua gagal pada implementasi pra-perbaikan yang sesuai):
+
+- `tools/test_render_regress.sh` → `build/render-regress/`: R01 (transaksi
+  resize via `MUGEN_SDL2_DIAG` + injeksi `Sdl2_DiagFailNext`, cek independen
+  `SDL_QueryTexture`) dan R03 (satu present per shim call via counter
+  diagnostik). Link `src/sdl2compat.c` + `src/sdl2surface.c` produksi.
+- `tools/test_render_video.sh` → `build/render-video/`: R02 (`Video_OnResize`
+  produksi dengan GL context nyata, 20 resize identik → matriks ortho yang
+  diharapkan, bukan hitungan API call). Link `src/video.c` produksi.
+- `tools/test_render_host.sh` → `build/render-host/`: R04 (assert
+  `offsetof` referensi 32-bit + sentinel tetangga) dan R05 (sprite BGRA 2x1
+  → RGB565 exact, transparan vs tak-tergambar dibedakan via prefill).
+  Link `src/sprite.c` + `src/keyedarray.c` + `src/softrender.c` produksi.
+
+Diagnostik `MUGEN_SDL2_DIAG` (`Sdl2_DiagReset/Counters/TextureSize/FailNext`)
+hanya ada di build test; build produksi tidak berubah. Batas M0 yang
+tercatat: gate ABI01/ABI02 64-bit penuh butuh compiler target nyata (todo
+M4); matriks viewport/scale dan pacing (§12–13 plan awal) masuk M9.
+
 ### Pekerjaan
 
 1. Catat SHA kode, SHA dependensi, compiler/triple, flags, SDL major/minor,
@@ -838,3 +865,29 @@ Dokumentasi resmi SDL2, diperiksa 4 November 2026:
 
 Referensi kontrak API tidak merupakan bukti hasil runtime proyek. Setiap status
 selesai tetap membutuhkan test, SHA implementasi, dan hasil platform yang sesuai.
+
+### M0 test matrix (normative)
+
+Fixture SDL di bawah dipakai oleh TX01/TX02/GL01/PR01/PR02/ABI01/ABI02/SW01/
+SW02/FT01/CF01. Setiap ukuran adalah byte-exact; tidak ada gambar "cukup mirip".
+Kolom Backend menyatakan di mana case berjalan; di luar itu case di-skip dengan
+alasan yang dicatat.
+
+| ID | Fixture | Ukuran | Backend | Expected | Menutup |
+|---|---|---|---|---|---|
+| F-RAMP565 | Ramp RGB565 0..255 per channel + pola per-baris | 64x64 | SDL1, SDL2 | .raw identik SDL1 vs SDL2 | TX01, §6.1 pitch |
+| F-IDX8 | indexed8 4x4, palette nontrivial (hitam, merah, hijau, biru, alpha 128) | 4x4 | SDL1, SDL2 | .raw palette-exact | M0, SW01 |
+| F-PNGRGB | PNG RGB 2x2 (decoder real) | 2x2 | SDL2 shim | Pixel match decode | SW01, M5 |
+| F-PNGRGBA | PNG RGBA 2x2, alpha 0/128/255 | 2x2 | SDL2 shim | Mask+blend exact | SW01/SW02 |
+| F-QUAD | Quad berkoordinat (sudut + tengah terlabel) | 320x240 | semua | Posisi terhitung independen | GL01 |
+| F-CORNER | Penanda empat sudut 8x8 di atas checkerboard | 64x64 | GL modes | Empat sudut sejajar | GL01 |
+| F-FONTKEY | solid + blended font "Ag", scale 1x dan 2x | text | SDL1, SDL2 | Key/alpha/palette dibanding | FT01 |
+| F-PADX | Surface 5x3 RGB565 (pitch berpading) | 5x3 | SDL1, SDL2 | Row benar | §6.1 |
+| F-ABI | Bg legacy=0/1 vs tetangga sentinel + kamera fractional | synth | host | Cabang benar | ABI01 |
+| F-PROJ | Afterimage create/remove/reset loop 100x | synth | host | Ownership benar | ABI02 |
+
+Counter diagnostik (draw, upload, present, swap, resource create/destroy,
+fallback) diimplementasikan sebagai wrapper test-only di `Sdl2_Present` dan
+`SDL_UpdateTexture`/`SDL_CreateTexture` — bukan counter di produksi. Test
+memakai `SDL_QueryTexture` sebagai pemeriksaan independen, tidak pernah metadata
+yang baru ditulis. Mutasi wajib-gagal (§13.1) diverifikasi di CI M9.

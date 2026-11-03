@@ -70,6 +70,104 @@ typedef struct Sdl2Video {
 
 static Sdl2Video g_sdl2Video;
 
+#ifdef MUGEN_SDL2_DIAG
+/*
+ * Diagnostic counters for the M0/M3 regression harness (RENDERING_PLAN.md
+ * section 4.5): linked only into test builds via -DMUGEN_SDL2_DIAG. They
+ * count operations without changing renderer semantics or logging per
+ * pixel on normal builds. Sdl2_DiagPresent counts Sdl2_Present calls that
+ * reached an upload (not early returns); Sdl2_DiagTextureCreate/Destroy
+ * track texture lifetime to catch unbalanced create/destroy.
+ */
+static int g_sdl2DiagPresent;
+static int g_sdl2DiagTextureCreate;
+static int g_sdl2DiagTextureDestroy;
+
+void Sdl2_DiagReset(void)
+{
+    g_sdl2DiagPresent = 0;
+    g_sdl2DiagTextureCreate = 0;
+    g_sdl2DiagTextureDestroy = 0;
+}
+
+void Sdl2_DiagCounters(int *present, int *tex_create, int *tex_destroy)
+{
+    if (present != NULL) {
+        *present = g_sdl2DiagPresent;
+    }
+    if (tex_create != NULL) {
+        *tex_create = g_sdl2DiagTextureCreate;
+    }
+    if (tex_destroy != NULL) {
+        *tex_destroy = g_sdl2DiagTextureDestroy;
+    }
+}
+
+/* Independent check for tests (plan section 5): the live texture's actual
+ * format and size from SDL_QueryTexture, never the shim's own metadata. */
+int Sdl2_DiagTextureSize(int *w, int *h, Uint32 *format)
+{
+    Uint32 fmt = 0;
+    int access = 0, tw = 0, th = 0;
+
+    if (g_sdl2Video.texture == NULL || SDL_QueryTexture(g_sdl2Video.texture, &fmt, &access, &tw, &th) != 0) {
+        return 0;
+    }
+    if (w != NULL) {
+        *w = tw;
+    }
+    if (h != NULL) {
+        *h = th;
+    }
+    if (format != NULL) {
+        *format = fmt;
+    }
+    return 1;
+}
+
+/* Fault injection for tests (plan section 4.4): make the next texture or
+ * surface creation fail, without GNU --wrap, fake headers or body copies.
+ * The wrappers below are the allocation ops the production code uses in
+ * DIAG builds; the test arms them. which: 1 = texture, 2 = surface. */
+static int g_sdl2DiagFailTexture;
+static int g_sdl2DiagFailSurface;
+
+void Sdl2_DiagFailNext(int which)
+{
+    if (which == 1) {
+        g_sdl2DiagFailTexture = 1;
+    } else if (which == 2) {
+        g_sdl2DiagFailSurface = 1;
+    }
+}
+
+static SDL_Texture *Sdl2_DiagCreateTexture(SDL_Renderer *r, Uint32 format, int access, int w, int h)
+{
+    if (g_sdl2DiagFailTexture) {
+        g_sdl2DiagFailTexture = 0;
+        SDL_SetError("injected texture failure");
+        return NULL;
+    }
+    return SDL_CreateTexture(r, format, access, w, h);
+}
+
+static SDL_Surface *Sdl2_DiagCreateSurface(Uint32 flags, int w, int h, int bpp, Uint32 rmask, Uint32 gmask,
+                                             Uint32 bmask, Uint32 amask)
+{
+    if (g_sdl2DiagFailSurface) {
+        g_sdl2DiagFailSurface = 0;
+        SDL_SetError("injected surface failure");
+        return NULL;
+    }
+    return SDL_CreateRGBSurface(flags, w, h, bpp, rmask, gmask, bmask, amask);
+}
+#define SDL_CreateTexture Sdl2_DiagCreateTexture
+#define SDL_CreateRGBSurface Sdl2_DiagCreateSurface
+#endif
+
+/* SDL_CreateTexture/SDL_CreateRGBSurface resolve to the DIAG wrappers above
+ * in test builds; production builds call SDL directly. */
+
 
 /* 0 = accepted and ignored, because the SDL2 build has no repeat control. */
 static int g_sdl2KeyRepeatDelay;
@@ -229,6 +327,9 @@ static int Sdl2_CreateRendererAndTexture(void)
         if (g_sdl2Video.texture == NULL) {
             return -1;
         }
+#ifdef MUGEN_SDL2_DIAG
+        g_sdl2DiagTextureCreate++;
+#endif
         g_sdl2Video.texture_w = g_sdl2Video.width;
         g_sdl2Video.texture_h = g_sdl2Video.height;
     }
@@ -383,6 +484,10 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
         }
         if (new_texture != g_sdl2Video.texture) {
             SDL_DestroyTexture(g_sdl2Video.texture);
+#ifdef MUGEN_SDL2_DIAG
+            g_sdl2DiagTextureDestroy++;
+            g_sdl2DiagTextureCreate++;
+#endif
             g_sdl2Video.texture = new_texture;
             g_sdl2Video.texture_format = format;
         }
@@ -469,6 +574,9 @@ static void Sdl2_Present(void)
     SDL_RenderClear(g_sdl2Video.renderer);
     SDL_RenderCopy(g_sdl2Video.renderer, g_sdl2Video.texture, NULL, NULL);
     SDL_RenderPresent(g_sdl2Video.renderer);
+#ifdef MUGEN_SDL2_DIAG
+    g_sdl2DiagPresent++;
+#endif
 }
 
 void Sdl2_Flip(SDL_Surface *surface)
