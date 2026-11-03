@@ -143,6 +143,47 @@ static void check(int cond, const char *what)
     }
 }
 
+/* ---- R06/CF01: honest renderer selection ----
+ *
+ * Capability is computed from linked tables + live state, never from macros
+ * or link success: System + true-colour-soft always; present only when the
+ * mode's present function is linked and non-stub; GPU/FBO only for OPENGL,
+ * GLScreen only for OPENGL_SCREEN. Invalid modes yield 0 (section 10.7:
+ * no NULL/stub table may be selected as functional). End-to-end selection
+ * (config values, DirectX alias, invalid rejection, strict env) is covered
+ * by tools/test_render_select.sh against a built binary; this host gate
+ * covers the pure capability mapping.
+ */
+static void test_cf01_capability(void)
+{
+    unsigned int sys, screen, gl;
+
+    printf("-- CF01 capability\n");
+    sys = Gfx_Capability(RENDER_SYSTEM);
+    check((sys & GFX_CAP_SYSTEM) != 0, "CF01: System has SYSTEM");
+    check((sys & GFX_CAP_TRUECOLOR_SOFT) != 0, "CF01: System has TRUECOLOR_SOFT");
+    check((sys & GFX_CAP_GPU_SPRITE) == 0, "CF01: System has no GPU_SPRITE");
+    check((sys & GFX_CAP_FBO) == 0, "CF01: System has no FBO");
+
+    screen = Gfx_Capability(RENDER_OPENGL_SCREEN);
+    check((screen & GFX_CAP_GLSCREEN) != 0, "CF01: OpenGLScreen has GLScreen");
+    check((screen & GFX_CAP_GPU_SPRITE) == 0, "CF01: OpenGLScreen is not a GPU sprite renderer");
+
+    gl = Gfx_Capability(RENDER_OPENGL);
+#ifdef ANDROID_PORT
+    check((gl & GFX_CAP_GPU_SPRITE) == 0, "CF01: Android build has no GPU sprite table");
+#else
+    if (gl & GFX_CAP_PRESENT) {
+        check((gl & GFX_CAP_GPU_SPRITE) != 0, "CF01: linked OpenGL has GPU_SPRITE");
+        check((gl & GFX_CAP_FBO) != 0, "CF01: linked OpenGL has FBO");
+    } else {
+        check((gl & GFX_CAP_GPU_SPRITE) == 0, "CF01: unlinked OpenGL not advertised as GPU");
+    }
+#endif
+    check(Gfx_Capability(-1) == 0, "CF01: invalid mode yields no caps");
+    check(Gfx_Capability(99) == 0, "CF01: out-of-range mode yields no caps");
+}
+
 /* ---- R04: layout contract ----
  *
  * The 32-bit reference offsets (AGENTS.md): Bg.legacy at 0x64, BgElem.y at

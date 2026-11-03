@@ -1424,6 +1424,10 @@ int __cdecl Con_CmdLuaExec(CmdTable *ctx, char *name, char *args);
 /* 0x0046bfc0 */ void __cdecl Gfx_SetClipRect(int x1, int y1, int x2, int y2);
 /* 0x0046c0c0 */ void __cdecl Gfx_SetClipRectScaled(float x1, float y1, float x2, float y2, float sx, float sy);
 /* 0x0046c190 */ void __cdecl Gfx_SelectRenderer(int mode);
+/* M6 (plan section 10.6 + 10.1): capability bits (GFX_CAP_* in gfx.h) and
+ * the once-per-startup requested-vs-effective log. Port additions. */
+unsigned int __cdecl Gfx_Capability(int mode);
+void __cdecl Gfx_LogRenderer(int requested, int effective, int directx);
 /* 0x0046c270 */ void __cdecl Log_Close(void);
 /* 0x0046c2e0 */ void __cdecl Log_SetMirror(TextRing *ring);
 /* 0x0046c320 */ void __cdecl Log_VWrite(Log *log, va_list ap, int level, const char *fmt);

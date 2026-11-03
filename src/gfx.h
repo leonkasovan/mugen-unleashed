@@ -35,6 +35,14 @@ typedef void (__stdcall *GlBindFramebufferFn)(unsigned int target, unsigned int 
 /* Renderer indices of the function tables (g_renderMode, see game.h and palette.h). */
 #define GFX_RENDERER_COUNT 4
 
+/* Renderer capability bits for Gfx_Capability (M6, plan section 10.6). */
+#define GFX_CAP_SYSTEM          0x01    /* software reference path */
+#define GFX_CAP_TRUECOLOR_SOFT  0x02    /* 24/32-bit software rasterizer */
+#define GFX_CAP_PRESENT         0x04    /* a working present function */
+#define GFX_CAP_GPU_SPRITE      0x08    /* GLSL/FBO sprite renderer */
+#define GFX_CAP_FBO             0x10    /* render targets */
+#define GFX_CAP_GLSCREEN        0x20    /* screen buffer via GL quad */
+
 /* An OpenGL texture (GlTex_* functions, renderer module glrender.c); also the render target "vbuf". */
 typedef struct GlTex {
     unsigned int id;        /* 0x00 GL texture name */

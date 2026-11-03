@@ -291,7 +291,15 @@ int Video_SetMode(int game_width, int game_height, int width, int height, int de
         SDL_putenv("SDL_VIDEO_CENTERED=1");
     }
     if (flags & VIDEO_DIRECTX) {
+        /* M6 (plan section 10.3): DirectX is a compatibility alias for the
+         * System renderer, not a Direct3D renderer. The driver hint below is
+         * an SDL 1.2 concept -- SDL2 selects its driver before SDL_Init and
+         * ignores a late SDL_VIDEODRIVER change (verified against real SDL2:
+         * the call succeeds but the active driver does not switch), so
+         * sending "directx" there is misleading as well as useless. */
+#ifndef MUGEN_SDL2
         SDL_putenv("SDL_VIDEODRIVER=directx");
+#endif
     }
     surface = SDL_SetVideoMode(sdl_width, sdl_height, depth, sdl_flags);
     g_videoSurface = surface;

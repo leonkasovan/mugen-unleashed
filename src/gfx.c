@@ -712,3 +712,63 @@ void Gfx_SelectRenderer(int mode)
     g_gfxCapture = g_gfxCaptureFns[mode];
     g_gfxPresent = g_gfxPresentFns[mode];
 }
+
+/*
+ * M6 capability query (plan section 10.6): what the selected renderer can
+ * actually do, from compiled-in tables and live state -- not from macros
+ * or link success. A NULL/stub table entry means the mode is not
+ * functional on this profile (section 10.7): the caller must not select it
+ * outside a fallback it reports.
+ *
+ * Bits (GfxCap_* in gfx.h): SYSTEM always; TRUECOLOR_SOFT since the
+ * true-colour software path; GPU_SPRITE only when the GL drawers are linked
+ * (g_gfxPresentFns entry non-NULL and not the Stub_Nop); GLScreen whenever
+ * System drawing exists (it presents the same buffer through GL).
+ */
+unsigned int Gfx_Capability(int mode)
+{
+    unsigned int caps = 0;
+
+    if (mode < 0 || mode >= GFX_RENDERER_COUNT) {
+        return 0;
+    }
+    /* System drawing is the reference path on every profile. */
+    caps |= GFX_CAP_SYSTEM;
+    /* True-colour software rasterizer (softrender.c true-colour path). */
+    caps |= GFX_CAP_TRUECOLOR_SOFT;
+    if (g_gfxPresentFns[mode] != NULL && g_gfxPresentFns[mode] != (GfxPresentFn)Stub_Nop) {
+        caps |= GFX_CAP_PRESENT;
+        if (mode == RENDER_OPENGL) {
+            caps |= GFX_CAP_GPU_SPRITE | GFX_CAP_FBO;
+        }
+        if (mode == RENDER_OPENGL_SCREEN) {
+            caps |= GFX_CAP_GLSCREEN;
+        }
+    }
+    return caps;
+}
+
+/*
+ * M6 startup log (plan section 10.1 + 10.10): requested mode (from the
+ * config) vs effective renderer (actually selected), once. The names stay
+ * the config values; DIRECTX is reported as the System alias it is.
+ */
+static const char *Gfx_ModeName(int mode)
+{
+    switch (mode) {
+    case RENDER_SYSTEM:
+        return "system";
+    case RENDER_OPENGL_SCREEN:
+        return "openglscreen";
+    case RENDER_OPENGL:
+        return "opengl";
+    default:
+        return "unknown";
+    }
+}
+
+void Gfx_LogRenderer(int requested, int effective, int directx)
+{
+    Log_Printf("renderer: requested=%s%s effective=%s caps=0x%X\n", Gfx_ModeName(requested),
+               directx ? "+directx(alias)" : "", Gfx_ModeName(effective), Gfx_Capability(effective));
+}

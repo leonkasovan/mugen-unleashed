@@ -270,6 +270,10 @@ int Config_Load(void)
         } else if (_stricmp(value, "openglscreen") == 0) {
             g_game->render_mode = RENDER_OPENGL_SCREEN;
         } else if (_stricmp(value, "directx") == 0) {
+            /* M6 (plan section 10.3): DirectX is a System-compatibility alias.
+             * The engine draws the same software frames; only the SDL 1.2
+             * video driver hint differs (see Video_SetMode). It is not a
+             * Direct3D sprite renderer and never selects GPU code paths. */
             g_game->video_flags |= VIDEO_DIRECTX;
             g_game->render_mode = RENDER_SYSTEM;
         } else {

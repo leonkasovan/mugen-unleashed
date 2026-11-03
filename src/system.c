@@ -346,6 +346,20 @@ void System_Init(void)
 #endif
     }
     Log_Printf("success...");
+    /* M6 (plan section 10.1 + 10.10): requested mode vs effective renderer,
+     * once. requested is what the config asked (DirectX reports as its System
+     * alias); effective is what g_renderMode selected after any fallback.
+     * Strict mode (plan section 10.8, opt-in via MUGEN_STRICT_RENDERER=1)
+     * turns a silent fallback into a fatal error for qualification runs.
+     * Normal runs keep the recovery with its reason. */
+    {
+        int directx = (g->video_flags & VIDEO_DIRECTX) != 0;
+        Gfx_LogRenderer(mode, g_renderMode, directx);
+        if (mode != g_renderMode && getenv("MUGEN_STRICT_RENDERER") != NULL) {
+            Log_Printf("strict renderer: requested mode %d unavailable (effective %d)\n", mode, g_renderMode);
+            Error_Exit();
+        }
+    }
     if (g_bgmInitialized && (g_game->video_flags & VIDEO_FULLSCREEN)) {
         g_bgmBackgroundMode = 0;
     }
