@@ -208,6 +208,37 @@ void GlMvp_Transform(const GlMvp *mvp, float x, float y, float z, float *x_out, 
     }
 }
 
+void GlQuad_Layout(unsigned int *stride, unsigned int *pos_offset, unsigned int *tc_offset)
+{
+    /* One vertex is GL_QUAD_VERTEX_FLOATS floats, position first. */
+    if (stride != NULL) {
+        *stride = GL_QUAD_VERTEX_FLOATS * (unsigned int)sizeof(float);
+    }
+    if (pos_offset != NULL) {
+        *pos_offset = 0u;
+    }
+    if (tc_offset != NULL) {
+        *tc_offset = 2u * (unsigned int)sizeof(float);
+    }
+}
+
+void GlQuad_Interleave(float *out, const GlQuadVerts *q)
+{
+    int i;
+
+    if (out == NULL || q == NULL) {
+        return;
+    }
+    for (i = 0; i < GL_QUAD_VERTEX_COUNT; i++) {
+        out[i * GL_QUAD_VERTEX_FLOATS + 0] = q->pos[i][0];
+        out[i * GL_QUAD_VERTEX_FLOATS + 1] = q->pos[i][1];
+        out[i * GL_QUAD_VERTEX_FLOATS + 2] = q->tc[i][0];
+        out[i * GL_QUAD_VERTEX_FLOATS + 3] = q->tc[i][1];
+        out[i * GL_QUAD_VERTEX_FLOATS + 4] = q->tc[i][2];
+        out[i * GL_QUAD_VERTEX_FLOATS + 5] = q->tc[i][3];
+    }
+}
+
 void GlQuad_Build(GlQuadVerts *out, const float *v, int special, double c0, double c1, double top_offset,
                   double bottom_offset, float width_ratio)
 {

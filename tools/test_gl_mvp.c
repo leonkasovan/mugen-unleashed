@@ -250,6 +250,44 @@ static void test_quad_offsets(void)
     check(nearly((double)q.tc[0][0], 0.15), "top_offset shifts the top edge");
 }
 
+/*
+ * Interleaved layout. One vertex is 6 floats: position at offset 0, texcoord
+ * at offset 2 floats = 8 bytes, stride 24 bytes. The packing must place each
+ * component exactly there, q included -- this is the contract between
+ * GlQuad_Interleave and the attribute pointers in src/gles_draw.c.
+ */
+static void test_interleave(void)
+{
+    GlQuadVerts q;
+    float v[8] = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f };
+    float out[GL_QUAD_VERTEX_COUNT * GL_QUAD_VERTEX_FLOATS];
+    unsigned int stride = 0, pos_off = 1, tc_off = 0;
+    int i;
+
+    GlQuad_Build(&q, v, 1, 0.5, 0.75, 0.0, 0.0, 1.0f);
+    memset(out, 0, sizeof(out));
+    GlQuad_Interleave(out, &q);
+
+    GlQuad_Layout(&stride, &pos_off, &tc_off);
+    check(stride == 24u, "layout: stride is 6 floats (24 bytes)");
+    check(pos_off == 0u, "layout: position at offset 0");
+    check(tc_off == 8u, "layout: texcoord at offset 8 (2 floats)");
+
+    for (i = 0; i < GL_QUAD_VERTEX_COUNT; i++) {
+        const float *vt = &out[i * GL_QUAD_VERTEX_FLOATS];
+
+        check(nearly((double)vt[0], (double)v[i * 2]), "interleave: x at +0");
+        check(nearly((double)vt[1], (double)v[i * 2 + 1]), "interleave: y at +1");
+        check(nearly((double)vt[2], (double)q.tc[i][0]), "interleave: s at +2");
+        check(nearly((double)vt[3], (double)q.tc[i][1]), "interleave: t at +3");
+        check(nearly((double)vt[4], 0.0), "interleave: r at +4");
+        check(nearly((double)vt[5], (double)q.tc[i][3]), "interleave: q at +5");
+    }
+    /* The bottom edge must still carry the projective value, not 1. */
+    check(nearly((double)out[2 * GL_QUAD_VERTEX_FLOATS + 5], 2.0 / 3.0),
+          "interleave: bottom-left keeps q = c0/c1");
+}
+
 int main(void)
 {
     test_ortho_screen();
@@ -261,6 +299,7 @@ int main(void)
     test_quad_special();
     test_quad_width_ratio();
     test_quad_offsets();
+    test_interleave();
 
     if (failures != 0) {
         printf("gl-mvp: %d FAILURES\n", failures);

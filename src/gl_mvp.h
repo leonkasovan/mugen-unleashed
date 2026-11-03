@@ -83,6 +83,24 @@ void GlMvp_Transform(const GlMvp *mvp, float x, float y, float z, float *x_out, 
 void GlQuad_Build(GlQuadVerts *out, const float *v, int special, double c0, double c1, double top_offset,
                   double bottom_offset, float width_ratio);
 
+/*
+ * Interleaved vertex layout for the GLES backend: position (x,y) then
+ * texcoord (s,t,r,q), all float, one struct per vertex. The q component is
+ * the projective stretch; it is part of the layout precisely so it cannot be
+ * dropped on the way to the GPU.
+ */
+#define GL_QUAD_VERTEX_FLOATS 6     /* 2 position + 4 texcoord */
+#define GL_QUAD_VERTEX_COUNT  4
+
+/* Byte stride and the byte offset of each attribute inside one vertex. Pure
+ * arithmetic over the layout above, so the offsets cannot drift from the
+ * packing done by GlQuad_Interleave. */
+void GlQuad_Layout(unsigned int *stride, unsigned int *pos_offset, unsigned int *tc_offset);
+
+/* Packs four corners into the interleaved array: out[0..23], six floats per
+ * vertex, in the order GlQuad_Layout describes. */
+void GlQuad_Interleave(float *out, const GlQuadVerts *q);
+
 #ifdef __cplusplus
 }
 #endif
