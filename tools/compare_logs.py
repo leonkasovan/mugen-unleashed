@@ -26,7 +26,7 @@ from collections import Counter
 
 # Lines that are pure environment noise and say nothing about behaviour.
 IGNORE_PATTERNS = (
-    r"^Command line:",          # argv[0] differs (mugen.exe vs mugen_unleashed.exe)
+    r"^Command line:",          # argv[0] differs (mugen.exe vs mugen-msvc-win32-sdl2.exe)
     r"^Session RNG seed is",    # seeded from the clock unless -sessionseed is given
     r"^Log file successfully closed",
 )
@@ -78,8 +78,8 @@ def main(argv):
                     help="how many differing fragments to print per side (default 20)")
     args = ap.parse_args(argv[1:])
 
-    a = normalise(args.original, ("mugen_unleashed.exe", "mugen.exe"))
-    b = normalise(args.rebuilt, ("mugen_unleashed.exe", "mugen.exe"))
+    a = normalise(args.original, ("mugen-msvc-win32-sdl2.exe", "mugen.exe"))
+    b = normalise(args.rebuilt, ("mugen-msvc-win32-sdl2.exe", "mugen.exe"))
 
     ca, cb = Counter(a), Counter(b)
     only_a, only_b = ca - cb, cb - ca

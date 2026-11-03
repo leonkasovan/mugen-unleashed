@@ -207,7 +207,7 @@ class BuildTests(unittest.TestCase):
         args=json.loads(self.gradle_log.read_text())
         self.assertIn("-PmugenNdkPath="+str(self.sdk/"ndk/27.1.12297006"),args)
         self.assertEqual(args[-1],"assembleDebug")
-        apk=self.project/"build/android/mugen-unleashed-arm64-v8a.apk"
+        apk=self.project/"build/android/mugen-android-arm64-v8a.apk"
         self.assertEqual(apk.read_text(),"debug fixture")
 
     def test_incompatible_latest_cli_is_not_reused(self):
@@ -235,7 +235,7 @@ class BuildTests(unittest.TestCase):
         stale.mkdir(parents=True); (stale/"app-debug.apk").write_text("stale debug")
         self.run_build("--no-assets")
         self.assertFalse((assets/"stale.sff").exists())
-        self.assertEqual((self.project/"build/android/mugen-unleashed-arm64-v8a.apk").read_text(),"release fixture")
+        self.assertEqual((self.project/"build/android/mugen-android-arm64-v8a.apk").read_text(),"release fixture")
 
     def test_bad_jdk_checksum_never_extracts(self):
         data=json.loads(self.jdk_json.read_text())

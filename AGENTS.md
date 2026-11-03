@@ -63,13 +63,13 @@ Each entry point owns its own subtree and never writes into another's.
 
 | Path | Written by | Contents |
 |---|---|---|
-| `build/mingw/` | root `Makefile` (Windows, default) | `obj/`, `lib/`, `mugen-static.exe`, `-stripped.exe` (SDL2 backend) |
-| `build/mingw-sdl1/` | `make SDL_BACKEND=1` (Windows) | the same shape, `mugen-static-sdl1.exe` |
+| `build/mingw/` | root `Makefile` (Windows, default) | `obj/`, `lib/`, `mugen-mingw-win32-sdl2.exe`, `-stripped.exe` (SDL2 backend) |
+| `build/mingw-sdl1/` | `make SDL_BACKEND=1` (Windows) | the same shape, `mugen-mingw-win32-sdl1.exe` |
 
-| `build/mingw64/` | `make MUGEN_TARGET=win64` (Windows, experimental) | the same shape, `mugen-win64.exe` |
+| `build/mingw64/` | `make MUGEN_TARGET=win64` (Windows, experimental) | the same shape, `mugen-mingw-win64.exe` |
 | `build/<linux-target>/` | root `Makefile` (Linux) | same shape, `mugen-linux-<arch>` |
 | `build/mingw-debug/` | `make DEBUG=1 BUILD=build/mingw-debug` | an explicit `BUILD=` override |
-| `build/x86-release/`, `build/x86-debug/` | root `CMakeLists.txt` via `CMakePresets.json` | MSVC `mugen_unleashed.exe` + `.pdb` |
+| `build/x86-release/`, `build/x86-debug/` | root `CMakeLists.txt` via `CMakePresets.json` | MSVC `mugen-msvc-win32-sdl2.exe` + `.pdb` |
 | `build/psvita*/` | `port/psvita/CMakeLists.txt` (you choose the dir) | `mugen`, `mugen.self`, `mugen.vpk`, `vita-mugen.cfg` |
 | `build/android/` | `port/android/build.sh` | `toolchains/` (JDK/SDK/NDK/CMake, `env.sh`), `sdl2/<abi>/`, `android-deps/<abi>/`, `android-deps-src/`, `sources/`, `build-sdl2/`, `gradle-user-home/`, `asset-list.txt`, `mugen-unleashed-<abi>.apk` |
 | `build/baseline/` | hand-made, kept on purpose | SDL1 reference binary and log used by the log-comparison workflow |
@@ -123,8 +123,8 @@ builds Linux x64/arm64 and an experimental `win64` target (`MUGEN_TARGET=win64`,
 needs a 64-bit static kit) — see `PLANS.md` for what is still outstanding there,
 and do not describe either as verified until the offsets above are dealt with.
 
-Output names differ by build: `mugen_unleashed.exe` (MSVC),
-`mugen-static.exe` (MinGW/SDL2), `mugen-static-sdl1.exe` (MinGW/SDL 1.2),
+Output names differ by build: `mugen-msvc-win32-sdl2.exe` (MSVC),
+`mugen-mingw-win32-sdl2.exe` (MinGW/SDL2), `mugen-mingw-win32-sdl1.exe` (MinGW/SDL 1.2),
 `mugen-linux-<arch>` (Linux).
 
 ### MSVC 2022 (primary)
@@ -134,7 +134,7 @@ tools\msvc_env.bat cmake --preset x86-release
 tools\msvc_env.bat cmake --build --preset x86-release
 ```
 
-→ `build\x86-release\mugen_unleashed.exe` + `.pdb`
+→ `build\x86-release\mugen-msvc-win32-sdl2.exe` + `.pdb`
 
 Debug variant: same with `x86-debug`. `tools\msvc_env.bat` finds VS 2022 through
 `vswhere`, so any edition or install path works. Never call `cmake` or `cl`
@@ -165,7 +165,7 @@ make -j8
 make install                            # strips and copies into install/
 ```
 
-→ `build/mingw/mugen-static.exe`, and `install/mugen-static.exe` after
+→ `build/mingw/mugen-mingw-win32-sdl2.exe`, and `install/mugen-mingw-win32-sdl2.exe` after
 `make install`.
 
 This build links **everything statically** (SDL2, SDL2_mixer, SDL2_ttf, zlib,
@@ -176,7 +176,7 @@ the same link step.
 
 `SDL_BACKEND` selects the SDL stack. **2 is the default** and is the normal
 target; `SDL_BACKEND=1` builds the older SDL 1.2 backend into
-`build/mingw-sdl1/mugen-static-sdl1.exe`, which exists for the differential
+`build/mingw-sdl1/mugen-mingw-win32-sdl1.exe`, which exists for the differential
 comparisons against the original binary. Switching the variable in an existing
 build directory is safe: `$(OBJ_DIR)/.config` records the backend and target,
 every object depends on it, and it is only rewritten when the configuration
@@ -307,12 +307,12 @@ diffing `mugen.log`** (`docs/ANALYSIS.md`, "Validation").
 ```sh
 make install
 cd install
-./mugen-static.exe -nosound          # startup/mode select
+./mugen-mingw-win32-sdl2.exe -nosound          # startup/mode select
 ```
 
-For the MSVC build, copy `build/x86-release/mugen_unleashed.exe` into `install/`
+For the MSVC build, copy `build/x86-release/mugen-msvc-win32-sdl2.exe` into `install/`
 by hand; it needs the `Elecbyte.MUGEN.libs` folder, the static one does not. An
-`SDL_BACKEND=1` static build installs as `mugen-static-sdl1.exe` and does not
+`SDL_BACKEND=1` static build installs as `mugen-mingw-win32-sdl1.exe` and does not
 overwrite the default one.
 
 Copy the original `mugen.exe` log out of the way first, then compare:
@@ -329,7 +329,7 @@ Scenarios worth running (all with `-nosound` for reproducibility):
 
 | Scenario | Command |
 |---|---|
-| startup → mode select | `./mugen-static.exe -nosound` (or `mugen-linux-x64` under Linux) |
+| startup → mode select | `./mugen-mingw-win32-sdl2.exe -nosound` (or `mugen-linux-x64` under Linux) |
 | quick VS, one character per side | `-nosound -p1 kfm -p2 kfm` |
 | AI vs AI, two rounds | `-nosound -rounds 2 -p1.ai 1 -p2.ai 1` |
 

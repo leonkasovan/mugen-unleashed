@@ -21,8 +21,8 @@
 #      cmake --build build/psvita
 #
 #  Outputs (in the build directory):
-#      mugen.self   the executable, runnable from ux0:app/MSDK00001/
-#      mugen.vpk    installable homebrew, data/ included
+#      mugen-psvita.self  the executable, runnable from ux0:app/MSDK00001/
+#      mugen-psvita.vpk   installable homebrew, data/ included
 #
 #  Notes on the source set (read before changing anything):
 #      * The engine compiles from ../src with the non-Windows compat layer
@@ -111,7 +111,7 @@ set(MUGEN_VITA_VERSION "01.00"     CACHE STRING "APP_VER, format ##.##")
 #
 #   cmake ... -DMUGEN_VITA_DATA_DIR=C:/mugen-1.1b1
 #
-# An empty value still produces a usable mugen.vpk -- install the game tree
+# An empty value still produces a usable mugen-psvita.vpk -- install the game tree
 # under ux0:data/mugen/ afterwards (see README.md).
 set(MUGEN_VITA_DATA_DIR "" CACHE PATH
     "M.U.G.E.N directory to pack into the VPK (optional: its contents go to data/)")
@@ -613,13 +613,13 @@ set_target_properties(mugen PROPERTIES OUTPUT_NAME mugen)
 # comment above.
 if(MUGEN_VITA_MEMSIZE GREATER 0)
   # A system-mode budget was requested explicitly.
-  vita_create_self(mugen.self mugen
+  vita_create_self(mugen-psvita.self mugen
     UNSAFE
     MEMSIZE ${MUGEN_VITA_MEMSIZE})
 else()
   # Normal app: no -m at all, so the system sizes the process. This is what the
   # VitaSDK samples do, and it is what GXM and vitaGL expect.
-  vita_create_self(mugen.self mugen
+  vita_create_self(mugen-psvita.self mugen
     UNSAFE)
 endif()
 
@@ -808,10 +808,10 @@ if(MUGEN_VITA_DATA_DIR)
     endif()
   endforeach()
 
-  message(STATUS "mugen.vpk packs ${MUGEN_VITA_DATA_DIR} as /data")
+  message(STATUS "mugen-psvita.vpk packs ${MUGEN_VITA_DATA_DIR} as /data")
 else()
   message(STATUS
-    "mugen.vpk packs no game data (set MUGEN_VITA_DATA_DIR to include a "
+    "mugen-psvita.vpk packs no game data (set MUGEN_VITA_DATA_DIR to include a "
     "M.U.G.E.N 1.1b1 install; see port/psvita/README.md)")
 endif()
 
@@ -822,11 +822,11 @@ endif()
 # --add accepts "src=dst" for directories directly. Building the SFO and the
 # archive explicitly keeps that in one command.
 #
-# Outputs mirror what vita_create_vpk would produce: mugen.vpk next to
-# mugen.self, in the build directory.
-set(MUGEN_VITA_VPK          "${CMAKE_CURRENT_BINARY_DIR}/mugen.vpk")
+# Outputs mirror what vita_create_vpk would produce: mugen-psvita.vpk next to
+# mugen-psvita.self, in the build directory.
+set(MUGEN_VITA_VPK          "${CMAKE_CURRENT_BINARY_DIR}/mugen-psvita.vpk")
 set(MUGEN_VITA_SFO          "${CMAKE_CURRENT_BINARY_DIR}/param.sfo")
-set(MUGEN_VITA_EBOOT        "${CMAKE_CURRENT_BINARY_DIR}/mugen.self")
+set(MUGEN_VITA_EBOOT        "${CMAKE_CURRENT_BINARY_DIR}/mugen-psvita.self")
 
 add_custom_command(
   OUTPUT ${MUGEN_VITA_SFO}
@@ -834,7 +834,7 @@ add_custom_command(
           -s APP_VER=${MUGEN_VITA_VERSION}
           -s TITLE_ID=${MUGEN_VITA_TITLEID}
           "${VITA_APP_NAME}" ${MUGEN_VITA_SFO}
-  COMMENT "Generating param.sfo for mugen.vpk"
+  COMMENT "Generating param.sfo for mugen-psvita.vpk"
   VERBATIM)
 
 set(_mugen_vpk_args
@@ -860,11 +860,11 @@ if(MUGEN_VITA_DATA_DIR)
   # directory to the game tree.
   # Anything this project itself builds is not game data. install/ is a working
   # M.U.G.E.N tree and is also where this project's test executables get copied,
-  # so a stale mugen_unleashed.exe (a 1.7 MB Windows PE) would otherwise be
+  # so a stale mugen-msvc-win32-sdl2.exe (a 1.7 MB Windows PE) would otherwise be
   # packed into the VPK. The tree itself is left alone.
   set(_mugen_data_exclude
-    mugen_unleashed.exe mugen_unleashed.pdb mugen-static.exe
-    mugen-static-stripped.exe mugen-linux-x64 mugen-linux-arm64 mugen-linux-x86
+    mugen-msvc-win32-sdl2.exe mugen-msvc-win32-sdl2.pdb mugen-mingw-win32-sdl2.exe mugen-static.exe
+    mugen-mingw-win32-sdl2-stripped.exe mugen-static-stripped.exe mugen-linux-x64 mugen-linux-arm64 mugen-linux-x86
     mugen.log mugen-match.log)
 
   file(GLOB _mugen_data_entries RELATIVE "${MUGEN_VITA_DATA_DIR}"
@@ -896,8 +896,8 @@ endif()
 add_custom_command(
   OUTPUT ${MUGEN_VITA_VPK}
   COMMAND ${VITA_PACK_VPK} ${_mugen_vpk_args} ${MUGEN_VITA_VPK}
-  DEPENDS ${MUGEN_VITA_SFO} ${MUGEN_VITA_EBOOT} mugen.self
-  COMMENT "Building mugen.vpk"
+  DEPENDS ${MUGEN_VITA_SFO} ${MUGEN_VITA_EBOOT} mugen-psvita.self
+  COMMENT "Building mugen-psvita.vpk"
   VERBATIM)
 
 add_custom_target(mugen-vpk ALL DEPENDS ${MUGEN_VITA_VPK})
@@ -912,8 +912,8 @@ message(STATUS "  SDL 1.2      ${MUGEN_VITA_PKGS_sdl_VERSION} (VitaSDK arm-vita-
 message(STATUS "  vitaGL       ${MUGEN_VITA_VITAGL_LIB}")
 message(STATUS "  Title        ${VITA_APP_NAME} (${MUGEN_VITA_TITLEID} v${MUGEN_VITA_VERSION})")
 message(STATUS "  Memory       budget ${MUGEN_VITA_MEMSIZE} KiB, newlib heap ${MUGEN_VITA_HEAP_MIB} MiB")
-message(STATUS "  Output       ${CMAKE_CURRENT_BINARY_DIR}/mugen.self")
-message(STATUS "               ${CMAKE_CURRENT_BINARY_DIR}/mugen.vpk")
+message(STATUS "  Output       ${CMAKE_CURRENT_BINARY_DIR}/mugen-psvita.self")
+message(STATUS "               ${CMAKE_CURRENT_BINARY_DIR}/mugen-psvita.vpk")
 message(STATUS "")
 message(STATUS "  Renderer: set `rendermode = opengl` in data/mugen.cfg on the Vita.")
 message(STATUS "  Floating point: no x87 on ARMv7, so mugen.log differs from win32")

@@ -12,7 +12,7 @@
 #
 # Downloads require curl and Python 3.8+. SDK licenses are shown by sdkmanager;
 # this script does not accept them automatically. See README.md for SDL2 libs.
-# Output: build/android/mugen-unleashed-arm64-v8a.apk
+# Output: build/android/mugen-android-arm64-v8a.apk
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -160,7 +160,7 @@ APK_DIR="$APP/build/outputs/apk/$BUILD_TYPE"
 FOUND=$(find "$APK_DIR" -maxdepth 1 -type f -name '*.apk')
 [ -n "$FOUND" ] || fail "No $BUILD_TYPE APK produced; see Gradle output"
 case "$FOUND" in *$'\n'*) fail "Multiple APKs in $APK_DIR; select an output explicitly";; esac
-DEST="$OUT/mugen-unleashed-$ANDROID_ABI.apk"
+DEST="$OUT/mugen-android-$ANDROID_ABI.apk"
 cp -f "$FOUND" "$DEST"
 printf '\nAPK: %s (%s bytes)\n' "$DEST" "$(file_size "$DEST")"
 printf 'Install: "%s/platform-tools/adb%s" install -r "%s"\n' \

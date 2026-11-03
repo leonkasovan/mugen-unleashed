@@ -15,8 +15,8 @@ Two Windows builds are supported, and they differ in how they ship:
 
 | Build | Executable | Runtime requirements |
 |---|---|---|
-| **GNU Make + MinGW (static)** | `mugen-static.exe` | Nothing but Windows system DLLs |
-| **MSVC + CMake** | `mugen_unleashed.exe` | The game's `Elecbyte.MUGEN.libs` folder (SDL, SDL_mixer, SDL_ttf, SDL_gfx, zlib, libresample, pthreads) |
+| **GNU Make + MinGW (static)** | `mugen-mingw-win32-sdl2.exe` | Nothing but Windows system DLLs |
+| **MSVC + CMake** | `mugen-msvc-win32-sdl2.exe` | The game's `Elecbyte.MUGEN.libs` folder (SDL, SDL_mixer, SDL_ttf, SDL_gfx, zlib, libresample, pthreads) |
 
 The static build is self-contained: SDL2, SDL2_mixer, SDL2_ttf, zlib, pthreads,
 Lua 5.1.4, libpng, glad, minizip and libresample are all linked in. Because
@@ -36,7 +36,7 @@ through `pkg-config` (`sdl2`, `SDL2_mixer`, `SDL2_ttf`, `zlib`, `libpng16`).
 
 ```sh
 make check-toolchain     # verifies the compiler and the static archives
-make -j8                 # build/mingw/mugen-static.exe
+make -j8                 # build/mingw/mugen-mingw-win32-sdl2.exe
 make install             # strip it and copy it into install/
 ```
 
@@ -44,7 +44,7 @@ make install             # strip it and copy it into install/
 `Elecbyte.MUGEN.libs` folder is needed.
 
 The SDL2 backend is the default. `make SDL_BACKEND=1` builds the older SDL 1.2
-backend instead (`build/mingw-sdl1/mugen-static-sdl1.exe`), which exists for the
+backend instead (`build/mingw-sdl1/mugen-mingw-win32-sdl1.exe`), which exists for the
 differential comparisons against the original binary, not as the normal target.
 
 See **[docs/BUILD-MINGW.md](docs/BUILD-MINGW.md)** for the dependency list,
@@ -57,7 +57,7 @@ tools\msvc_env.bat cmake --preset x86-release
 tools\msvc_env.bat cmake --build --preset x86-release
 ```
 
-Produces `build/x86-release/mugen_unleashed.exe`. This build links the game's
+Produces `build/x86-release/mugen-msvc-win32-sdl2.exe`. This build links the game's
 original DLLs rather than static copies. See
 **[docs/BUILD-MSVC.md](docs/BUILD-MSVC.md)**.
 

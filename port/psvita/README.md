@@ -679,7 +679,7 @@ memory rather than at the flags.
    the box, which is the width the motif was designed for.
 
 One packing detail learned here: `install/` doubles as the place this project's
-own test executables get copied, so a stale `mugen_unleashed.exe` (a 1.7 MB
+own test executables get copied, so a stale `mugen-msvc-win32-sdl2.exe` (a 1.7 MB
 Windows PE) was being packed into the VPK. Those build outputs are now excluded
 by name; the tree itself is untouched.
 

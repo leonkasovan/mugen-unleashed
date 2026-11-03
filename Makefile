@@ -1,6 +1,6 @@
 # mugen-unleashed -- GNU Make + GCC (MinGW-w64, 32-bit) STATIC build.
 #
-# Produces a self-contained mugen-static.exe: the engine in src/, the libraries
+# Produces a self-contained engine binary: the engine in src/, the libraries
 # in third_party/ built from their original sources, libresample vendored, and
 # SDL2 + SDL2_mixer + SDL2_ttf + zlib + pthread linked statically from the
 # x86devkit (SDL2_mixer brings mpg123, vorbisfile, FLAC, opus and wavpack with
@@ -20,9 +20,12 @@
 # The same Makefile also builds a Linux target, chosen from uname and the
 # compiler's triple (docs/BUILD-LINUX.md). There the distro's shared SDL is
 # linked instead of the kit's static archives, so the executable is
-# mugen-linux-<arch> and both checks below follow the platform being built.
+# mugen-<target> and both checks below follow the platform being built.
 #
-#   make              build $(TARGET): mugen-static.exe or mugen-linux-<arch>
+#   make              build $(TARGET): mugen-mingw-<target>-sdl<2|1>.exe on
+#                     Windows, mugen-<target> on Linux (SDL2 is the only
+#                     backend there)
+# (verify with "make help")
 #   make -j8          parallel build
 #   make install      strip and copy the executable into install/
 #   make V=1          show the full command lines
@@ -73,11 +76,15 @@ ifneq ($(filter 1 2,$(SDL_BACKEND)),$(SDL_BACKEND))
   $(error SDL_BACKEND must be 1 or 2, not "$(SDL_BACKEND)")
 endif
 # The output name marks the non-default backend, not the default one: SDL2 is
-# the default, so it keeps the plain mugen-static.exe name that install/ and
-# the docs refer to, and an SDL 1.2 build gets -sdl1 appended. Object and
-# output directories follow the same split, so the two backends can be built
-# side by side without reusing each other's objects.
-SDL_BACKEND_SUFFIX := $(if $(filter 1,$(SDL_BACKEND)),-sdl1)
+# The output name always marks the backend: SDL2 is the default and gets
+# -sdl2, an SDL 1.2 build gets -sdl1. Object and output directories follow the
+# same split, so the two backends can be built side by side without reusing
+# each other's objects.
+#
+# Only the win32 target supports the SDL 1.2 backend (the reference backend
+# for the log-comparison workflow); SDL2-only targets reject SDL_BACKEND=1 so
+# their names stay within the approved set.
+SDL_BACKEND_TAG := $(if $(filter 1,$(SDL_BACKEND)),sdl1,sdl2)
 
 # ------------------------------------------------------- platform detection
 #
@@ -136,18 +143,26 @@ endif
 ifeq ($(MUGEN_TARGET),win32)
   MUGEN_FAMILY := win32
   MUGEN_PTRBITS := 32
-  BUILD    ?= build/mingw$(SDL_BACKEND_SUFFIX)
-  TARGET   := $(BUILD)/mugen-static$(SDL_BACKEND_SUFFIX).exe
+  BUILD    ?= build/mingw-$(SDL_BACKEND_TAG)
+  TARGET   := $(BUILD)/mugen-mingw-win32-$(SDL_BACKEND_TAG).exe
 else ifeq ($(MUGEN_TARGET),win64)
   MUGEN_FAMILY := win32
   MUGEN_PTRBITS := 64
-  BUILD    ?= build/mingw64$(SDL_BACKEND_SUFFIX)
-  TARGET   := $(BUILD)/mugen-win64$(SDL_BACKEND_SUFFIX).exe
+  BUILD    ?= build/mingw64-$(SDL_BACKEND_TAG)
+  TARGET   := $(BUILD)/mugen-mingw-win64-$(SDL_BACKEND_TAG).exe
 else
   MUGEN_FAMILY := linux
   MUGEN_PTRBITS := $(if $(findstring 64,$(MUGEN_TARGET)),64,32)
-  BUILD    ?= build/$(MUGEN_TARGET)$(SDL_BACKEND_SUFFIX)
-  TARGET   := $(BUILD)/mugen-$(MUGEN_TARGET)$(SDL_BACKEND_SUFFIX)
+  BUILD    ?= build/$(MUGEN_TARGET)-$(SDL_BACKEND_TAG)
+  TARGET   := $(BUILD)/mugen-$(MUGEN_TARGET)
+endif
+
+# SDL 1.2 is only wired up for the win32 target; everywhere else it is SDL2
+# or nothing, so the name stays within the approved set.
+ifeq ($(SDL_BACKEND),1)
+ifneq ($(MUGEN_TARGET),win32)
+$(error SDL_BACKEND=1 is only supported for MUGEN_TARGET=win32, not "$(MUGEN_TARGET)")
+endif
 endif
 
 # What check-toolchain expects `$(CC) -dumpmachine` to start with. Detection
@@ -579,9 +594,9 @@ $(RC_OBJ): $(ALL_RC) $(CONFIG_STAMP)
 # Strips the executable and copies it into the game directory, where it stays.
 # install/ is the shipped M.U.G.E.N 1.1b1 tree (git-ignored). The installed
 # name follows $(TARGET), so it is never the original's mugen.exe and never a
-# Windows name on Linux: mugen-static.exe on Windows, mugen-linux-<arch> on
-# Linux (an ELF binary called .exe was the old behaviour here). An SDL 1.2
-# build appends -sdl1, so installing one backend never clobbers the other.
+# Windows name on Linux: mugen-mingw-*.exe on Windows, mugen-linux-<arch> on
+# Linux (an ELF binary called .exe was the old behaviour here). The name marks
+# the backend, so installing one backend never clobbers the other.
 
 INSTALL_DIR  ?= install
 INSTALL_NAME ?= $(notdir $(TARGET))

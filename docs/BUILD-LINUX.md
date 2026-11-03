@@ -28,7 +28,7 @@ TRIPLE  := $(shell $(CC) -dumpmachine 2>/dev/null) # CPU + ABI
 
 | `uname -s` | `-dumpmachine` | Target | Output |
 |---|---|---|---|
-| `Windows_NT`, `MINGW*`, `MSYS*`, `CYGWIN*` | `i686-w64-mingw32` | `win32` | `mugen-static.exe` |
+| `Windows_NT`, `MINGW*`, `MSYS*`, `CYGWIN*` | `i686-w64-mingw32` | `win32` | `mugen-mingw-win32-sdl2.exe` |
 | `Linux` | `x86_64-*-linux-gnu` | `linux-x64` | `mugen-linux-x64` |
 | `Linux` | `aarch64-*-linux-gnu` | `linux-arm64` | `mugen-linux-arm64` |
 | `Linux` | `i686-*-linux-gnu` | `linux-x86` | `mugen-linux-x86` |
