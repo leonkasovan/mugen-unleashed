@@ -50,7 +50,10 @@ void System_SetWindowIcon(void)
 #endif
     icon = LoadIconA(module, MAKEINTRESOURCEA(WINDOW_ICON_ID));
     if (icon != NULL) {
-        SetClassLongA(window, GCL_HICON, (LONG)icon);
+        /* SetClassLongPtr is the pointer-aware spelling on both ABIs:
+         * SetClassLong truncates the HICON on 64-bit Windows (and GCL_HICON
+         * is not defined for the 64-bit API, which uses GCLP_HICON). */
+        SetClassLongPtrA(window, GCLP_HICON, (LONG_PTR)icon);
     }
 #else
     /*

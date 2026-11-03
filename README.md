@@ -70,6 +70,17 @@ make -j8
 The target (`linux-x64`, `linux-x86`, `linux-arm64`) is chosen from the host and
 the compiler's own triple. See **[docs/BUILD-LINUX.md](docs/BUILD-LINUX.md)**.
 
+### MinGW Win64 (experimental)
+
+```sh
+export PATH=/c/w64devkit/bin:$PATH
+export PKG_CONFIG_PATH=/c/w64devkit/lib/pkgconfig
+make MUGEN_TARGET=win64 BUILD=build/win64-sdl2 -j8
+```
+
+Produces `build/win64-sdl2/mugen-mingw-win64-sdl2.exe`. See
+**[docs/BUILD-MINGW64.md](docs/BUILD-MINGW64.md)**.
+
 ### Other platforms
 
 - **Android** — `port/android/`, native SDL2, arm64.
@@ -81,9 +92,10 @@ The engine is a faithful reconstruction of a 2013 binary, so it inherits its
 platform expectations:
 
 - **32-bit is the reference.** The struct layouts, offsets and assertions in
-  `src/` describe the original 32-bit binary. 64-bit builds work for the parts
-  that have been ported, but the fidelity checks are compiled out there (see
-  `MUGEN_LAYOUT_32BIT` in `src/mugen.h`).
+  `src/` describe the original 32-bit binary. Win64 builds link and run (see
+  `docs/BUILD-MINGW64.md`): a Win64-vs-Win32 log comparison on the same
+  scenario is identical after numeric normalisation. Linux ARM64/x64 link
+  but are not yet qualified the same way.
 - **x87 float semantics on x86.** The original ran with `/arch:IA32` at 53-bit
   precision; the MinGW builds pass `-mfpmath=387 -fexcess-precision=standard`
   so float rounding matches. Changing this alters gameplay-visible arithmetic.
