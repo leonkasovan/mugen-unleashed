@@ -1242,6 +1242,17 @@ void Sprite_DrawSoft8(const DrawParams *dp, SpriteSet *set, int sprite)
                 Log_Printf("soft: rotated true-colour sprite drawn unrotated (unsupported)\n");
             }
         }
+        if (dp->blend != BLEND_NONE) {
+            /* Only masked drawing is implemented here; ADD/SUB need a
+             * conversion through the blend drawers, which take paletted
+             * sources only. Fall back to masked (one line, per op). */
+            static int add_logged, sub_logged;
+            if (dp->blend == BLEND_ADD && add_logged++ == 0) {
+                Log_Printf("soft: ADD true-colour sprite drawn masked (unsupported)\n");
+            } else if (dp->blend == BLEND_SUB && sub_logged++ == 0) {
+                Log_Printf("soft: SUB true-colour sprite drawn masked (unsupported)\n");
+            }
+        }
         Soft_TrueColourScale(set, sprite, dp->x, dp->y,
                              (float)((double)spr->w * sx), (float)((double)spr->h * sy), flip);
         return;
