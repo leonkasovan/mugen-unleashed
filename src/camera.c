@@ -185,7 +185,10 @@ void Stage_UpdateBgCamera(ScreenLoop *screen)
         if (e != NULL) {
             /* e->y (0x088 in the 32-bit layout): the position Bg_SetCamera
              * just computed for this element. Same struct-offset reasoning as
-             * bg->legacy above. */
+             * bg->legacy above. Coincidentally still 0x88 on 64-bit (no
+             * pointer precedes y in BgElem -- see tools/test_abi_layout.sh
+             * output), but member access is what keeps it correct; do not
+             * reintroduce the hardcoded offset. */
             float v = (float)(g_gameCoord[0] / g->stage.unit * e->y + g->camera_offset_y);
             v = (float)floor(v + 0.5);
             g->draw_offset_y += Ftol(v);

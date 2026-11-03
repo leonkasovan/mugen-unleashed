@@ -585,7 +585,12 @@ int Bgm_StreamOpen(const BgmInfo *info_in)
     if (s->mode == BGM_MODE_PLUGIN) {
         plugin->set_mute(s->instance, s->muted);
     } else {
-        Bgm_StreamSetupResampler(&s->format, s, (int)file);
+        /* fallback is bytes per sample for unknown sample formats; the
+         * original reads whatever its caller left in ecx. A truncated
+         * pointer is no less arbitrary there, but on 64-bit (LP64/LLP64)
+         * a pointer-to-int cast is implementation-defined, so say what is
+         * meant: the low 32 bits. Only read for unknown formats. */
+        Bgm_StreamSetupResampler(&s->format, s, (int)(intptr_t)file);
     }
     return 1;
 }
@@ -752,7 +757,8 @@ unsigned int Bgm_StreamRead(void *dst, int *status)
             if (s->format_changed == 1) {
                 AudioFormat format;
                 s->plugin->get_format(s->instance, &format);
-                Bgm_StreamSetupResampler(&format, s, (int)&format);
+                /* Same truncated-pointer fallback as above. */
+                Bgm_StreamSetupResampler(&format, s, (int)(intptr_t)&format);
             } else {
                 ended = 1;
             }

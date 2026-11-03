@@ -23,7 +23,10 @@ static Palette *Palette_At(const KeyedArray *palettes, int index)
     return (Palette *)(palettes->data + palettes->elem_size * index);
 }
 
-/* Video memory of an OpenGL texture object (GlTex_*): a byte count at offset 0x18. */
+/* Video memory of an OpenGL texture object (GlTex_*): the size field at
+ * offset 0x18. Safe on every ABI by construction: GlTex holds only 32-bit
+ * fields (no pointers), so member and hardcoded offsets coincide on 32-bit
+ * and 64-bit alike (see the struct in gfx.h, MUGEN_ASSERT_SIZE 0x1C). */
 static unsigned int GlTex_Size(const void *tex)
 {
     return *(const unsigned int *)((const unsigned char *)tex + 0x18);

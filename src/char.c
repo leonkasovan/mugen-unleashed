@@ -2464,10 +2464,15 @@ void Player_Reset(Player *p)
             if (proj != NULL) {
                 /* The original read the pointer at proj+0x504 -- Projectile.afterimage
                  * in the 32-bit layout (playerstate.h) -- and cleared whatever it
-                 * pointed at, then nulled the pointer. That is exactly what
-                 * Projectiles_Remove does through the member access; mirror it here
-                 * instead of dereferencing a hardcoded offset, which lands on a
-                 * different member wherever the natural layout differs (64-bit). */
+                 * pointed at, then nulled the pointer. That slot is declared as
+                 * AfterImage * (an element of GameVars.afterimages lent to the
+                 * projectile), NOT a KeyedArray **: the "borrowed list" the old
+                 * comment named is the afterimage's frames buffer, and clearing
+                 * means releasing it back to the pool (running = 0, anim = 0).
+                 * This is exactly what Projectiles_Remove does through member
+                 * access; mirror it here instead of dereferencing a hardcoded
+                 * offset, which lands on a different member wherever the
+                 * natural layout differs (0x548 on 64-bit). */
                 Projectile *proj_s = (Projectile *)proj;
                 if (proj_s->afterimage != NULL) {
                     proj_s->afterimage->running = 0;
