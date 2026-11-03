@@ -89,7 +89,16 @@
 extern "C" {
 #endif
 
-/* Video: one window, one GL context or one streaming texture, created lazily. */
+/* Video: one window, one GL context or one streaming texture, created lazily.
+ *
+ * Ownership (plan section 5.2 step 10): the backend owns the display window,
+ * renderer, texture and display surface; the engine borrows the display
+ * surface pointer (g_videoSurface/g_screenSurface) and must not free it --
+ * Sdl2_VideoQuit/Sdl2_DestroyVideo is the only release path. SpriteSets own
+ * their own screen/sprite surfaces. On failure or shutdown no path frees
+ * the same surface twice or leaves a borrowed alias dangling: failed
+ * resizes return NULL with the old pair intact, and VideoQuit drops every
+ * backend allocation together. */
 SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags);
 void Sdl2_Flip(SDL_Surface *surface);
 void Sdl2_UpdateRect(SDL_Surface *surface, Sint32 x, Sint32 y, Uint32 w, Uint32 h);

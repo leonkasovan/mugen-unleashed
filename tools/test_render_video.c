@@ -153,12 +153,34 @@ static void test_r02_projection(void)
     glGetFloatv(GL_PROJECTION_MATRIX, got);
     expected_ortho(want, 800, 600);
     check(matrix_equal(got, want), "R02: 20 identical resizes give the expected ortho");
+    /* The presenter must leave modelview alone too (M2 step 7). */
+    glGetFloatv(GL_MODELVIEW_MATRIX, got);
+    memset(want, 0, sizeof(want));
+    want[0] = want[5] = want[10] = want[15] = 1.0f;
+    check(matrix_equal(got, want), "R02: modelview is identity after resize");
 
     /* And back to game size fills what it should. */
     Video_OnResize(640, 480);
     glGetFloatv(GL_PROJECTION_MATRIX, got);
     expected_ortho(want, 640, 480);
     check(matrix_equal(got, want), "R02: resize back to 640x480 gives the expected ortho");
+
+    /* Non-uniform aspect must not leak one axis into the other. */
+    Video_OnResize(800, 400);
+    glGetFloatv(GL_PROJECTION_MATRIX, got);
+    expected_ortho(want, 800, 400);
+    check(matrix_equal(got, want), "R02: non-uniform 800x400 gives the expected ortho");
+
+    /* Minimized (zero size) defers: the previous valid setup survives. */
+    Video_OnResize(0, 0);
+    glGetFloatv(GL_PROJECTION_MATRIX, got);
+    check(matrix_equal(got, want), "R02: zero-size resize keeps the last valid projection");
+
+    /* Restore after minimize performs one valid setup again. */
+    Video_OnResize(640, 480);
+    glGetFloatv(GL_PROJECTION_MATRIX, got);
+    expected_ortho(want, 640, 480);
+    check(matrix_equal(got, want), "R02: restore after minimize gives the expected ortho");
 }
 
 int main(void)

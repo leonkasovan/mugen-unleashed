@@ -419,6 +419,44 @@ int Video_SetMode(int game_width, int game_height, int width, int height, int de
  * game size (the screen buffer keeps its own); OpenGLScreen resets the
  * projection and clears the window to red (sic: glClearColor(1, 0, 0, 0)).
  */
+/*
+ * M2 helper (RENDERING_PLAN.md section 6.1): explicit OpenGLScreen
+ * projection reset. Selects projection, loads identity, sets the ortho for
+ * the screen quad, then returns to modelview with an identity transform so
+ * overlay, screenshot and later draws inherit no presenter state (section
+ * 6.7). Never multiplies the previous matrix: SDL2 can deliver RESIZED and
+ * SIZE_CHANGED for one user resize, and each pass used to compose another
+ * projection on top of the last until the picture shrank away.
+ */
+static void Video_ResetGLScreenProjection(int width, int height)
+{
+#ifdef MUGEN_SDL2
+    /* Logical size and drawable pixels differ on high-DPI (section 6.3):
+     * the viewport covers the real drawable, the ortho the logical quad. */
+    int dw = width, dh = height;
+    SDL_Window *win = NULL;
+    Uint32 id;
+    for (id = 1; id < 64; id++) {
+        win = SDL_GetWindowFromID(id);
+        if (win != NULL) {
+            break;
+        }
+    }
+    if (win != NULL) {
+        SDL_GL_GetDrawableSize(win, &dw, &dh);
+    }
+    glViewport(0, 0, dw, dh);
+#else
+    /* SDL1 contract: the video surface IS the drawable (section 6.3). */
+    glViewport(0, 0, width, height);
+#endif
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    gluOrtho2D(0.0, (double)width, (double)height, 0.0);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+}
+
 void Video_OnResize(int width, int height)
 {
 #ifdef ANDROID_PORT
@@ -427,7 +465,18 @@ void Video_OnResize(int width, int height)
     (void)width;
     (void)height;
 #else
+    /* Last OpenGLScreen size the presenter set up (static, not a struct
+     * field: plan section 1.2 forbids new fields on reconstructed structs
+     * for backend state). Lets RESIZED + SIZE_CHANGED for one user resize
+     * skip the expensive re-setup while still syncing drawable/DPI. */
+    static int glscreen_w;
+    static int glscreen_h;
     MatchLog_Printf(9, "Video resize event %ix%i\n", width, height);
+    if (width <= 0 || height <= 0) {
+        /* Minimized (section 6.5): defer drawing; restore performs one valid
+         * setup without touching game sizes or sprite/FBO resources. */
+        return;
+    }
     switch (g_renderMode) {
     case RENDER_SYSTEM: {
         SDL_Surface *surface = SDL_SetVideoMode(width, height, g_videoDepth, g_videoSdlFlags);
@@ -440,19 +489,14 @@ void Video_OnResize(int width, int height)
     }
     case RENDER_OPENGL_SCREEN:
         g_videoSurface = SDL_SetVideoMode(width, height, g_videoDepth, g_videoSdlFlags);
-        glViewport(0, 0, width, height);
-        glMatrixMode(GL_PROJECTION);
-        /* gluOrtho2D multiplies the current matrix (it is glOrtho underneath).
-         * Without resetting first, every resize composed another projection on
-         * top of the previous one and the picture shrank or vanished -- SDL2
-         * can deliver RESIZED and SIZE_CHANGED for one user resize, doubling
-         * the damage. The engine's Gl_SetupView always loads an identity
-         * before its ortho for the same reason. */
-        glLoadIdentity();
-        gluOrtho2D(0.0, (double)width, (double)height, 0.0);
-        glClearColor(1.0f, 0.0f, 0.0f, 0.0f);
-        glClearDepth(1.0);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        if (width != glscreen_w || height != glscreen_h || g_screenSurface != g_videoSurface) {
+            Video_ResetGLScreenProjection(width, height);
+            glClearColor(1.0f, 0.0f, 0.0f, 0.0f);
+            glClearDepth(1.0);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            glscreen_w = width;
+            glscreen_h = height;
+        }
         g_glScreenResized = 1;
         g_screenSurface = g_videoSurface;
         break;

@@ -341,11 +341,19 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
 {
     Uint32 rmask, gmask, bmask, amask, format;
     int is_gl = (flags & SDL_OPENGL) ? 1 : 0;
-    int want_w = width > 0 ? width : 1;
-    int want_h = height > 0 ? height : 1;
+    /* M1 step 2 (plan section 5.2): validate before mutating anything. A
+     * minimized/zero-size request must not become a 1x1 game buffer -- the
+     * caller keeps its storage and the window keeps its size; Video_OnResize
+     * already returns early for these, this is the second line of defence. */
+    int want_w = width;
+    int want_h = height;
 
     if (!Sdl2_FormatForDepth(bpp, &rmask, &gmask, &bmask, &amask, &format)) {
         Log_Printf("video: %s\n", SDL_GetError());
+        return NULL;
+    }
+    if (width <= 0 || height <= 0) {
+        Log_Printf("video: refusing non-positive mode %dx%d\n", width, height);
         return NULL;
     }
     /*
@@ -371,9 +379,28 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
         g_sdl2Video.bpp = bpp;
         g_sdl2Video.is_gl = is_gl;
     } else if (g_sdl2Video.window != NULL && (width != g_sdl2Video.width || height != g_sdl2Video.height)) {
+        /* M1 step 1 (plan section 5.2): the physical window and the storage
+         * buffer are separate sizes. The window follows the OS request
+         * immediately; the texture + surface below follow only if their
+         * allocations succeed. On failure the old framebuffer keeps
+         * rendering, scaled by the logical-size renderer (step 6). Never
+         * claim the storage followed the window when it did not. */
         SDL_SetWindowSize(g_sdl2Video.window, want_w, want_h);
         g_sdl2Video.width = want_w;
         g_sdl2Video.height = want_h;
+    }
+    /* M1 step 2 continued: refuse sizes the renderer cannot texture before
+     * touching the storage pair. Query once the renderer exists; without one
+     * yet, SDL_CreateTexture below is the check (it fails the same way). */
+    if (!is_gl && g_sdl2Video.renderer != NULL) {
+        SDL_RendererInfo info;
+        if (SDL_GetRendererInfo(g_sdl2Video.renderer, &info) == 0 && info.max_texture_width > 0 &&
+            info.max_texture_height > 0 &&
+            (want_w > info.max_texture_width || want_h > info.max_texture_height)) {
+            Log_Printf("video: mode %dx%d exceeds renderer texture limit %dx%d\n", want_w, want_h,
+                       info.max_texture_width, info.max_texture_height);
+            return NULL;
+        }
     }
     if (flags & SDL_FULLSCREEN) {
         if (SDL_GetWindowFlags(g_sdl2Video.window) & SDL_WINDOW_FULLSCREEN) {
@@ -654,6 +681,12 @@ void Sdl2_VideoQuit(void)
 
     Sdl2_DestroyVideo();
 }
+/* Note (plan section 5.2 step 10): the engine never calls this on its normal
+ * exit path -- cleanup() in sdlmain.c calls SDL_Quit() directly, as the
+ * original did, and the OS reclaims the display surface. Sdl2_VideoQuit
+ * exists for the test harness and for any future explicit teardown; the
+ * borrowed g_videoSurface/g_screenSurface aliases must not be dereferenced
+ * after either path runs. */
 
 void Sdl2_SetCaption(const char *title, const char *icon)
 {

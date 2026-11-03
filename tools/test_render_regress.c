@@ -149,6 +149,19 @@ static void test_r01_transaction(void)
     check(present == 1, "R01: one present for the upload");
     check(Sdl2_DiagTextureSize(&tw, &th, NULL) && tw == 320 && th == 240,
           "R01: pair still consistent after upload");
+
+    /* M1 step 2: zero/minimized sizes are refused, never a 1x1 buffer. */
+    check(Sdl2_SetVideoMode(0, 0, 16, 0) == NULL, "R01: zero size refused");
+    check(Sdl2_DiagTextureSize(&tw, &th, NULL) && tw == 320 && th == 240,
+          "R01: pair intact after zero-size refusal");
+
+    /* M1 grow + shrink cycle: both directions keep the pair consistent. */
+    check(Sdl2_SetVideoMode(800, 600, 16, 0) != NULL, "R01: grow to 800x600");
+    check(Sdl2_DiagTextureSize(&tw, &th, NULL) && tw == 800 && th == 600,
+          "R01: live texture is 800x600 after grow");
+    check(Sdl2_SetVideoMode(320, 240, 16, 0) != NULL, "R01: shrink back");
+    check(Sdl2_DiagTextureSize(&tw, &th, NULL) && tw == 320 && th == 240,
+          "R01: live texture is 320x240 after shrink");
     Sdl2_VideoQuit();
 }
 
