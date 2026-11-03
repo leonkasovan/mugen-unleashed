@@ -199,14 +199,14 @@ game data at runtime: use it only for a previously provisioned data directory
 or diagnostic builds. The first-run extraction/update limitations still apply.
 `--clean` removes generated app build/CMake output; it does not uninstall tools.
 
-Output: **`build/android/mugen-unleashed-arm64-v8a.apk`**.
+Output: **`build/android/mugen-android-arm64-v8a.apk`**.
 Only arm64-v8a is currently supported by Gradle; another `ANDROID_ABI` is rejected
 rather than producing a mislabeled arm64 APK.
 
 After sourcing the tool environment, use the SDK's adb:
 
 ```sh
-adb install -r build/android/mugen-unleashed-arm64-v8a.apk
+adb install -r build/android/mugen-android-arm64-v8a.apk
 adb logcat -s mugen
 ```
 

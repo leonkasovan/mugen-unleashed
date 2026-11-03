@@ -7,7 +7,7 @@ The engine itself (`../../src`) is the Windows reconstruction, unchanged in
 behaviour. This directory holds only what the Vita needs: a `CMakeLists.txt`,
 the LiveArea assets, and the OpenGL adaptation.
 
-Output: a `mugen.vpk` you can copy to the console and install with VitaShell.
+Output: a `mugen-psvita.vpk` you can copy to the console and install with VitaShell.
 
 ---
 
@@ -20,7 +20,7 @@ Output: a `mugen.vpk` you can copy to the console and install with VitaShell.
 | libc | newlib |
 | Graphics | **vitaGL** — GL 1.x/2.1 compatibility layer over SceGxm |
 | SDL | **SDL 1.2.16** from VitaSDK (`libSDL.a`), not SDL2 |
-| Output | `mugen.self` (runnable) and `mugen.vpk` (installable) |
+| Output | `mugen-psvita.self` (runnable) and `mugen-psvita.vpk` (installable) |
 
 ### Why SDL 1.2 and not SDL2
 
@@ -99,8 +99,8 @@ Result (verified, clean build directory, nothing else set):
 
 ```
 build/psvita/mugen       4264 KB   ARM EABI ELF (intermediate)
-build/psvita/mugen.self  2203 KB   SELF, compressed
-build/psvita/mugen.vpk   2198 KB   installable homebrew
+build/psvita/mugen-psvita.self  2203 KB   SELF, compressed
+build/psvita/mugen-psvita.vpk   2198 KB   installable homebrew
 ```
 
 ### Building without Ninja
@@ -202,9 +202,9 @@ cmake -S port/psvita -B build/psvita -G Ninja \
 
 ```sh
 # Copy to the console (with VitaShell in USB/FTP mode, or a memory card reader)
-cp build/psvita/mugen.vpk /path/to/ux0:/
+cp build/psvita/mugen-psvita.vpk /path/to/ux0:/
 
-# Then in VitaShell: select mugen.vpk -> "Install"
+# Then in VitaShell: select mugen-psvita.vpk -> "Install"
 ```
 
 Installs to `ux0:app/MSDK00001/`. Start it from the LiveArea bubble.
@@ -679,7 +679,7 @@ memory rather than at the flags.
    the box, which is the width the motif was designed for.
 
 One packing detail learned here: `install/` doubles as the place this project's
-own test executables get copied, so a stale `mugen-msvc-win32-sdl2.exe` (a 1.7 MB
+own test executables get copied, so a stale `mugen-msvc-win32-sdl1.exe` (a 1.7 MB
 Windows PE) was being packed into the VPK. Those build outputs are now excluded
 by name; the tree itself is untouched.
 
@@ -1056,7 +1056,7 @@ shipped. Only what vitaGL cannot process was changed:
 | `////*EB_DEFINES*////` | **kept** | `Gl_InsertDefines` replaces it with the engine's `#define` block; every variant depends on it |
 
 Verified: the four rewritten files are what the VPK now carries
-(`unzip -p .../mugen.vpk data/indexed.frag | grep "vitaGL build"`), and the diff
+(`unzip -p .../mugen-psvita.vpk data/indexed.frag | grep "vitaGL build"`), and the diff
 against the originals is only the lines above.
 
 ### The remaining blocker is not the shaders: it is the draw path

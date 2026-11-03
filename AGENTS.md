@@ -69,8 +69,8 @@ Each entry point owns its own subtree and never writes into another's.
 | `build/mingw64/` | `make MUGEN_TARGET=win64` (Windows, experimental) | the same shape, `mugen-mingw-win64.exe` |
 | `build/<linux-target>/` | root `Makefile` (Linux) | same shape, `mugen-linux-<arch>` |
 | `build/mingw-debug/` | `make DEBUG=1 BUILD=build/mingw-debug` | an explicit `BUILD=` override |
-| `build/x86-release/`, `build/x86-debug/` | root `CMakeLists.txt` via `CMakePresets.json` | MSVC `mugen-msvc-win32-sdl2.exe` + `.pdb` |
-| `build/psvita*/` | `port/psvita/CMakeLists.txt` (you choose the dir) | `mugen`, `mugen.self`, `mugen.vpk`, `vita-mugen.cfg` |
+| `build/x86-release/`, `build/x86-debug/` | root `CMakeLists.txt` via `CMakePresets.json` | MSVC `mugen-msvc-win32-sdl1.exe` + `.pdb` |
+| `build/psvita*/` | `port/psvita/CMakeLists.txt` (you choose the dir) | `mugen`, `mugen-psvita.self`, `mugen-psvita.vpk`, `vita-mugen.cfg` |
 | `build/android/` | `port/android/build.sh` | `toolchains/` (JDK/SDK/NDK/CMake, `env.sh`), `sdl2/<abi>/`, `android-deps/<abi>/`, `android-deps-src/`, `sources/`, `build-sdl2/`, `gradle-user-home/`, `asset-list.txt`, `mugen-unleashed-<abi>.apk` |
 | `build/baseline/` | hand-made, kept on purpose | SDL1 reference binary and log used by the log-comparison workflow |
 | `build/<test-name>/` | `tools/test_*.sh` | each test's scratch output |
@@ -123,7 +123,7 @@ builds Linux x64/arm64 and an experimental `win64` target (`MUGEN_TARGET=win64`,
 needs a 64-bit static kit) — see `PLANS.md` for what is still outstanding there,
 and do not describe either as verified until the offsets above are dealt with.
 
-Output names differ by build: `mugen-msvc-win32-sdl2.exe` (MSVC),
+Output names differ by build: `mugen-msvc-win32-sdl1.exe` (MSVC),
 `mugen-mingw-win32-sdl2.exe` (MinGW/SDL2), `mugen-mingw-win32-sdl1.exe` (MinGW/SDL 1.2),
 `mugen-linux-<arch>` (Linux).
 
@@ -134,7 +134,7 @@ tools\msvc_env.bat cmake --preset x86-release
 tools\msvc_env.bat cmake --build --preset x86-release
 ```
 
-→ `build\x86-release\mugen-msvc-win32-sdl2.exe` + `.pdb`
+→ `build\x86-release\mugen-msvc-win32-sdl1.exe` + `.pdb`
 
 Debug variant: same with `x86-debug`. `tools\msvc_env.bat` finds VS 2022 through
 `vswhere`, so any edition or install path works. Never call `cmake` or `cl`
@@ -310,7 +310,7 @@ cd install
 ./mugen-mingw-win32-sdl2.exe -nosound          # startup/mode select
 ```
 
-For the MSVC build, copy `build/x86-release/mugen-msvc-win32-sdl2.exe` into `install/`
+For the MSVC build, copy `build/x86-release/mugen-msvc-win32-sdl1.exe` into `install/`
 by hand; it needs the `Elecbyte.MUGEN.libs` folder, the static one does not. An
 `SDL_BACKEND=1` static build installs as `mugen-mingw-win32-sdl1.exe` and does not
 overwrite the default one.

@@ -106,8 +106,11 @@ add_executable(mugen WIN32 ${MUGEN_SOURCES} src/mugen.rc src/mugen.manifest)
 # ... if multiple CL.EXE write to the same .PDB file, please use /FS"): /FS is
 # already passed, but an unnamed PDB cannot be shared that way.
 set_target_properties(mugen PROPERTIES
-  OUTPUT_NAME mugen-msvc-win32-sdl2
-  COMPILE_PDB_NAME mugen-msvc-win32-sdl2
+  # SDL 1.2 until the MSVC backend migrates to SDL2 (see SDL2_PLAN.md):
+  # MugenSdk.cmake links the game's original SDL 1.2 DLLs and MUGEN_SDL2 is
+  # not defined, so the name must not claim the SDL2 backend.
+  OUTPUT_NAME mugen-msvc-win32-sdl1
+  COMPILE_PDB_NAME mugen-msvc-win32-sdl1
   COMPILE_PDB_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 target_include_directories(mugen PRIVATE src)
 target_compile_definitions(mugen PRIVATE _CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_DEPRECATE)

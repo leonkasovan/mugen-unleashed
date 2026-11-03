@@ -860,11 +860,22 @@ if(MUGEN_VITA_DATA_DIR)
   # directory to the game tree.
   # Anything this project itself builds is not game data. install/ is a working
   # M.U.G.E.N tree and is also where this project's test executables get copied,
-  # so a stale mugen-msvc-win32-sdl2.exe (a 1.7 MB Windows PE) would otherwise be
+  # so a stale mugen-msvc-win32-sdl1.exe (a 1.7 MB Windows PE) would otherwise be
   # packed into the VPK. The tree itself is left alone.
   set(_mugen_data_exclude
-    mugen-msvc-win32-sdl2.exe mugen-msvc-win32-sdl2.pdb mugen-mingw-win32-sdl2.exe mugen-static.exe
-    mugen-mingw-win32-sdl2-stripped.exe mugen-static-stripped.exe mugen-linux-x64 mugen-linux-arm64 mugen-linux-x86
+    # current output names (see the naming scheme in the root CMakeLists.txt
+    # and the Makefile) plus legacy names from before the rename, so a stale
+    # binary left behind in install/ never gets packed as game data
+    mugen-msvc-win32-sdl1.exe mugen-msvc-win32-sdl1.pdb
+    mugen-mingw-win32-sdl2.exe mugen-mingw-win32-sdl1.exe
+    mugen-mingw-win64-sdl2.exe
+    mugen-mingw-win32-sdl2-stripped.exe mugen-mingw-win32-sdl1-stripped.exe
+    mugen-linux-x64 mugen-linux-arm64 mugen-linux-x86
+    # legacy (pre-rename)
+    mugen_unleashed.exe mugen_unleashed.pdb
+    mugen-static.exe mugen-static-sdl1.exe
+    mugen-static-stripped.exe mugen-static-sdl1-stripped.exe
+    mugen-win64.exe mugen-win64-sdl1.exe
     mugen.log mugen-match.log)
 
   file(GLOB _mugen_data_entries RELATIVE "${MUGEN_VITA_DATA_DIR}"

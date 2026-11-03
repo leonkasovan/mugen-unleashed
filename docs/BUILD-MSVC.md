@@ -1,6 +1,6 @@
 # Building with MSVC 2022 (Visual Studio)
 
-`CMakeLists.txt` + `CMakePresets.json` build `mugen-msvc-win32-sdl2.exe` with
+`CMakeLists.txt` + `CMakePresets.json` build `mugen-msvc-win32-sdl1.exe` with
 Visual Studio 2022's C compiler. This is the primary Windows build; there is
 also a [GNU Make + MinGW build](BUILD-MINGW.md).
 
@@ -65,8 +65,8 @@ tools\msvc_env.bat cmake --build --preset x86-release
 Output:
 
 ```
-build\x86-release\mugen-msvc-win32-sdl2.exe
-build\x86-release\mugen-msvc-win32-sdl2.pdb      (debug symbols, RelWithDebInfo)
+build\x86-release\mugen-msvc-win32-sdl1.exe
+build\x86-release\mugen-msvc-win32-sdl1.pdb      (debug symbols, RelWithDebInfo)
 ```
 
 The `x86-debug` preset builds an unoptimised executable in its own directory:
@@ -76,7 +76,7 @@ tools\msvc_env.bat cmake --preset x86-debug
 tools\msvc_env.bat cmake --build --preset x86-debug
 ```
 
-→ `build\x86-debug\mugen-msvc-win32-sdl2.exe`
+→ `build\x86-debug\mugen-msvc-win32-sdl1.exe`
 
 ### Presets
 
@@ -147,7 +147,7 @@ subtly wrong binary.
 
 ## Output and runtime dependencies
 
-`mugen-msvc-win32-sdl2.exe` is a 32-bit GUI executable that imports:
+`mugen-msvc-win32-sdl1.exe` is a 32-bit GUI executable that imports:
 
 ```
 SDL.dll  SDL_mixer.dll  SDL_ttf.dll  SDL_gfx.dll  zlib1.dll
@@ -161,7 +161,7 @@ they come from the game's `Elecbyte.MUGEN.libs` folder, which the embedded
 manifest names. `libmpg123-0.dll` is loaded with `LoadLibrary` only when the
 `mpg123` BGM plugin is used.
 
-To run: copy `mugen-msvc-win32-sdl2.exe` into a M.U.G.E.N 1.1 Beta 1 directory. It
+To run: copy `mugen-msvc-win32-sdl1.exe` into a M.U.G.E.N 1.1 Beta 1 directory. It
 does not shadow the original `mugen.exe`.
 
 ## Troubleshooting
@@ -174,12 +174,12 @@ through `tools\msvc_env.bat`, or use a Developer Command Prompt.
 ### `error: Cannot open compiler generated file ...` / C1041 on `vc140.pdb`
 
 Parallel builds racing on one PDB. `CMakeLists.txt` pins a single
-`COMPILE_PDB_NAME mugen-msvc-win32-sdl2` for the target so every `cl` shares one PDB
+`COMPILE_PDB_NAME mugen-msvc-win32-sdl1` for the target so every `cl` shares one PDB
 correctly (with `/FS`); before that fix CMake pointed `TARGET_COMPILE_PDB` at
 the object *directory*, and builds failed. If you see it again, check that
 property survived your edits.
 
-### `LINK : fatal error LNK1168: cannot open mugen-msvc-win32-sdl2.exe for writing`
+### `LINK : fatal error LNK1168: cannot open mugen-msvc-win32-sdl1.exe for writing`
 
 The previous executable is still held open — it is running, or an interrupted
 link left a handle. Close it (or wait a moment) and rebuild; it is transient
@@ -208,8 +208,8 @@ tools\msvc_env.bat cmake --preset x86-release
 ## Continuous integration
 
 `.github/workflows/build.yml` does the same on `windows-2022`: configure with
-`x86-release`, build, then package `mugen-msvc-win32-sdl2.exe` and
-`mugen-msvc-win32-sdl2.pdb` into `mugen-unleashed-x86.zip`. Tags (`v*`) attach the
+`x86-release`, build, then package `mugen-msvc-win32-sdl1.exe` and
+`mugen-msvc-win32-sdl1.pdb` into `mugen-unleashed-x86.zip`. Tags (`v*`) attach the
 zip to a GitHub release.
 
 ## Relationship to the other build
@@ -217,7 +217,7 @@ zip to a GitHub release.
 | | MSVC (`CMakeLists.txt`) | [GNU Make](BUILD-MINGW.md) |
 |---|---|---|
 | compiler | `cl` (x86) | `i686-w64-mingw32-gcc` |
-| output | `build\x86-release\mugen-msvc-win32-sdl2.exe` | `build/mingw/mugen-msvc-win32-sdl2.exe` |
+| output | `build\x86-release\mugen-msvc-win32-sdl1.exe` | `build/mingw/mugen-msvc-win32-sdl1.exe` |
 | CRT | static `/MT` | static MinGW CRT (`msvcrt.dll`) |
 | fidelity | the reference build — matches the original's code generation | equivalent, with explicit x87/excess-precision flags |
 | verification | the build the `mugen.log` differential tests were run against | build-verified |

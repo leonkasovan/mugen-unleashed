@@ -22,7 +22,7 @@ The instructions below are for the environment this project was verified in:
 ```sh
 make check-toolchain     # verifies the 32-bit toolchain and that the static
                          # archives (not just .pc files) are present
-make -j8                 # build/mingw/mugen-mingw-win32-sdl2.exe (SDL2 backend)
+make -j8                 # build/mingw-sdl2/mugen-mingw-win32-sdl2.exe (SDL2 backend)
 make install             # strip it and copy it into install/
 ```
 
@@ -30,7 +30,7 @@ Targets and variables:
 
 | Command | Effect |
 |---|---|
-| `make` | build `$(TARGET)`; the SDL2 backend by default, so `build/mingw/mugen-mingw-win32-sdl2.exe` |
+| `make` | build `$(TARGET)`; the SDL2 backend by default, so `build/mingw-sdl2/mugen-mingw-win32-sdl2.exe` |
 | `make SDL_BACKEND=1` | the SDL 1.2 backend instead: `build/mingw-sdl1/mugen-mingw-win32-sdl1.exe` |
 | `make -j8` | parallel build, from scratch in ~30 s on a recent machine |
 | `make V=1` | print the full command lines |
@@ -146,7 +146,7 @@ Windows system DLLs only, plus `msvcrt.dll` (MinGW's CRT, present on every
 Windows since XP). Verified with:
 
 ```sh
-objdump -p build/mingw/mugen-mingw-win32-sdl2.exe | grep "DLL Name"
+objdump -p build/mingw-sdl2/mugen-mingw-win32-sdl2.exe | grep "DLL Name"
 ```
 
 Note the executable *exports* a few hundred SDL/Mixer/TTF names. Those come
@@ -184,15 +184,15 @@ nothing loads from it.
 
 ## What the build does, in order
 
-1. Compile the engine modules in `src/` into `build/mingw/obj/src/`
+1. Compile the engine modules in `src/` into `build/mingw-sdl2/obj/src/`
    (78 original modules plus `src/sdlmixercompat.c`).
-2. Compile Lua, libpng, libresample, glad, minizip into `build/mingw/obj/` and
-   archive the three libraries into `build/mingw/lib/`.
-3. Generate `build/mingw/obj/res/mugen_all.rc` — a copy of `src/mugen.rc` with
+2. Compile Lua, libpng, libresample, glad, minizip into `build/mingw-sdl2/obj/` and
+   archive the three libraries into `build/mingw-sdl2/lib/`.
+3. Generate `build/mingw-sdl2/obj/res/mugen_all.rc` — a copy of `src/mugen.rc` with
    the assembly manifest appended as resource `1 24` — and compile it with
    `windres`. `src/mugen.rc` itself is left untouched, so the CMake build keeps
    adding `src/mugen.manifest` to the linker directly.
-4. Link `build/mingw/mugen-mingw-win32-sdl2.exe` with `-mwindows` (GUI subsystem,
+4. Link `build/mingw-sdl2/mugen-mingw-win32-sdl2.exe` with `-mwindows` (GUI subsystem,
    `WinMain` from `src/sdlmain.c`) and `-Wl,--gc-sections` so unreferenced
    archive members are dropped.
 5. `make install` strips a copy and puts it in `install/`.
