@@ -5,6 +5,7 @@
  * handle the part the options screen edits ([Options], volumes, keys).
  */
 #include "mugen.h"
+#include "render_policy.h"
 
 #ifdef MUGEN_VITA_GL
 /* Defined near Options_Load; Config_Load runs first. */
@@ -302,9 +303,36 @@ int Config_Load(void)
     Ini_GetInt(ini, "systemfit", &g_game->system_fit);
     g = g_game;
 #ifdef ANDROID_PORT
-    if (g->render_mode != RENDER_SYSTEM) {
-        Log_Printf("Android: RenderMode requires System; using native SDL2 presentation.\n");
-        g->render_mode = RENDER_SYSTEM;
+    /*
+     * Renderer availability on Android (RENDERING_PLAN.md 12.2 and 12.7).
+     *
+     * The decision goes through RenderPolicy_Resolve so there is one table
+     * instead of an ad-hoc #ifdef. The capabilities are what this target
+     * actually compiles: the Android build excludes glrender.c/gldetect.c, so
+     * there are no GL sprite tables and no GL presenter.
+     *
+     * With MUGEN_GLES the GLES backend units (probe, CPU MVP, program/VBO
+     * submission) are compiled, but the mode still cannot be selected: no
+     * context is created and the presenter is not wired, so the sprite
+     * tables remain unpopulated. Selecting it here would be exactly the
+     * "removing the System force alone picks an incomplete path" failure the
+     * plan warns about. The capabilities below are the honest answer until
+     * that wiring lands, and flipping them is the single change that enables
+     * the mode.
+     */
+    {
+        RenderCaps caps;
+        RenderDecision decision;
+
+        caps.system = 1;
+        caps.gl_screen = 0;
+        caps.gl_sprite = 0;
+        RenderPolicy_Resolve(g->render_mode, &caps, &decision);
+        if (decision.fell_back) {
+            Log_Printf("Android: RenderMode %d unavailable (%s); using System.\n", g->render_mode,
+                       (decision.reason != NULL) ? decision.reason : "unspecified");
+            g->render_mode = decision.effective;
+        }
     }
 #endif
     i = g->render_mode;

@@ -69,6 +69,7 @@ run_host GL01 bash tools/test_render_video.sh
 run_host ES01-struct bash tools/test_gles_shader.sh
 run_host VT01-caps bash tools/test_vita_caps.sh
 run_host GL-MVP bash tools/test_gl_mvp.sh
+run_host CF01-policy bash tools/test_render_policy.sh
 if [ -n "$ENGINE" ] && [ -x "$ENGINE" ]; then
     run_host CF01 bash tools/test_render_select.sh "$ENGINE" install
     rm -f install/mugen.log
