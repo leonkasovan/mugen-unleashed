@@ -179,12 +179,16 @@ static void test_r04_layout(void)
 
 /* ---- R05: true-colour rasterizer ----
  *
- * 2x1 32-bit BGRA RAW sprite: pixel 0 opaque red (B=0,G=0,R=255,A=255),
- * pixel 1 fully transparent (A=0). Drawn 1:1 at (1,0) onto a 4x2 RGB565
- * target prefilled with 0x1234. Expected, computed from the masks here:
- * target(1,0) = RGB565(255,0,0) = 0xF800, target(2,0) still 0x1234
- * (transparent source leaves the pixel untouched -- not "never drawn",
- * because the prefill proves the drawer visited the span without writing).
+ * 2x1 32-bit RGBA RAW sprite: pixel 0 opaque red (R=255,G=0,B=0,A=255),
+ * pixel 1 fully transparent (A=0). RGBA byte order matches the SFF v2 PNG
+ * decoder (libpng writes R,G,B,A with no BGR transform) and
+ * SpriteSet_FromPixels-from-RGBA-surface layout. Drawn 1:1 at (1,0) onto a
+ * 4x2 RGB565 target prefilled with 0x1234. Expected, computed from the
+ * masks here: target(1,0) = RGB565(255,0,0) = 0xF800, target(2,0) still
+ * 0x1234 (transparent source leaves the pixel untouched -- not "never
+ * drawn", because the prefill proves the drawer visited the span without
+ * writing). A second pass draws a half-alpha green pixel and checks the
+ * BLEND_OP_SCALE equation value (SW01 alpha 0/128/255).
  */
 static void test_r05_truecolour(void)
 {
@@ -237,10 +241,10 @@ static void test_r05_truecolour(void)
     Sprite_InitRows(&tspr);
     KeyedArray_Add(tset->sprites, &tspr, 0, 0);
 
-    /* B,G,R,A order (little-endian BGRA, as the PNG decoder writes it). */
-    srcpx[0] = 0;
+    /* R,G,B,A order (as the PNG decoder writes it: no BGR transform). */
+    srcpx[0] = 255;
     srcpx[1] = 0;
-    srcpx[2] = 255;
+    srcpx[2] = 0;
     srcpx[3] = 255;     /* opaque red */
     srcpx[4] = 0;
     srcpx[5] = 0;
@@ -263,6 +267,10 @@ static void test_r05_truecolour(void)
     dp.scale_y = 1.0f;
     dp.scale2_x = 1.0f;
     dp.scale2_y = 1.0f;
+    /* Production fills alpha_src/alpha_dst via Trans_Parse (256/0 = opaque);
+     * the memset above is a test artefact, not a real DrawParams. */
+    dp.alpha_src = 1.0f;
+    dp.alpha_dst = 0.0f;
     dp.x = 1.0f;
     dp.y = 0.0f;
     dp.blend = BLEND_NONE;
@@ -276,6 +284,95 @@ static void test_r05_truecolour(void)
     check(row0[3] == 0x1234, "R05: pixel right of sprite untouched");
     check(((unsigned short *)((char *)dst->pixels + dst->pitch))[0] == 0x1234,
           "R05: second row untouched");
+
+    /* Half alpha: green A=128 over 0x1234. Engine equation (BLEND_OP_SCALE):
+     * dst = src*128/256 + dst*128/256, where dst channels are unpacked the
+     * way Soft_TrueColourBlend does (R 5-bit, G 6-bit, B 5-bit<<3). dst
+     * 0x1234 unpacks to R=16 G=68 B=160; src green (0,255,0): R=8 G=161
+     * B=80 → RGB565 pack (8>>3, 161>>2, 80>>3) = 0x0D0A. Computed here from
+     * the masks, not by calling the engine's pack routine. */
+    srcpx[0] = 0;
+    srcpx[1] = 255;
+    srcpx[2] = 0;
+    srcpx[3] = 128;
+    srcpx[4] = 0;
+    srcpx[5] = 0;
+    srcpx[6] = 0;
+    srcpx[7] = 0;
+    /* Reprefill: the second pass blends over the prefill, not over the
+     * first pass's red pixel. */
+    {
+        int i, n = (dst->pitch * 2) / 2;
+        unsigned short *p = (unsigned short *)dst->pixels;
+        for (i = 0; i < n; i++) {
+            p[i] = 0x1234;
+        }
+    }
+    memset(&dp, 0, sizeof(dp));
+    dp.scale_x = 1.0f;
+    dp.scale_y = 1.0f;
+    dp.scale2_x = 1.0f;
+    dp.scale2_y = 1.0f;
+    dp.alpha_src = 1.0f;
+    dp.alpha_dst = 0.0f;
+    dp.x = 1.0f;
+    dp.y = 0.0f;
+    dp.blend = BLEND_NONE;
+    dp.masked = 1;
+    Sprite_DrawSoft(sset, 0, &dp);
+    row0 = (unsigned short *)dst->pixels;
+    check(row0[1] == 0x0D0A, "R05: half-alpha green blends to 0x0D0A");
+
+    /* 24-bit BGR (PCX layout: byte0=B): blue (0,0,255) opaque, drawn 2x
+     * scaled to cover 2 target pixels. Scale path with integer factor 2
+     * must be pixel-exact: both covered pixels become RGB565 blue. */
+    {
+        unsigned char src24[3 * 2];
+        Sprite ss24;
+        KeyedArray *ks24;
+        SpriteSet s24;
+
+        src24[0] = 255;
+        src24[1] = 0;
+        src24[2] = 0;
+        src24[3] = 255;
+        src24[4] = 0;
+        src24[5] = 0;
+        memset(&ss24, 0, sizeof(ss24));
+        ss24.w = 2;
+        ss24.h = 1;
+        ss24.bpp = 24;
+        ss24.format = SPRITE_FORMAT_RAW;
+        ss24.pixels = src24;
+        Sprite_InitRows(&ss24);
+        ss24.pal_index = -1;
+        memset(&s24, 0, sizeof(s24));
+        ks24 = KeyedArray_Create(1, sizeof(Sprite));
+        s24.sprites = ks24;
+        KeyedArray_Add(ks24, &ss24, 0, 0);
+        {
+            int i, n = (dst->pitch * 2) / 2;
+            unsigned short *p = (unsigned short *)dst->pixels;
+            for (i = 0; i < n; i++) {
+                p[i] = 0x1234;
+            }
+        }
+        memset(&dp, 0, sizeof(dp));
+        dp.scale_x = 2.0f;
+        dp.scale_y = 1.0f;
+        dp.scale2_x = 1.0f;
+        dp.scale2_y = 1.0f;
+        dp.alpha_src = 1.0f;
+        dp.alpha_dst = 0.0f;
+        dp.x = 1.0f;
+        dp.y = 0.0f;
+        dp.blend = BLEND_NONE;
+        dp.masked = 1;
+        Sprite_DrawSoft(&s24, 0, &dp);
+        row0 = (unsigned short *)dst->pixels;
+        /* RGB565(0,0,255) = 0x001F, two pixels wide. */
+        check(row0[1] == 0x001F && row0[2] == 0x001F, "R05: 24-bit blue scaled 2x is pixel-exact");
+    }
     SDL_FreeSurface(dst);
 }
 

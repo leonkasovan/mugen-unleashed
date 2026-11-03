@@ -950,20 +950,41 @@ int Gfx_SoftCeil(float x)
  * non-paletted sources, so ADD/SUB fall back to masked).)
  */
 
-/* Reads one source pixel as 0x00RRGGBB, or 0 when transparent. */
-static unsigned int Soft_TrueColourPixel(const Sprite *spr, const unsigned char *row, int x)
+/* Reads one source pixel as 0x00RRGGBB, or 0 when transparent.
+ *
+ * Byte orders (verified against the decoders, not assumed from the name):
+ * - 32-bit (SFF v2 PNG via Png_ReadStream, SpriteSet_FromPixels from an RGBA
+ *   surface): libpng writes R,G,B,A in order with no BGR/swap transform, and
+ *   the GL path's Gl_Premultiply reads src[0] as R for a GL_RGBA upload --
+ *   so byte 0 is R. Straight (not premultiplied) alpha.
+ * - 24-bit (PCX via Pcx_Decode): planes arrive R, G, B but are stored at
+ *   px*3+2, +1, +0 respectively, so byte 0 is B. Pure black is the mask
+ *   colour of PCX true-colour images.
+ *
+ * The pixel alpha (0..255; 255 for opaque 24-bit) goes to *alpha_out when
+ * non-NULL. */
+static unsigned int Soft_TrueColourPixel(const Sprite *spr, const unsigned char *row, int x, int *alpha_out)
 {
     const unsigned char *p = row + x * (spr->bpp >> 3);
 
     if (spr->bpp == 32) {
+        if (alpha_out != NULL) {
+            *alpha_out = p[3];
+        }
         if (p[3] == 0) {
             return 0;
         }
-        return (unsigned int)p[2] << 16 | (unsigned int)p[1] << 8 | p[0];
+        return (unsigned int)p[0] << 16 | (unsigned int)p[1] << 8 | p[2];
     }
     /* 24-bit: pure black is the mask colour of PCX true-colour images */
     if (p[0] == 0 && p[1] == 0 && p[2] == 0) {
+        if (alpha_out != NULL) {
+            *alpha_out = 0;
+        }
         return 0;
+    }
+    if (alpha_out != NULL) {
+        *alpha_out = 255;
     }
     return (unsigned int)p[2] << 16 | (unsigned int)p[1] << 8 | p[0];
 }
@@ -974,11 +995,42 @@ static unsigned short Soft_TrueColour565(unsigned int c)
     return (unsigned short)((c >> 8 & 0xF800) | (c >> 5 & 0x07E0) | (c >> 3 & 0x001F));
 }
 
+/* Blends packed 0x00RRGGBB src over RGB565 dst by alpha (0..256), following
+ * the engine's BLEND_OP_SCALE equation (softblend.c: target * alpha_dst +
+ * colour * alpha_src, each / 256): dst = src*a/256 + dst*(256-a)/256.
+ * Operates per channel in 8-bit and repacks, so the result matches a
+ * reference computed from the masks. */
+static unsigned short Soft_TrueColourBlend(unsigned int c, unsigned short dst, int alpha)
+{
+    unsigned int dr = (unsigned int)(dst & 0xF800) >> 8;
+    unsigned int dg = (unsigned int)(dst & 0x07E0) >> 3;
+    unsigned int db = (unsigned int)(dst & 0x001F) << 3;
+    unsigned int sr = c >> 16 & 0xFF;
+    unsigned int sg = c >> 8 & 0xFF;
+    unsigned int sb = c & 0xFF;
+    unsigned int r = (sr * (unsigned int)alpha + dr * (unsigned int)(256 - alpha)) >> 8;
+    unsigned int g = (sg * (unsigned int)alpha + dg * (unsigned int)(256 - alpha)) >> 8;
+    unsigned int b = (sb * (unsigned int)alpha + db * (unsigned int)(256 - alpha)) >> 8;
+
+    if (r > 255) {
+        r = 255;
+    }
+    if (g > 255) {
+        g = 255;
+    }
+    if (b > 255) {
+        b = 255;
+    }
+    return (unsigned short)((r >> 3 << 11) | (g >> 2 << 5) | (b >> 3));
+}
+
 /*
  * Unscaled true-colour blit at (x, y), flipped by flip, masked (transparency
- * per Soft_TrueColourPixel). The clip/flip bookkeeping mirrors Soft_Blit.
+ * per Soft_TrueColourPixel). 32-bit sources with alpha < 255 blend over the
+ * target by the pixel alpha combined with dp_alpha (DrawParams alpha_src
+ * 0..256, 256 = opaque). The clip/flip bookkeeping mirrors Soft_Blit.
  */
-static void Soft_TrueColourBlit(SpriteSet *set, int sprite, int x, int y, int flip)
+static void Soft_TrueColourBlit(SpriteSet *set, int sprite, int x, int y, int flip, int dp_alpha)
 {
     const Sprite *spr = Soft_SpriteAt(set, sprite);
     const Sprite *tspr = Soft_SpriteAt(g_renderTarget, g_renderTargetSprite);
@@ -1049,9 +1101,15 @@ static void Soft_TrueColourBlit(SpriteSet *set, int sprite, int x, int y, int fl
 
         s += (flip & SOFT_FLIP_H) ? (w - 1 - sx) * (spr->bpp >> 3) : sx * (spr->bpp >> 3);
         for (n = ncols; n != 0; n--) {
-            unsigned int c = Soft_TrueColourPixel(spr, s, 0);
+            int palpha;
+            unsigned int c = Soft_TrueColourPixel(spr, s, 0, &palpha);
             if (c != 0) {
-                *d = Soft_TrueColour565(c);
+                int a = palpha * dp_alpha >> 8;
+                if (a >= 256) {
+                    *d = Soft_TrueColour565(c);
+                } else {
+                    *d = Soft_TrueColourBlend(c, *d, a);
+                }
             }
             d++;
             s += step * (spr->bpp >> 3);
@@ -1062,9 +1120,9 @@ static void Soft_TrueColourBlit(SpriteSet *set, int sprite, int x, int y, int fl
 /*
  * True-colour drawing scaled to sw x sh pixels, axis at (x, y), flipped by
  * flip. Mirrors Soft_Scale's fixed-point stepping with the true-colour
- * sampler; op is unused here because only masked drawing is supported.
- */
-static void Soft_TrueColourScale(SpriteSet *set, int sprite, float x, float y, float sw, float sh, int flip)
+ * sampler; dp_alpha blends 32-bit sources as in the blit above. */
+static void Soft_TrueColourScale(SpriteSet *set, int sprite, float x, float y, float sw, float sh, int flip,
+                                 int dp_alpha)
 {
     const Sprite *spr = Soft_SpriteAt(set, sprite);
     const Sprite *tspr = Soft_SpriteAt(g_renderTarget, g_renderTargetSprite);
@@ -1085,7 +1143,7 @@ static void Soft_TrueColourScale(SpriteSet *set, int sprite, float x, float y, f
     if (0.001f > d1) {
         d2 = (float)fabs((double)h - sh);
         if (0.001f > d2) {
-            Soft_TrueColourBlit(set, sprite, Ftol(x), Ftol(y), flip);
+            Soft_TrueColourBlit(set, sprite, Ftol(x), Ftol(y), flip, dp_alpha);
             return;
         }
     }
@@ -1188,9 +1246,15 @@ static void Soft_TrueColourScale(SpriteSet *set, int sprite, float x, float y, f
             s += sx_int * bytes_pp;
         }
         for (n = ncols; n != 0; n--) {
-            unsigned int c = Soft_TrueColourPixel(spr, s, 0);
+            int palpha;
+            unsigned int c = Soft_TrueColourPixel(spr, s, 0, &palpha);
             if (c != 0) {
-                *d = Soft_TrueColour565(c);
+                int a = palpha * dp_alpha >> 8;
+                if (a >= 256) {
+                    *d = Soft_TrueColour565(c);
+                } else {
+                    *d = Soft_TrueColourBlend(c, *d, a);
+                }
             }
             d++;
             u += du;
@@ -1253,8 +1317,12 @@ void Sprite_DrawSoft8(const DrawParams *dp, SpriteSet *set, int sprite)
                 Log_Printf("soft: SUB true-colour sprite drawn masked (unsupported)\n");
             }
         }
+        /* DrawParams alpha (256 = opaque) combines with the pixel alpha:
+         * Soft_TrueColourPixel already returns 0 for alpha-0 pixels, and
+         * the blit/scale blend below by dp_alpha for the rest. */
         Soft_TrueColourScale(set, sprite, dp->x, dp->y,
-                             (float)((double)spr->w * sx), (float)((double)spr->h * sy), flip);
+                             (float)((double)spr->w * sx), (float)((double)spr->h * sy), flip,
+                             Ftol(dp->alpha_src * 256.0));
         return;
     }
 
