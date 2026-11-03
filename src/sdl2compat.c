@@ -342,48 +342,60 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
     g_sdl2Video.logical_w = g_sdl2Video.width;
     g_sdl2Video.logical_h = g_sdl2Video.height;
 
-    if (g_sdl2Video.texture == NULL || g_sdl2Video.texture_format != format) {
-        if (g_sdl2Video.texture != NULL) {
+    /*
+     * Texture and surface are replaced as one transaction. A failed resize
+     * must leave the pair consistent: if the texture kept its old size while
+     * the surface was swapped to the new one, Sdl2_Present would upload
+     * surface->pixels with a pitch the surviving texture does not match
+     * (reads past the allocation -- SIGSEGV on stock SDL2), and a later retry
+     * at the same size would see matching texture_w/texture_h metadata and
+     * never rebuild. Build both replacements first; commit both only when
+     * both succeeded, leaving the old pair untouched on any failure.
+     */
+    int want_texture = (g_sdl2Video.texture == NULL || g_sdl2Video.texture_format != format ||
+                        g_sdl2Video.texture_w != g_sdl2Video.width ||
+                        g_sdl2Video.texture_h != g_sdl2Video.height);
+    int want_surface = (g_sdl2Video.surface == NULL ||
+                        g_sdl2Video.surface->w != g_sdl2Video.width ||
+                        g_sdl2Video.surface->h != g_sdl2Video.height ||
+                        g_sdl2Video.surface->format->BitsPerPixel != bpp);
+    if (want_texture || want_surface) {
+        SDL_Texture *new_texture = g_sdl2Video.texture;
+        SDL_Surface *new_surface = g_sdl2Video.surface;
+        if (want_texture) {
+            new_texture = SDL_CreateTexture(g_sdl2Video.renderer, format, SDL_TEXTUREACCESS_STREAMING,
+                                            g_sdl2Video.width, g_sdl2Video.height);
+            if (new_texture == NULL) {
+                Log_Printf("video: SDL_CreateTexture failed: %s\n", SDL_GetError());
+                return NULL;    /* the old texture and surface stay paired */
+            }
+        }
+        if (want_surface) {
+            new_surface = SDL_CreateRGBSurface(0, g_sdl2Video.width, g_sdl2Video.height, bpp, rmask, gmask,
+                                               bmask, amask);
+            if (new_surface == NULL) {
+                if (new_texture != g_sdl2Video.texture) {
+                    SDL_DestroyTexture(new_texture);
+                }
+                Log_Printf("video: SDL_CreateRGBSurface failed: %s\n", SDL_GetError());
+                return NULL;    /* the old texture and surface stay paired */
+            }
+        }
+        if (new_texture != g_sdl2Video.texture) {
             SDL_DestroyTexture(g_sdl2Video.texture);
+            g_sdl2Video.texture = new_texture;
+            g_sdl2Video.texture_format = format;
         }
-        g_sdl2Video.texture = SDL_CreateTexture(g_sdl2Video.renderer, format, SDL_TEXTUREACCESS_STREAMING,
-                                                g_sdl2Video.width, g_sdl2Video.height);
-        if (g_sdl2Video.texture == NULL) {
-            Log_Printf("video: SDL_CreateTexture failed: %s\n", SDL_GetError());
-            return NULL;
+        if (new_surface != g_sdl2Video.surface) {
+            SDL_FreeSurface(g_sdl2Video.surface);
+            g_sdl2Video.surface = new_surface;
+            /* Opaque: the engine writes finished pixels and composites with its own
+             * blitters, so upload-time blending would darken the image. */
+            SDL_SetSurfaceBlendMode(g_sdl2Video.surface, SDL_BLENDMODE_NONE);
         }
-        g_sdl2Video.texture_format = format;
-    } else if (g_sdl2Video.texture_w != g_sdl2Video.width || g_sdl2Video.texture_h != g_sdl2Video.height) {
-        /* A streaming texture's size is fixed at creation. */
-        SDL_Texture *resized = SDL_CreateTexture(g_sdl2Video.renderer, format, SDL_TEXTUREACCESS_STREAMING,
-                                                 g_sdl2Video.width, g_sdl2Video.height);
-
-        if (resized != NULL) {
-            SDL_DestroyTexture(g_sdl2Video.texture);
-            g_sdl2Video.texture = resized;
-        }
-        /* On failure the old texture is kept: a stale frame beats no window. */
     }
     g_sdl2Video.texture_w = g_sdl2Video.width;
     g_sdl2Video.texture_h = g_sdl2Video.height;
-
-    if (g_sdl2Video.surface == NULL || g_sdl2Video.surface->w != g_sdl2Video.width ||
-        g_sdl2Video.surface->h != g_sdl2Video.height ||
-        g_sdl2Video.surface->format->BitsPerPixel != bpp) {
-        if (g_sdl2Video.surface != NULL) {
-            SDL_FreeSurface(g_sdl2Video.surface);
-            g_sdl2Video.surface = NULL;
-        }
-        g_sdl2Video.surface = SDL_CreateRGBSurface(0, g_sdl2Video.width, g_sdl2Video.height, bpp, rmask, gmask,
-                                                   bmask, amask);
-        if (g_sdl2Video.surface == NULL) {
-            Log_Printf("video: SDL_CreateRGBSurface failed: %s\n", SDL_GetError());
-            return NULL;
-        }
-        /* Opaque: the engine writes finished pixels and composites with its own
-         * blitters, so upload-time blending would darken the image. */
-        SDL_SetSurfaceBlendMode(g_sdl2Video.surface, SDL_BLENDMODE_NONE);
-    }
     return g_sdl2Video.surface;
 }
 

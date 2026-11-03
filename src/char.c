@@ -2462,11 +2462,17 @@ void Player_Reset(Player *p)
             KeyedArray *cur = *(KeyedArray **)p->projectiles;
             unsigned char *proj = cur->data + cur->elem_size * list->iter;
             if (proj != NULL) {
-                KeyedArray **borrowed = (KeyedArray **)(proj + 0x504);
-                if (*borrowed != NULL) {
-                    (*borrowed)->data = NULL;
-                    (*borrowed)->count = 0;
-                    *borrowed = NULL;
+                /* The original read the pointer at proj+0x504 -- Projectile.afterimage
+                 * in the 32-bit layout (playerstate.h) -- and cleared whatever it
+                 * pointed at, then nulled the pointer. That is exactly what
+                 * Projectiles_Remove does through the member access; mirror it here
+                 * instead of dereferencing a hardcoded offset, which lands on a
+                 * different member wherever the natural layout differs (64-bit). */
+                Projectile *proj_s = (Projectile *)proj;
+                if (proj_s->afterimage != NULL) {
+                    proj_s->afterimage->running = 0;
+                    proj_s->afterimage->anim = 0;
+                    proj_s->afterimage = NULL;
                 }
                 KeyedArray_Remove(list->iter, cur);
             }

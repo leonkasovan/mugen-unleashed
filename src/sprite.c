@@ -509,9 +509,11 @@ void Sprite_DrawWithPalette(SpriteSet *set, int sprite, int pal_index, const Dra
 
 /*
  * 0x00465A80: software renderer, 16-bit targets only. Paletted sprites go
- * to the software rasterizer; SDL surface sprites are blitted onto the
- * render target surface, and only without scaling, rotation, flipping or
- * blending.
+ * to the software rasterizer; true-colour RAW sprites (SFF v2 PNG, 24-bit
+ * PCX) go to the true-colour rasterizer (port addition -- the original left
+ * these to the OpenGL renderer and dropped them here); SDL surface sprites
+ * are blitted onto the render target surface, and only without scaling,
+ * rotation, flipping or blending.
  */
 void Sprite_DrawSoft(SpriteSet *set, int sprite, const DrawParams *dp)
 {
@@ -523,6 +525,14 @@ void Sprite_DrawSoft(SpriteSet *set, int sprite, const DrawParams *dp)
     }
     spr = Sprite_At(set, sprite);
     if (spr->bpp <= 8) {
+        Sprite_DrawSoft8(dp, set, sprite);
+        return;
+    }
+    /* True-colour raster data (SPRITE_FORMAT_RAW): Sprite_DrawSoft8's
+     * true-colour path handles it, including scaling and flips. Compressed
+     * formats decode through it too: Sprite_Init already converted the
+     * format to RAW (see Sprite_Init's decode block). */
+    if (spr->bpp == 24 || spr->bpp == 32) {
         Sprite_DrawSoft8(dp, set, sprite);
         return;
     }

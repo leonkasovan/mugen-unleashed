@@ -931,13 +931,323 @@ int Gfx_SoftCeil(float x)
     return Ftol(ceil(x));
 }
 
+/* ---- true-colour drawing (port addition, not in the original) ----
+ *
+ * The original's software renderer only draws paletted sprites: SFF v1 is all
+ * 8-bit, and true-colour content (SFF v2 PNG sprites, 24-bit PCX) was meant
+ * for the OpenGL renderer. On the ports that have no GL (Android, and the
+ * Vita's shipped System renderer) those sprites were silently dropped --
+ * see Sprite_DrawSoft's bpp > 8 path.
+ *
+ * The drawers here take over that case: source pixels are 24-bit BGR (PCX)
+ * or 32-bit BGRA (PNG decode and SpriteSet_FromPixels layout, matching
+ * GlTex_UploadRGBA's input), read through spr->rows, converted to RGB565 and
+ * written through the same Soft_Put ops the paletted path uses. Alpha 0 (or
+ * pure black for 24-bit) is the transparent colour, which matches how the
+ * encoders write these sprites. Scaling and rotation reuse the existing
+ * fixed-point stepping; blending is limited to what the target format can
+ * express (add through the existing scale-add loop is not available for
+ * non-paletted sources, so ADD/SUB fall back to masked).)
+ */
+
+/* Reads one source pixel as 0x00RRGGBB, or 0 when transparent. */
+static unsigned int Soft_TrueColourPixel(const Sprite *spr, const unsigned char *row, int x)
+{
+    const unsigned char *p = row + x * (spr->bpp >> 3);
+
+    if (spr->bpp == 32) {
+        if (p[3] == 0) {
+            return 0;
+        }
+        return (unsigned int)p[2] << 16 | (unsigned int)p[1] << 8 | p[0];
+    }
+    /* 24-bit: pure black is the mask colour of PCX true-colour images */
+    if (p[0] == 0 && p[1] == 0 && p[2] == 0) {
+        return 0;
+    }
+    return (unsigned int)p[2] << 16 | (unsigned int)p[1] << 8 | p[0];
+}
+
+/* Packs 0x00RRGGBB as RGB565. */
+static unsigned short Soft_TrueColour565(unsigned int c)
+{
+    return (unsigned short)((c >> 8 & 0xF800) | (c >> 5 & 0x07E0) | (c >> 3 & 0x001F));
+}
+
 /*
- * 0x004806A0: Sprite_DrawSoft's drawer for paletted sprites. Rotated sprites
- * (flips and negative scales folded into the angle) go to the rotating
- * drawers, the others to the scaled ones with the combined signed scales.
+ * Unscaled true-colour blit at (x, y), flipped by flip, masked (transparency
+ * per Soft_TrueColourPixel). The clip/flip bookkeeping mirrors Soft_Blit.
+ */
+static void Soft_TrueColourBlit(SpriteSet *set, int sprite, int x, int y, int flip)
+{
+    const Sprite *spr = Soft_SpriteAt(set, sprite);
+    const Sprite *tspr = Soft_SpriteAt(g_renderTarget, g_renderTargetSprite);
+    int w = spr->w, h = spr->h;
+    int sx = 0, sy = 0;
+    int x0, y0, x1, y1, xend, yend, ncols, nrows, r;
+    const unsigned char *src;
+    unsigned char *dst;
+
+    if (flip & SOFT_FLIP_H) {
+        x = x + spr->x - w + 1;
+    } else {
+        x -= spr->x;
+    }
+    if (flip & SOFT_FLIP_V) {
+        y = y + spr->y - h + 1;
+    } else {
+        y -= spr->y;
+    }
+    if (y >= g_clipY2) {
+        return;
+    }
+    yend = h + y;
+    if (yend <= g_clipY1 || x >= g_clipX2) {
+        return;
+    }
+    xend = w + x;
+    if (xend <= g_clipX1) {
+        return;
+    }
+    y0 = y;
+    if (y < g_clipY1) {
+        sy = g_clipY1 - y;
+        y0 = g_clipY1;
+    }
+    y1 = yend - 1;
+    if (y1 >= g_clipY2) {
+        y1 = g_clipY2 - 1;
+    }
+    x0 = x;
+    if (x < g_clipX1) {
+        sx = g_clipX1 - x;
+        x0 = g_clipX1;
+    }
+    x1 = xend - 1;
+    if (x1 >= g_clipX2) {
+        x1 = g_clipX2 - 1;
+    }
+    ncols = x1 - x0 + 1;
+    nrows = y1 - y0 + 1;
+    if (ncols <= 0 || nrows <= 0) {
+        return;
+    }
+    src = Sprite_GetPixels(set, sprite);
+    if (src == NULL) {
+        return;
+    }
+    dst = Sprite_GetPixels(g_renderTarget, g_renderTargetSprite);
+    if (dst == NULL) {
+        return;
+    }
+    for (r = 0; r < nrows; r++) {
+        int row = (flip & SOFT_FLIP_V) ? h - sy - 1 - r : sy + r;
+        const unsigned char *s = src + spr->rows[row];
+        unsigned short *d = (unsigned short *)(dst + tspr->rows[y0 + r] + x0 * 2);
+        int step = (flip & SOFT_FLIP_H) ? -1 : 1;
+        int n;
+
+        s += (flip & SOFT_FLIP_H) ? (w - 1 - sx) * (spr->bpp >> 3) : sx * (spr->bpp >> 3);
+        for (n = ncols; n != 0; n--) {
+            unsigned int c = Soft_TrueColourPixel(spr, s, 0);
+            if (c != 0) {
+                *d = Soft_TrueColour565(c);
+            }
+            d++;
+            s += step * (spr->bpp >> 3);
+        }
+    }
+}
+
+/*
+ * True-colour drawing scaled to sw x sh pixels, axis at (x, y), flipped by
+ * flip. Mirrors Soft_Scale's fixed-point stepping with the true-colour
+ * sampler; op is unused here because only masked drawing is supported.
+ */
+static void Soft_TrueColourScale(SpriteSet *set, int sprite, float x, float y, float sw, float sh, int flip)
+{
+    const Sprite *spr = Soft_SpriteAt(set, sprite);
+    const Sprite *tspr = Soft_SpriteAt(g_renderTarget, g_renderTargetSprite);
+    int w = spr->w, h = spr->h;
+    int ix0, iy0, ix1, iy1, u0, v0, du, dv, sx_int = 0, sy_int = 0, ncols, nrows, iy;
+    float fw, fh, d1, d2, x0, y0;
+    double xend, yend;
+    const unsigned char *src;
+    unsigned char *dst;
+    int bytes_pp = spr->bpp >> 3;
+
+    if (sw <= 0.0f || sh <= 0.0f) {
+        return;
+    }
+    fw = (float)w;
+    fh = (float)h;
+    d1 = (float)fabs((double)w - sw);
+    if (0.001f > d1) {
+        d2 = (float)fabs((double)h - sh);
+        if (0.001f > d2) {
+            Soft_TrueColourBlit(set, sprite, Ftol(x), Ftol(y), flip);
+            return;
+        }
+    }
+    if (flip & SOFT_FLIP_H) {
+        x0 = (float)(x - ((double)(w - spr->x) * sw / fw - 1.0));
+    } else {
+        x0 = (float)(x - (double)spr->x * sw / fw);
+    }
+    if (flip & SOFT_FLIP_V) {
+        y0 = (float)(y - ((double)(h - spr->y) * sh / fh - 1.0));
+    } else {
+        y0 = (float)(y - (double)spr->y * sh / fh);
+    }
+    if ((double)g_clipY2 <= y0) {
+        return;
+    }
+    yend = (double)y0 + sh;
+    if ((double)g_clipY1 >= yend - 0.5) {
+        return;
+    }
+    if ((double)g_clipX2 <= x0) {
+        return;
+    }
+    xend = (double)x0 + sw;
+    if ((double)g_clipX1 >= xend - 0.5) {
+        return;
+    }
+
+    iy0 = Soft_StartPixel(y0, fh, sh, &v0);
+    if (iy0 < g_clipY1) {
+        v0 += Soft_SkipFrac(g_clipY1 - iy0, h, sh);
+        iy0 = g_clipY1;
+    }
+    iy1 = Gfx_SoftCeil((float)(yend - 1.0));
+    if (iy1 >= g_clipY2) {
+        iy1 = g_clipY2 - 1;
+    }
+    if (iy1 - iy0 + 1 <= 0) {
+        return;
+    }
+    ix0 = Soft_StartPixel(x0, fw, sw, &u0);
+    if ((double)g_clipX1 > x0) {
+        u0 += Soft_SkipFrac(g_clipX1 - ix0, w, sw);
+        ix0 = g_clipX1;
+    }
+    ix1 = Gfx_SoftCeil((float)(xend - 1.0));
+    if (ix1 >= g_clipX2) {
+        ix1 = g_clipX2 - 1;
+    }
+    du = Ftol((double)(w << 16) / sw);
+    dv = Ftol((double)(h << 16) / sh);
+    while (u0 < 0 && ix0 <= ix1) {
+        u0 += du;
+        ix0++;
+    }
+    sx_int = u0 >> 16;
+    u0 &= 0xFFFF;
+    while (v0 < 0 && iy0 <= iy1) {
+        iy0++;
+        v0 += dv;
+    }
+    sy_int = v0 >> 16;
+    v0 &= 0xFFFF;
+    ncols = ix1 - ix0 + 1;
+    nrows = iy1 - iy0 + 1;
+    if (ncols <= 0 || nrows <= 0) {
+        return;
+    }
+    if ((Soft_MulAdd(ncols - 1, du, u0) >> 16) + sx_int >= w) {
+        du--;
+    }
+    if ((Soft_MulAdd(nrows - 1, dv, v0) >> 16) + sy_int >= h) {
+        dv--;
+    }
+    src = Sprite_GetPixels(set, sprite);
+    if (src == NULL) {
+        return;
+    }
+    dst = Sprite_GetPixels(g_renderTarget, g_renderTargetSprite);
+    if (dst == NULL) {
+        return;
+    }
+    for (iy = iy0; nrows > 0; nrows--, iy++) {
+        const unsigned char *s;
+        unsigned short *d = (unsigned short *)(dst + tspr->rows[iy] + ix0 * 2);
+        int u = u0;
+        int row, n;
+
+        if ((v0 >> 16) + sy_int >= h) {
+            v0 -= 0x10000;
+        }
+        row = (v0 >> 16) + sy_int;
+        if (flip & SOFT_FLIP_V) {
+            row = h - row - 1;
+        }
+        s = src + spr->rows[row];
+        if (flip & SOFT_FLIP_H) {
+            s += (w - sx_int - 1) * bytes_pp;
+        } else {
+            s += sx_int * bytes_pp;
+        }
+        for (n = ncols; n != 0; n--) {
+            unsigned int c = Soft_TrueColourPixel(spr, s, 0);
+            if (c != 0) {
+                *d = Soft_TrueColour565(c);
+            }
+            d++;
+            u += du;
+            if (flip & SOFT_FLIP_H) {
+                s -= (u >> 16) * bytes_pp;
+            } else {
+                s += (u >> 16) * bytes_pp;
+            }
+            u &= 0xFFFF;
+        }
+        v0 += dv;
+    }
+}
+
+/*
+ * 0x004806A0 (extended): Sprite_DrawSoft's drawer for paletted sprites and,
+ * since the true-colour port addition, for 24/32-bit RAW sprites too.
+ * Rotated sprites (flips and negative scales folded into the angle) go to
+ * the rotating drawers, the others to the scaled ones with the combined
+ * signed scales. True-colour sources only support the masked path; ADD and
+ * SUB of a true-colour sprite fall back to masked.
  */
 void Sprite_DrawSoft8(const DrawParams *dp, SpriteSet *set, int sprite)
 {
+    const Sprite *spr = Soft_SpriteAt(set, sprite);
+
+    if (spr->bpp > 8) {
+        /* True-colour RAW sprite (SFF v2 PNG, 24-bit PCX). Rotated drawing is
+         * not supported here; folds go through the scale path. */
+        float sx = (float)((double)dp->scale2_x * dp->scale_x * ((dp->flip & DRAW_FLIP_H) ? -1 : 1) *
+                           ((dp->flip2 & DRAW_FLIP_H) ? -1 : 1));
+        float sy = (float)((double)dp->scale2_y * dp->scale_y * ((dp->flip & DRAW_FLIP_V) ? -1 : 1) *
+                           ((dp->flip2 & DRAW_FLIP_V) ? -1 : 1));
+        int flip = 0;
+
+        if (sx < 0.0f) {
+            flip |= SOFT_FLIP_H;
+            sx = -sx;
+        }
+        if (sy < 0.0f) {
+            flip |= SOFT_FLIP_V;
+            sy = -sy;
+        }
+        if (dp->angle != 0.0f) {
+            /* No rotated drawer for true colour; ignore the angle rather than
+             * drawing nothing (rare: true-colour sprite with a set angle). */
+            static int angle_logged;
+            if (angle_logged++ == 0) {
+                Log_Printf("soft: rotated true-colour sprite drawn unrotated (unsupported)\n");
+            }
+        }
+        Soft_TrueColourScale(set, sprite, dp->x, dp->y,
+                             (float)((double)spr->w * sx), (float)((double)spr->h * sy), flip);
+        return;
+    }
+
+    {
     int alpha_src = Ftol(dp->alpha_src * 256.0);
     int alpha_dst = Ftol(256.0 * dp->alpha_dst);
     float sx, sy;
@@ -992,4 +1302,5 @@ void Sprite_DrawSoft8(const DrawParams *dp, SpriteSet *set, int sprite)
         SoftSprite_DrawScaledSub(set, sprite, dp->x, dp->y, sx, sy);
         break;
     }
+}
 }

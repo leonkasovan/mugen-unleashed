@@ -168,7 +168,12 @@ void Stage_UpdateBgCamera(ScreenLoop *screen)
     k = g_gameCoord[0] / g->stage.unit;
     x = (float)(camx / k * s / g->stage.xscale);
     y = (float)(camy / k * s / g->stage.yscale);
-    if (*(const int *)((const char *)bg + 0x64) != 0) {
+    /* The original read *(int*)(bg+0x64) -- Bg.legacy, which sits at 0x64 only
+     * in the 32-bit layout this struct mirrors. A hardcoded offset reads a
+     * different member wherever the natural layout differs (0x7c on 64-bit),
+     * so the whole-pixel camera rounding silently keyed off the wrong field.
+     * Read the member. */
+    if (bg->legacy != 0) {
         /* the background wants whole camera units */
         x = (float)Ftol(x);
     }
@@ -178,7 +183,10 @@ void Stage_UpdateBgCamera(ScreenLoop *screen)
         Bg_SetCamera(bg, x, y, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f);
         e = Bg_FindById(g->stage_bg, g->stage.zoffsetlink);
         if (e != NULL) {
-            float v = (float)(g_gameCoord[0] / g->stage.unit * *(const float *)((const char *)e + 0x88) + g->camera_offset_y);
+            /* e->y (0x088 in the 32-bit layout): the position Bg_SetCamera
+             * just computed for this element. Same struct-offset reasoning as
+             * bg->legacy above. */
+            float v = (float)(g_gameCoord[0] / g->stage.unit * e->y + g->camera_offset_y);
             v = (float)floor(v + 0.5);
             g->draw_offset_y += Ftol(v);
         }

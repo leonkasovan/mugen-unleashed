@@ -442,6 +442,13 @@ void Video_OnResize(int width, int height)
         g_videoSurface = SDL_SetVideoMode(width, height, g_videoDepth, g_videoSdlFlags);
         glViewport(0, 0, width, height);
         glMatrixMode(GL_PROJECTION);
+        /* gluOrtho2D multiplies the current matrix (it is glOrtho underneath).
+         * Without resetting first, every resize composed another projection on
+         * top of the previous one and the picture shrank or vanished -- SDL2
+         * can deliver RESIZED and SIZE_CHANGED for one user resize, doubling
+         * the damage. The engine's Gl_SetupView always loads an identity
+         * before its ortho for the same reason. */
+        glLoadIdentity();
         gluOrtho2D(0.0, (double)width, (double)height, 0.0);
         glClearColor(1.0f, 0.0f, 0.0f, 0.0f);
         glClearDepth(1.0);

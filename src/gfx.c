@@ -527,7 +527,24 @@ void Gfx_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
             dst.w = 0;
             dst.h = 0;
             SDL_UpperBlit(surface, NULL, g_screenSurface, &dst);
-            SDL_UpdateRect(g_screenSurface, 0, 0, 0, 0);
+            /* On the SDL2 desktop backend SDL_UpdateRect and SDL_Flip both end
+             * in Sdl2_Present (upload + RenderCopy + RenderPresent), so this
+             * block followed by the PageFlip block below presented every frame
+             * twice. On SDL 1.2 UpdateRect is the presentation of the
+             * single-buffered surface and Flip of a double-buffered one, and
+             * each driver ignores the call that does not apply -- the original
+             * engine could call both for that reason. The SDL2 shims must see
+             * only one, so UpdateRect is skipped when a PageFlip will run. */
+            int pageflip_coming = (g_videoFlags & VIDEO_HWBLIT) && (g_videoSdlFlags & SDL_DOUBLEBUF);
+#ifdef MUGEN_VITA_GL
+            /* Vita: the block below only flips when the driver gave us a
+             * double-buffered surface (see its comment), which is not the same
+             * condition. Keep UpdateRect there unconditionally. */
+            pageflip_coming = 0;
+#endif
+            if (!pageflip_coming) {
+                SDL_UpdateRect(g_screenSurface, 0, 0, 0, 0);
+            }
         }
     }
 #ifdef MUGEN_VITA_GL
