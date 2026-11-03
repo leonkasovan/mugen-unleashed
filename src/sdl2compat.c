@@ -66,6 +66,7 @@ typedef struct Sdl2Video {
     int is_gl;
     int swap_interval;          /* -1 = SDL default, set by SDL_GL_SWAP_CONTROL */
     int vsync_applied;
+    int display_dirty;          /* frame-end flush pending (M3 frame boundary) */
 } Sdl2Video;
 
 static Sdl2Video g_sdl2Video;
@@ -504,9 +505,15 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
     return g_sdl2Video.surface;
 }
 
-/* Uploads the engine's framebuffer into the texture and draws it. Both
- * SDL_UpdateRect and SDL_Flip land here: SDL 1.2 used them to say "now show
- * this", and there is nothing cheaper to do with a streaming texture. */
+/* Uploads the engine's framebuffer into the texture and draws it.
+ *
+ * M3 frame boundary (RENDERING_PLAN.md section 7): SDL_UpdateRect only marks
+ * the display dirty; the actual upload + present happens in Sdl2_PresentFrame
+ * at the frame boundary (Screen_Present) or in Sdl2_Flip (the PageFlip path).
+ * A thousand offscreen pixel updates therefore present nothing, and one
+ * composed frame presents exactly once. SDL 1.2 presented in UpdateRect
+ * itself; the shim splits the two so the engine's call pattern (UpdateRect
+ * per primitive, Flip per page-flipped frame) maps onto one present each. */
 /*
  * Port addition: SDL_RENDER_DEVICE_RESET / SDL_RENDER_TARGETS_RESET mean the
  * renderer's backing store is gone and every texture must be recreated. Android
@@ -583,16 +590,63 @@ void Sdl2_Flip(SDL_Surface *surface)
 {
     (void)surface;      /* there is exactly one window; the argument is implicit */
     Sdl2_Present();
+    g_sdl2Video.display_dirty = 0;  /* flushed */
 }
 
+/*
+ * Marks the display dirty without presenting. Offscreen render-target
+ * updates (prim.c pixel primitives) land here hundreds of times per frame;
+ * presenting each one doubled the upload work and broke the one-present-per-
+ * frame contract. The frame boundary (Sdl2_PresentFrame, called from
+ * Screen_Present on SDL2 desktop builds) does the single upload+present.
+ *
+ * Only the display surface dirties the display: UpdateRect on any other
+ * surface is a no-op for presentation (its pixels reach the screen through
+ * the framebuffer composition in Gfx_Present, which targets the display).
+ */
 void Sdl2_UpdateRect(SDL_Surface *surface, Sint32 x, Sint32 y, Uint32 w, Uint32 h)
 {
-    (void)surface;
     (void)x;
     (void)y;
     (void)w;
     (void)h;
+    if (!g_sdl2Video.is_gl && surface != NULL && surface == g_sdl2Video.surface) {
+        g_sdl2Video.display_dirty = 1;
+    }
+}
+
+/*
+ * Presents the frame if UpdateRect marked the display dirty since the last
+ * present. Called once per Screen_Present on SDL2 desktop builds (see
+ * frame.c) so Normal and PageFlip both produce exactly one upload+present
+ * for the final frame: Normal via UpdateRect-dirty + this flush, PageFlip
+ * via Flip (UpdateRect only dirties, Flip presents and clears).
+ */
+void Sdl2_PresentFrame(void)
+{
+    if (!g_sdl2Video.display_dirty) {
+        return;
+    }
     Sdl2_Present();
+    g_sdl2Video.display_dirty = 0;
+}
+
+/*
+ * Explicit dirty mark for diagnostics that draw outside the frame loop
+ * (plan section 7.8): marks the display without presenting, so the next
+ * frame-boundary flush shows it. Not used by the engine itself.
+ */
+void Sdl2_MarkDisplayDirty(void)
+{
+    if (!g_sdl2Video.is_gl && g_sdl2Video.surface != NULL) {
+        g_sdl2Video.display_dirty = 1;
+    }
+}
+
+/* Test hook: is a present pending? */
+int Sdl2_DiagIsDirty(void)
+{
+    return g_sdl2Video.display_dirty;
 }
 
 void Sdl2_VideoQuit(void)

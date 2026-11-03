@@ -329,8 +329,32 @@ karena expose/resume merupakan request eksplisit dan tercatat terpisah.
 
 ### Perubahan
 
-1. Tambahkan API backend untuk dirty marking dan frame-end flush; nama usulan
-   `Sdl2_MarkDisplayDirty`/`Sdl2_PresentFrame`, belum merupakan API baseline.
+Status implementasi (commit M3): langkah 1–2, 4–5 dan 8 selesai.
+
+1. ~~Tambahkan API backend untuk dirty marking dan frame-end flush~~ SELESAI:
+   `Sdl2_MarkDisplayDirty`/`Sdl2_PresentFrame` di `src/sdl2compat.c/.h`
+   (diagnostik eksplisit + flush batas frame).
+2. ~~`SDL_UpdateRect` di desktop shim tidak langsung mempresentasikan~~
+   SELESAI: hanya menandai dirty bila surface-nya display; offscreen no-op
+   untuk presentasi. Beda display vs offscreen via perbandingan pointer
+   surface (§7.2).
+3. Audit `Gfx_Present` dan primitive di `prim.c`: TERBUKA — 1000-primitive
+   gate ada di harness (`test_render_regress`), audit lengkap menyusul M9.
+4. ~~Flush desktop SDL2 di batas frame~~ SELESAI: `Screen_Present`
+   memanggil `Sdl2_PresentFrame()` (guarded `MUGEN_SDL2`, Android
+   dikecualikan — pakai `Android_PresentFrame` sendiri). Mencakup semua
+   pemanggil `Screen_Present` (gameloop, title, matchload, round).
+   Skip-frame return sebelum `g_gfxPresent` → tidak mempresentasikan.
+5. ~~Rekonsiliasi `SDL_Flip` vs PageFlip~~ SELESAI: UpdateRect-dirty +
+   Flip-present = satu present; workaround skip-UpdateRect di `gfx.c`
+   dihapus (tidak diperlukan lagi).
+6. Pisahkan flush System dari swap GL: TERBUKA (langkah M9) — `Gl_Present`/
+   OpenGLScreen tidak tersentuh perubahan ini.
+7. Jalur SDL1 dan Vita SDL1: TIDAK BERUBAH (semua perubahan di-guarded
+   `MUGEN_SDL2`; Vita pakai `SDL_Flip` sendiri).
+8. ~~Penggunaan di luar loop frame~~ SELESAI: `Sdl2_MarkDisplayDirty`
+   eksplisit untuk diagnostik; tidak ada lagi immediate present global.
+9. Vsync System tidak diubah (langkah M9 — pacing terpisah).
 2. `SDL_UpdateRect` di desktop shim tidak langsung mempresentasikan seluruh window
    untuk setiap permintaan. Bedakan display surface dari surface offscreen.
 3. Audit `Gfx_Present` dan primitive di `prim.c`: update satu pixel pada render

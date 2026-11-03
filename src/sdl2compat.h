@@ -100,6 +100,9 @@ void Sdl2_VideoQuit(void);
  * frozen window after a GPU driver reset, a remote-desktop session change or a
  * display mode switch). */
 void Sdl2_ResetRenderer(void);
+/* Frame-boundary flush (M3): presents if UpdateRect dirtied the display. */
+void Sdl2_PresentFrame(void);
+void Sdl2_MarkDisplayDirty(void);
 void Sdl2_SetCaption(const char *title, const char *icon);
 int Sdl2_ToggleFullScreen(SDL_Surface *screen);
 int Sdl2_GL_SetAttribute(SDL_GLattr attr, int value);

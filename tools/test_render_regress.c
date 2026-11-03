@@ -44,6 +44,8 @@ void Sdl2_DiagReset(void);
 void Sdl2_DiagCounters(int *present, int *tex_create, int *tex_destroy);
 int Sdl2_DiagTextureSize(int *w, int *h, Uint32 *format);
 void Sdl2_DiagFailNext(int which);
+void Sdl2_PresentFrame(void);
+int Sdl2_DiagIsDirty(void);
 
 /* The engine's logger; this test is not the engine. */
 void Log_Printf(const char *fmt, ...)
@@ -150,43 +152,83 @@ static void test_r01_transaction(void)
     Sdl2_VideoQuit();
 }
 
-/* ---- R03: one present per frame on SDL2 desktop ----
+/* ---- R03 / PR01: one present per frame on SDL2 desktop ----
  *
- * UpdateRect and Flip both end in Sdl2_Present on this backend, so one
- * Gfx_Present-equivalent (blit + UpdateRect + PageFlip Flip) used to
- * present twice. The fix skips the UpdateRect when a Flip follows; here
- * each shim call is counted directly: one Flip is one present, and an
- * offscreen pixel update (surface write with no shim call) is none.
+ * M3 frame boundary: UpdateRect only dirties the display; Sdl2_PresentFrame
+ * (called once per Screen_Present) does the single upload+present; Flip
+ * presents immediately and clears. Gates:
+ *  - offscreen pixel writes (no shim call) + UpdateRect without flush =
+ *    zero presents (1000-primitive audit in miniature);
+ *  - one UpdateRect + one PresentFrame = exactly one present (Normal);
+ *  - one UpdateRect + one Flip = exactly one present (PageFlip);
+ *  - repeated dirty marks without flush still present once;
+ *  - a skipped frame (no UpdateRect, no flush) presents nothing.
  */
 static void test_r03_single_present(void)
 {
     SDL_Surface *s;
-    int present;
+    SDL_Surface *off;
+    int present, i;
 
-    printf("-- R03 single present\n");
+    printf("-- R03/PR01 single present\n");
     s = Sdl2_SetVideoMode(64, 64, 16, 0);
     check(s != NULL, "R03: setup");
     if (s == NULL) {
         return;
     }
+    off = SDL_CreateRGBSurface(0, 64, 64, 16, 0xF800, 0x07E0, 0x001F, 0);
+    check(off != NULL, "R03: offscreen surface");
+    if (off == NULL) {
+        return;
+    }
 
-    /* Offscreen update: writing pixels without a shim call presents nothing. */
+    /* 1000 offscreen pixel updates: no shim call, no present. */
+    Sdl2_DiagReset();
+    for (i = 0; i < 1000; i++) {
+        ((unsigned short *)off->pixels)[i % (64 * 64)] = (unsigned short)i;
+    }
+    Sdl2_UpdateRect(off, 0, 0, 64, 64);
+    Sdl2_DiagCounters(&present, NULL, NULL);
+    check(present == 0, "R03: offscreen updates present nothing");
+    check(Sdl2_DiagIsDirty() == 0, "R03: offscreen UpdateRect dirties nothing");
+
+    /* Display write + UpdateRect without flush: dirty, still nothing. */
     Sdl2_DiagReset();
     memset(s->pixels, 0x12, (size_t)s->pitch * (size_t)s->h);
-    Sdl2_DiagCounters(&present, NULL, NULL);
-    check(present == 0, "R03: offscreen pixel write presents nothing");
-
-    /* One UpdateRect is exactly one present. */
-    Sdl2_DiagReset();
     Sdl2_UpdateRect(s, 0, 0, 0, 0);
     Sdl2_DiagCounters(&present, NULL, NULL);
-    check(present == 1, "R03: one UpdateRect is one present");
+    check(present == 0, "R03: UpdateRect alone presents nothing");
+    check(Sdl2_DiagIsDirty() == 1, "R03: display UpdateRect marks dirty");
 
-    /* One Flip is exactly one present. */
-    Sdl2_DiagReset();
-    Sdl2_Flip(s);
+    /* Normal frame: UpdateRect + frame-end flush = one present. */
+    Sdl2_PresentFrame();
     Sdl2_DiagCounters(&present, NULL, NULL);
-    check(present == 1, "R03: one Flip is one present");
+    check(present == 1, "R03: Normal frame presents once");
+    check(Sdl2_DiagIsDirty() == 0, "R03: flush clears dirty");
+
+    /* Repeated dirty marks + one flush = still one present. */
+    Sdl2_DiagReset();
+    Sdl2_UpdateRect(s, 0, 0, 0, 0);
+    Sdl2_UpdateRect(s, 0, 0, 0, 0);
+    Sdl2_PresentFrame();
+    Sdl2_DiagCounters(&present, NULL, NULL);
+    check(present == 1, "R03: repeated marks flush once");
+
+    /* PageFlip frame: UpdateRect + Flip = one present, flush is a no-op. */
+    Sdl2_DiagReset();
+    memset(s->pixels, 0x34, (size_t)s->pitch * (size_t)s->h);
+    Sdl2_UpdateRect(s, 0, 0, 0, 0);
+    Sdl2_Flip(s);
+    Sdl2_PresentFrame();
+    Sdl2_DiagCounters(&present, NULL, NULL);
+    check(present == 1, "R03: PageFlip frame presents once");
+
+    /* Skipped frame: nothing marked, nothing flushed, nothing presented. */
+    Sdl2_DiagReset();
+    Sdl2_PresentFrame();
+    Sdl2_DiagCounters(&present, NULL, NULL);
+    check(present == 0, "R03: skipped frame presents nothing");
+    SDL_FreeSurface(off);
     Sdl2_VideoQuit();
 }
 
