@@ -174,6 +174,35 @@ fi
 cp "$OUT/r05.fixed.c" src/sprite.c
 bash tools/test_render_host.sh >"$OUT/r05.fixed.log" 2>&1 && echo "MUT R05: fixed code passes again" || missed R05 "revert did not restore a passing gate"
 
+# --------------------------------------------------------------- MUT-GLESQ --
+# Drop the projective Q from the stretched-quad texcoords (RENDERING_PLAN.md
+# section 13.1 lists "membuang Q" as a mutation that must break a gate).
+# GLES has no fixed-function matrix stack, so Q is carried per-vertex and a
+# lost Q silently flattens the trapezoid on the GPU path.
+cp src/gl_mvp.c "$OUT/glesq.fixed.c"
+"$PYBIN" - src/gl_mvp.c <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p, encoding="utf-8").read()
+old = """        out->tc[2][3] = q;"""
+assert old in s
+s = s.replace(old, "        out->tc[2][3] = 1.0f;", 1)
+open(p, "w", newline="").write(s.replace("\n", "\r\n"))
+print("MUT-GLESQ applied")
+PYEOF
+
+if bash tools/test_gl_mvp.sh >"$OUT/glesq.mut.log" 2>&1; then
+    missed GLES-Q "gate passed with the projective Q dropped"
+else
+    if grep -q 'q = c0/c1' "$OUT/glesq.mut.log"; then
+        caught GLES-Q "quad Q checks fail"
+    else
+        missed GLES-Q "failed elsewhere"
+    fi
+fi
+cp "$OUT/glesq.fixed.c" src/gl_mvp.c
+bash tools/test_gl_mvp.sh >"$OUT/glesq.fixed.log" 2>&1 && echo "MUT GLES-Q: fixed code passes again" || missed GLES-Q "revert did not restore a passing gate"
+
 echo "== mutations: caught=$CAUGHT missed=$MISSED =="
 if [ -n "$(git status --porcelain -- src/)" ]; then
     echo "TREE DIRTY after mutations -- reverting" >&2

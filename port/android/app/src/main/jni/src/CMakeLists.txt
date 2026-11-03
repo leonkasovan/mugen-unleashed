@@ -60,6 +60,9 @@ list(FILTER MUGEN_ENGINE_SOURCES EXCLUDE REGEX ".*/(sdlmain|glrender|gldetect|sd
 option(MUGEN_GLES "M8 GLES 3.0 backend probe+loader (draw path not yet landed)" OFF)
 if(MUGEN_GLES)
     list(APPEND MUGEN_ENGINE_SOURCES "${MUGEN_ROOT}/src/gles_probe.c")
+    # MVP/quad CPU math the GLES vertex shader consumes (no fixed-function
+    # matrix stack on GLES). Unit-tested on the host by tools/test_gl_mvp.sh.
+    list(APPEND MUGEN_ENGINE_SOURCES "${MUGEN_ROOT}/src/gl_mvp.c")
     list(APPEND MUGEN_ENGINE_SOURCES "${MUGEN_ROOT}/third_party/glad-es-3.0/glad.c")
 endif()
 
