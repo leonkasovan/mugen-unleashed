@@ -115,6 +115,12 @@ void Input_DeinitPads(void)
 /* 0x00474750: reports a button change (code = pad * PAD_BUTTONS + button). */
 void Pads_SetButton(int code, int pressed)
 {
+    /* Fix (port change): callers can compute codes from device-reported axis,
+     * hat and button numbers. Every index into g_padButtonState goes through
+     * here, so this is the one place that has to reject an out-of-range code. */
+    if (code < 0 || code > INPUT_PAD_COUNT) {
+        return;
+    }
     if (g_padHandler != NULL) {
         g_padHandler(code, pressed);
     }
@@ -193,13 +199,29 @@ void Pads_HandleEvent(const SDL_Event *ev)
     if (slot < 0) {
         return;
     }
-#ifdef ANDROID_PORT
-    /* Android devices may report more controls than the engine's pad slot. */
-    if ((ev->type == SDL_JOYAXISMOTION && (int)ev->jaxis.axis * 2 + 2 >= PAD_BUTTONS) ||
-        (ev->type == SDL_JOYHATMOTION && g_pads[slot].hat_base + 4 >= PAD_BUTTONS)) {
+    /*
+     * Fix (port change): the original indexes the pad's button codes without a
+     * bound, and the check that guarded it was Android-only. A pad reporting
+     * axis 16 maps to local codes 33..34, past PAD_BUTTONS (32), so the write
+     * landed in the next pad's slot -- pad 0's axis 16 changed pad 1's state --
+     * and on the last slot it ran past g_padButtonState (INPUT_PAD_COUNT + 1
+     * bytes) entirely. Devices with more than 15 axes, or more hats than one
+     * slot has room for, are ordinary. Bound the local code on every platform;
+     * the global code is checked again in Pads_SetButton.
+     */
+    if (ev->type == SDL_JOYAXISMOTION) {
+        unsigned int axis = (unsigned int)ev->jaxis.axis;
+
+        /* Axis 0 and 1 are swapped below, so both map to one of the first two. */
+        if (axis > 1) {
+            if (axis * 2u + 2u > PAD_BUTTONS) {
+                return;
+            }
+        }
+    }
+    if (ev->type == SDL_JOYHATMOTION && g_pads[slot].hat_base + 4 >= PAD_BUTTONS) {
         return;
     }
-#endif
     if (ev->type == SDL_JOYHATMOTION) {
         int base = slot * PAD_BUTTONS + g_pads[slot].hat_base + 1;
 
@@ -338,9 +360,15 @@ long long Input_FindKey(int *const *maps, int count, int code)
     return 0;
 }
 
-#ifdef ANDROID_PORT
-/* Native SDL2 hotplug. Keep existing pad slots stable when a device leaves. */
-void Android_PadDeviceEvent(const SDL_Event *event)
+#if defined(ANDROID_PORT) || defined(MUGEN_SDL2_API)
+/*
+ * SDL2 hotplug: attach a device that appeared, release one that left, keeping
+ * existing pad slots stable. Written for Android but not Android-specific --
+ * the desktop backend simply never called it, so a controller plugged in or
+ * reconnected after start-up was ignored until the pads were reinitialised.
+ * Matching is by SDL_JoystickInstanceID, which is what both platforms use.
+ */
+void Pads_DeviceEvent(const SDL_Event *event)
 {
     int i, slot = -1;
     SDL_Joystick *joystick;

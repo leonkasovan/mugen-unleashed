@@ -1530,6 +1530,9 @@ int __cdecl Bgm_ValidateSubsystem(const BgmSubsystem *sub);
 /* 0x004746d0 */ void __cdecl Input_DeinitPads(void);
 /* 0x00474750 */ void __cdecl Pads_SetButton(int code, int pressed);
 /* 0x00474790 */ void __cdecl Pads_HandleEvent(const SDL_Event *ev);
+/* Port addition (SDL2 targets): controller added/removed. Matches pads by
+ * SDL_JoystickInstanceID and keeps existing slots stable. */
+void __cdecl Pads_DeviceEvent(const SDL_Event *event);
 /* 0x00474a60 */ void __cdecl Pads_QueueCode(int code);
 /* 0x00474ac0 */ int __cdecl Pads_PopCode(void);
 /* 0x00474b10 */ int __cdecl Pads_CodePending(void);

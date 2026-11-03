@@ -635,7 +635,20 @@ int Input_Remap(void)
             translate = Input_TranslateJoy;
         }
         for (p = 0; p < 2; p++) {
-            const int *keys = pass == 0 ? g_game->keys[p] : g_game->joy_keys_active[p];
+            /*
+             * Fix (port change): a disabled input device contributes nothing.
+             * The original trusted the bindings alone, so a player with
+             * p<n>.usekeyboard = 0 still had the keyboard mapped whenever the
+             * keys array happened to be populated. joy_keys_active is already
+             * zeroed by Config_Load when p<n>.joystick.type is 0; the keys
+             * array had no equivalent guard.
+             */
+            const int *keys;
+
+            if (pass == 0 && !g_game->use_keyboard[p]) {
+                continue;
+            }
+            keys = pass == 0 ? g_game->keys[p] : g_game->joy_keys_active[p];
 
             for (i = 0; i < INPUT_KEYS; i++) {
                 /* The translation of the built-in key is Input_TranslateKey, inlined. */
@@ -647,7 +660,21 @@ int Input_Remap(void)
                 } else if (builtin & KEYMAP_KEY_SHIFT) {
                     code |= KEYMAP_SHIFTED;
                 }
-                map[translate(keys[input_key_slots[i]])] = code;
+                /*
+                 * Fix (port change): translate() passes the configured value
+                 * through, and Config_ReadKeys accepts whatever atoi() made of
+                 * it, so a binding of 129 became 129 + INPUT_PAD_BASE = 641 and
+                 * wrote one past this 641-entry array. Reject anything outside
+                 * the map before indexing; an out-of-range binding simply
+                 * contributes nothing, which is what an unusable key does.
+                 */
+                {
+                    int idx = translate(keys[input_key_slots[i]]);
+
+                    if (idx >= 0 && idx < KEYMAP_SIZE) {
+                        map[idx] = code;
+                    }
+                }
             }
         }
     }

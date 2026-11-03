@@ -280,7 +280,7 @@ void Events_Poll(void)
             break;
         case SDL_JOYDEVICEADDED:
         case SDL_JOYDEVICEREMOVED:
-            Android_PadDeviceEvent(&ev);
+            Pads_DeviceEvent(&ev);
             break;
         case SDL_RENDER_DEVICE_RESET:
         case SDL_RENDER_TARGETS_RESET:
@@ -300,6 +300,15 @@ void Events_Poll(void)
         case SDL_RENDER_DEVICE_RESET:
         case SDL_RENDER_TARGETS_RESET:
             Sdl2_ResetRenderer();
+            break;
+        /*
+         * Controller hotplug. Android handled this; the desktop backend did not,
+         * so a pad attached or reconnected after start-up kept an empty or stale
+         * slot until Pads_Init ran again.
+         */
+        case SDL_JOYDEVICEADDED:
+        case SDL_JOYDEVICEREMOVED:
+            Pads_DeviceEvent(&ev);
             break;
         /*
          * SDL2 desktop: SDL_ACTIVEEVENT and SDL_VIDEORESIZE became
@@ -385,7 +394,22 @@ void Events_Poll(void)
                  */
                 int sym = engine_key;
 
-                if (sym < 0x20 || sym > 0x7E) {
+                /*
+                 * Fix (port change): printable keys were dropped here entirely,
+                 * on the reasoning that SDL_TEXTINPUT would deliver them. That
+                 * holds for typing, but not for shortcuts built on Ctrl, which
+                 * does not reliably produce SDL_TEXTINPUT across SDL2 backends:
+                 * Ctrl+backquote and Ctrl+C reached keyboard handling and
+                 * produced no console callback at all, so bindings such as the
+                 * console toggle and the collision display never fired.
+                 *
+                 * Modifier combinations are therefore forwarded as key events.
+                 * There is no double delivery: the platform does not emit text
+                 * for them. A plain printable keystroke still arrives only
+                 * through SDL_TEXTINPUT, which keeps character insertion --
+                 * and its repeat behaviour -- exactly as it was.
+                 */
+                if (sym < 0x20 || sym > 0x7E || (g_keyModState & (KMOD_CTRL | KMOD_ALT)) != 0) {
                     g_keyEventHandler(0, sym, ev.type == SDL_KEYDOWN);
                 }
 #else

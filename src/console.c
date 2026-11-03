@@ -676,14 +676,20 @@ int ConsoleView_Init(ConsoleView *v)
     if (a == NULL) {
         g_outOfMemory = 1;
     }
-    d = calloc(0x40, 4);
+    /*
+     * Fix (port change): the elements are ConText pointers, not ints. The
+     * original stored 4-byte pointers because that was sizeof(void *) there;
+     * on LP64 PtrArray_Push copies sizeof(void *) bytes into a 4-byte slot and
+     * every reader recovers only the low half of the address.
+     */
+    d = calloc(0x40, sizeof(ConText *));
     if (d == NULL) {
         g_outOfMemory = 1;
     }
     if (a != NULL && d != NULL) {
         a->data = d;
         a->capacity = 0x40;
-        a->elem_size = 4;
+        a->elem_size = sizeof(ConText *);
         v->lines = a;
         return 1;
     }
@@ -1815,12 +1821,13 @@ int Console_Create(void)
     if (!ConsoleInput_Init(&g_console->input)) {
         goto fail;
     }
-    g_console->pending = DynArray_Create(0x10, 4);
+    /* Element size must be a pointer's width: see ConsoleView_Init. */
+    g_console->pending = DynArray_Create(0x10, sizeof(char *));
     if (g_console->pending == NULL) {
         goto fail;
     }
     g_console->history_max = 0x40;
-    h = DynArray_Create(0x40, 4);
+    h = DynArray_Create(0x40, sizeof(char *));
     g_console->history = h;
     if (h != NULL && (s = Mem_Calloc(1, 1)) != NULL) {
         /* entry 0: the line being edited */
