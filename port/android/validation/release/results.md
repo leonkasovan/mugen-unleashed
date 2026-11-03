@@ -3,16 +3,31 @@
 Evidence type per row: HOST (this machine), DEVICE (physical Android hardware),
 or OPEN (not yet collected). A row without a cited file is not a pass.
 
+**Artifact under test:** `build/android/mugen-unleashed-arm64-v8a.apk`,
+sha256 `2d0ee99eb2b21c47a9dca81b24eda2ba8c51e385e018ea22e83a176c21cc31a4`,
+8034618 bytes. All four host rows below cite this one APK; the `libmain.so`
+hash that `host-evidence.txt` and `native-closure.txt` both record is
+`6d10ef47b4a3bf1ede8724fea9d831aaf731a8254f9a388daa2ba8e95c2756d5`.
+
+An earlier revision of `host-evidence.txt` cited `54ccf452...` (8037443 bytes)
+while `native-closure.txt` and `signature.txt` cited `2d0ee99e...`, so the pins,
+closure, entry and signature rows described two different builds. That file has
+been re-derived from `2d0ee99e...`; any `54ccf452...` figures quoted elsewhere
+are historical and no longer back a row.
+
 ## Host-proven (evidence in this directory)
 
 - [x] T01 bootstrap selection/checksum/offline — `../apk-baseline/` + 23
   `test_build.py` fixtures (offline); real downloads verified during setup.
 - [x] T02 clean real build, exact pins — `host-evidence.txt`: JDK 17.0.19,
   SDK 34, build-tools 33.0.1, NDK 27.1.12297006, CMake 3.22.1; APK
-  `mugen-unleashed-arm64-v8a.apk` 8037443 bytes, SHA-256 cited inline.
+  `mugen-unleashed-arm64-v8a.apk` 8034618 bytes, sha256 `2d0ee99e...` cited in
+  that file, in `native-closure.txt` and in `signature.txt`.
 - [x] T03 dependency closure — `host-evidence.txt`: libmain NEEDED is exactly
-  libSDL2/mixer/ttf + system GLES/log/android/m/dl/z/c. ELF64 AArch64, one
-  SONAME per library, no host/x86/SDL1 archives. API min 21 (NDK platform).
+  libSDL2/mixer/ttf + log/android/m/dl/z/c. ELF64 AArch64, one SONAME per
+  library, no host/x86/SDL1 archives. This build reaches GLES through
+  libandroid.so (EGL); it has no direct libGLESv1_CM/libGLESv2 NEEDED entry,
+  unlike the superseded `54ccf452...` build.
 - [x] T04 native entry — `host-evidence.txt`: `T SDL_main` + `T Mugen_Main`
   resolved in libmain.so. Load + early logcat need a device.
 - [x] T20 signing/packaging — `host-evidence.txt`: debug-signed (CERT.RSA/SF),

@@ -5,26 +5,36 @@ platforms: android-34
 build-tools: 33.0.1
 cmake: 3.22.1
 
-=== NEEDED + arch + entry + signing (T03/T04/T20) ===
-  0x0000000000000001 (NEEDED)       Shared library: [libSDL2.so]
-  0x0000000000000001 (NEEDED)       Shared library: [libSDL2_mixer.so]
-  0x0000000000000001 (NEEDED)       Shared library: [libSDL2_ttf.so]
-  0x0000000000000001 (NEEDED)       Shared library: [libGLESv1_CM.so]
-  0x0000000000000001 (NEEDED)       Shared library: [libGLESv2.so]
-  0x0000000000000001 (NEEDED)       Shared library: [liblog.so]
-  0x0000000000000001 (NEEDED)       Shared library: [libandroid.so]
-  0x0000000000000001 (NEEDED)       Shared library: [libm.so]
-  0x0000000000000001 (NEEDED)       Shared library: [libdl.so]
-  0x0000000000000001 (NEEDED)       Shared library: [libz.so]
-  0x0000000000000001 (NEEDED)       Shared library: [libc.so]
-  Class:                             ELF64
-  Machine:                           AArch64
-00000000000b0624 T Mugen_Main
-000000000010e1b0 T SDL_main
-    10656  1981-01-01 01:01   META-INF/CERT.SF
-     1167  1981-01-01 01:01   META-INF/CERT.RSA
-    10582  1981-01-01 01:01   META-INF/MANIFEST.MF
+=== APK under test (T02) ===
+sha256: 2d0ee99eb2b21c47a9dca81b24eda2ba8c51e385e018ea22e83a176c21cc31a4
+        build/android/mugen-unleashed-arm64-v8a.apk
+8034618 bytes
 
-=== APK (T02) ===
-54ccf452eb1eb0708acb3421dfe299c2398143c7a0894e0b18945a6a2ccfa350 *build/android/mugen-unleashed-arm64-v8a.apk
-8037443 bytes
+Every row below was re-derived from THIS artifact. The earlier revision of this
+file cited 54ccf452..., a different build, while native-closure.txt and
+signature.txt cited 2d0ee99e...; the four pieces of evidence therefore described
+two different APKs. This file now matches the other two, and libmain.so's hash
+below matches native-closure.txt.
+
+lib/arm64-v8a/libmain.so sha256:
+  6d10ef47b4a3bf1ede8724fea9d831aaf731a8254f9a388daa2ba8e95c2756d5
+
+=== NEEDED (T03) ===
+  libSDL2.so  libSDL2_mixer.so  libSDL2_ttf.so
+  liblog.so  libandroid.so  libm.so  libdl.so  libz.so  libc.so
+
+One SONAME per library, no host/x86/SDL1 archives. GLES is entered through
+libandroid.so (EGL) rather than a direct libGLESv* NEEDED entry: the earlier
+build cited libGLESv1_CM.so + libGLESv2.so and this one does not, which is the
+concrete difference between the two artifacts.
+
+=== arch + entry (T03/T04) ===
+  Class:                             ELF64
+  Type:                              DYN (Shared object file)
+  Machine:                           AArch64
+  T SDL_main      at 0x000000000010c664 (3072 bytes)
+  T Mugen_Main    at 0x00000000000af4c8 (532 bytes)
+
+=== signing (T20) ===
+META-INF/CERT.SF, META-INF/CERT.RSA, META-INF/MANIFEST.MF present:
+debug-signed. Release signing identity is still OPEN.

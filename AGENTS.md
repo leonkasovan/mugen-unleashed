@@ -65,6 +65,8 @@ Each entry point owns its own subtree and never writes into another's.
 |---|---|---|
 | `build/mingw/` | root `Makefile` (Windows, default) | `obj/`, `lib/`, `mugen-static.exe`, `-stripped.exe` (SDL2 backend) |
 | `build/mingw-sdl1/` | `make SDL_BACKEND=1` (Windows) | the same shape, `mugen-static-sdl1.exe` |
+
+| `build/mingw64/` | `make MUGEN_TARGET=win64` (Windows, experimental) | the same shape, `mugen-win64.exe` |
 | `build/<linux-target>/` | root `Makefile` (Linux) | same shape, `mugen-linux-<arch>` |
 | `build/mingw-debug/` | `make DEBUG=1 BUILD=build/mingw-debug` | an explicit `BUILD=` override |
 | `build/x86-release/`, `build/x86-debug/` | root `CMakeLists.txt` via `CMakePresets.json` | MSVC `mugen_unleashed.exe` + `.pdb` |
@@ -75,9 +77,16 @@ Each entry point owns its own subtree and never writes into another's.
 
 Two rules follow from the "keep temporary files inside the project" rule above:
 
-- Anything not in the table is a leftover. Delete it rather than leaving it to
-  accumulate; several debugging scripts, stub headers and stray `.exe`/`.log`
-  files once piled up in `build/` itself.
+- **Delete only what you created, or whose owner the table names.** The table
+  maps the common cases; it is not a whitelist. `make` accepts any `BUILD=<dir>`,
+  and `build/mingw64/` (the experimental win64 target) is a legitimate output
+  too, so a directory that is absent from the table may still be someone's
+  build. "Not in the table" is not evidence of garbage.
+- Fair game: scratch files from your own session — probe programs, stub headers,
+  one-off scripts, the `.exe`/`.log` your runs produced. Remove those when you
+  are done instead of letting them accumulate; several debugging scripts and
+  stray binaries once piled up in `build/` itself. If you cannot tell whether a
+  directory is yours, leave it.
 - `port/android/build.sh` also writes `port/android/app/src/main/assets/`
   (staging) and `port/android/app/build/`, `port/android/app/.cxx/` (Gradle's
   own output). Those are Gradle-owned, are git-ignored, and are recreated from
@@ -88,12 +97,31 @@ Two rules follow from the "keep temporary files inside the project" rule above:
 **32-bit x86 is the reference.** Every struct in `src/` has the original's field
 offsets, checked at compile time with `MUGEN_ASSERT_SIZE` / `MUGEN_ASSERT_OFFSET`.
 Those assertions describe the original binary, so `MUGEN_LAYOUT_32BIT`
-(`src/mugen.h`) compiles them out when pointers are not 4 bytes; nothing reads a
-struct by absolute offset, so the relayout is functionally safe.
+(`src/mugen.h`) compiles them out when pointers are not 4 bytes.
+
+**Disabling the assertions is not evidence that a 64-bit build is correct.**
+They only stop *checking*; they do not make offset-dependent code safe. Five
+places read a struct through a hardcoded byte offset, which is exactly the
+pattern the assertions exist to catch. Measured against the real headers:
+
+| Site | Field | 32-bit | 64-bit |
+|---|---|---|---|
+| `camera.c` `bg + 0x64` | `Bg.legacy` | 0x64 (correct) | **0x7c (wrong field)** |
+| `char.c` `proj + 0x504` | `Projectile.afterimage` | 0x504 (correct) | **0x548 (wrong, and a pointer)** |
+| `ai.c` `in + 0x78` | `InputBuf.keys` | 0x78 | 0x78 (unaffected) |
+| `camera.c` `e + 0x88` | `BgElem.y` | 0x88 | 0x88 (unaffected) |
+| `sprite.c` `tex + 0x18` | texture byte count | 0x18 | not a struct of ours |
+
+So the 64-bit targets are **portable in progress, not audited**: structs that
+gain a pointer before a field the code reaches by offset will silently read or
+write the wrong member. Before claiming a 64-bit target works, grep for
+`(const char *)… + 0x` / `(char *)… + 0x` and convert each hit to a field
+access, or establish that no pointer precedes the field on any build.
 
 The CMake/MSVC build still hard-rejects anything but 32-bit MSVC. The Makefile
 builds Linux x64/arm64 and an experimental `win64` target (`MUGEN_TARGET=win64`,
-needs a 64-bit static kit) — see `PLANS.md` for what is still outstanding there.
+needs a 64-bit static kit) — see `PLANS.md` for what is still outstanding there,
+and do not describe either as verified until the offsets above are dealt with.
 
 Output names differ by build: `mugen_unleashed.exe` (MSVC),
 `mugen-static.exe` (MinGW/SDL2), `mugen-static-sdl1.exe` (MinGW/SDL 1.2),
