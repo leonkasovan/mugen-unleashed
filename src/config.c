@@ -628,8 +628,20 @@ static void Config_ApplyVitaJoystick(void)
 
     for (player = 0; player < 2; player++) {
         int *jk = g_game->joy_keys[player];
+        int i;
 
-        memset(jk, JOY_NONE, sizeof(g_game->joy_keys[player]));
+        /*
+         * Fix (port change): this was memset(jk, JOY_NONE, sizeof(...)), but
+         * jk is an array of int and JOY_NONE is 0x80, so every element came
+         * out as 0x80808080 (-2139062144) instead of 128. Player 2 -- which
+         * the loop leaves at the cleared values -- then displayed a label of
+         * "A--2139062144" and eleven more negative bindings in the options
+         * screen, and Options_Save wrote them out again. The fill has to be
+         * per element because the elements are wider than a byte.
+         */
+        for (i = 0; i < KEY_COUNT; i++) {
+            jk[i] = JOY_NONE;
+        }
         if (player != 0) {
             /* One pad: it drives P1 only. */
             continue;

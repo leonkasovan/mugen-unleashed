@@ -395,23 +395,31 @@ void Events_Poll(void)
                 int sym = engine_key;
 
                 /*
-                 * Fix (port change): printable keys were dropped here entirely,
-                 * on the reasoning that SDL_TEXTINPUT would deliver them. That
-                 * holds for typing, but not for shortcuts built on Ctrl, which
-                 * does not reliably produce SDL_TEXTINPUT across SDL2 backends:
-                 * Ctrl+backquote and Ctrl+C reached keyboard handling and
-                 * produced no console callback at all, so bindings such as the
-                 * console toggle and the collision display never fired.
+                 * Fix (port change): printable keys used to be dropped here,
+                 * on the reasoning that SDL_TEXTINPUT would deliver them; only
+                 * non-printable keys and Ctrl/Alt combinations were forwarded.
+                 * That reasoning holds for character insertion but not for
+                 * bindings: a default binding on a plain printable key -- Space
+                 * to "lifereset" -- reached neither path. SDL_TEXTINPUT is
+                 * text-only (sym = -1, see below) and so never consulted the
+                 * binding list, and the key event carrying the same press was
+                 * filtered out here. Shortcuts on Ctrl/Alt were fixed earlier
+                 * by forwarding modified keys; the unmodified printable ones
+                 * were left behind.
                  *
-                 * Modifier combinations are therefore forwarded as key events.
-                 * There is no double delivery: the platform does not emit text
-                 * for them. A plain printable keystroke still arrives only
-                 * through SDL_TEXTINPUT, which keeps character insertion --
-                 * and its repeat behaviour -- exactly as it was.
+                 * Every key event is forwarded now, with unicode 0. On KEYUP
+                 * that is exactly what SDL 1.2 passed. On KEYDOWN SDL 1.2 also
+                 * carried the character, but no binding depends on it:
+                 * Keybind_Parse leaves unicode 0, and Keybind_Match compares
+                 * the key symbol and the kinds of modifier.
+                 *
+                 * Character insertion still happens only in SDL_TEXTINPUT:
+                 * unicode 0 fails the `ch >= 0x20` test there. The text path
+                 * remains text-only, so no binding runs twice, and
+                 * Console_HandleKey keeps a printable key from running its
+                 * command while the console line is being typed into.
                  */
-                if (sym < 0x20 || sym > 0x7E || (g_keyModState & (KMOD_CTRL | KMOD_ALT)) != 0) {
-                    g_keyEventHandler(0, sym, ev.type == SDL_KEYDOWN);
-                }
+                g_keyEventHandler(0, sym, ev.type == SDL_KEYDOWN);
 #else
                 /* The original passes the dword at the unicode field, padding included. */
                 unsigned int unicode;

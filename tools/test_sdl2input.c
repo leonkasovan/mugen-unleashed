@@ -412,6 +412,65 @@ static void test_console_integration(void)
         check(g_console->view.lines->count != lines_before, "Enter echoed the line into the output");
     }
 
+    /*
+     * A binding on an unmodified printable key. SDL2 sends the press as a key
+     * event with no unicode and follows it with SDL_TEXTINPUT, so the key
+     * event is the only place Space can be matched -- the text path runs no
+     * binding. Forwarding only the non-printable and modified keys made the
+     * shipped default "Space -> lifereset" unreachable: neither path looked it
+     * up.
+     */
+    if (Keybind_Add(g_console->bindings, "lifereset", 0, ' ', 0, 1) != 0) {
+        SDL_Event ev;
+        unsigned int queued;
+
+        Console_Toggle();               /* closed: the binding runs */
+        check(g_console->open == 0, "the console closed for the binding case");
+        queued = g_console->pending->count;
+        memset(&ev, 0, sizeof(ev));
+        ev.type = SDL_KEYDOWN;
+        ev.key.keysym.sym = SDLK_SPACE;
+        SDL_PushEvent(&ev);
+        Events_Poll();
+        check(g_console->pending->count == queued + 1,
+              "Space with the console closed queued the binding's command once");
+        if (g_console->pending->count == queued + 1) {
+            check(strcmp(((char **)g_console->pending->data)[queued], "lifereset") == 0,
+                  "the queued command is the one bound to Space");
+        }
+        memset(&ev, 0, sizeof(ev));
+        ev.type = SDL_KEYUP;
+        ev.key.keysym.sym = SDLK_SPACE;
+        SDL_PushEvent(&ev);
+        Events_Poll();
+        check(g_console->pending->count == queued + 1,
+              "the release did not queue the command again");
+
+        /*
+         * Open console: the same press is typing, not a shortcut. The command
+         * must not run, and the character must be inserted once -- by
+         * SDL_TEXTINPUT, not by the key event.
+         */
+        Console_Toggle();
+        check(g_console->open != 0, "the console reopened for the typing case");
+        ConText_Set(g_console->input.text, "");
+        g_console->input.cursor.chars = 0;
+        g_console->input.cursor.bytes = 0;
+        queued = g_console->pending->count;
+        memset(&ev, 0, sizeof(ev));
+        ev.type = SDL_KEYDOWN;
+        ev.key.keysym.sym = SDLK_SPACE;
+        SDL_PushEvent(&ev);
+        Events_Poll();
+        check(g_console->pending->count == queued,
+              "Space typed into an open console did not run the binding");
+        console_type(" ");
+        check(strcmp(console_line(), " ") == 0,
+              "the typed Space reached the line exactly once");
+    } else {
+        printf("SKIP: could not bind Space\n");
+    }
+
     g_keyEventHandler = NULL;
     Keyboard_SetEventHandler(NULL);
 }

@@ -992,6 +992,7 @@ void Console_HandleKey(unsigned int unicode, int key, int pressed)
     ConsoleInput *in = &c->input;
     unsigned short ch = (unsigned short)unicode;
     const char *cmd;
+    int typing;
 
     /*
      * Fix (port change): key == -1 means SDL2 delivered this as text rather
@@ -1005,7 +1006,27 @@ void Console_HandleKey(unsigned int unicode, int key, int pressed)
         cmd = Keybind_Find(c->bindings, g_keyModState, key, ch, pressed);
     }
     if (cmd != NULL) {
-        if (c->open == 0 || ch < 0x20 || ch > 0x7E) {
+        /*
+         * Fix (port change): the test used to be `c->open == 0 || ch < 0x20 ||
+         * ch > 0x7E` alone. That was right for SDL 1.2, which filled the
+         * unicode of every KEYDOWN, so a printable key had ch == key and the
+         * unicode test also covered it. SDL2 delivers a printable key as a key
+         * event with no unicode -- the character follows in SDL_TEXTINPUT --
+         * so ch is 0 there and the test read a typed Space as "not printable",
+         * queuing the command its binding names while the user was typing into
+         * the console line. A printable ASCII key is typing when no Ctrl/Alt is
+         * held; a shortcut or the console toggle is not.
+         */
+        typing = 0;
+        if (c->open != 0) {
+            if (ch >= 0x20 && ch <= 0x7E) {
+                typing = 1;
+            } else if (key >= 0x20 && key <= 0x7E &&
+                       (g_keyModState & (KEYBIND_CTRL | KEYBIND_ALT)) == 0) {
+                typing = 1;
+            }
+        }
+        if (typing == 0) {
             Console_QueueCommand(cmd);
         }
         if (_stricmp(cmd, "consoletoggle") == 0) {

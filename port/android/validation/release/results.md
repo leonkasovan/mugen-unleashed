@@ -25,9 +25,11 @@ are historical and no longer back a row.
   that file, in `native-closure.txt` and in `signature.txt`.
 - [x] T03 dependency closure — `host-evidence.txt`: libmain NEEDED is exactly
   libSDL2/mixer/ttf + log/android/m/dl/z/c. ELF64 AArch64, one SONAME per
-  library, no host/x86/SDL1 archives. This build reaches GLES through
-  libandroid.so (EGL); it has no direct libGLESv1_CM/libGLESv2 NEEDED entry,
-  unlike the superseded `54ccf452...` build.
+  library, no host/x86/SDL1 archives. libmain has no direct
+  libGLESv1_CM/libGLESv2 NEEDED entry, unlike the superseded `54ccf452...`
+  build; GLES is reached transitively, `libmain -> libSDL2 ->
+  libGLESv1_CM/libGLESv2`, as `native-closure.txt` records for libSDL2.so.
+  libandroid.so is not the GLES path.
 - [x] T04 native entry — `host-evidence.txt`: `T SDL_main` + `T Mugen_Main`
   resolved in libmain.so. Load + early logcat need a device.
 - [x] T20 signing/packaging — `host-evidence.txt`: debug-signed (CERT.RSA/SF),
