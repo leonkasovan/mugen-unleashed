@@ -648,6 +648,14 @@ teruji. M8 tidak dinyatakan selesai hanya dengan satu triangle atau layar menu.
 
 ## 13. M9 — Matriks pengujian dan bukti penerimaan
 
+Status implementasi (M9 harness): `tools/test_qualify.sh` memetakan setiap
+ID ke harness dan menulis bukti ke `build/render-validation/<sha>/<target>/`
+(`results.txt` + satu `.log` per ID). ID yang harness-nya belum ada dilaporkan
+**OPEN dengan alasan**, tidak pernah PASS (§13.4). `tools/test_mutate.sh`
+menjalankan lima mutasi wajib-gagal (R01 transaksi, R02 identitas proyeksi,
+R03 present immediate, R04 offset hardcoded, R05 skip true-colour): semuanya
+tertangkap, tree bersih setelah run.
+
 ### 13.1 Test suite yang perlu tersedia
 
 Nama test di tabel adalah **deliverable yang direncanakan**, bukan suite yang
