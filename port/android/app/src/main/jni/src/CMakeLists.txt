@@ -41,6 +41,15 @@ file(GLOB MUGEN_ENGINE_SOURCES CONFIGURE_DEPENDS "${MUGEN_ROOT}/src/*.c")
 # supplies main here), and glrender.c/gldetect.c are the desktop-GL renderer,
 # which cannot exist on Android.
 #
+# M8 GLES backend (RENDERING_PLAN.md section 12, opt-in, default OFF):
+# -DMUGEN_GLES=1 compiles the GLES capability probe (src/gles_probe.c) and
+# the vendored GLES 3.0 loader (third_party/glad-es-3.0) INSTEAD of the
+# desktop GL files. The desktop glrender.c/gldetect.c stay excluded either
+# way: the GLES draw path is a separate backend, not a recompile of the
+# fixed-function desktop renderer (plan section 12.1). Until the GLES draw
+# path lands, MUGEN_GLES only links the probe + loader; System stays the
+# renderer and Gfx_Capability reports no GPU_SPRITE.
+#
 # NOT excluded: compat_linux.c. It is the Win32-over-POSIX shim the Linux and
 # PS Vita builds use (FreeLibrary, InterlockedExchangeAdd, FontsDir, ...), and
 # the engine calls those unconditionally.
@@ -48,6 +57,11 @@ file(GLOB MUGEN_ENGINE_SOURCES CONFIGURE_DEPENDS "${MUGEN_ROOT}/src/*.c")
 # Rng_Seed as well as the entry point; its main() is renamed Mugen_Main for this
 # target (see src/main.c) and android_main.c calls it.
 list(FILTER MUGEN_ENGINE_SOURCES EXCLUDE REGEX ".*/(sdlmain|glrender|gldetect|sdl2compat|sdlmixercompat)\\.c$")
+option(MUGEN_GLES "M8 GLES 3.0 backend probe+loader (draw path not yet landed)" OFF)
+if(MUGEN_GLES)
+    list(APPEND MUGEN_ENGINE_SOURCES "${MUGEN_ROOT}/src/gles_probe.c")
+    list(APPEND MUGEN_ENGINE_SOURCES "${MUGEN_ROOT}/third_party/glad-es-3.0/glad.c")
+endif()
 
 # Native SDL2 backend; no SDL 1.2 compatibility translation units.
 list(APPEND MUGEN_ENGINE_SOURCES
@@ -151,6 +165,14 @@ target_compile_definitions(main PRIVATE
     PNG_ARM_NEON_CHECK_SUPPORTED=0
     PNG_SETJMP_SUPPORTED=1
 )
+# M8 GLES backend: MUGEN_GLES define + vendored loader include path + link
+# against the NDK's GLESv3/EGL. Off unless -DMUGEN_GLES=1 (default OFF).
+if(MUGEN_GLES)
+    target_compile_definitions(main PRIVATE MUGEN_GLES=1)
+    target_include_directories(main PRIVATE "${MUGEN_ROOT}/third_party/glad-es-3.0")
+    target_link_libraries(main PRIVATE GLESv3 EGL)
+    message(STATUS "M8 GLES backend: probe+loader enabled (draw path not yet landed)")
+endif
 
 target_compile_options(main PRIVATE
     # libresample's public header is written for MSVC: it uses __declspec

@@ -38,7 +38,15 @@
  * included (it is generated with the compatibility profile).
  */
 #ifdef ANDROID_PORT
-/* Android uses native SDL2 rendering; desktop GL is not compiled. */
+/* Android uses native SDL2 rendering; desktop GL is not compiled.
+ * MUGEN_GLES (M8) selects the GLES 3.0 backend instead: glad-es-3.0
+ * becomes the GL declaration source (never the desktop glad), and
+ * glrender.c compiles against the GLES API (no fixed-function, no
+ * sampler1D, GLSL ES shaders). Default OFF: System stays the renderer
+ * until the GLES path is qualified per RENDERING_PLAN.md section 12. */
+#ifdef MUGEN_GLES
+#include <glad_es.h>
+#endif
 #elif defined(MUGEN_VITA_GL)
 /*
  * PS Vita port (port/psvita): glad is not part of that build. It is generated

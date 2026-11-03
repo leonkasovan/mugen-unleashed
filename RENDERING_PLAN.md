@@ -608,6 +608,16 @@ pada Vita. Nama opsi berikut adalah **usulan dari plan Vita, belum API baseline*
 M8 adalah fitur GPU lanjutan. R05 dapat ditutup lebih dahulu melalui M5; tidak
 perlu menunggu GLES untuk menghentikan silent drop true-color pada System.
 
+Status fondasi (sesi berjalan, BUKAN klaim selesai): loader GLES 3.0
+terpisah (`third_party/glad-es-3.0` via `src/glad_es.h`, tidak pernah
+dicampur dengan glad desktop), probe capability (`src/gles_probe.c`:
+parse versi ES, NPOT+FBO by version, tanpa gate `ARB_fragment_program`),
+shader dialect GLES (`data/*_es.vert/frag`: GLSL ES 1.00, palette sampler2D
+256x1, MVP uniform), gate struktural (`tools/test_gles_shader.sh`),
+dan flag opt-in `MUGEN_GLES` di CMake Android (default OFF, System tetap).
+Draw path VBO + integrasi mode + ES01 device gate: pekerjaan lanjutan
+di bawah (todo #33 lanjutan).
+
 1. Buat backend programmable dengan sumber API GLES dan loader yang sesuai;
    jangan mengompilasi glad desktop/fixed-function sebagai GLES.
 2. Pada Android, pertahankan SDL2 native, lifecycle Android dan satu owner
