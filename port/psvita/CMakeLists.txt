@@ -873,6 +873,7 @@ if(MUGEN_VITA_DATA_DIR)
     mugen-linux-x64 mugen-linux-arm64 mugen-linux-x86
     # legacy (pre-rename)
     mugen_unleashed.exe mugen_unleashed.pdb
+    mugen-msvc-win32-sdl2.exe mugen-msvc-win32-sdl2.pdb
     mugen-static.exe mugen-static-sdl1.exe
     mugen-static-stripped.exe mugen-static-sdl1-stripped.exe
     mugen-win64.exe mugen-win64-sdl1.exe
