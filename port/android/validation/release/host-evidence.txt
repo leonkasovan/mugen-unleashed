@@ -23,10 +23,16 @@ lib/arm64-v8a/libmain.so sha256:
   libSDL2.so  libSDL2_mixer.so  libSDL2_ttf.so
   liblog.so  libandroid.so  libm.so  libdl.so  libz.so  libc.so
 
-One SONAME per library, no host/x86/SDL1 archives. GLES is entered through
-libandroid.so (EGL) rather than a direct libGLESv* NEEDED entry: the earlier
-build cited libGLESv1_CM.so + libGLESv2.so and this one does not, which is the
-concrete difference between the two artifacts.
+One SONAME per library, no host/x86/SDL1 archives.
+
+GLES is no longer a *direct* dependency of libmain: this build does not list
+libGLESv1_CM.so or libGLESv2.so in its own NEEDED, where the superseded
+54ccf452... build did. That is the concrete difference between the two
+artifacts, and it concerns libmain's own imports only -- not the closure. The
+libraries are still loaded transitively: native-closure.txt records libSDL2.so
+carrying NEEDED libGLESv1_CM.so + libGLESv2.so, so the chain is
+libmain -> libSDL2 -> libGLESv1_CM/libGLESv2. Saying anything more specific
+about how the engine reaches GLES would need its own evidence.
 
 === arch + entry (T03/T04) ===
   Class:                             ELF64

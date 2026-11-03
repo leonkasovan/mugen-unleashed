@@ -993,7 +993,17 @@ void Console_HandleKey(unsigned int unicode, int key, int pressed)
     unsigned short ch = (unsigned short)unicode;
     const char *cmd;
 
-    cmd = Keybind_Find(c->bindings, g_keyModState, key, ch, pressed);
+    /*
+     * Fix (port change): key == -1 means SDL2 delivered this as text rather
+     * than as a key event (see the SDL_TEXTINPUT case in events.c). Text is for
+     * insertion only -- looking up a binding here ran every Ctrl shortcut twice
+     * on backends that report modified keys as text, e.g. Ctrl+1 on X11.
+     */
+    if (key == -1) {
+        cmd = NULL;
+    } else {
+        cmd = Keybind_Find(c->bindings, g_keyModState, key, ch, pressed);
+    }
     if (cmd != NULL) {
         if (c->open == 0 || ch < 0x20 || ch > 0x7E) {
             Console_QueueCommand(cmd);

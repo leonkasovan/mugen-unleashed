@@ -473,7 +473,22 @@ void Events_Poll(void)
                         s++;
                     }
                     if (cp != 0) {
-                        g_keyEventHandler(cp, (int)cp, 1);
+                        /*
+                         * Fix (port change): -1 marks a text-only event.
+                         *
+                         * This callback serves two purposes -- Keybind_Find for
+                         * shortcuts and character insertion -- and the text path
+                         * matched shortcuts a second time. The assumption that a
+                         * modifier never produces text does not hold on every
+                         * backend: X11 reports Ctrl+1 as text, so one binding
+                         * ran once from SDL_KEYDOWN (above) and once here.
+                         *
+                         * sym = -1 cannot collide with a real engine key (0
+                         * means "no key" and is filtered earlier), and
+                         * Console_HandleKey treats it as text-only: no binding
+                         * lookup, insertion only.
+                         */
+                        g_keyEventHandler(cp, -1, 1);
                     }
                 }
             }

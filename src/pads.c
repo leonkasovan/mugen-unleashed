@@ -40,7 +40,22 @@ int Pads_Init(void)
 
     g_padCount = SDL_NumJoysticks();
     if (g_padCount == 0) {
+#if defined(ANDROID_PORT) || defined(MUGEN_SDL2_API)
+        /*
+         * Fix (port change): keep discovery alive when nothing is attached.
+         * Returning here left joystick events disabled (Input_DeinitPads sets
+         * SDL_IGNORE), so a pad connected later produced no event and
+         * Pads_DeviceEvent never ran. Adding is harmless: Pads_HandleEvent
+         * ignores events while g_padsActive is 0, and the add event is what
+         * sets it.
+         */
+        SDL_JoystickEventState(SDL_ENABLE);
+        g_padsActive = 0;
+        g_padCount = 0;
         return 0;
+#else
+        return 0;
+#endif
     }
     if (g_padCount > PAD_MAX) {
         g_padCount = PAD_MAX;
@@ -90,7 +105,18 @@ void Input_DeinitPads(void)
     memset(g_padButtonState, 0, INPUT_PAD_COUNT + 1);
     g_padQueueWrite = 0;
     g_padQueueRead = 0;
+#if defined(ANDROID_PORT) || defined(MUGEN_SDL2_API)
+    /*
+     * Fix (port change): SDL_IGNORE here disabled the joystick events that
+     * Pads_DeviceEvent depends on, and Pads_Init returns early when no pad is
+     * present, so the next device to be connected was never seen at all --
+     * hotplug only worked if a pad happened to be attached at start-up.
+     * Events stay enabled and Pads_HandleEvent already ignores them while no
+     * pad is open (g_padsActive == 0).
+     */
+#else
     SDL_JoystickEventState(SDL_IGNORE);
+#endif
     for (i = 0; i < g_padCount; i++) {
 #ifdef MUGEN_SDL2_API
         /*
@@ -103,7 +129,11 @@ void Input_DeinitPads(void)
         if (SDL_JoystickOpened(i) && g_pads[i].joystick != NULL) {
 #endif
             SDL_JoystickClose(g_pads[i].joystick);
-#ifdef ANDROID_PORT
+#if defined(ANDROID_PORT) || defined(MUGEN_SDL2_API)
+            /* Fix (port change): clear the handle on every SDL2 target, not
+             * just Android. A closed handle left in the slot makes
+             * Pads_DeviceEvent treat it as an open pad and skip the slot when
+             * the device comes back. */
             g_pads[i].joystick = NULL;
 #endif
         }
@@ -211,10 +241,20 @@ void Pads_HandleEvent(const SDL_Event *ev)
      */
     if (ev->type == SDL_JOYAXISMOTION) {
         unsigned int axis = (unsigned int)ev->jaxis.axis;
+        unsigned int last;
 
-        /* Axis 0 and 1 are swapped below, so both map to one of the first two. */
+        /*
+         * Axis 0 and 1 are swapped below, so both land among the first two.
+         * The per-axis pair is (axis*2+1, axis*2+2) and every consumer treats
+         * PAD_BUTTONS as an exclusive bound: Pads_DeviceEvent clears codes
+         * below it, Pads_SetButton refuses anything above the global array.
+         * The old test used >, which let axis 15 through with the pair 31/32;
+         * 32 is outside the slot, so it stayed held after the device was
+         * removed. Accept only when the whole pair is inside the slot.
+         */
         if (axis > 1) {
-            if (axis * 2u + 2u > PAD_BUTTONS) {
+            last = axis * 2u + 2u;
+            if (last >= PAD_BUTTONS) {
                 return;
             }
         }

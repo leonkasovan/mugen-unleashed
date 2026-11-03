@@ -612,12 +612,28 @@ static void Config_ApplyVitaJoystick(void)
      * Values are engine button codes for the 4-axis/0-hat driver (raw index
      * + 9), not the SDL indices. See the comment above.
      */
+    /*
+     * Fix (port change): the loop used to give both players the same joystick
+     * codes. g_keyMap is one global table, so the second player's pass simply
+     * overwrote the first: whatever P2 bound to a code became the action for
+     * everyone. That is invisible only while both players bind the same action
+     * to the same button, which is a coincidence and not a property.
+     *
+     * The Vita has a single internal pad -- SDL's Vita joystick driver reports
+     * one device -- so the pad belongs to player 1 and player 2 gets no
+     * joystick at all. Binding P2 to slot 1 instead would leave it matching
+     * nothing, since no second pad exists to deliver those codes.
+     */
     int player;
 
     for (player = 0; player < 2; player++) {
         int *jk = g_game->joy_keys[player];
 
         memset(jk, JOY_NONE, sizeof(g_game->joy_keys[player]));
+        if (player != 0) {
+            /* One pad: it drives P1 only. */
+            continue;
+        }
         jk[KEY_JUMP] = 17;     /* d-pad up: raw 8 */
         jk[KEY_RIGHT] = 18;    /* d-pad right: raw 9 */
         jk[KEY_CROUCH] = 15;   /* d-pad down: raw 6 */
