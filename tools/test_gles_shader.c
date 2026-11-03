@@ -56,7 +56,7 @@ static int balanced(const char *s)
     return depth == 0;
 }
 
-/* Strip /* *\/ and // comments: the ES headers document the desktop
+/* Strip block and line comments: the ES headers document the desktop
  * constructs they replace, so a substring search must not trip on the
  * documentation itself. */
 static char *strip_comments(const char *s)
@@ -131,6 +131,69 @@ int main(int argc, char **argv)
 {
     const char *dir = argc > 1 ? argv[1] : "data";
     char path[512];
+
+    /*
+     * Third argument: run the Vita dialect checks instead of the GLES ones.
+     * The Vita's vitaGL shaders are the same ES-shaped dialect (attributes +
+     * varyings, sampler2D palette) but live in port/psvita/shaders and use
+     * their own varying names, so only the ES-compatibility rules apply --
+     * see tools/test_vita_caps.sh and port/psvita/DEPENDENCIES.md.
+     */
+    if (argc > 2 && strcmp(argv[2], "vita") == 0) {
+        /*
+         * vitaGL's GLSL translator accepts the ES-shaped dialect but has its
+         * own naming (aPosition/aTexCoord/vTexCoord) and does not require a
+         * precision statement. The rules that matter for this port (V3) are:
+         * no gl_TexCoord / gl_MultiTexCoord built-ins, no sampler1D, explicit
+         * attribute+varying submission, the EB_DEFINES marker, and a 2D
+         * palette texture.
+         */
+        const char *names[4] = { "indexed.vert", "rgba.vert", "indexed.frag", "rgba.frag" };
+        int i;
+        for (i = 0; i < 4; i++) {
+            char *raw2, *s2;
+            snprintf(path, sizeof(path), "%s/%s", dir, names[i]);
+            raw2 = read_file(path);
+            check(raw2 != NULL, "cannot read vita shader", path);
+            if (raw2 == NULL) {
+                continue;
+            }
+            check(strstr(raw2, "////*EB_DEFINES*////") != NULL, "keeps the EB_DEFINES marker", path);
+            s2 = strip_comments(raw2);
+            free(raw2);
+            if (s2 == NULL) {
+                continue;
+            }
+            check(strstr(s2, "sampler1D") == NULL, "no sampler1D", path);
+            check(strstr(s2, "gl_TexCoord") == NULL, "no gl_TexCoord built-in", path);
+            check(strstr(s2, "gl_MultiTexCoord") == NULL, "no gl_MultiTexCoord built-in", path);
+            check(balanced(s2), "balanced braces", path);
+            if (i < 2) {
+                check(strstr(s2, "attribute ") != NULL, "vertex shader declares attributes", path);
+                check(strstr(s2, "varying ") != NULL, "vertex shader writes varyings", path);
+            } else {
+                check(strstr(s2, "varying ") != NULL, "fragment shader reads a varying", path);
+                check(strstr(s2, "gl_FragColor") != NULL, "fragment shader writes gl_FragColor", path);
+            }
+            free(s2);
+        }
+        {
+            char *s2;
+            snprintf(path, sizeof(path), "%s/indexed.frag", dir);
+            s2 = read_file(path);
+            check(s2 != NULL, "cannot read vita indexed.frag", path);
+            if (s2 != NULL) {
+                check(strstr(s2, "sampler2D texunit1") != NULL, "vita palette is sampler2D", path);
+                free(s2);
+            }
+        }
+        if (failures != 0) {
+            printf("vita-shader: %d FAILURES\n", failures);
+            return 1;
+        }
+        printf("vita-shader: ES dialect gates pass\n");
+        return 0;
+    }
 
     snprintf(path, sizeof(path), "%s/indexed_es.vert", dir);
     check_shader(path, 1);

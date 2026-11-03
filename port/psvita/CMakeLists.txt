@@ -354,6 +354,7 @@ set(MUGEN_VITA_FORCE_INCLUDE -include "${MUGEN_SRC}/compat_linux.h")
 add_executable(mugen
   ${MUGEN_ENGINE_SOURCES}
   src/vita_gl_shim.c
+  src/vita_caps.c
   src/vita_fps.c
   src/vita_newlib.c
   ${MUGEN_LUA_SOURCES}
@@ -490,21 +491,44 @@ pkg_check_modules(MUGEN_VITA_PKGS REQUIRED
 # with a readable message rather than as a wall of undefined Sce*/shark_* at
 # link time.
 set(MUGEN_VITA_VITAGL_DEPS "")
-foreach(_gl_dep
-    vitaGL      # the GL implementation itself
-    vitashark   # vitaShaRK: shader compiler front end
-    SceShaccCgExt  # the ShaccCg compiler
-    mathneon)   # NEON maths helpers
-  find_library(MUGEN_VITA_LIB_${_gl_dep} NAMES ${_gl_dep})
-  if(NOT MUGEN_VITA_LIB_${_gl_dep})
-    message(FATAL_ERROR
-      "lib${_gl_dep}.a not found. SDL 1.2's OpenGL video driver needs vitaGL "
-      "and its dependencies; install them into "
-      "${MUGEN_VITASDK}/arm-vita-eabi (vdpm install vitaGL) and reconfigure.")
-  endif()
-  list(APPEND MUGEN_VITA_VITAGL_DEPS "${MUGEN_VITA_LIB_${_gl_dep}}")
-endforeach()
-set(MUGEN_VITA_VITAGL_LIB "${MUGEN_VITA_LIB_vitaGL}")
+if(MUGEN_VITA_BUILD_VITAGL)
+  # RENDERING_PLAN.md V1: the vendored vitaGL must be the one that ends up in
+  # the executable, not simply a library that gets built and ignored. The
+  # vendored target carries its own dependency chain (see cmake/VitaGl.cmake);
+  # only the helper libraries that are not vendored are looked up in the SDK.
+  message(STATUS "vitaGL: linking the VENDORED target (MUGEN_VITA_BUILD_VITAGL=ON)")
+  list(APPEND MUGEN_VITA_VITAGL_DEPS vitagl_vita)
+  foreach(_gl_dep
+      vitashark   # vitaShaRK: shader compiler front end
+      SceShaccCgExt  # the ShaccCg compiler
+      mathneon)   # NEON maths helpers
+    find_library(MUGEN_VITA_LIB_${_gl_dep} NAMES ${_gl_dep})
+    if(NOT MUGEN_VITA_LIB_${_gl_dep})
+      message(FATAL_ERROR
+        "lib${_gl_dep}.a not found. The vendored vitaGL needs it; install it into "
+        "${MUGEN_VITASDK}/arm-vita-eabi and reconfigure.")
+    endif()
+    list(APPEND MUGEN_VITA_VITAGL_DEPS "${MUGEN_VITA_LIB_${_gl_dep}}")
+  endforeach()
+  set(MUGEN_VITA_VITAGL_LIB vitagl_vita)
+else()
+  foreach(_gl_dep
+      vitaGL      # the GL implementation itself
+      vitashark   # vitaShaRK: shader compiler front end
+      SceShaccCgExt  # the ShaccCg compiler
+      mathneon)   # NEON maths helpers
+    find_library(MUGEN_VITA_LIB_${_gl_dep} NAMES ${_gl_dep})
+    if(NOT MUGEN_VITA_LIB_${_gl_dep})
+      message(FATAL_ERROR
+        "lib${_gl_dep}.a not found. SDL 1.2's OpenGL video driver needs vitaGL "
+        "and its dependencies; install them into "
+        "${MUGEN_VITASDK}/arm-vita-eabi (vdpm install vitaGL) and reconfigure "
+        "(or set -DMUGEN_VITA_BUILD_VITAGL=ON to build the vendored copy).")
+    endif()
+    list(APPEND MUGEN_VITA_VITAGL_DEPS "${MUGEN_VITA_LIB_${_gl_dep}}")
+  endforeach()
+  set(MUGEN_VITA_VITAGL_LIB "${MUGEN_VITA_LIB_vitaGL}")
+endif()
 
 target_include_directories(mugen PRIVATE
   ${MUGEN_VITA_PKGS_INCLUDE_DIRS}

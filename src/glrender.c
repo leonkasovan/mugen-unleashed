@@ -605,10 +605,25 @@ int Gl_Init(int framebuffers)
             MatchLog_Printf(3, "GL: Video driver does not support EXT_framebuffer_object.\n");
             return 0;
         }
+#ifndef MUGEN_VITA_GL
+        /*
+         * ARB_fragment_program is required only on the desktop path, where it
+         * stood in for "this driver can use the shaders at all". The engine
+         * never actually uses the extension: data/*.frag are plain GLSL, and
+         * the Vita's VitaGL is an OpenGL ES 2.0 implementation that does not
+         * advertise ARB_fragment_program. Requiring it there rejected every
+         * context that could in fact run the renderer.
+         *
+         * Fix (port change, RENDERING_PLAN.md V2): on the Vita the gate is
+         * dropped and the real qualification is the shader compile+link plus
+         * the FBO completeness check in VitaGl_Probe. The desktop path keeps
+         * the original behaviour untouched.
+         */
         if (!g_glewArbFragmentProgram) {
             MatchLog_Printf(3, "GL: Video driver does not support ARB_fragment_program.\n");
             return 0;
         }
+#endif
     }
     glGetIntegerv(GL_MAX_TEXTURE_SIZE, &g_glMaxTextureSize);
     MatchLog_Printf(7, "GL: Max texture size %i.\n", g_glMaxTextureSize);

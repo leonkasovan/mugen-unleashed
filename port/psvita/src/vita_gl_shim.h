@@ -42,6 +42,13 @@ void        MugenVita_MultiTexCoord4f(GLenum target, GLfloat s, GLfloat t, GLflo
 void        MugenVita_LogicOp(GLenum opcode);
 
 /*
+ * V4 capability: 1 when the driver can honour glBlendColor /
+ * GL_CONSTANT_ALPHA. vitaGL cannot, so this is 0 and MugenVita_BlendColor
+ * logs exactly what degrades instead of silently doing nothing.
+ */
+extern int MugenVita_ConstantAlphaSupported;
+
+/*
  * GL constants vitaGL does not define. Desktop GL values, so the guarded block
  * in Gfx_GlInvertPixel compiles; it is unreachable because the port's
  * EXT_blend_logic_op probe always reports the extension absent.

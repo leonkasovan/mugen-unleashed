@@ -44,6 +44,7 @@
 
 #include "mugen.h"
 #include "vita_gl_shim.h"
+#include "vita_caps.h"
 
 /* The constant colour recorded by MugenVita_BlendColor (RGBA). */
 static GLfloat MugenVita_blendColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
@@ -95,6 +96,16 @@ int MugenVita_GLArbTextureNpot = 0;
 int MugenVita_GLExtBlendLogicOp = 0;
 int MugenVita_GLExtFramebufferObject = 0;
 
+/*
+ * V4 capability (not a g_glew* flag): 1 when the driver can honour
+ * glBlendColor / GL_CONSTANT_ALPHA. vitaGL cannot, so this stays 0 and the
+ * constant-alpha blend the engine uses for BLEND_ADD/BLEND_ALPHA sprites is
+ * approximated instead of being silently claimed to work. Read by
+ * tools/test_vita_caps.sh through MugenVita_ResolveCaps and logged once by
+ * VitaGl_Probe.
+ */
+int MugenVita_ConstantAlphaSupported = 0;
+
 /* -------------------------------------------------- entry points vitaGL lacks */
 
 /*
@@ -118,11 +129,31 @@ int MugenVita_GLExtFramebufferObject = 0;
  */
 void MugenVita_BlendColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha)
 {
-    /* Remembered so a future vitaGL release that gains the call can use it. */
+    static int logged;
+
+    /*
+     * V4 (RENDERING_PLAN.md section 11): an empty function is not accepted as
+     * rendering parity. vitaGL has no glBlendColor, so the constant the
+     * engine's GL_CONSTANT_ALPHA blend reads cannot be supplied. Rather than
+     * pretend, the value is recorded, the capability flag says it is
+     * unsupported, and the first use logs exactly what is lost.
+     *
+     * What degrades: Gl_DrawSprite sets glBlendFunc(GL_ONE, GL_CONSTANT_ALPHA)
+     * for BLEND_ALPHA sprites and glBlendColor(alpha_src, ..., alpha_dst).
+     * Without the constant, the destination factor stays 1 and the sprite
+     * composites additively instead of at the requested alpha. BLEND_ADD, the
+     * masked path and every non-constant-alpha blend are unaffected.
+     */
     MugenVita_blendColor[0] = red;
     MugenVita_blendColor[1] = green;
     MugenVita_blendColor[2] = blue;
     MugenVita_blendColor[3] = alpha;
+    if (!logged) {
+        logged = 1;
+        Log_Printf("GL: glBlendColor(%.3f,%.3f,%.3f,%.3f) ignored -- vitaGL has no "
+                   "constant-alpha blend; BLEND_ALPHA sprites composite additively\n",
+                   (double)red, (double)green, (double)blue, (double)alpha);
+    }
 }
 
 /*
@@ -200,7 +231,21 @@ void MugenVita_MultiTexCoord4f(GLenum target, GLfloat s, GLfloat t, GLfloat r, G
  */
 void MugenVita_LogicOp(GLenum opcode)
 {
-    (void)opcode;
+    static int logged;
+
+    /*
+     * V4: declared unsupported rather than implemented as a silent no-op.
+     * The engine reaches this only from Gfx_GlInvertPixel, which is guarded
+     * by the EXT_blend_logic_op capability flag; vitaGL reports the extension
+     * absent, so this path is unreachable today. If a future vitaGL gains
+     * logic ops the flag flips and this must call glLogicOp for real -- until
+     * then, say so once instead of pretending the operation happened.
+     */
+    if (!logged) {
+        logged = 1;
+        Log_Printf("GL: glLogicOp(0x%X) unsupported (no EXT_blend_logic_op); "
+                   "invert-pixel fallback used\n", (unsigned)opcode);
+    }
 }
 
 /*
@@ -213,69 +258,38 @@ int VitaGl_Probe(void)
 {
     const char *version;
     const char *extensions;
-    int major = 0;
-    int minor = 0;
+    MugenVitaCaps caps;
+    int ok;
 
     version = (const char *)glGetString(GL_VERSION);
     extensions = (const char *)glGetString(GL_EXTENSIONS);
 
     /*
-     * GL_VERSION normally starts with "<major>.<minor>", optionally followed by
-     * vendor text -- that is what desktop GL guarantees.
+     * Version parsing, extension matching and the capability rules live in
+     * vita_caps.c: pure logic with no GL calls, so it is unit-tested on the
+     * host (tools/test_vita_caps.sh) instead of only on the console. This
+     * function's job is to read the driver strings, resolve, publish the
+     * flags Gl_Init() reads, and log the verdict.
      *
-     * Fix (port change): VitaGL reports "OpenGL ES 2.0 VitaGL", where the
-     * version is NOT at the start. The old parser read the leading digits, found
-     * none, and left major at 0, so MugenVita_GLVersion20 stayed false and every
-     * GL 2.0-only path was disabled on a context that reports ES 2.0. Scan for
-     * the first "<digits>.<digits>" pair instead, and treat the ES 2.0 string as
-     * satisfying the 2.0 check.
+     * VitaGL reports "OpenGL ES 2.0 VitaGL" -- the version is not at the
+     * start of the string -- which the resolver handles by scanning for the
+     * first "<digits>.<digits>" pair.
      *
-     * Hand-parsed rather than with sscanf: the engine's CRT shim renames the
-     * _snprintf family around, and this file stays free of <stdio.h>.
+     * constant_alpha_supported is 0: vitaGL has no glBlendColor (V4), so
+     * GL_CONSTANT_ALPHA blending cannot be honoured. Recording it as a
+     * capability (instead of implying it works) is what makes the gap
+     * visible in the log and testable.
      */
-    if (version != NULL) {
-        const char *p = version;
+    ok = MugenVita_ResolveCaps(version, extensions, 0, &caps);
 
-        while (*p != '\0') {
-            if (*p >= '0' && *p <= '9') {
-                int maj = 0;
-                int min = 0;
-                const char *q = p;
-
-                while (*q >= '0' && *q <= '9') {
-                    maj = maj * 10 + (*q - '0');
-                    q++;
-                }
-                if (*q == '.') {
-                    q++;
-                    if (*q >= '0' && *q <= '9') {
-                        while (*q >= '0' && *q <= '9') {
-                            min = min * 10 + (*q - '0');
-                            q++;
-                        }
-                        major = maj;
-                        minor = min;
-                        break;
-                    }
-                }
-                /* A bare number ("OpenGL ES 2.0" reads as 2 then 0): the pair
-                 * above already covered it. Skip this run and keep looking. */
-                p = q;
-                continue;
-            }
-            p++;
-        }
-    }
-
-    MugenVita_GLVersion20 = (major > 2 || (major == 2 && minor >= 0)) ? 1 : 0;
-    MugenVita_GLArbTextureNpot =
-        VitaGl_HasExtension(extensions, "GL_ARB_texture_non_power_of_two");
-    MugenVita_GLExtFramebufferObject =
-        VitaGl_HasExtension(extensions, "GL_EXT_framebuffer_object");
-    MugenVita_GLArbFragmentProgram =
-        VitaGl_HasExtension(extensions, "GL_ARB_fragment_program");
-    MugenVita_GLExtBlendLogicOp =
-        VitaGl_HasExtension(extensions, "GL_EXT_blend_logic_op");
+    MugenVita_GLVersion20 = caps.gl2;
+    MugenVita_GLArbTextureNpot = caps.npot;
+    MugenVita_GLExtFramebufferObject = caps.fbo;
+    /* Not required by the engine's shaders (plain GLSL); reported for the
+     * log only, so a driver that happens to advertise it changes nothing. */
+    MugenVita_GLArbFragmentProgram = 0;
+    MugenVita_GLExtBlendLogicOp = caps.blend_logic_op;
+    MugenVita_ConstantAlphaSupported = caps.constant_alpha;
 
     /*
      * Report to mugen.log, not just the match log.
@@ -292,13 +306,45 @@ int VitaGl_Probe(void)
     } else {
         Log_Printf("GL: no extension list (no GL context)\n");
     }
-    Log_Printf("GL: flags 2.0=%d npot=%d fbo=%d fragprog=%d blendlogic=%d\n",
-               MugenVita_GLVersion20, MugenVita_GLArbTextureNpot, MugenVita_GLExtFramebufferObject,
-               MugenVita_GLArbFragmentProgram, MugenVita_GLExtBlendLogicOp);
-
-    if (!MugenVita_GLVersion20) {
-        return 0;
+    Log_Printf("GL: flags 2.0=%d npot=%d fbo=%d blendlogic=%d constantalpha=%d\n",
+               caps.gl2, caps.npot, caps.fbo, caps.blend_logic_op, caps.constant_alpha);
+    if (!caps.programmable) {
+        Log_Printf("GL: no GLSL path (below 2.0)\n");
     }
-    return MugenVita_GLArbTextureNpot && MugenVita_GLExtFramebufferObject &&
-           MugenVita_GLArbFragmentProgram;
+    if (!caps.constant_alpha) {
+        /* Honest capability statement (V4): constant-alpha blending degrades. */
+        Log_Printf("GL: constant-alpha blending unavailable (no glBlendColor); "
+                   "BLEND_ADD/ALPHA sprites approximate\n");
+    }
+
+    /*
+     * FBO completeness (V2: "Periksa format attachment/depth dan FBO
+     * completeness"). A context that creates but cannot render to a
+     * framebuffer fails the mode just as a missing extension does.
+     */
+    if (ok && caps.fbo) {
+        GLuint probe_fbo = 0;
+        GLenum status;
+
+        glGenFramebuffers(1, &probe_fbo);
+        if (probe_fbo != 0) {
+            GLint prev = 0;
+            glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev);
+            glBindFramebuffer(GL_FRAMEBUFFER, probe_fbo);
+            status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+            glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev);
+            glDeleteFramebuffers(1, &probe_fbo);
+            Log_Printf("GL: FBO probe status 0x%X (complete=0x%X)\n", (unsigned)status,
+                       (unsigned)GL_FRAMEBUFFER_COMPLETE);
+            if (status != GL_FRAMEBUFFER_COMPLETE) {
+                Log_Printf("GL: framebuffer incomplete; GL mode unavailable\n");
+                ok = 0;
+            }
+        } else {
+            Log_Printf("GL: could not create a probe framebuffer\n");
+            ok = 0;
+        }
+    }
+
+    return ok;
 }

@@ -67,6 +67,7 @@ run_host R05 bash tools/test_render_host.sh
 run_host R02 bash tools/test_render_video.sh
 run_host GL01 bash tools/test_render_video.sh
 run_host ES01-struct bash tools/test_gles_shader.sh
+run_host VT01-caps bash tools/test_vita_caps.sh
 if [ -n "$ENGINE" ] && [ -x "$ENGINE" ]; then
     run_host CF01 bash tools/test_render_select.sh "$ENGINE" install
     rm -f install/mugen.log
@@ -78,8 +79,8 @@ echo "== gates requiring a device or GPU context =="
 record PR02 OPEN "suspend/resume + expose need a live window session (harness: manual)"
 record SW02 OPEN "PalFX/shear/rotate/Q golden images need GPU reference captures"
 record FT01 OPEN "font palette/alpha comparison needs TTF fixture runs"
-record VT01 OPEN "needs Vita hardware (M7 V1-V2)"
-record VT02 OPEN "needs Vita hardware (M7 V3-V5)"
+record VT01-device OPEN "V1/V2 logic gates pass on host (VT01-caps); device probe needs the console"
+record VT02-device OPEN "V3/V4 shader+blend gates pass structurally; pixel parity needs the console"
 record ES01-device OPEN "needs GLES device (M8 draw path not yet landed)"
 record E2E01 OPEN "menu/select/match/screenshot matrix needs scripted runs"
 

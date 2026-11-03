@@ -525,6 +525,13 @@ pada Vita. Nama opsi berikut adalah **usulan dari plan Vita, belum API baseline*
 
 ### V1 — Dependency, link dan satu pemilik GPU
 
+Status no-device: **SELESAI sebagian**. `MUGEN_VITA_BUILD_VITAGL=ON` dulu
+membangun target vendored tetapi executable tetap me-link `libvitaGL.a` dari
+SDK (temuan V1 yang sebenarnya). Sekarang cabangnya eksklusif: ON →
+`vitagl_vita` masuk link `mugen`; OFF → keempat library dari SDK. Pin,
+pemilik GPU, dan apa yang bisa diverifikasi tanpa konsol dicatat di
+[port/psvita/DEPENDENCIES.md](port/psvita/DEPENDENCIES.md).
+
 - [ ] Buat profil CMake SDL1 dan SDL2 yang memakai direktori objek/dependency
   berbeda; pertahankan SDL1 recovery sampai kualifikasi perangkat selesai.
 - [ ] Pin SDL2, SDL2_ttf, SDL2_mixer, codec dan vitaGL; catat commit, build flags,
@@ -546,6 +553,17 @@ pada Vita. Nama opsi berikut adalah **usulan dari plan Vita, belum API baseline*
   dahulu; kegagalan teardown tidak boleh diteruskan sebagai sukses recovery.
 
 ### V2 — Capability probe fungsional
+
+Status no-device: **SELESAI untuk bagian logika**. Resolusi capability
+dipindah ke `port/psvita/src/vita_caps.c` — fungsi murni tanpa panggilan GL,
+sehingga diuji di host oleh `tools/test_vita_caps.sh`: parser versi
+(mengenali `OpenGL ES 2.0 VitaGL`), NPOT menerima `GL_OES_texture_npot` **atau**
+`GL_ARB_texture_non_power_of_two`, FBO core by version, dan **tanpa** syarat
+`ARB_fragment_program`. Gate itu juga dilewati di `glrender.c` untuk
+`MUGEN_VITA_GL`. Probe menambah pemeriksaan FBO completeness
+(`glCheckFramebufferStatus`) — konteks yang membuat FBO tetapi tidak lengkap
+gagal sama seperti extension yang hilang. Yang tersisa dan butuh device:
+clear/capture warna, triangle berprogram, readback.
 
 - [ ] Buat konteks, clear/capture warna, triangle berprogram custom, texture 2D,
   palette 256×1, FBO, clipping dan swap dengan hasil pixel independen.
@@ -574,6 +592,15 @@ pada Vita. Nama opsi berikut adalah **usulan dari plan Vita, belum API baseline*
   dan readback tidak boleh tertinggal pada API/immediate-mode desktop.
 
 ### V4 — Blending, target dan fitur pelengkap
+
+Status no-device: **sebagian**. `MugenVita_BlendColor` bukan lagi no-op
+senyap: nilai tetap direkam, capability `MugenVita_ConstantAlphaSupported`
+selalu 0 pada vitaGL, dan pemakaian pertama menulis satu baris `mugen.log`
+yang menyatakan persis apa yang hilang (sprite `BLEND_ALPHA` menjadi
+additif; `BLEND_ADD`, masked, dan blend non-constant-alpha tidak terpengaruh).
+`MugenVita_LogicOp` menyatakan unsupported sekali, bukan fungsi kosong.
+Yang tersisa: ping-pong untuk constant-destination-alpha, dan paritas pixel
+terhadap desktop — keduanya butuh device.
 
 - [ ] Hilangkan semantic no-op `MugenVita_BlendColor` pada jalur baru. Turunkan
   persamaan dari shader dan blend state engine; jangan mengasumsikan RGB dan
