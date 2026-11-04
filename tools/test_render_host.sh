@@ -13,43 +13,8 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
-TARGET="${MUGEN_TEST_TARGET:-win32}"
 OUT=build/render-host
-
-case "$TARGET" in
-win32)
-    CC="${CC:-gcc}"
-    ARCHFLAGS="-m32"
-    EXPECT_BITS=32
-    PKGCONF="${PKG_CONFIG:-pkg-config}"
-    PLAT_INC="-Ithird_party/sdk/include"
-    ;;
-win64)
-    CC="${CC:-/c/w64devkit/bin/gcc}"
-    # The kit's gcc is a wrapper that needs ITS OWN bin dir ahead of everything
-    # else on PATH to find cc1/as for the right target. Merely checking that
-    # the dir appears somewhere was not enough: with i686/bin first, the
-    # inherited i686 `as` still won and rejected --64 ("as: unrecognized
-    # option `--64'"). Prepend the directory the chosen compiler lives in, so
-    # the assembler always matches the compiler, whatever the incoming order.
-    case "$CC" in
-    */*) CC_DIR=${CC%/*} ;;
-    *) CC_DIR=$(command -v "$CC") ; CC_DIR=${CC_DIR%/*} ;;
-    esac
-    case ":$PATH:" in
-    "$CC_DIR:"*) ;;
-    *) export PATH="$CC_DIR:$PATH" ;;
-    esac
-    ARCHFLAGS="-m64"
-    EXPECT_BITS=64
-    PKGCONF="${PKG_CONFIG:-/c/w64devkit/bin/pkg-config}"
-    PLAT_INC=""
-    ;;
-*)
-    echo "unsupported MUGEN_TEST_TARGET $TARGET (win32|win64)" >&2
-    exit 2
-    ;;
-esac
+. tools/lib_target.sh
 
 mkdir -p "$OUT"
 
@@ -67,9 +32,4 @@ echo "target $TARGET: $CC $ARCHFLAGS ($("$CC" -dumpmachine 2>/dev/null || echo u
     -lwinmm -lm
 
 echo "built $OUT/test_render_host"
-result="$("$OUT/test_render_host")"
-printf '%s\n' "$result"
-if ! printf '%s\n' "$result" | grep -q "^abi: $EXPECT_BITS-bit build$"; then
-    echo "FAIL: harness is not a $EXPECT_BITS-bit build" >&2
-    exit 1
-fi
+run_harness "$OUT/test_render_host"

@@ -203,6 +203,38 @@ fi
 cp "$OUT/glesq.fixed.c" src/gl_mvp.c
 bash tools/test_gl_mvp.sh >"$OUT/glesq.fixed.log" 2>&1 && echo "MUT GLES-Q: fixed code passes again" || missed GLES-Q "revert did not restore a passing gate"
 
+# -------------------------------------------------------------- MUT-RESET --
+# Rebuild the texture at the window's size after a device reset instead of the
+# storage's (RENDERING_PLAN.md 5.2 step 9). With a refused resize in between,
+# the window is 800x600 while the surviving surface is 640x480, so the upload
+# reads past the buffer.
+cp src/sdl2compat.c "$OUT/reset.fixed.c"
+"$PYBIN" - src/sdl2compat.c <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p, encoding="utf-8").read()
+old = """                                                SDL_TEXTUREACCESS_STREAMING, g_sdl2Video.storage_w,
+                                                g_sdl2Video.storage_h);"""
+new = """                                                SDL_TEXTUREACCESS_STREAMING, g_sdl2Video.width,
+                                                g_sdl2Video.height);"""
+assert old in s
+s = s.replace(old, new, 1)
+open(p, "w", newline="").write(s.replace("\n", "\r\n"))
+print("MUT-RESET applied")
+PYEOF
+
+if bash tools/test_render_regress.sh >"$OUT/reset.mut.log" 2>&1; then
+    missed RESET "gate passed with the window-size rebuild"
+else
+    if grep -q 'RESET' "$OUT/reset.mut.log"; then
+        caught RESET "reset size checks fail"
+    else
+        missed RESET "failed elsewhere"
+    fi
+fi
+cp "$OUT/reset.fixed.c" src/sdl2compat.c
+bash tools/test_render_regress.sh >"$OUT/reset.fixed.log" 2>&1 && echo "MUT RESET: fixed code passes again" || missed RESET "revert did not restore a passing gate"
+
 echo "== mutations: caught=$CAUGHT missed=$MISSED =="
 if [ -n "$(git status --porcelain -- src/)" ]; then
     echo "TREE DIRTY after mutations -- reverting" >&2

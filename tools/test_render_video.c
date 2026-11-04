@@ -34,6 +34,7 @@
 #endif
 
 #include "mugen.h"
+#include "test_abi.h"
 
 /* ---- engine globals video.c needs (declared in symbols.h, defined here) -- */
 GameVars *g_game;
@@ -234,6 +235,7 @@ static void test_r02_projection(void)
 
 int main(void)
 {
+    TEST_REPORT_ABI();
     SDL_Surface *glsurf;
 
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {

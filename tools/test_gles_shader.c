@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "test_abi.h"
 
 static int failures;
 
@@ -129,6 +130,7 @@ static void check_shader(const char *path, int is_vert)
 
 int main(int argc, char **argv)
 {
+    TEST_REPORT_ABI();
     const char *dir = argc > 1 ? argv[1] : "data";
     char path[512];
 

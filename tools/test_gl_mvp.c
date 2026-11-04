@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "gl_mvp.h"
+#include "test_abi.h"
 
 /* The engine's defaults (src/globals.c): g_glNear, g_glFar, g_glZScale. */
 #define NEAR 1000.0
@@ -290,6 +291,7 @@ static void test_interleave(void)
 
 int main(void)
 {
+    TEST_REPORT_ABI();
     test_ortho_screen();
     test_ortho_framebuffer();
     test_perspective();

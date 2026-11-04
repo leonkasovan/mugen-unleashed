@@ -3,20 +3,23 @@
 # MVP construction and quad vertex/texcoord generation. No GL context needed.
 #
 # Usage: tools/test_gl_mvp.sh
+#   MUGEN_TEST_TARGET=win32|win64 selects compiler and pointer width.
 # Artefacts go under build/render-gl per AGENTS.md.
 set -eu
 
 cd "$(dirname "$0")/.."
 
 OUT=build/render-gl
-CC="${CC:-gcc}"
+. tools/lib_target.sh
 
 mkdir -p "$OUT"
 
-"$CC" -m32 -std=gnu11 -O1 -g -Wall \
+echo "target $TARGET: $CC $ARCHFLAGS ($("$CC" -dumpmachine 2>/dev/null || echo unknown))"
+
+"$CC" $ARCHFLAGS -std=gnu11 -O1 -g -Wall \
     -Isrc \
     tools/test_gl_mvp.c src/gl_mvp.c \
     -o "$OUT/test_gl_mvp" -lm
 
 echo "built $OUT/test_gl_mvp"
-"$OUT/test_gl_mvp"
+run_harness "$OUT/test_gl_mvp"

@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "vita_caps.h"
+#include "test_abi.h"
 
 static int failures;
 
@@ -115,6 +116,7 @@ static void test_no_fragment_program_requirement(void)
 
 int main(void)
 {
+    TEST_REPORT_ABI();
     test_version_parse();
     test_extension_tokens();
     test_vita_caps();

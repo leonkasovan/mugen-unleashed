@@ -28,6 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <SDL.h>
+#include "test_abi.h"
 
 #ifdef main
 #undef main
@@ -38,6 +39,7 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags);
 void Sdl2_Flip(SDL_Surface *surface);
 void Sdl2_UpdateRect(SDL_Surface *surface, Sint32 x, Sint32 y, Uint32 w, Uint32 h);
 void Sdl2_VideoQuit(void);
+void Sdl2_ResetRenderer(void);
 
 /* MUGEN_SDL2_DIAG test hooks (src/sdl2compat.c). */
 void Sdl2_DiagReset(void);
@@ -165,6 +167,60 @@ static void test_r01_transaction(void)
     Sdl2_VideoQuit();
 }
 
+/*
+ * Device reset after a refused resize (RENDERING_PLAN.md 5.2 steps 6 and 9).
+ *
+ * A failed resize leaves the window at the requested size while the storage
+ * pair keeps the old one -- that is deliberate. A later GPU/device reset then
+ * rebuilds the texture, and it must use the size of the storage that survived,
+ * not the window's: rebuilding at the window size produced a 800x600 texture
+ * for a 640x480 surface, and the next full upload read past the buffer.
+ */
+static void test_r01_reset_uses_storage(void)
+{
+    SDL_Surface *s;
+    int tw = 0, th = 0;
+
+    printf("-- R01 device reset after failed resize\n");
+    s = Sdl2_SetVideoMode(640, 480, 16, 0);
+    check(s != NULL && s->w == 640 && s->h == 480, "RESET: setup 640x480");
+    if (s == NULL) {
+        return;
+    }
+
+    /* Refuse the next texture: the window moves to 800x600, storage does not. */
+    Sdl2_DiagFailNext(1);
+    check(Sdl2_SetVideoMode(800, 600, 16, 0) == NULL, "RESET: 800x600 refused");
+    check(Sdl2_DiagTextureSize(&tw, &th, NULL) && tw == 640 && th == 480,
+          "RESET: live texture still 640x480 after refusal");
+
+    /* Device reset: the rebuilt pair must match the surviving storage. */
+    Sdl2_ResetRenderer();
+    check(Sdl2_DiagTextureSize(&tw, &th, NULL), "RESET: texture recreated");
+    check(tw == 640 && th == 480, "RESET: rebuilt texture uses the storage size, not the window's");
+    if (tw != 640 || th != 480) {
+        /*
+         * Stop here: uploading a 640x480 surface into an 800x600 texture is
+         * the very out-of-bounds read under test, and letting it run turns a
+         * clean assertion failure into a SIGSEGV.
+         */
+        printf("RESET: size mismatch, not uploading\n");
+        Sdl2_VideoQuit();
+        return;
+    }
+
+    /* And an upload through the surviving surface still matches the texture. */
+    s = Sdl2_SetVideoMode(640, 480, 16, 0);
+    check(s != NULL && s->w == 640 && s->h == 480, "RESET: storage still usable");
+    if (s != NULL) {
+        memset(s->pixels, 0x3C, (size_t)s->pitch * (size_t)s->h);
+        Sdl2_Flip(s);
+        check(Sdl2_DiagTextureSize(&tw, &th, NULL) && tw == 640 && th == 480,
+              "RESET: pair consistent after upload");
+    }
+    Sdl2_VideoQuit();
+}
+
 /* ---- R03 / PR01: one present per frame on SDL2 desktop ----
  *
  * M3 frame boundary: UpdateRect only dirties the display; Sdl2_PresentFrame
@@ -247,6 +303,7 @@ static void test_r03_single_present(void)
 
 int main(void)
 {
+    TEST_REPORT_ABI();
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         /*
          * Exit 77 is the qualification runner's SKIP status. Returning 0 here
@@ -256,6 +313,7 @@ int main(void)
         return 77;
     }
     test_r01_transaction();
+    test_r01_reset_uses_storage();
     test_r03_single_present();
     SDL_Quit();
 
@@ -263,6 +321,6 @@ int main(void)
         printf("render-regress: %d FAILURES\n", failures);
         return 1;
     }
-    printf("render-regress: R01/R03 shim gates pass\n");
+    printf("render-regress: R01/R03/RESET shim gates pass\n");
     return 0;
 }

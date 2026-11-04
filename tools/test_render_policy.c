@@ -11,6 +11,7 @@
 #include <stdio.h>
 
 #include "render_policy.h"
+#include "test_abi.h"
 
 static int failures;
 
@@ -49,6 +50,7 @@ static void row(int requested, int gl_screen, int gl_sprite, int want_effective,
 
 int main(void)
 {
+    TEST_REPORT_ABI();
     RenderCaps caps;
     RenderDecision d;
 
