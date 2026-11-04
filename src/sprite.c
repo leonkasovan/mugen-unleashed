@@ -484,7 +484,13 @@ void *Sprite_GetPixels(SpriteSet *set, int sprite)
 /* 0x004659D0: draws a sprite with the current renderer. */
 void Sprite_Draw(SpriteSet *set, int sprite, const DrawParams *dp)
 {
-#ifndef ANDROID_PORT
+#if !defined(ANDROID_PORT) || defined(MUGEN_GLES)
+    /*
+     * M8: with the GLES backend compiled in, Android has a GPU drawer too, so
+     * the gate that used to hide it (the Android build had no GL renderer) now
+     * only applies to the plain Android build. System still routes to the
+     * software rasterizer on both.
+     */
     if (g_renderMode == RENDER_MODE_GL) {
         Sprite_DrawGL(set, sprite, dp);
     } else

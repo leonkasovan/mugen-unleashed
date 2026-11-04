@@ -16,9 +16,7 @@
 
 #ifdef MUGEN_GLES
 
-#define GLES_CAP_NPOT           0x01    /* core since ES 2.0 */
-#define GLES_CAP_FBO            0x02    /* core since ES 2.0 */
-#define GLES_CAP_GLSL_ES_100    0x04    /* GLSL ES 1.00 programs compile+link */
+#include "gles_probe.h"
 
 /* Parse "OpenGL ES X.Y ..." -- plan 12.3: a GLES 3.x string does NOT make
  * GLSL 120 valid; the dialect is selected from these numbers, and only the

@@ -289,6 +289,88 @@ static void test_interleave(void)
           "interleave: bottom-left keeps q = c0/c1");
 }
 
+/*
+ * Sprite modelview: the terms of Gl_DrawSprite's matrix sequence.
+ *
+ *  - a plain sprite at (x, y) with unit scales is a pure translation by
+ *    (x - anchor_x, y - anchor_y);
+ *  - scale_x multiplies the x column only;
+ *  - flip2 negative on x mirrors and adds the 0.99999899 nudge along x;
+ *  - a 180-degree angle negates both axes (with the translation applied
+ *    before the rotation, as GL's post-multiply order does).
+ */
+static void test_sprite_modelview(void)
+{
+    GlSpriteMv in;
+    GlMvp m;
+    float x, y, w;
+
+    memset(&in, 0, sizeof(in));
+    in.paletted = 1;
+    in.pal_offset = 0.0f;
+    in.scale_x = in.scale_y = 1.0f;
+    in.scale2_x = in.scale2_y = 1.0f;
+    in.sx1 = in.sy1 = 1;
+    in.sx2 = in.sy2 = 1;
+    in.anchor_x = 10.0f;
+    in.anchor_y = 20.0f;
+
+    /* Plain: point (0,0) lands on (x - anchor). */
+    in.x = 100.0f;
+    in.y = 200.0f;
+    GlMvp_SpriteModelView(&m, &in);
+    GlMvp_Transform(&m, 0.0f, 0.0f, 0.0f, &x, &y, NULL, &w);
+    check(nearly((double)x, 90.0) && nearly((double)y, 180.0), "mv: plain sprite translates to (x-ax, y-ay)");
+    check(nearly((double)w, 1.0), "mv: w stays 1 for an affine modelview");
+
+    /*
+     * scale_x = 2 scales the offset measured from the anchor: the point at
+     * anchor+10 lands 20 past x. (M = T(x,y) * S * T(-anchor), so the anchor
+     * itself always maps to (x, y).)
+     */
+    in.scale_x = 2.0f;
+    GlMvp_SpriteModelView(&m, &in);
+    GlMvp_Transform(&m, 20.0f, 0.0f, 0.0f, &x, &y, NULL, &w);
+    check(nearly((double)x, 100.0 + 20.0), "mv: scale_x scales the offset from the anchor");
+    GlMvp_Transform(&m, 10.0f, 0.0f, 0.0f, &x, &y, NULL, &w);
+    check(nearly((double)x, 100.0), "mv: scale_x keeps the anchor at x");
+    GlMvp_Transform(&m, 0.0f, 10.0f, 0.0f, &x, &y, NULL, &w);
+    check(nearly((double)y, 190.0), "mv: scale_x leaves y alone");
+    in.scale_x = 1.0f;
+
+    /*
+     * Horizontal flip through flip2: the nudge is applied first in the chain
+     * (T(offset) T(flip) ...), so it adds to the final position after the
+     * mirror. Point at the anchor maps to x + 0.99999899; a point 6 left of the
+     * anchor mirrors to 6 right of it.
+     */
+    in.sx2 = -1;
+    GlMvp_SpriteModelView(&m, &in);
+    GlMvp_Transform(&m, 10.0f, 0.0f, 0.0f, &x, &y, NULL, &w);
+    check(nearly((double)x, 100.0 + 0.99999899), "mv: flip2 x nudges by 0.99999899");
+    GlMvp_Transform(&m, 4.0f, 0.0f, 0.0f, &x, &y, NULL, &w);
+    check(nearly((double)x, 100.0 + 6.0 + 0.99999899), "mv: flip2 x mirrors about the anchor");
+    in.sx2 = 1;
+
+    /* 180 degrees: both axes negate about the anchor. */
+    in.angle = 180.0f;
+    GlMvp_SpriteModelView(&m, &in);
+    GlMvp_Transform(&m, 10.0f, 20.0f, 0.0f, &x, &y, NULL, &w);
+    /* The anchor maps to the translation point (100, 200). */
+    check(nearly((double)x, 100.0) && nearly((double)y, 200.0), "mv: 180deg keeps the anchor at (x,y)");
+    GlMvp_Transform(&m, 0.0f, 0.0f, 0.0f, &x, &y, NULL, &w);
+    check(nearly((double)x, 110.0) && nearly((double)y, 220.0), "mv: 180deg mirrors about the anchor");
+    in.angle = 0.0f;
+
+    /* Paletted and true-colour sprites use different half-texel offsets. */
+    in.paletted = 0;
+    in.rgba_offset_x = 0.5f;
+    in.rgba_offset_y = 0.25f;
+    GlMvp_SpriteModelView(&m, &in);
+    GlMvp_Transform(&m, 0.0f, 0.0f, 0.0f, &x, &y, NULL, &w);
+    check(nearly((double)x, 90.5) && nearly((double)y, 180.25), "mv: true-colour offset is applied");
+}
+
 int main(void)
 {
     TEST_REPORT_ABI();
@@ -302,6 +384,7 @@ int main(void)
     test_quad_width_ratio();
     test_quad_offsets();
     test_interleave();
+    test_sprite_modelview();
 
     if (failures != 0) {
         printf("gl-mvp: %d FAILURES\n", failures);

@@ -248,7 +248,16 @@ void Screen_EndFrame(void)
     }
     Screen_Present();
 #ifdef ANDROID_PORT
-    /* Only the frame boundary uploads/presents; skipped frames stay skipped. */
+    /*
+     * Only the frame boundary presents; skipped frames stay skipped. GL modes
+     * present by swapping the context (the GLES renderer already drew into the
+     * default framebuffer) instead of uploading the CPU surface.
+     */
+#ifdef MUGEN_GLES
+    if (!g_game->skip_draw && (g_renderMode == RENDER_OPENGL || g_renderMode == RENDER_OPENGL_SCREEN)) {
+        Android_GLPresent();
+    } else
+#endif
     if (!g_game->skip_draw && Android_PresentFrame() < 0) {
         SDL_LogError(SDL_LOG_CATEGORY_RENDER, "MUGEN frame presentation: %s", SDL_GetError());
     }

@@ -65,6 +65,9 @@ if(MUGEN_GLES)
     list(APPEND MUGEN_ENGINE_SOURCES "${MUGEN_ROOT}/src/gl_mvp.c")
     # GLES program loading + VBO quad submission (thin layer over gl_mvp.c).
     list(APPEND MUGEN_ENGINE_SOURCES "${MUGEN_ROOT}/src/gles_draw.c")
+    # The renderer itself: GlTex_* over GLES, the ES programs, the sprite path
+    # and the Gfx_Gl* dispatch entries Gfx_SelectRenderer(RENDER_OPENGL) uses.
+    list(APPEND MUGEN_ENGINE_SOURCES "${MUGEN_ROOT}/src/gles_render.c")
     list(APPEND MUGEN_ENGINE_SOURCES "${MUGEN_ROOT}/third_party/glad-es-3.0/glad.c")
 endif()
 

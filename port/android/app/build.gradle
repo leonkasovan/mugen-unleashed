@@ -62,7 +62,10 @@ android {
                 // through -P properties; neither library is vendored here.
                 arguments "-DCMAKE_BUILD_TYPE=Release",
                           "-Dsdl2IncludeDir=" + (project.findProperty('sdl2IncludeDir') ?: ''),
-                          "-Dsdl2MixerTtfDir=" + (project.findProperty('sdl2MixerTtfDir') ?: '')
+                          "-Dsdl2MixerTtfDir=" + (project.findProperty('sdl2MixerTtfDir') ?: ''),
+                          // M8: the GLES 3.0 renderer (RENDERING_PLAN.md section 12).
+                          // Off unless build.sh --gles passes mugenGles=true.
+                          "-DMUGEN_GLES=" + (project.findProperty('mugenGles') ?: 'OFF')
                 cFlags "-O2"
             }
         }

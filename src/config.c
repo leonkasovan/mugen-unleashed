@@ -356,8 +356,21 @@ int Config_Load(void)
         RenderDecision decision;
 
         caps.system = 1;
+#ifdef MUGEN_GLES
+        /*
+         * M8: the GLES backend is compiled in, so the GL modes are candidates.
+         * Whether one can actually run is decided after the context exists --
+         * Gl_Init probes, compiles the ES shaders and checks FBO completeness,
+         * and system.c falls back to System with a logged reason when any of
+         * that fails. Reporting 0 here would hide a working GLES path; claiming
+         * it without validating it is the failure mode section 12.2 warns of.
+         */
+        caps.gl_screen = 1;
+        caps.gl_sprite = 1;
+#else
         caps.gl_screen = 0;
         caps.gl_sprite = 0;
+#endif
         RenderPolicy_Resolve(g->render_mode, &caps, &decision);
         if (decision.fell_back) {
             Log_Printf("Android: RenderMode %d unavailable (%s); using System.\n", g->render_mode,

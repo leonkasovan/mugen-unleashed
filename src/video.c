@@ -227,8 +227,26 @@ int Video_SetMode(int game_width, int game_height, int width, int height, int de
     g_unused504230 = 0;
     g_unused504234 = 0;
 #ifdef ANDROID_PORT
-    /* Deliberate Android port behavior: only native SDL2 software presentation.
-     * Renderer selection is validated before loading any sprites. */
+    /*
+     * M8: with the GLES backend compiled in, the GL modes get the GL window and
+     * context; System keeps the SDL_Renderer path. The two never share a window
+     * (plan section 12.2), so android_video.c tears one down before building
+     * the other.
+     */
+#ifdef MUGEN_GLES
+    if (g_renderMode == RENDER_OPENGL || g_renderMode == RENDER_OPENGL_SCREEN) {
+        surface = Android_CreateDisplayGL(sdl_width, sdl_height, depth, g_game->keep_aspect);
+        if (surface == NULL) {
+            Log_Printf("Android GL display creation failed: %s\n", SDL_GetError());
+            g_libraryError = LIBERR_VIDEO_MODE;
+            return 0;
+        }
+        g_videoSurface = surface;
+        sdl_flags = 0;
+        goto android_surface_ready;
+    }
+#endif
+    /* Plain Android build: only native SDL2 software presentation. */
     if (g_renderMode != RENDER_SYSTEM) {
         g_libraryError = LIBERR_VIDEO_MODE;
         return 0;
@@ -241,6 +259,7 @@ int Video_SetMode(int game_width, int game_height, int width, int height, int de
     }
     g_videoSurface = surface;
     sdl_flags = 0; /* No SDL 1.2 surface/window flags in the Android build. */
+android_surface_ready:
 #else
     if (g_renderMode == RENDER_OPENGL || g_renderMode == RENDER_OPENGL_SCREEN) {
         sdl_flags = SDL_OPENGL;

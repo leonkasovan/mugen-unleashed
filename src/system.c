@@ -362,6 +362,32 @@ void System_Init(void)
 #endif
     }
     Log_Printf("success...");
+#ifdef ANDROID_PORT
+#ifdef MUGEN_GLES
+    /*
+     * M8: the GL modes are only usable once the context exists, so the real
+     * qualification happens here rather than in the mode table: Gl_Init probes
+     * the driver, compiles and links the ES shaders and requires a complete
+     * framebuffer. Any failure falls back to System with a reason -- the same
+     * recovery the Vita path uses, and the reason MUGEN_STRICT_RENDERER checks.
+     */
+    if ((g_renderMode == RENDER_OPENGL || g_renderMode == RENDER_OPENGL_SCREEN) && !Gl_Init(1)) {
+        Log_Printf("GLES unavailable; falling back to the system renderer. ");
+        g_renderMode = RENDER_SYSTEM;
+        g_game->render_mode = RENDER_SYSTEM;
+        g_game->depth = 16;
+        g_game->stage_fit = 0;
+        g_game->system_fit = 0;
+        Gfx_SelectRenderer(RENDER_SYSTEM);
+        g_libraryError = LIBERR_NONE;
+        if (!Video_SetMode((int)g_game->game_coord[0], (int)g_game->game_coord[1], g_game->video_width,
+                           g_game->video_height, g_game->depth, g_game->video_flags)) {
+            Log_Printf("failed. ");
+            Error_Exit();
+        }
+    }
+#endif
+#endif
     /* M6 (plan section 10.1 + 10.10): requested mode vs effective renderer,
      * once. requested is what the config asked (DirectX reports as its System
      * alias); effective is what g_renderMode selected after any fallback.

@@ -101,6 +101,36 @@ void GlQuad_Layout(unsigned int *stride, unsigned int *pos_offset, unsigned int 
  * vertex, in the order GlQuad_Layout describes. */
 void GlQuad_Interleave(float *out, const GlQuadVerts *q);
 
+/*
+ * Modelview for one sprite, mirroring the sequence Gl_DrawSprite leaves on the
+ * GL matrix stack:
+ *
+ *   T(offset) T(flip) T(x,y) S(scale2*sx2,sy2) Rx(angle_y) Ry(angle_z)
+ *   Rz(-angle) * SH(shear) * S(scale_x*sx1, scale_y*sy1) T(-anchor)
+ *
+ * GLES has no matrix stack, so this is built on the CPU and handed to the
+ * vertex shader. Every term is kept in the order above: the flips and the shear
+ * sit between different scales, and reordering them changes the picture.
+ */
+typedef struct GlSpriteMv {
+    int paletted;           /* selects the palette offset pair below */
+    float pal_offset;       /* g_glPalOffset (paletted sprites) */
+    float rgba_offset_x;    /* g_glRgbaOffsetX (true-colour sprites) */
+    float rgba_offset_y;    /* g_glRgbaOffsetY */
+    float x, y;             /* DrawParams.x / .y */
+    float angle;            /* DrawParams.angle, rotated by -angle */
+    float angle_x;          /* DrawParams.angle_y */
+    float angle_z;          /* DrawParams.angle_z */
+    float shear_x, shear_y; /* DrawParams.shear_x / .shear_y */
+    float scale_x, scale_y;   /* DrawParams.scale_x / .scale_y */
+    float scale2_x, scale2_y; /* DrawParams.scale2_x / .scale2_y */
+    int sx1, sy1;           /* flip signs of dp->flip  (-1 or 1) */
+    int sx2, sy2;           /* flip signs of dp->flip2 (-1 or 1) */
+    float anchor_x, anchor_y; /* sprite axis (spr->x / spr->y) */
+} GlSpriteMv;
+
+void GlMvp_SpriteModelView(GlMvp *out, const GlSpriteMv *in);
+
 #ifdef __cplusplus
 }
 #endif

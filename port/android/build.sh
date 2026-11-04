@@ -9,6 +9,7 @@
 #   port/android/build.sh --offline         require cached tools/Gradle/deps
 #   port/android/build.sh --clean           clean generated app build/staging
 #   port/android/build.sh --no-assets       package no game data
+#   port/android/build.sh --gles            build the GLES 3.0 renderer (M8)
 #
 # The packaged data/mugen.cfg is port/android/mugen.cfg (the Android defaults),
 # not the game tree copy. GAME_CFG=<path> stages a different one.
@@ -28,6 +29,7 @@ PACK_ASSETS=1
 DOWNLOAD_TOOLS=0
 CHECK_TOOLS=0
 OFFLINE=0
+GLES=0
 say()  { printf '\n==> %s\n' "$*"; }
 fail() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 usage() {
@@ -38,6 +40,7 @@ for arg in "$@"; do
     --debug) BUILD_TYPE=debug ;;
     --clean) CLEAN=1 ;;
     --no-assets) PACK_ASSETS=0 ;;
+    --gles) GLES=1 ;;
     --setup) DOWNLOAD_TOOLS=1; CHECK_TOOLS=1 ;;
     --download-tools) DOWNLOAD_TOOLS=1 ;;
     --check-tools) CHECK_TOOLS=1 ;;
@@ -163,6 +166,7 @@ GRADLE_ARGS=(
   "-Psdl2IncludeDir=$(android_native_path "$SDL2_INCLUDE")"
   "-Psdl2MixerTtfDir=$(android_native_path "$SDL2_COMPANION_DIR")"
 )
+if [ "$GLES" = 1 ]; then GRADLE_ARGS+=("-PmugenGles=ON"); say "GLES 3.0 renderer enabled (M8, experimental)"; fi
 if [ "$OFFLINE" = 1 ]; then GRADLE_ARGS+=(--offline); fi
 if [ "$BUILD_TYPE" = debug ]; then TASK=assembleDebug; else TASK=assembleRelease; fi
 

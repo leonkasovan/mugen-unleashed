@@ -2,6 +2,7 @@
  * GLES draw path: MVP construction and quad vertex generation.
  * See gl_mvp.h for why this exists and what it replaces.
  */
+#include <math.h>
 #include <string.h>
 
 #include "gl_mvp.h"
@@ -305,4 +306,123 @@ void GlQuad_Build(GlQuadVerts *out, const float *v, int special, double c0, doub
         out->tc[3][2] = 0.0f;
         out->tc[3][3] = q;
     }
+}
+
+/* Rotation about X by `deg`, matching glRotatef(deg, 1, 0, 0). */
+static void mat_rotate_x(double *out, double deg)
+{
+    double r = deg * (3.14159265358979323846 / 180.0);
+    double c = cos(r);
+    double s = sin(r);
+
+    mat_identity(out);
+    out[M(1, 1)] = c;
+    out[M(2, 1)] = -s;
+    out[M(1, 2)] = s;
+    out[M(2, 2)] = c;
+}
+
+/* Rotation about Y by `deg`, matching glRotatef(deg, 0, 1, 0). */
+static void mat_rotate_y(double *out, double deg)
+{
+    double r = deg * (3.14159265358979323846 / 180.0);
+    double c = cos(r);
+    double s = sin(r);
+
+    mat_identity(out);
+    out[M(0, 0)] = c;
+    out[M(2, 0)] = s;
+    out[M(0, 2)] = -s;
+    out[M(2, 2)] = c;
+}
+
+/* Rotation about Z by `deg`, matching glRotatef(deg, 0, 0, 1). */
+static void mat_rotate_z(double *out, double deg)
+{
+    double r = deg * (3.14159265358979323846 / 180.0);
+    double c = cos(r);
+    double s = sin(r);
+
+    mat_identity(out);
+    out[M(0, 0)] = c;
+    out[M(1, 0)] = -s;
+    out[M(0, 1)] = s;
+    out[M(1, 1)] = c;
+}
+
+/*
+ * The shear matrix Gl_DrawSprite passes to glMultMatrixf: column-major with
+ * m[4] = shear_x and m[1] = shear_y, i.e.
+ *   x' = x + shear_x * y
+ *   y' = shear_y * x + y
+ */
+static void mat_shear(double *out, double shear_x, double shear_y)
+{
+    mat_identity(out);
+    out[M(1, 0)] = shear_x;
+    out[M(0, 1)] = shear_y;
+}
+
+/* tmp = m * x, then m = tmp, so a caller can post-multiply in GL's order. */
+static void mat_post(double *m, const double *x)
+{
+    double tmp[16];
+
+    mat_mul(tmp, m, x);
+    memcpy(m, tmp, sizeof(tmp));
+}
+
+void GlMvp_SpriteModelView(GlMvp *out, const GlSpriteMv *in)
+{
+    double m[16];
+    double t[16];
+
+    if (out == NULL || in == NULL) {
+        return;
+    }
+    mat_identity(m);
+
+    /* Offset: the half-texel shift that puts a sprite's texels on pixel
+     * centres, a different pair for paletted and true-colour textures. */
+    if (in->paletted) {
+        mat_translate(t, (double)in->pal_offset, (double)in->pal_offset, 0.0);
+    } else {
+        mat_translate(t, (double)in->rgba_offset_x, (double)in->rgba_offset_y, 0.0);
+    }
+    mat_post(m, t);
+
+    /* Flip nudge: a negative flip2*flip scale mirrors in place, and GL's path
+     * adds a hair of translation so the mirrored edge lands on the texel. */
+    if ((double)(in->sx2 * in->sx1) * (double)in->scale2_x * (double)in->scale_x < 0.0) {
+        mat_translate(t, 0.99999899, 0.0, 0.0);
+        mat_post(m, t);
+    }
+    if ((double)(in->sy2 * in->sy1) * (double)in->scale2_y * (double)in->scale_y < 0.0) {
+        mat_translate(t, 0.0, 0.99999899, 0.0);
+        mat_post(m, t);
+    }
+
+    mat_translate(t, (double)in->x, (double)in->y, 0.0);
+    mat_post(m, t);
+
+    mat_scale(t, (double)(in->sx2 * in->scale2_x), (double)(in->sy2 * in->scale2_y), 1.0);
+    mat_post(m, t);
+
+    mat_rotate_x(t, (double)in->angle_x);
+    mat_post(m, t);
+    mat_rotate_y(t, (double)in->angle_z);
+    mat_post(m, t);
+    mat_rotate_z(t, -(double)in->angle);
+    mat_post(m, t);
+
+    mat_shear(t, (double)in->shear_x, (double)in->shear_y);
+    mat_post(m, t);
+
+    mat_scale(t, (double)(in->sx1 * in->scale_x), (double)(in->sy1 * in->scale_y), 1.0);
+    mat_post(m, t);
+
+    mat_translate(t, -(double)in->anchor_x, -(double)in->anchor_y, 0.0);
+    mat_post(m, t);
+
+    mat_store(out, m);
 }

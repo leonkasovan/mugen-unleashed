@@ -1,6 +1,9 @@
 #ifndef MUGEN_ANDROID_PLATFORM_H
 #define MUGEN_ANDROID_PLATFORM_H
 
+#ifdef MUGEN_GLES
+#include <glad.h>
+#endif
 #include <SDL.h>
 #if SDL_MAJOR_VERSION != 2
 #error Android requires the native SDL2 headers
@@ -17,6 +20,11 @@
 /* Native SDL2 engine operations; no SDL 1.2 aliases, flags or fake types.
  * Video operations run on the SDL main thread. */
 SDL_Surface *Android_CreateDisplay(int width, int height, int depth, int keep_aspect);
+#ifdef MUGEN_GLES
+/* GLES presentation path; see android_video.c for the window ownership rule. */
+SDL_Surface *Android_CreateDisplayGL(int width, int height, int depth, int keep_aspect);
+int Android_GLPresent(void);
+#endif
 int Android_PresentFrame(void);
 void Android_MarkDisplayDirty(SDL_Surface *surface);
 void Android_SetBackground(int background);

@@ -3,6 +3,14 @@
 
 static SDL_Window *display_window;
 static SDL_Renderer *display_renderer;
+#ifdef MUGEN_GLES
+/* Set when the window was created for GL: the two presentation paths cannot
+ * share a window (plan section 12.2), so the flags are decided at creation and
+ * a switch tears the window down. */
+static SDL_GLContext display_gl;
+static int display_is_gl;
+static SDL_Surface *display_placeholder;
+#endif
 static SDL_Texture *display_texture;
 static SDL_Surface *display_pixels;
 static int display_dirty;
@@ -42,6 +50,23 @@ SDL_Surface *Android_CreateDisplay(int width, int height, int depth, int keep_as
     }
     SDL_SetSurfaceBlendMode(pixels, SDL_BLENDMODE_NONE);
     SDL_FillRect(pixels, NULL, 0);
+#ifdef MUGEN_GLES
+    /*
+     * Coming back from the GL path: SDL2 cannot convert a GL window into a
+     * renderer window, so the window has to go. Without this the renderer was
+     * never created and the first texture failed with "Parameter 'renderer' is
+     * invalid" -- which is what a failed GL probe falling back to System does.
+     */
+    if (display_gl != NULL) {
+        SDL_GL_DeleteContext(display_gl);
+        display_gl = NULL;
+        SDL_DestroyWindow(display_window);
+        display_window = NULL;
+        SDL_FreeSurface(display_placeholder);
+        display_placeholder = NULL;
+        display_is_gl = 0;
+    }
+#endif
     if (display_window == NULL) {
         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
         display_window = SDL_CreateWindow("M.U.G.E.N", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -78,6 +103,97 @@ fail:
     SDL_FreeSurface(pixels);
     return NULL;
 }
+
+#ifdef MUGEN_GLES
+/*
+ * Creates the GL window and context the GLES renderer draws into.
+ *
+ * SDL2 cannot change a window's flags after creation, and a window carries
+ * either an SDL_Renderer or a GL context, never both. Selecting GL therefore
+ * destroys any renderer path first and builds this one; selecting System again
+ * destroys this and rebuilds the renderer path. Returns a placeholder surface
+ * that carries the engine's render size -- the GLES renderer draws into the
+ * default framebuffer, and the engine only uses the surface's dimensions.
+ */
+SDL_Surface *Android_CreateDisplayGL(int width, int height, int depth, int keep_aspect)
+{
+    SDL_Surface *surface;
+    Uint32 format;
+
+    (void)keep_aspect;
+    if (width <= 0 || height <= 0) {
+        SDL_SetError("Android GL display requires positive dimensions");
+        return NULL;
+    }
+    if (display_gl != NULL) {
+        /* Already a GL window: keep it, just hand back the size. */
+        if (display_placeholder != NULL && display_placeholder->w == width && display_placeholder->h == height) {
+            return display_placeholder;
+        }
+    } else {
+        /* Coming from (or starting on) the SDL_Renderer path: tear it down. */
+        SDL_DestroyTexture(display_texture);
+        SDL_DestroyRenderer(display_renderer);
+        SDL_DestroyWindow(display_window);
+        display_texture = NULL;
+        display_renderer = NULL;
+        display_window = NULL;
+        SDL_FreeSurface(display_pixels);
+        display_pixels = NULL;
+    }
+    format = depth == 32 ? SDL_PIXELFORMAT_RGBA8888 : SDL_PIXELFORMAT_RGB565;
+    if (display_gl == NULL) {
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+        SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+        SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 16);
+        display_window = SDL_CreateWindow("M.U.G.E.N", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, width,
+                                          height, SDL_WINDOW_OPENGL | SDL_WINDOW_FULLSCREEN_DESKTOP |
+                                                      SDL_WINDOW_ALLOW_HIGHDPI);
+        if (display_window == NULL) {
+            return NULL;
+        }
+        display_gl = SDL_GL_CreateContext(display_window);
+        if (display_gl == NULL) {
+            SDL_DestroyWindow(display_window);
+            display_window = NULL;
+            return NULL;
+        }
+        if (SDL_GL_MakeCurrent(display_window, display_gl) < 0) {
+            SDL_GL_DeleteContext(display_gl);
+            display_gl = NULL;
+            SDL_DestroyWindow(display_window);
+            display_window = NULL;
+            return NULL;
+        }
+        if (gladLoadGLES2Loader((GLADloadproc)SDL_GL_GetProcAddress) == 0) {
+            SDL_GL_DeleteContext(display_gl);
+            display_gl = NULL;
+            SDL_DestroyWindow(display_window);
+            display_window = NULL;
+            return NULL;
+        }
+        display_is_gl = 1;
+        SDL_ShowCursor(SDL_DISABLE);
+    }
+    SDL_FreeSurface(display_placeholder);
+    surface = SDL_CreateRGBSurfaceWithFormat(0, width, height, 32, format);
+    display_placeholder = surface;
+    return surface;
+}
+
+/* Presents the GL frame. The GLES renderer has already drawn into the default
+ * framebuffer, so this is the swap and nothing else. */
+int Android_GLPresent(void)
+{
+    if (display_window == NULL || display_gl == NULL) {
+        return 0;
+    }
+    SDL_GL_SwapWindow(display_window);
+    return 1;
+}
+#endif /* MUGEN_GLES */
 
 void Android_MarkDisplayDirty(SDL_Surface *surface)
 {
@@ -133,6 +249,15 @@ int Android_SetFullscreen(int fullscreen)
 
 void Android_VideoQuit(void)
 {
+#ifdef MUGEN_GLES
+    if (display_gl != NULL) {
+        SDL_GL_DeleteContext(display_gl);
+        display_gl = NULL;
+    }
+    SDL_FreeSurface(display_placeholder);
+    display_placeholder = NULL;
+    display_is_gl = 0;
+#endif
     SDL_DestroyTexture(display_texture);
     SDL_DestroyRenderer(display_renderer);
     SDL_DestroyWindow(display_window);
