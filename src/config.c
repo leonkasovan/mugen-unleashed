@@ -11,6 +11,15 @@
 /* Defined near Options_Load; Config_Load runs first. */
 static void Config_ApplyVitaJoystick(void);
 #endif
+#ifdef ANDROID_PORT
+/* The [P<n> Gamepad] groups, loaded with the rest of the options and applied
+ * after the pads open (their topology is only known then). */
+static int g_cfgGamepadKeys[2][KEY_COUNT];
+static int g_cfgGamepadPresent[2];
+static void Config_LoadGamepadGroups(Ini *ini);
+/* Defined near Options_Load; Config_Load runs first. */
+void Config_ApplyAndroidJoystick(void);
+#endif
 
 #define CONFIG_PATH "data/mugen.cfg"
 
@@ -604,6 +613,129 @@ static double Options_PctToVolume(int pct, double volume)
     return (volume - floor(volume + 0.5)) + pct;
 }
 
+#ifdef ANDROID_PORT
+/*
+ * Fix (port change): an Android pad is bound through SDL's game-controller
+ * semantics, not by translating raw device indices.
+ *
+ * [P<n> Joystick] in the shipped mugen.cfg is a PC DirectInput pad's numbering:
+ * Jump=9, Crou=10, Left=11, Right=12, A=13, B=14, X=15, Y=16, Z=18, C=20,
+ * Start=24. Those are not button indices -- the engine derives an engine code
+ * from the device's own topology:
+ *
+ *     axis n   -> n*2 + 1 (negative) / + 2 (positive)
+ *     hat      -> axes*2 + 1..4 (up, down, left, right)
+ *     button b -> axes*2 + hats*4 + 1 + b
+ *
+ * so those values only mean what they say on a pad with 4 axes and 1 hat. A
+ * real controller does not match: the tested Xbox Wireless Controller reports
+ * axes=8 hats=0, so its face buttons start at engine code 17 while the config's
+ * A/B/X/Y (13..16) are axis codes there -- and its d-pad arrives as buttons at
+ * code 32+, past the 32 codes a pad slot holds, so those were dropped. The pad
+ * opened, the left stick steered, and every attack button was dead.
+ *
+ * Rather than try to map one topology onto another, the pad is bound as a game
+ * controller (Pads_HandleControllerEvent): A/B/X/Y, the d-pad, the shoulders
+ * and Start mean the same thing on every device, and the compact 1..11 layout
+ * fits a slot with room to spare.
+ *
+ * The group that configures it is [P<n> Gamepad], read here:
+ *
+ *   [P1 Gamepad]
+ *   Jump  = 1      ; up
+ *   Crouch= 2      ; down
+ *   Left  = 3
+ *   Right = 4
+ *   A     = 5
+ *   B     = 6
+ *   C     = 7      ; RB
+ *   X     = 8
+ *   Y     = 9
+ *   Z     = 10     ; LB
+ *   Start = 11
+ *
+ * A missing group falls back to exactly that layout, so an untouched mugen.cfg
+ * still works. Only codes the controller path can deliver (1..11) are honoured;
+ * anything else is reported and ignored, because a larger number here no longer
+ * means "the next button" -- it means nothing on this path.
+ */
+/* Reads [P1 Gamepad] / [P2 Gamepad] into the sidecar tables. A group that is
+ * not there leaves its slot absent, which means "use the built-in layout". */
+static void Config_LoadGamepadGroups(Ini *ini)
+{
+    int player;
+
+    for (player = 0; player < 2; player++) {
+        char group[16];
+        int i;
+
+        for (i = 0; i < KEY_COUNT; i++) {
+            g_cfgGamepadKeys[player][i] = JOY_NONE;
+        }
+        snprintf(group, sizeof(group), "P%d Gamepad", player + 1);
+        g_cfgGamepadPresent[player] = Config_ReadKeys(ini, group, g_cfgGamepadKeys[player]);
+        if (!g_cfgGamepadPresent[player]) {
+            Log_Printf("config: no [%s] group; the built-in gamepad layout applies\n", group);
+        }
+    }
+}
+
+void Config_ApplyAndroidJoystick(void)
+{
+    int player;
+
+    if (Pads_ControllerCount() == 0) {
+        /* No pad SDL can map: [P<n> Joystick] stays in force, and its raw codes
+         * are the only ones that can work. */
+        Log_Printf("config: no game controller; [P<n> Joystick] left unchanged\n");
+        return;
+    }
+    for (player = 0; player < 2; player++) {
+        int *jk = g_game->joy_keys[player];
+        const int *cfg = g_cfgGamepadKeys[player];
+        int used_default = 0;
+        int i;
+
+        if (!g_cfgGamepadPresent[player]) {
+            /* No [P<n> Gamepad] group: use the built-in compact layout. */
+            Pads_ControllerBindings(jk);
+            used_default = 1;
+        } else {
+            for (i = 0; i < KEY_COUNT; i++) {
+                jk[i] = JOY_NONE;
+            }
+            for (i = 0; i < KEY_COUNT; i++) {
+                int v = cfg[i];
+
+                if (v == JOY_NONE) {
+                    continue;
+                }
+                if (v < 1 || v >= PAD_BUTTONS) {
+                    Log_Printf("config: [P%d Gamepad] key %d = %d is outside the gamepad range "
+                               "1..%d; ignored\n", player + 1, i, v, PAD_BUTTONS - 1);
+                    continue;
+                }
+                jk[i] = player * PAD_BUTTONS + v;
+            }
+        }
+        /*
+         * Mirror into the active map. Input_InitPads copies joy_keys ->
+         * joy_keys_active at its start, i.e. before the pads were opened, and
+         * this policy runs after that (the pad's topology is only known once it
+         * is open). Without this second copy the runtime kept the pre-policy
+         * codes while mugen.log showed the translated ones -- the pad looked
+         * bound and still pressed nothing. use_joystick is honoured: a player
+         * with the joystick disabled keeps an empty active map.
+         */
+        if (g_game->use_joystick[player]) {
+            memcpy(g_game->joy_keys_active[player], jk, sizeof(g_game->joy_keys_active[player]));
+        }
+        Log_Printf("config: P%d bound through the game controller (%s)\n", player + 1,
+                   used_default ? "built-in layout, no [P<n> Gamepad] group" : "[P<n> Gamepad]");
+    }
+}
+#endif /* ANDROID_PORT */
+
 #ifdef MUGEN_VITA_GL
 /*
  * Port addition: the Vita joystick mapping, as a function so every place that
@@ -811,6 +943,11 @@ void Options_Load(void)
     g->use_joystick[1] = g->option_input[1][1] != 0;
     Config_ReadKeys(ini, "P1 joystick", g->joy_keys[0]);
     Config_ReadKeys(ini, "P2 joystick", g_game->joy_keys[1]);
+#ifdef ANDROID_PORT
+    /* [P<n> Gamepad] describes the compact game-controller layout; see
+     * Config_ApplyAndroidJoystick for why Android uses that instead. */
+    Config_LoadGamepadGroups(ini);
+#endif
     g = g_game;
     Config_FillUnassigned(g->joy_keys[0], JOY_NONE);
     Config_FillUnassigned(g->joy_keys[1], JOY_NONE);
@@ -828,6 +965,11 @@ void Options_Load(void)
 #endif
     Ini_Free(ini);
     Input_InitPads();
+#ifdef ANDROID_PORT
+    /* After the pads are open (their topology is only known then) and before
+     * Input_Remap builds g_keyMap from these codes. */
+    Config_ApplyAndroidJoystick();
+#endif
     if (!Input_Remap()) {
         Error_Fatal("Cannot init input\n");
     }

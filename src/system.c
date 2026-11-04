@@ -428,6 +428,10 @@ void System_Init(void)
     Options_SetDefaults();
     Options_Load();
     Log_Printf("Options loaded OK\n");
+    /* Port addition: dump the joystick bindings the config ended up with, so a
+     * pad that opens but never presses anything can be diagnosed against the
+     * codes Pads_Init reported for the actual device. */
+    Pads_LogBindings();
     g = g_game;
     if (args->ai_level > 0) {
         g->difficulty = args->ai_level;

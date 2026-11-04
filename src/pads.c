@@ -15,6 +15,13 @@
 /* Axis values beyond this press the axis' button. */
 #define PAD_AXIS_THRESHOLD 16000
 
+#ifdef ANDROID_PORT
+/* Defined below (the game-controller path); Pads_Init and Input_DeinitPads
+ * call them, so the declarations come first. */
+static int Pads_OpenControllers(void);
+static void Pads_CloseControllers(void);
+#endif
+
 /*
  * 0x004745F0: opens the joysticks (at most PAD_MAX). Returns the button
  * count of the first opened joystick that has buttons, 0 when there is
@@ -39,6 +46,14 @@ int Pads_Init(void)
 #endif
 
     g_padCount = SDL_NumJoysticks();
+    /*
+     * Diagnostic (port addition): how many devices SDL reports, and what each
+     * one looks like. Without this the only evidence was "Initializing pads...
+     * OK", which says a pad opened but not which pad, what topology it has, or
+     * which engine button codes it will therefore deliver -- the three things
+     * needed to explain a pad that opens and then appears dead.
+     */
+    Log_Printf("pads: SDL_NumJoysticks() = %d\n", g_padCount);
     if (g_padCount == 0) {
 #if defined(ANDROID_PORT) || defined(MUGEN_SDL2_API)
         /*
@@ -77,12 +92,37 @@ int Pads_Init(void)
         if (count > PAD_BUTTONS) {
             pad->button_count = PAD_BUTTONS;
         }
+        /*
+         * The topology decides every engine button code:
+         *   axis  n   -> pad*PAD_BUTTONS + n*2 + 1 (negative) / + 2 (positive)
+         *   hat       -> pad*PAD_BUTTONS + axes*2 + 1..4 (up, down, left, right)
+         *   button b  -> pad*PAD_BUTTONS + axes*2 + hats*4 + 1 + b
+         * So the same physical pad produces different codes once its axis or
+         * hat count changes, and mugen.cfg's [P<n> Joystick] group has to agree
+         * with that. Printing the ranges is what makes a mismatch visible.
+         */
+        Log_Printf("pads: %d \"%s\" axes=%d hats=%d buttons=%d -> "
+                   "axis codes %d..%d, hat codes %d..%d, button codes %d..%d\n",
+                   i, SDL_JoystickName(joy) != NULL ? SDL_JoystickName(joy) : "(unnamed)",
+                   SDL_JoystickNumAxes(joy), SDL_JoystickNumHats(joy), SDL_JoystickNumButtons(joy),
+                   1, pad->hat_base, pad->hat_base + 1, pad->hat_base + 4,
+                   pad->button_base + 1, pad->button_base + SDL_JoystickNumButtons(joy));
+        if (count > PAD_BUTTONS) {
+            Log_Printf("pads: %d has %d codes, only %d fit a slot; the rest are dropped\n", i, count,
+                       PAD_BUTTONS);
+        }
         if (found == 0) {
             found = pad->button_count;
         }
     }
     /* One byte more than the INPUT_PAD_COUNT buttons. */
     memset(g_padButtonState, 0, INPUT_PAD_COUNT + 1);
+#ifdef ANDROID_PORT
+    if (Pads_OpenControllers() > 0) {
+        /* Controller events, not raw joystick events, drive these pads. */
+        SDL_GameControllerEventState(SDL_ENABLE);
+    }
+#endif
     g_padsActive = found != 0;
     if (g_padsActive) {
         SDL_JoystickEventState(SDL_ENABLE);
@@ -90,6 +130,242 @@ int Pads_Init(void)
     g_padsChanged = 0;
     return found;
 }
+
+#ifdef ANDROID_PORT
+/*
+ * Port fix: the Android controller path uses SDL's game-controller semantics.
+ *
+ * The engine's raw model turns a device's axis/hat/button *indices* into input
+ * codes (code = axes*2 + hats*4 + 1 + index). That only lines up with a given
+ * mugen.cfg when the pad has the topology those numbers were written for, and
+ * a real Android pad does not: the tested Xbox Wireless Controller reports
+ * 8 axes and 0 hats, so its face buttons start at code 17 while mugen.cfg's
+ * A/B/X/Y (13..16) are axis codes on it, and its d-pad arrives as buttons at
+ * code 32+ -- past the 32 codes one pad slot holds, so those were dropped
+ * outright. The pad opened, and nothing on it worked.
+ *
+ * So on Android the semantic controls are bound directly. SDL_GameController
+ * maps a device through its own database, so A/B/X/Y, the d-pad, the shoulders
+ * and Start mean the same thing on every pad. The engine's 12 code slots per
+ * pad are more than enough for those eleven controls.
+ *
+ * The compact layout, also written into g_game->joy_keys by
+ * Pads_ControllerBindings():
+ *
+ *   1 up   2 down   3 left   4 right
+ *   5 A    6 B      7 C      8 X      9 Y      10 Z      11 Start
+ *
+ * Directions keep 1..4 because that is where the raw axis path already put the
+ * left stick -- the two agree instead of fighting.
+ *
+ * C and Z go on the shoulders (RB and LB): a M.U.G.E.N 6-button pad puts the
+ * third punch and third kick on the top row, and a modern gamepad's only
+ * remaining buttons are RB/LB. Logged at start-up so the choice is visible.
+ */
+#define PAD_CTRL_UP     1
+#define PAD_CTRL_DOWN   2
+#define PAD_CTRL_LEFT   3
+#define PAD_CTRL_RIGHT  4
+#define PAD_CTRL_A      5
+#define PAD_CTRL_B      6
+#define PAD_CTRL_C      7
+#define PAD_CTRL_X      8
+#define PAD_CTRL_Y      9
+#define PAD_CTRL_Z      10
+#define PAD_CTRL_START  11
+
+/* Sidecar, not a field on Pad: the reconstructed struct has a fixed layout
+ * (MUGEN_ASSERT_SIZE(Pad, 0x14)) and backend state must not extend it. */
+static SDL_GameController *g_padController[PAD_MAX];
+
+/* Semantic control -> compact engine code, in one table so the two lists
+ * cannot drift apart. */
+typedef struct PadCtrlMap {
+    SDL_GameControllerButton button;
+    int code;
+    int key;
+    const char *name;
+} PadCtrlMap;
+
+static const PadCtrlMap pad_ctrl_map[] = {
+    { SDL_CONTROLLER_BUTTON_DPAD_UP, PAD_CTRL_UP, KEY_JUMP, "Up" },
+    { SDL_CONTROLLER_BUTTON_DPAD_DOWN, PAD_CTRL_DOWN, KEY_CROUCH, "Down" },
+    { SDL_CONTROLLER_BUTTON_DPAD_LEFT, PAD_CTRL_LEFT, KEY_LEFT, "Left" },
+    { SDL_CONTROLLER_BUTTON_DPAD_RIGHT, PAD_CTRL_RIGHT, KEY_RIGHT, "Right" },
+    { SDL_CONTROLLER_BUTTON_A, PAD_CTRL_A, KEY_A, "A" },
+    { SDL_CONTROLLER_BUTTON_B, PAD_CTRL_B, KEY_B, "B" },
+    { SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, PAD_CTRL_C, KEY_C, "C" },
+    { SDL_CONTROLLER_BUTTON_X, PAD_CTRL_X, KEY_X, "X" },
+    { SDL_CONTROLLER_BUTTON_Y, PAD_CTRL_Y, KEY_Y, "Y" },
+    { SDL_CONTROLLER_BUTTON_LEFTSHOULDER, PAD_CTRL_Z, KEY_Z, "Z" },
+    { SDL_CONTROLLER_BUTTON_START, PAD_CTRL_START, KEY_START, "Start" },
+};
+#define PAD_CTRL_MAP_COUNT ((int)(sizeof(pad_ctrl_map) / sizeof(pad_ctrl_map[0])))
+
+/* Opens the game controllers that back the joysticks already opened. Returns
+ * how many opened. A pad SDL has no mapping for stays unopened and the caller
+ * keeps the raw code path. */
+static int Pads_OpenControllers(void)
+{
+    int opened = 0;
+    int i;
+
+    for (i = 0; i < g_padCount && i < PAD_MAX; i++) {
+        if (g_pads[i].joystick == NULL) {
+            continue;
+        }
+        if (!SDL_IsGameController(i)) {
+            Log_Printf("pads: %d has no SDL game-controller mapping; raw codes only\n", i);
+            continue;
+        }
+        g_padController[i] = SDL_GameControllerOpen(i);
+        if (g_padController[i] == NULL) {
+            Log_Printf("pads: %d could not open as a game controller: %s\n", i, SDL_GetError());
+            continue;
+        }
+        Log_Printf("pads: %d opened as a game controller (semantic buttons)\n", i);
+        opened++;
+    }
+    return opened;
+}
+
+static void Pads_CloseControllers(void)
+{
+    int i;
+
+    for (i = 0; i < PAD_MAX; i++) {
+        if (g_padController[i] != NULL) {
+            SDL_GameControllerClose(g_padController[i]);
+            g_padController[i] = NULL;
+        }
+    }
+}
+
+/* 1 when the slot is driven by a game controller, so the raw event path must
+ * keep out of the way: its axis codes 9..12 would collide with the compact
+ * layout's X/Y/Z/Start. */
+int Pads_SlotUsesController(int slot)
+{
+    if (slot < 0 || slot >= PAD_MAX) {
+        return 0;
+    }
+    return g_padController[slot] != NULL;
+}
+
+/* How many pads are driven by a game controller (0 when none). */
+int Pads_ControllerCount(void)
+{
+    int n = 0;
+    int i;
+
+    for (i = 0; i < PAD_MAX; i++) {
+        if (g_padController[i] != NULL) {
+            n++;
+        }
+    }
+    return n;
+}
+
+/* Fills out[KEY_COUNT] with the local code of each action, or JOY_NONE when
+ * the pad does not have that control. */
+void Pads_ControllerBindings(int *out)
+{
+    int i;
+
+    for (i = 0; i < KEY_COUNT; i++) {
+        out[i] = JOY_NONE;
+    }
+    if (g_padController[0] == NULL) {
+        return;
+    }
+    for (i = 0; i < PAD_CTRL_MAP_COUNT; i++) {
+        out[pad_ctrl_map[i].key] = pad_ctrl_map[i].code;
+    }
+    Log_Printf("pads: controller layout:");
+    for (i = 0; i < PAD_CTRL_MAP_COUNT; i++) {
+        Log_Printf(" %s=%d", pad_ctrl_map[i].name, pad_ctrl_map[i].code);
+    }
+    Log_Printf("\n");
+}
+
+/*
+ * Handles an SDL controller event by mapping the semantic control onto the
+ * compact layout above.
+ */
+void Pads_HandleControllerEvent(const SDL_Event *ev)
+{
+    int slot;
+    int i;
+
+    if (!g_padsActive) {
+        return;
+    }
+    for (slot = 0; slot < PAD_MAX; slot++) {
+        if (g_padController[slot] != NULL) {
+            SDL_JoystickID id = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(g_padController[slot]));
+
+            if (ev->type == SDL_CONTROLLERBUTTONDOWN || ev->type == SDL_CONTROLLERBUTTONUP) {
+                if (id != ev->cbutton.which) {
+                    continue;
+                }
+            } else if (ev->type == SDL_CONTROLLERAXISMOTION) {
+                if (id != ev->caxis.which) {
+                    continue;
+                }
+            } else {
+                return;
+            }
+            break;
+        }
+    }
+    if (slot >= PAD_MAX) {
+        return;
+    }
+
+    if (ev->type == SDL_CONTROLLERBUTTONDOWN || ev->type == SDL_CONTROLLERBUTTONUP) {
+        int pressed = ev->type == SDL_CONTROLLERBUTTONDOWN;
+        static int logged[PAD_CTRL_MAP_COUNT];
+
+        for (i = 0; i < PAD_CTRL_MAP_COUNT; i++) {
+            if (pad_ctrl_map[i].button != ev->cbutton.button) {
+                continue;
+            }
+            if (logged[i] < 2) {
+                logged[i]++;
+                Log_Printf("pads: controller %s %s -> code %d (slot %d)\n", pad_ctrl_map[i].name,
+                           pressed ? "down" : "up", slot * PAD_BUTTONS + pad_ctrl_map[i].code, slot);
+            }
+            Pads_SetButton(slot * PAD_BUTTONS + pad_ctrl_map[i].code, pressed ? 1 : 0);
+            return;
+        }
+        return;
+    }
+
+    /* Axes: the left stick steers with the same codes the d-pad uses, so
+     * either input works without a second binding. */
+    if (ev->type == SDL_CONTROLLERAXISMOTION) {
+        int axis = ev->caxis.axis;
+        int value = ev->caxis.value;
+        int first;
+        int dir;
+
+        if (axis != SDL_CONTROLLER_AXIS_LEFTX && axis != SDL_CONTROLLER_AXIS_LEFTY) {
+            return;
+        }
+        first = (axis == SDL_CONTROLLER_AXIS_LEFTX) ? PAD_CTRL_LEFT : PAD_CTRL_UP;
+        dir = (value < -PAD_AXIS_THRESHOLD) ? -1 : ((value > PAD_AXIS_THRESHOLD) ? 1 : 0);
+        if (dir <= 0 && g_padButtonState[slot * PAD_BUTTONS + first] != 0) {
+            Pads_SetButton(slot * PAD_BUTTONS + first, 0);
+        }
+        if (dir >= 0 && g_padButtonState[slot * PAD_BUTTONS + first + 1] != 0) {
+            Pads_SetButton(slot * PAD_BUTTONS + first + 1, 0);
+        }
+        if (dir != 0) {
+            Pads_SetButton(slot * PAD_BUTTONS + first + (dir > 0), 1);
+        }
+    }
+}
+#endif /* ANDROID_PORT */
 
 /* 0x004746D0: closes the joysticks and removes the joystick handler. */
 void Input_DeinitPads(void)
@@ -102,6 +378,9 @@ void Input_DeinitPads(void)
     }
 #endif
     g_padHandler = NULL;
+#ifdef ANDROID_PORT
+    Pads_CloseControllers();
+#endif
     memset(g_padButtonState, 0, INPUT_PAD_COUNT + 1);
     g_padQueueWrite = 0;
     g_padQueueRead = 0;
@@ -223,12 +502,43 @@ void Pads_HandleEvent(const SDL_Event *ev)
     int slot;
 
     if (g_padsActive == 0) {
+        /*
+         * Diagnostic (port addition): say why a real event is being dropped.
+         * A pad that opens but never activates lands here for every event, and
+         * silently returning left nothing to distinguish that from a device
+         * that sends nothing at all.
+         */
+        static int logged;
+        if (!logged) {
+            logged = 1;
+            Log_Printf("pads: ignoring joystick event %d: no pad is active (g_padsActive=0)\n",
+                       (int)ev->type);
+        }
         return;
     }
     slot = Pads_EventSlot(ev);
     if (slot < 0) {
+        static int logged_slot;
+        if (!logged_slot) {
+            logged_slot = 1;
+            Log_Printf("pads: ignoring joystick event %d: device is not an open pad slot\n",
+                       (int)ev->type);
+        }
         return;
     }
+#ifdef ANDROID_PORT
+    /*
+     * The same device delivers both raw joystick events and controller events.
+     * When a slot is backed by a game controller the semantic path owns it:
+     * letting the raw path through as well pressed two codes per physical
+     * button (observed: d-pad Down arrived as controller code 2 AND as raw
+     * code 29), and the raw codes 9..12 would collide with the compact
+     * layout's X/Y/Z/Start.
+     */
+    if (Pads_SlotUsesController(slot)) {
+        return;
+    }
+#endif
     /*
      * Fix (port change): the original indexes the pad's button codes without a
      * bound, and the check that guarded it was Android-only. A pad reporting
@@ -264,7 +574,13 @@ void Pads_HandleEvent(const SDL_Event *ev)
     }
     if (ev->type == SDL_JOYHATMOTION) {
         int base = slot * PAD_BUTTONS + g_pads[slot].hat_base + 1;
+        static int logged_hat;
 
+        if (logged_hat < 8) {
+            logged_hat++;
+            Log_Printf("pads: hat %u value 0x%X -> codes %d..%d (slot %d)\n",
+                       (unsigned)ev->jhat.hat, (unsigned)ev->jhat.value, base, base + 3, slot);
+        }
         pad_set_flag(base, ev->jhat.value & SDL_HAT_UP);
         pad_set_flag(base + 1, ev->jhat.value & SDL_HAT_DOWN);
         pad_set_flag(base + 2, ev->jhat.value & SDL_HAT_LEFT);
@@ -296,7 +612,13 @@ void Pads_HandleEvent(const SDL_Event *ev)
         }
         if (dir != 0) {
             int code = pad * PAD_BUTTONS + first + (dir > 0);
+            static int logged_axis;
 
+            if (logged_axis < 16 && g_padButtonState[code] != 1) {
+                logged_axis++;
+                Log_Printf("pads: axis %d value %d -> code %d (slot %d)\n", ev->jaxis.axis,
+                           (int)ev->jaxis.value, code, pad);
+            }
             if (g_padButtonState[code] != 1) {
                 Pads_SetButton(code, 1);
             }
@@ -309,9 +631,23 @@ void Pads_HandleEvent(const SDL_Event *ev)
         int code;
 
         if (button >= PAD_BUTTONS) {
+            static int logged_over;
+            if (logged_over < 4) {
+                logged_over++;
+                Log_Printf("pads: button %u maps to code %d, outside a slot (%d); dropped\n",
+                           (unsigned)ev->jbutton.button, button, PAD_BUTTONS);
+            }
             return;
         }
         code = slot * PAD_BUTTONS + button;
+        {
+            static int logged_btn;
+            if (logged_btn < 16) {
+                logged_btn++;
+                Log_Printf("pads: button %u %s -> code %d (slot %d)\n",
+                           (unsigned)ev->jbutton.button, pressed ? "down" : "up", code, slot);
+            }
+        }
         if ((signed char)g_padButtonState[code] != pressed) {
             Pads_SetButton(code, pressed);
         }
@@ -466,3 +802,64 @@ void Pads_DeviceEvent(const SDL_Event *event)
     SDL_JoystickEventState(SDL_ENABLE);
 }
 #endif
+
+/*
+ * Diagnostic (port addition): the joystick bindings the config asked for.
+ *
+ * Printed after the options reload, because Options_Load rereads
+ * [P1 Joystick]/[P2 Joystick] and a platform policy may have replaced them
+ * since. Comparing these codes with the "pads: N ... -> codes" line from
+ * Pads_Init is what shows whether a pad that opens will actually press
+ * anything: the same physical button produces different engine codes on a
+ * controller with a different axis or hat count.
+ */
+void Pads_LogBindings(void)
+{
+    static const struct {
+        int key;
+        const char *name;
+    } names[] = {
+        { KEY_JUMP, "Jump" },   { KEY_RIGHT, "Right" }, { KEY_CROUCH, "Crouch" }, { KEY_LEFT, "Left" },
+        { KEY_A, "A" },         { KEY_B, "B" },         { KEY_C, "C" },           { KEY_X, "X" },
+        { KEY_Y, "Y" },         { KEY_Z, "Z" },         { KEY_START, "Start" },
+    };
+    int player;
+
+    if (g_game == NULL) {
+        return;
+    }
+    for (player = 0; player < 2; player++) {
+        const int *jk = g_game->joy_keys[player];
+        int unbound = 0;
+        int n;
+
+        /* Built piecewise with an explicit cursor: an accumulating snprintf
+         * offset can exceed the buffer when a value is long, and the previous
+         * version then underflowed the remaining-size argument. */
+        {
+            char line[192];
+            int pos = 0;
+
+            line[0] = '\0';
+            for (n = 0; n < (int)(sizeof(names) / sizeof(names[0])); n++) {
+                int v = jk[names[n].key];
+                int room = (int)sizeof(line) - pos;
+
+                if (v == JOY_NONE) {
+                    unbound++;
+                }
+                if (room <= 1) {
+                    break;
+                }
+                pos += snprintf(line + pos, (size_t)room, "%s%s=%d", pos != 0 ? " " : "", names[n].name, v);
+                if (pos >= (int)sizeof(line)) {
+                    pos = (int)sizeof(line) - 1;
+                }
+            }
+            Log_Printf("pads: P%d joystick bindings from mugen.cfg: %s\n", player + 1, line);
+        }
+        if (unbound == (int)(sizeof(names) / sizeof(names[0]))) {
+            Log_Printf("pads: P%d has no joystick bound (every entry is JOY_NONE)\n", player + 1);
+        }
+    }
+}

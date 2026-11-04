@@ -1542,6 +1542,15 @@ void __cdecl Pads_DeviceEvent(const SDL_Event *event);
 /* 0x00474a60 */ void __cdecl Pads_QueueCode(int code);
 /* 0x00474ac0 */ int __cdecl Pads_PopCode(void);
 /* 0x00474b10 */ int __cdecl Pads_CodePending(void);
+/* Port addition: diagnostic dump of the configured joystick bindings. */
+void __cdecl Pads_LogBindings(void);
+#ifdef ANDROID_PORT
+/* Android controller path (SDL game-controller semantics). */
+void __cdecl Pads_HandleControllerEvent(const SDL_Event *ev);
+int __cdecl Pads_SlotUsesController(int slot);
+void __cdecl Pads_ControllerBindings(int *out);
+int __cdecl Pads_ControllerCount(void);
+#endif
 /* 0x00474b30 */ long long __cdecl Input_FindKey(int *const *maps, int count, int code);
 /* 0x00474cd0 */ Cutscene *__cdecl Storyboard_Load(const char *path);
 /* 0x00474e40 */ Cutscene *__cdecl Storyboard_Create(const char *dir, Ini *ini);
