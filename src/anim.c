@@ -753,7 +753,8 @@ void Anim_Draw(AnimState *st, const DrawParams *dp, float sx, float sy)
 #endif
             if (st->sprite != -1) {
                 if (st->queue == NULL) {
-#ifndef ANDROID_PORT
+#if !defined(ANDROID_PORT) || defined(MUGEN_GLES)
+        /* M8: with the GLES backend the GL drawer exists on Android too. */
                     if (g_renderMode == RENDER_MODE_GL) {
                         Sprite_DrawGL(st->sprites, st->sprite, &local);
                     } else

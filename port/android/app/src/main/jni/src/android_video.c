@@ -183,6 +183,34 @@ SDL_Surface *Android_CreateDisplayGL(int width, int height, int depth, int keep_
     return surface;
 }
 
+/* The GL window's drawable size in pixels: the panel or window size, which is
+ * not the game resolution. The GLES presenter builds its viewport from this. */
+void Android_GLDrawableSize(int *w, int *h)
+{
+    int dw = 0;
+    int dh = 0;
+
+    if (w != NULL) {
+        *w = 0;
+    }
+    if (h != NULL) {
+        *h = 0;
+    }
+    if (display_window == NULL) {
+        return;
+    }
+    SDL_GL_GetDrawableSize(display_window, &dw, &dh);
+    if (dw <= 0 || dh <= 0) {
+        SDL_GetWindowSize(display_window, &dw, &dh);
+    }
+    if (w != NULL) {
+        *w = dw;
+    }
+    if (h != NULL) {
+        *h = dh;
+    }
+}
+
 /* Presents the GL frame. The GLES renderer has already drawn into the default
  * framebuffer, so this is the swap and nothing else. */
 int Android_GLPresent(void)

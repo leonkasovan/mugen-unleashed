@@ -120,7 +120,13 @@ SpriteSet *Screen_Create(int depth, int width, int height)
         return NULL;
     }
     for (i = 0; i < 1; i++) {
-#ifndef ANDROID_PORT
+#if !defined(ANDROID_PORT) || defined(MUGEN_GLES)
+        /*
+         * M8: the GLES backend gives Android a real GL renderer, so the screen
+         * buffer is a render-target texture in GL mode here too. With a CPU
+         * surface instead, Gl_Present had no texture to draw and the window
+         * stayed black while sprites rendered invisibly.
+         */
         if (g_renderMode == RENDER_OPENGL) {
             void *vbuf = GlVbuf_Alloc(depth, width, height);
             if (!Sprite_Init(SPRITE_INIT_OWN, &spr, SPRITE_FORMAT_TEXTURE, vbuf, 0x1C, width, height, depth, 0, 0)) {
@@ -171,13 +177,19 @@ int Gfx_SetRenderTarget(SpriteSet *target, int index)
         g_targetPixels = 0;
         g_targetBytesPerPixel = g_videoBytesPerPixel;
         g_clipRowSkip = 0;
-#ifndef ANDROID_PORT
-        /* Android port: no GL renderer is compiled in, so these cannot run. */
+#if !defined(ANDROID_PORT) || defined(MUGEN_GLES)
+        /* M8: GL mode exists on Android too (see Screen_Create). */
         if (g_renderMode == RENDER_OPENGL && changed) {
+#ifdef MUGEN_GLES
+            /* GLES has no *EXT framebuffer entry points; GlVbuf_Bind(NULL)
+             * binds the window and re-establishes the viewport/projection. */
+            GlVbuf_Bind(NULL);
+#else
             g_glewBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
             g_glBoundFramebuffer = 0;
             glViewport(0, 0, g_videoWidth, g_videoHeight);
             Gl_SetupView();
+#endif
         }
 #endif
         Gfx_SetClipRect(0, 0, g_targetWidth, g_targetHeight);
@@ -195,7 +207,10 @@ int Gfx_SetRenderTarget(SpriteSet *target, int index)
     g_targetBpp = spr->bpp;
     g_targetBytesPerPixel = (spr->bpp + 7) >> 3;
     g_clipRowSkip = 0;
-#ifdef ANDROID_PORT
+#if defined(MUGEN_GLES)
+    /* M8: bind the render target's framebuffer, as the desktop path does. */
+    if (spr->format == SPRITE_FORMAT_TEXTURE && (spr->pixels == NULL || !GlVbuf_Bind(spr->pixels))) {
+#elif defined(ANDROID_PORT)
     if (spr->format == SPRITE_FORMAT_TEXTURE) {
 #else
     if (spr->format == SPRITE_FORMAT_TEXTURE && (spr->pixels == NULL || !GlVbuf_Bind(spr->pixels))) {

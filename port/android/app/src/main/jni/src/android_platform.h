@@ -24,6 +24,7 @@ SDL_Surface *Android_CreateDisplay(int width, int height, int depth, int keep_as
 /* GLES presentation path; see android_video.c for the window ownership rule. */
 SDL_Surface *Android_CreateDisplayGL(int width, int height, int depth, int keep_aspect);
 int Android_GLPresent(void);
+void Android_GLDrawableSize(int *w, int *h);
 #endif
 int Android_PresentFrame(void);
 void Android_MarkDisplayDirty(SDL_Surface *surface);

@@ -101,7 +101,7 @@ int GlTex_Alloc(GlTex *tex, int w, int h)
     if (tex->id == 0) {
         glGenTextures(1, &id);
         if (id == 0) {
-            MatchLog_Printf(3, "GLES: glGenTextures failed\n");
+            Log_Printf("GLES: glGenTextures failed\n");
             return 0;
         }
         tex->id = (unsigned int)id;
@@ -132,8 +132,25 @@ static void gles_tex_account(GlTex *tex, int w, int h, int bytes_per_pixel)
 
 int GlTex_Upload(GlTex *tex, int h, int internal_format, int w, int format, const void *pixels)
 {
-    if (tex == NULL || tex->id == 0) {
+    GLuint id;
+
+    if (tex == NULL || w <= 0 || h <= 0) {
         return 0;
+    }
+    /*
+     * Allocate the GL name on first use. The desktop renderer always calls
+     * GlTex_Init/GlTex_Alloc first, but the GLES path uploads into long-lived
+     * scratch textures (one for paletted sprites, one for true colour) that
+     * start empty -- refusing an id of 0 here made every sprite upload fail and
+     * the draw return early, which is why nothing was ever rendered.
+     */
+    if (tex->id == 0) {
+        id = 0;
+        glGenTextures(1, &id);
+        if (id == 0) {
+            return 0;
+        }
+        tex->id = (unsigned int)id;
     }
     glBindTexture(GL_TEXTURE_2D, (GLuint)tex->id);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -171,7 +188,7 @@ int GlTex_Upload2D(int h, int bpp, GlTex *tex, const void *pixels, int w)
         gles_tex_account(tex, w, h, 4);
         return GlTex_Upload(tex, h, GL_RGBA, w, GL_RGBA, pixels);
     }
-    MatchLog_Printf(3, "GLES: sprite of %d bpp has no texture format\n", bpp);
+    Log_Printf("GLES: sprite of %d bpp has no texture format\n", bpp);
     return 0;
 }
 
@@ -221,7 +238,7 @@ static char *gles_read_shader(const char *name)
     snprintf(path, sizeof(path), "data/%s", name);
     f = fopen(path, "rb");
     if (f == NULL) {
-        MatchLog_Printf(3, "GLES: cannot open %s\n", path);
+        Log_Printf("GLES: cannot open %s\n", path);
         return NULL;
     }
     fseek(f, 0, SEEK_END);
@@ -313,18 +330,18 @@ int Gl_Init(int framebuffers)
         return 1;
     }
     if (!Gles_Probe(&caps)) {
-        MatchLog_Printf(3, "GLES: capability probe failed; GL mode unavailable\n");
+        Log_Printf("GLES: capability probe failed; GL mode unavailable\n");
         return 0;
     }
     g_glesCaps = caps;
 
     if (!gles_load_es_program(&g_glesProgramIndexed, "indexed")) {
-        MatchLog_Printf(3, "GLES: indexed program unavailable; GL mode unavailable\n");
+        Log_Printf("GLES: indexed program unavailable; GL mode unavailable\n");
         Gl_Deinit();
         return 0;
     }
     if (!gles_load_es_program(&g_glesProgramRgba, "rgba")) {
-        MatchLog_Printf(3, "GLES: rgba program unavailable; GL mode unavailable\n");
+        Log_Printf("GLES: rgba program unavailable; GL mode unavailable\n");
         Gl_Deinit();
         return 0;
     }
@@ -333,7 +350,7 @@ int Gl_Init(int framebuffers)
     g_glesSolidFrag = strdup(gles_solid_frag_src);
     if (g_glesSolidVert == NULL || g_glesSolidFrag == NULL ||
         !GlesDraw_LoadProgram(&g_glesProgramSolid, g_glesSolidVert, g_glesSolidFrag, "solid")) {
-        MatchLog_Printf(3, "GLES: solid program unavailable; GL mode unavailable\n");
+        Log_Printf("GLES: solid program unavailable; GL mode unavailable\n");
         Gl_Deinit();
         return 0;
     }
@@ -348,7 +365,7 @@ int Gl_Init(int framebuffers)
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
     glDisable(GL_DEPTH_TEST);
     g_glesReady = 1;
-    MatchLog_Printf(7, "GLES: renderer ready (indexed+rgba+solid, max texture %d)\n", g_glMaxTextureSize);
+    Log_Printf("GLES: renderer ready (indexed+rgba+solid, max texture %d)\n", g_glMaxTextureSize);
     return 1;
 }
 
@@ -472,7 +489,7 @@ void Gfx_GlInvertPixel(int x, int y)
 
     if (!logged) {
         logged = 1;
-        MatchLog_Printf(3, "GLES: invert-pixel unsupported (no logic ops); ignored\n");
+        Log_Printf("GLES: invert-pixel unsupported (no logic ops); ignored\n");
     }
     (void)x;
     (void)y;
@@ -635,7 +652,7 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
         Palette *pal = SpriteSet_GetPaletteConverted(set, spr->pal_index);
 
         if (pal == NULL) {
-            MatchLog_Printf(3, "GLES: sprite %d has no usable palette; draw skipped\n", sprite);
+            Log_Printf("GLES: sprite %d has no usable palette; draw skipped\n", sprite);
             return;
         }
         pal_tex = &pal_scratch;
@@ -768,17 +785,88 @@ void Sprite_DrawGL(SpriteSet *set, int sprite, const DrawParams *dp)
 
 /* ----------------------------------------------------------- present */
 
+/*
+ * Presents: binds the window framebuffer and draws the screen buffer texture
+ * across it. The desktop renderer does the same through Gl_DrawQuadRgba; here
+ * the quad is submitted directly, with a projection that maps the texture onto
+ * the whole window.
+ */
 void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
 {
-    /* The frame is already drawn into the default framebuffer; presenting is
-     * the swap, which the Android video layer owns. */
-    (void)set;
-    (void)sprite;
-    (void)x;
-    (void)y;
-    (void)w;
-    (void)h;
+    Sprite *spr;
+    GlTex *tex;
+    GlMvp proj;
+    float pos[8];
+    float tc[16] = { 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f,
+                     0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 0.0f, 1.0f };
+    int win_w = 0;
+    int win_h = 0;
+
     glDisable(GL_SCISSOR_TEST);
+    if (!g_glesReady || set == NULL) {
+        return;
+    }
+    spr = (Sprite *)(set->sprites->data + set->sprites->elem_size * sprite);
+    if (spr == NULL || spr->format != SPRITE_FORMAT_TEXTURE) {
+        return;
+    }
+    tex = (GlTex *)spr->pixels;
+    if (tex == NULL || tex->id == 0) {
+        return;
+    }
+    if (w == 0.0f && h == 0.0f) {
+        w = (float)spr->w;
+        h = (float)spr->h;
+    }
+
+    /* The window's own pixel size: the drawable, not the game resolution. */
+    Android_GLDrawableSize(&win_w, &win_h);
+    if (win_w <= 0 || win_h <= 0) {
+        return;
+    }
+    /*
+     * Save the binding and put it back afterwards.
+     *
+     * Gfx_SetRenderTarget only rebinds when the target *changes*, so leaving
+     * the window bound here meant the next frame drew into the window instead
+     * of the screen texture -- and then this function cleared the window and
+     * blitted the (empty) texture over it. Every frame wiped the previous one,
+     * which is exactly the black screen with a small flicker that showed up.
+     */
+    {
+        GLint saved_fbo = 0;
+
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        g_glBoundFramebuffer = 0;
+        glViewport(0, 0, win_w, win_h);
+    glDisable(GL_BLEND);
+    glDisable(GL_SCISSOR_TEST);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    /*
+     * Ortho over the game size with the viewport over the whole window: the
+     * engine's own coordinates stay at the game resolution and the driver
+     * scales the result to the panel, which is what the desktop path does
+     * (Gl_SetupView uses g_targetWidth/Height, the viewport the drawable).
+     * Using the window size for both drew the quad into a 1280x720 corner of a
+     * 1920x1080 surface with the rest left at the clear colour.
+     */
+    GlMvp_SetupView(&proj, 0, g_targetWidth, g_targetHeight, 0, g_glNear, g_glFar, 1.0);
+    pos[0] = x;         pos[1] = y;
+    pos[2] = x + w;     pos[3] = y;
+    pos[4] = x;         pos[5] = y + h;
+    pos[6] = x + w;     pos[7] = y + h;
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)tex->id);
+    GlesDraw_Quad(&g_glesBuffer, &g_glesProgramRgba, proj.m, pos, tc, 0, 0, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 0,
+                  1.0f, (float)tex->w, (float)tex->h, 1.0f);
+        glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
+        g_glBoundFramebuffer = saved_fbo != 0 ? 1 : 0;
+        Gl_SetupView();
+    }
 }
 
 /* Copies the framebuffer into a new surface (screenshot). */
@@ -813,12 +901,110 @@ void *Gl_Capture(void)
     return shot;
 }
 
-/* Attaches a framebuffer (render target). */
+/*
+ * Render targets (the desktop renderer's "vbuf": a texture with a depth
+ * renderbuffer behind a framebuffer object).
+ *
+ * The engine draws the frame into the screen buffer, which in GL mode is a
+ * texture rather than a CPU surface, and Gl_Present then draws that texture to
+ * the window. Without a working FBO the screen buffer cannot be a texture and
+ * Gl_Present has nothing to show -- which is exactly the black screen the GLES
+ * path produced before this.
+ */
+int GlTex_AllocDepth(GlTex *tex)
+{
+    GLuint depth = 0;
+
+    if (tex == NULL || tex->w <= 0 || tex->h <= 0) {
+        return 0;
+    }
+    if (tex->depth != 0) {
+        return 1;
+    }
+    glGenRenderbuffers(1, &depth);
+    if (depth == 0) {
+        Log_Printf("GLES: glGenRenderbuffers failed\n");
+        return 0;
+    }
+    glBindRenderbuffer(GL_RENDERBUFFER, depth);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, tex->w, tex->h);
+    glBindRenderbuffer(GL_RENDERBUFFER, 0);
+    tex->depth = (unsigned int)depth;
+    return 1;
+}
+
 void Gl_AttachFramebuffer(unsigned int texture, unsigned int depth)
 {
-    (void)texture;
-    (void)depth;
-    MatchLog_Printf(3, "GLES: render targets are not implemented yet; draw ignored\n");
+    static GLuint fbo;
+
+    if (fbo == 0) {
+        glGenFramebuffers(1, &fbo);
+        if (fbo == 0) {
+            Log_Printf("GLES: glGenFramebuffers failed\n");
+            return;
+        }
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, (GLuint)texture, 0);
+    if (depth != 0) {
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, (GLuint)depth);
+    } else {
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, 0);
+    }
+    {
+        GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+
+        if (status != GL_FRAMEBUFFER_COMPLETE) {
+            static int logged;
+
+            if (!logged) {
+                logged = 1;
+                Log_Printf("GLES: render target incomplete (0x%X); drawing to the window\n", (unsigned)status);
+            }
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            g_glBoundFramebuffer = 0;
+            return;
+        }
+    }
+    g_glBoundFramebuffer = 1;
+}
+
+/* Allocates a render-target texture (w x h RGBA plus a depth renderbuffer). */
+GlTex *GlVbuf_Alloc(int depth, int w, int h)
+{
+    GlTex *tex;
+
+    if (depth <= 16) {
+        Log_Printf("GLES: render target depth %d unsupported (needs 32)\n", depth);
+        return NULL;
+    }
+    if (w <= 0 || h <= 0) {
+        return NULL;
+    }
+    tex = GlTex_Create();
+    if (tex == NULL) {
+        g_outOfMemory = 1;
+        return NULL;
+    }
+    if (!GlTex_Alloc(tex, w, h) || !GlTex_AllocDepth(tex)) {
+        GlTex_Free(tex);
+        return NULL;
+    }
+    return tex;
+}
+
+/* Binds a render target (NULL: the window) with its viewport and projection. */
+int GlVbuf_Bind(GlTex *vbuf)
+{
+    if (vbuf == NULL) {
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        g_glBoundFramebuffer = 0;
+        glViewport(0, 0, g_targetWidth, g_targetHeight);
+        return Gl_SetupView();
+    }
+    Gl_AttachFramebuffer(vbuf->id, vbuf->depth);
+    glViewport(0, 0, vbuf->w, vbuf->h);
+    return Gl_SetupView();
 }
 
 #endif /* ANDROID_PORT && MUGEN_GLES */

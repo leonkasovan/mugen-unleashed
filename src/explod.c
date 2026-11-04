@@ -550,7 +550,8 @@ void SysDraw_Update(SysDrawItem *e)
         Anim_Draw(e->anim, &dp, 1.0f, 1.0f);
         break;
     case SYSDRAW_SPRITE:
-#ifndef ANDROID_PORT
+#if !defined(ANDROID_PORT) || defined(MUGEN_GLES)
+        /* M8: with the GLES backend the GL drawer exists on Android too. */
         if (g_renderMode == RENDER_MODE_GL) {
             Sprite_DrawGL(e->draw_sprites, e->sprite, &dp);
         } else
