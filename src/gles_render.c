@@ -10,7 +10,7 @@
  * What is here:
  *   - the GlTex_* texture object over GLES (8-bit index, 24-bit RGB, RGBA),
  *     with the palette as a 256x1 2D texture because GLES has no 1D textures;
- *   - shader programs from data/*_es.{vert,frag} (GLSL ES 1.00);
+ *   - shader programs from the *_es shader files (GLSL ES 1.00);
  *   - the sprite path: CPU modelview (src/gl_mvp.c) + VBO quad submission
  *     (src/gles_draw.c);
  *   - the dispatch entries Gfx_SelectRenderer(RENDER_OPENGL) installs:
@@ -40,6 +40,50 @@
 /* Video memory accounting, mirroring glrender.c's g_glTexMemory. */
 static unsigned long g_glesTexMemory;
 static unsigned long g_glesTexMemoryPeak;
+
+/*
+ * Storage description of the two scratch sprite textures, so a repeated upload
+ * of the same size and format can use glTexSubImage2D. Using glTexImage2D every
+ * time reallocates the texture on every sprite every frame, which measured at
+ * ~52 fps against the software renderer's locked 60 and made animation (the
+ * select cursor's 8-tick blink) look irregular.
+ *
+ * Kept as a sidecar keyed by texture id, not a field on GlTex: the struct has a
+ * fixed 32-bit layout (MUGEN_ASSERT_SIZE(GlTex, 0x1C)).
+ */
+typedef struct GlesTexFormat {
+    unsigned int id;
+    int w;
+    int h;
+    int internal_format;
+} GlesTexFormat;
+#define GLES_TEX_FORMAT_SLOTS 8
+static GlesTexFormat g_glesTexFormat[GLES_TEX_FORMAT_SLOTS];
+
+static GlesTexFormat *gles_tex_format_slot(unsigned int id)
+{
+    GlesTexFormat *free_slot = NULL;
+    int i;
+
+    for (i = 0; i < GLES_TEX_FORMAT_SLOTS; i++) {
+        if (g_glesTexFormat[i].id == id) {
+            return &g_glesTexFormat[i];
+        }
+        if (g_glesTexFormat[i].id == 0 && free_slot == NULL) {
+            free_slot = &g_glesTexFormat[i];
+        }
+    }
+    if (free_slot == NULL) {
+        /* All slots taken (more than 8 live textures): fall back to slot 0,
+         * which only costs a redundant glTexImage2D. */
+        free_slot = &g_glesTexFormat[0];
+    }
+    free_slot->id = id;
+    free_slot->w = 0;
+    free_slot->h = 0;
+    free_slot->internal_format = 0;
+    return free_slot;
+}
 
 /* 0 = created, 1 = allocated and uploaded at least once. */
 GlTex *GlTex_Create(void)
@@ -81,6 +125,14 @@ int GlTex_Delete(GlTex *tex)
         g_glesTexMemory -= tex->size;
     } else {
         g_glesTexMemory = 0;
+    }
+    {
+        GlesTexFormat *slot = gles_tex_format_slot((unsigned int)id);
+
+        slot->id = 0;
+        slot->w = 0;
+        slot->h = 0;
+        slot->internal_format = 0;
     }
     tex->id = 0;
     tex->size = 0;
@@ -158,7 +210,19 @@ int GlTex_Upload(GlTex *tex, int h, int internal_format, int w, int format, cons
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D(GL_TEXTURE_2D, 0, internal_format, w, h, 0, format, GL_UNSIGNED_BYTE, pixels);
+    {
+        GlesTexFormat *slot = gles_tex_format_slot(tex->id);
+
+        if (slot->w == w && slot->h == h && slot->internal_format == internal_format) {
+            /* Same storage: only the texels change. */
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, format, GL_UNSIGNED_BYTE, pixels);
+        } else {
+            glTexImage2D(GL_TEXTURE_2D, 0, internal_format, w, h, 0, format, GL_UNSIGNED_BYTE, pixels);
+            slot->w = w;
+            slot->h = h;
+            slot->internal_format = internal_format;
+        }
+    }
     tex->w = w;
     tex->h = h;
     return 1;
@@ -803,9 +867,6 @@ void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
     int win_h = 0;
 
     glDisable(GL_SCISSOR_TEST);
-    if (!g_glesReady || set == NULL) {
-        return;
-    }
     spr = (Sprite *)(set->sprites->data + set->sprites->elem_size * sprite);
     if (spr == NULL || spr->format != SPRITE_FORMAT_TEXTURE) {
         return;
@@ -846,14 +907,16 @@ void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
     glClear(GL_COLOR_BUFFER_BIT);
 
     /*
-     * Ortho over the game size with the viewport over the whole window: the
-     * engine's own coordinates stay at the game resolution and the driver
-     * scales the result to the panel, which is what the desktop path does
-     * (Gl_SetupView uses g_targetWidth/Height, the viewport the drawable).
-     * Using the window size for both drew the quad into a 1280x720 corner of a
-     * 1920x1080 surface with the rest left at the clear colour.
+     * The projection covers the VIDEO size, not the render target's.
+     *
+     * The desktop Gl_Present calls Gfx_SetRenderTarget(NULL, 0) first, which
+     * rewrites g_targetWidth/Height to g_videoWidth/Height before Gl_SetupView
+     * reads them. Reading the target size directly meant that a stage-fitted
+     * match -- where the screen buffer takes the stage's aspect and is smaller
+     * than the video -- projected a small region and the picture appeared
+     * shrunken at the top-left of the window.
      */
-    GlMvp_SetupView(&proj, 0, g_targetWidth, g_targetHeight, 0, g_glNear, g_glFar, 1.0);
+    GlMvp_SetupView(&proj, 0, g_videoWidth, g_videoHeight, 0, g_glNear, g_glFar, 1.0);
     pos[0] = x;         pos[1] = y;
     pos[2] = x + w;     pos[3] = y;
     pos[4] = x;         pos[5] = y + h;
