@@ -16,7 +16,9 @@ static void Config_ApplyVitaJoystick(void);
  * after the pads open (their topology is only known then). */
 static int g_cfgGamepadKeys[2][KEY_COUNT];
 static int g_cfgGamepadPresent[2];
+static int g_cfgGamepadMissing;
 static void Config_LoadGamepadGroups(Ini *ini);
+static void Config_WriteMissingGamepadGroups(void);
 /* Defined near Options_Load; Config_Load runs first. */
 void Config_ApplyAndroidJoystick(void);
 #endif
@@ -675,9 +677,109 @@ static void Config_LoadGamepadGroups(Ini *ini)
         snprintf(group, sizeof(group), "P%d Gamepad", player + 1);
         g_cfgGamepadPresent[player] = Config_ReadKeys(ini, group, g_cfgGamepadKeys[player]);
         if (!g_cfgGamepadPresent[player]) {
+            g_cfgGamepadMissing = 1;
             Log_Printf("config: no [%s] group; the built-in gamepad layout applies\n", group);
         }
     }
+}
+
+/*
+ * Port addition: writes the built-in [P<n> Gamepad] groups into mugen.cfg when
+ * it does not have them.
+ *
+ * The groups are self-documenting once they are in the file, and a user who
+ * wants to remap the pad should not have to invent the section. This runs after
+ * Config_Load has read the file (so nothing the user wrote is disturbed) and
+ * before Options_Save could rewrite it, appending at the end with the file's own
+ * line endings.
+ *
+ * Only the missing groups are added; an existing group is never touched, even
+ * partially. Failure is logged and ignored: a read-only config must not stop the
+ * game from starting.
+ */
+static void Config_WriteMissingGamepadGroups(void)
+{
+    Ini *ini;
+    Stream *s;
+    int player;
+
+    if (!g_cfgGamepadMissing) {
+        return;
+    }
+    if (!g_cfgGamepadPresent[0] && !g_cfgGamepadPresent[1]) {
+        /* Nothing to distinguish from: append the whole section. */
+    }
+    s = Stream_OpenFile(CONFIG_PATH, "rt");
+    if (s == NULL) {
+        Log_Printf("config: could not reopen %s to add the gamepad groups\n", CONFIG_PATH);
+        return;
+    }
+    ini = Ini_Parse(s, INI_MODE_EDIT);
+    Stream_Close(s);
+    if (ini == NULL) {
+        Log_Printf("config: could not parse %s to add the gamepad groups\n", CONFIG_PATH);
+        return;
+    }
+    if (!Ini_AppendLine(ini, "")) {
+        Ini_Free(ini);
+        return;
+    }
+    if (!Ini_AppendLine(ini, ";-------------------------------------------------------")) {
+        Ini_Free(ini);
+        return;
+    }
+    if (!Ini_AppendLine(ini, "; Gamepad config (Android: SDL game-controller mapping)")) {
+        Ini_Free(ini);
+        return;
+    }
+    if (!Ini_AppendLine(ini, "; Added automatically because these groups were missing.")) {
+        Ini_Free(ini);
+        return;
+    }
+    if (!Ini_AppendLine(ini, "; These are NOT the [P<n> Joystick] device indices: the Android build")) {
+        Ini_Free(ini);
+        return;
+    }
+    if (!Ini_AppendLine(ini, "; binds a pad through SDL's game-controller API and maps it onto this")) {
+        Ini_Free(ini);
+        return;
+    }
+    if (!Ini_AppendLine(ini, "; compact layout -- 1 up, 2 down, 3 left, 4 right, 5 A, 6 B, 7 C (RB),")) {
+        Ini_Free(ini);
+        return;
+    }
+    if (!Ini_AppendLine(ini, "; 8 X, 9 Y, 10 Z (LB), 11 Start. Select (Back) opens the in-match menu.")) {
+        Ini_Free(ini);
+        return;
+    }
+    for (player = 0; player < 2; player++) {
+        static const char *const names[] = { "Jump", "Crouch", "Left", "Right", "A", "B", "C", "X", "Y", "Z", "Start" };
+        static const int codes[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 };
+        char line[64];
+        int i;
+
+        if (g_cfgGamepadPresent[player]) {
+            continue;
+        }
+        snprintf(line, sizeof(line), "[P%d Gamepad]", player + 1);
+        if (!Ini_AppendLine(ini, line)) {
+            Ini_Free(ini);
+            return;
+        }
+        for (i = 0; i < (int)(sizeof(names) / sizeof(names[0])); i++) {
+            snprintf(line, sizeof(line), "%-6s = %d", names[i], codes[i]);
+            if (!Ini_AppendLine(ini, line)) {
+                Ini_Free(ini);
+                return;
+            }
+        }
+    }
+    if (!Ini_Save(ini, CONFIG_PATH)) {
+        Log_Printf("config: could not write the gamepad groups to %s\n", CONFIG_PATH);
+    } else {
+        Log_Printf("config: wrote the default gamepad groups to %s\n", CONFIG_PATH);
+    }
+    Ini_Free(ini);
 }
 
 void Config_ApplyAndroidJoystick(void)
@@ -947,6 +1049,17 @@ void Options_Load(void)
     /* [P<n> Gamepad] describes the compact game-controller layout; see
      * Config_ApplyAndroidJoystick for why Android uses that instead. */
     Config_LoadGamepadGroups(ini);
+    {
+        /* Startup only: write the defaults into the file once, so the group is
+         * visible and editable instead of being implied. Guarded so the options
+         * screen's reloads do not rewrite the config. */
+        static int wrote_defaults;
+
+        if (!wrote_defaults) {
+            wrote_defaults = 1;
+            Config_WriteMissingGamepadGroups();
+        }
+    }
 #endif
     g = g_game;
     Config_FillUnassigned(g->joy_keys[0], JOY_NONE);

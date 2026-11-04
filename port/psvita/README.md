@@ -110,6 +110,15 @@ cmake -S port/psvita -B build/psvita -G "MinGW Makefiles" ...
 cmake --build build/psvita -j8
 ```
 
+### The packed `mugen.cfg` comes from `port/psvita/mugen.cfg`
+
+`port/psvita/mugen.cfg` is the Vita's own config: `RenderMode = System`,
+`GameWidth/GameHeight = 640x480` (the render size, not the 960x544 panel),
+`FullScreen = 1`, and `[P1 Joystick]` bound to the Vita driver's engine codes
+(Triangle 9, Circle 10, Cross 11, Square 12, L 13, R 14, Down 15, Left 16,
+Up 17, Right 18, Select 19, Start 20). `MUGEN_VITA_CFG` overrides the template;
+with it empty, the data directory's `data/mugen.cfg` is used as before.
+
 ### The packed `mugen.cfg` is patched
 
 A desktop `data/mugen.cfg` does not work on the Vita, so four keys are rewritten

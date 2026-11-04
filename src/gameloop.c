@@ -112,6 +112,25 @@ int Game_ReadInput(ScreenLoop *screen)
     if (g->console_open != 0) {
         return 1;
     }
+#ifdef ANDROID_PORT
+    /*
+     * Port addition: the pad's Select/Back button opens the in-match menu.
+     *
+     * The pause path below is keyboard-only -- it tests screen->key, while pad
+     * codes arrive in screen->input2 -- so a controller had no way to reach the
+     * menu once a match started. Pads_HandleControllerEvent emits
+     * PAD_SELECT_CODE for SDL's Back/Select button; translating it here keeps
+     * the reconstructed pause logic untouched and gives the pad the same entry
+     * point the Pause key has. The press is consumed so it cannot also read as
+     * a player action.
+     */
+    if (screen->input2 != 0 && (int)(screen->input2 & ~0x100u) == PAD_SELECT_CODE) {
+        if ((screen->input2 & 0x100u) == 0) {
+            key = ENGINE_KEY_PAUSE;
+        }
+        screen->input2 = 0;
+    }
+#endif
     if (screen->kind != 8 && screen->kind != 7 && g->defocus_paused == 0 && key == ENGINE_KEY_PAUSE &&
         screen->ticks > 0) {
         g->defocus_paused = 1;

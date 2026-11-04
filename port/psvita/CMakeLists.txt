@@ -672,7 +672,25 @@ if(MUGEN_VITA_DATA_DIR)
   # patched file cannot simply be added after the tree; it has to be substituted
   # at the point the tree is enumerated (see below). The source tree is never
   # touched.
+  #
+  # The template is port/psvita/mugen.cfg when it exists: it carries the Vita's
+  # own defaults (RenderMode=System, 640x480 render size, FullScreen=1 and the
+  # PS button layout in [P<n> Joystick]) instead of the desktop values a general
+  # game tree ships. MUGEN_VITA_CFG overrides it; an empty value falls back to
+  # the data directory's copy, which is what earlier builds always used.
+  set(MUGEN_VITA_CFG "${CMAKE_CURRENT_SOURCE_DIR}/mugen.cfg" CACHE FILEPATH
+      "mugen.cfg template packed as data/mugen.cfg (empty: use MUGEN_VITA_DATA_DIR)")
   set(MUGEN_VITA_CFG_SRC "${MUGEN_VITA_DATA_DIR}/data/mugen.cfg")
+  if(MUGEN_VITA_CFG)
+    if(EXISTS "${MUGEN_VITA_CFG}")
+      set(MUGEN_VITA_CFG_SRC "${MUGEN_VITA_CFG}")
+      message(STATUS "Vita: config template ${MUGEN_VITA_CFG}")
+    else()
+      message(WARNING
+        "MUGEN_VITA_CFG=${MUGEN_VITA_CFG} does not exist; using "
+        "${MUGEN_VITA_DATA_DIR}/data/mugen.cfg")
+    endif()
+  endif()
   set(MUGEN_VITA_CFG_OUT "${CMAKE_CURRENT_BINARY_DIR}/vita-mugen.cfg")
   if(EXISTS "${MUGEN_VITA_CFG_SRC}")
     file(READ "${MUGEN_VITA_CFG_SRC}" _cfg)

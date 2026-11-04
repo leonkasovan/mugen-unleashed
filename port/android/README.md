@@ -261,6 +261,39 @@ creation rejects unsupported depths and incompatible pitch instead of uploading
 mismatched pixels. Offscreen indexed font surfaces remain supported. Text scaling uses the shared
 `src/sdl2surface.c` engine operation; Android does not export `zoomSurface`.
 
+### `data/mugen.cfg` is the Android one
+
+`port/android/mugen.cfg` is the platform's config and `build.sh` installs it over
+the staged copy, so the APK ships settings that suit a device rather than a
+desktop's: `RenderMode = System` (the GL/GLES sprite renderer is not runnable on
+Android yet; the software renderer presents through SDL2's `SDL_Renderer`), both
+players' joysticks enabled, and the `[P1 Gamepad]` / `[P2 Gamepad]` groups.
+`GAME_CFG=<path>` stages a different file.
+
+The gamepad groups are **not** the `[P<n> Joystick]` device indices. Android
+binds a pad through SDL's game-controller API, where A/B/X/Y, the d-pad, the
+shoulders and Start mean the same thing on every controller, and maps them onto
+this compact per-pad layout:
+
+| code | control | | code | control |
+|---|---|---|---|---|
+| 1 | up | | 5 | A |
+| 2 | down | | 6 | B |
+| 3 | left | | 7 | C (RB) |
+| 4 | right | | 8 | X |
+| | | | 9 | Y |
+| | | | 10 | Z (LB) |
+| | | | 11 | Start |
+
+The left stick steers with codes 1..4, the same as the d-pad, so either works.
+**Select (Back) opens the in-match menu**: `Game_ReadInput` turns its pad code
+into the engine's pause key, which is the same path the Pause key uses.
+
+If `[P1 Gamepad]` / `[P2 Gamepad]` are absent, the built-in layout above is
+used *and* both groups are appended to `data/mugen.cfg` at start-up, so the file
+becomes self-documenting and editable. An existing group is never touched, and a
+read-only config only logs the failure.
+
 Saved numeric key IDs remain compatible with `mugen.cfg`. These are engine
 configuration identifiers, not SDL2 keycodes or scancodes. Native SDL2 events
 are translated before array access; focus snapshots use the inverse mapping from the shared

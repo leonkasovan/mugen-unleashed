@@ -927,3 +927,67 @@ int Ini_SetLanguage(const char *lang)
     g_iniLang[2] = lang[2];
     return 1;
 }
+
+/*
+ * Port addition: appends one source line to an editable Ini.
+ *
+ * Ini_SetValuef can only replace a key that already exists, so a group that a
+ * newer build wants to add cannot be written with it. This appends the line
+ * verbatim (no trailing newline: Ini_Save adds it) and keeps the grow step the
+ * same as the parser's. Returns 1 on success, 0 on a missing source or an
+ * allocation failure.
+ *
+ * The caller is responsible for the group header: appending "[P1 Gamepad]"
+ * first and then the key lines is exactly how the file is laid out.
+ */
+int Ini_AppendLine(Ini *ini, const char *text)
+{
+    IniSource *src = (ini != NULL) ? ini->src : NULL;
+    char *copy;
+    size_t len;
+    int crlf;
+    int i;
+
+    if (src == NULL || text == NULL) {
+        return 0;
+    }
+    if (src->src_count + 1 >= src->src_cap) {
+        char **grown = realloc(src->src_lines, (size_t)(src->src_cap + 0x100) * sizeof(char *));
+
+        if (grown == NULL) {
+            return 0;
+        }
+        src->src_cap += 0x100;
+        src->src_lines = grown;
+    }
+    /*
+     * Match the file's line ending. The parser keeps a CRLF file's trailing
+     * '\r' in src_lines (only '\n' is stripped), and Ini_Save appends '\n',
+     * so a line without it would be the one LF line in a CRLF file. Harmless
+     * to the parser -- '\r' is a blank character -- but it makes the file look
+     * hand-edited for no reason.
+     */
+    crlf = 0;
+    for (i = src->src_count - 1; i >= 0; i--) {
+        size_t n = strlen(src->src_lines[i]);
+
+        if (n != 0) {
+            crlf = src->src_lines[i][n - 1] == '\r';
+            break;
+        }
+    }
+    len = strlen(text);
+    copy = malloc(len + (crlf ? 2 : 1));
+    if (copy == NULL) {
+        return 0;
+    }
+    memcpy(copy, text, len);
+    if (crlf) {
+        copy[len] = '\r';
+        len++;
+    }
+    copy[len] = '\0';
+    src->src_lines[src->src_count] = copy;
+    src->src_count++;
+    return 1;
+}

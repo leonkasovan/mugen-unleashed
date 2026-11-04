@@ -173,6 +173,13 @@ int Pads_Init(void)
 #define PAD_CTRL_Y      9
 #define PAD_CTRL_Z      10
 #define PAD_CTRL_START  11
+/*
+ * Select opens the in-match menu: the engine's menu key is PAUSE, which
+ * Game_ReadInput turns into defocus_paused (the pause screen) while a match is
+ * running. A pad has no keyboard, so Select is bound to that code here -- a
+ * gamepad's Back/Select is the conventional button for it.
+ */
+#define PAD_CTRL_SELECT PAD_SELECT_CODE
 
 /* Sidecar, not a field on Pad: the reconstructed struct has a fixed layout
  * (MUGEN_ASSERT_SIZE(Pad, 0x14)) and backend state must not extend it. */
@@ -199,6 +206,10 @@ static const PadCtrlMap pad_ctrl_map[] = {
     { SDL_CONTROLLER_BUTTON_Y, PAD_CTRL_Y, KEY_Y, "Y" },
     { SDL_CONTROLLER_BUTTON_LEFTSHOULDER, PAD_CTRL_Z, KEY_Z, "Z" },
     { SDL_CONTROLLER_BUTTON_START, PAD_CTRL_START, KEY_START, "Start" },
+    /* Select has no KEY_* slot: it is not a player action but the in-match
+     * menu key, handled in Game_ReadInput. -1 keeps it out of the binding
+     * table while the event path still emits its code. */
+    { SDL_CONTROLLER_BUTTON_BACK, PAD_CTRL_SELECT, -1, "Select" },
 };
 #define PAD_CTRL_MAP_COUNT ((int)(sizeof(pad_ctrl_map) / sizeof(pad_ctrl_map[0])))
 
@@ -279,6 +290,12 @@ void Pads_ControllerBindings(int *out)
         return;
     }
     for (i = 0; i < PAD_CTRL_MAP_COUNT; i++) {
+        /* key < 0 marks a control with no KEY_* slot (Select: it is the menu
+         * key, not a player action). Writing out[-1] would corrupt the caller's
+         * stack. */
+        if (pad_ctrl_map[i].key < 0 || pad_ctrl_map[i].key >= KEY_COUNT) {
+            continue;
+        }
         out[pad_ctrl_map[i].key] = pad_ctrl_map[i].code;
     }
     Log_Printf("pads: controller layout:");

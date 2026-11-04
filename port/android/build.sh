@@ -10,6 +10,9 @@
 #   port/android/build.sh --clean           clean generated app build/staging
 #   port/android/build.sh --no-assets       package no game data
 #
+# The packaged data/mugen.cfg is port/android/mugen.cfg (the Android defaults),
+# not the game tree copy. GAME_CFG=<path> stages a different one.
+#
 # Downloads require curl and Python 3.8+. SDK licenses are shown by sdkmanager;
 # this script does not accept them automatically. See README.md for SDL2 libs.
 # Output: build/android/mugen-android-arm64-v8a.apk
@@ -60,6 +63,8 @@ if [ "$CHECK_TOOLS" = 1 ]; then exit 0; fi
 SDL2_DEPS_DIR=$(android_shell_path "${SDL2_DEPS_DIR:-$OUT/sdl2/$ANDROID_ABI}")
 SDL2_COMPANION_DIR=$(android_shell_path "${SDL2_COMPANION_DIR:-$OUT/android-deps/$ANDROID_ABI}")
 GAME_DATA_DIR=$(android_shell_path "${GAME_DATA_DIR:-$ROOT/install}")
+# The platform's mugen.cfg, installed over the staged copy (see the staging step).
+GAME_CFG=$(android_shell_path "${GAME_CFG:-$HERE/mugen.cfg}")
 SDL2_INCLUDE="$SDL2_DEPS_DIR/include"
 [ -f "$SDL2_INCLUDE/SDL2/SDL.h" ] ||
   fail "SDL2 headers missing in $SDL2_INCLUDE/SDL2; build SDL2 or set SDL2_DEPS_DIR (see README.md)"
@@ -125,6 +130,17 @@ if [ "$PACK_ASSETS" = 1 ]; then
     COUNT=$((COUNT + 1))
   done < "$OUT/asset-list.txt"
   printf '    %s file(s)\n' "$COUNT"
+  # Platform config: port/android/mugen.cfg holds the Android defaults
+  # (RenderMode=System, the [P<n> Gamepad] groups). Installed over the staged
+  # copy so the APK ships settings that suit the device rather than a desktop's;
+  # a local edit to GAME_DATA_DIR/data/mugen.cfg is therefore not what gets
+  # packaged. Pass --game-cfg to stage a different file.
+  if [ -f "$GAME_CFG" ]; then
+    cp -f "$GAME_CFG" "$ASSETS/data/mugen.cfg"
+    printf '    data/mugen.cfg <- %s\n' "$(cd "$(dirname "$GAME_CFG")" && pwd)/$(basename "$GAME_CFG")"
+  else
+    fail "platform config $GAME_CFG not found"
+  fi
 else
   say "Skipping game data (--no-assets)"
 fi

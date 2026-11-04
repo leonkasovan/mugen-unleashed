@@ -1380,6 +1380,8 @@ int __cdecl Config_RequestedRenderMode(void);
 /* 0x00469b80 */ Ini *__cdecl Ini_OpenEditable(const char *path);
 /* 0x00469bc0 */ Ini *__cdecl Ini_Parse(Stream *s, int mode);
 /* 0x0046a150 */ int __cdecl Ini_Save(Ini *ini, const char *path);
+/* Port addition: appends a line to an editable Ini. */
+int __cdecl Ini_AppendLine(Ini *ini, const char *text);
 /* 0x0046a1d0 */ int __cdecl Ini_FindGroup(Ini *ini, const char *name);
 /* 0x0046a2f0 */ int __cdecl Ini_SelectGroup(Ini *ini, const char *name);
 /* 0x0046a360 */ int __cdecl Ini_SelectGroupIndex(Ini *ini, int index);
