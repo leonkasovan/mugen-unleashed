@@ -136,9 +136,11 @@ int Sdl2_DiagTextureSize(int *w, int *h, Uint32 *format)
 /* Fault injection for tests (plan section 4.4): make the next texture or
  * surface creation fail, without GNU --wrap, fake headers or body copies.
  * The wrappers below are the allocation ops the production code uses in
- * DIAG builds; the test arms them. which: 1 = texture, 2 = surface. */
+ * DIAG builds; the test arms them. which: 1 = texture, 2 = surface, 3 =
+ * format surface (the OpenGLScreen placeholder). */
 static int g_sdl2DiagFailTexture;
 static int g_sdl2DiagFailSurface;
+static int g_sdl2DiagFailFormatSurface;
 
 void Sdl2_DiagFailNext(int which)
 {
@@ -146,6 +148,8 @@ void Sdl2_DiagFailNext(int which)
         g_sdl2DiagFailTexture = 1;
     } else if (which == 2) {
         g_sdl2DiagFailSurface = 1;
+    } else if (which == 3) {
+        g_sdl2DiagFailFormatSurface = 1;
     }
 }
 
@@ -169,12 +173,23 @@ static SDL_Surface *Sdl2_DiagCreateSurface(Uint32 flags, int w, int h, int bpp, 
     }
     return SDL_CreateRGBSurface(flags, w, h, bpp, rmask, gmask, bmask, amask);
 }
+static SDL_Surface *Sdl2_DiagCreateSurfaceWithFormat(Uint32 flags, int w, int h, int depth, Uint32 format)
+{
+    if (g_sdl2DiagFailFormatSurface) {
+        g_sdl2DiagFailFormatSurface = 0;
+        SDL_SetError("injected format-surface failure");
+        return NULL;
+    }
+    return SDL_CreateRGBSurfaceWithFormat(flags, w, h, depth, format);
+}
 #define SDL_CreateTexture Sdl2_DiagCreateTexture
 #define SDL_CreateRGBSurface Sdl2_DiagCreateSurface
+#define SDL_CreateRGBSurfaceWithFormat Sdl2_DiagCreateSurfaceWithFormat
 #endif
 
-/* SDL_CreateTexture/SDL_CreateRGBSurface resolve to the DIAG wrappers above
- * in test builds; production builds call SDL directly. */
+/* SDL_CreateTexture/SDL_CreateRGBSurface/SDL_CreateRGBSurfaceWithFormat
+ * resolve to the DIAG wrappers above in test builds; production builds call
+ * SDL directly. */
 
 
 /* 0 = accepted and ignored, because the SDL2 build has no repeat control. */
@@ -452,15 +467,26 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
          */
         if (g_sdl2Video.placeholder == NULL || g_sdl2Video.placeholder->w != g_sdl2Video.width ||
             g_sdl2Video.placeholder->h != g_sdl2Video.height) {
-            if (g_sdl2Video.placeholder != NULL) {
-                SDL_FreeSurface(g_sdl2Video.placeholder);
-                g_sdl2Video.placeholder = NULL;
-            }
-            g_sdl2Video.placeholder = SDL_CreateRGBSurfaceWithFormat(0, g_sdl2Video.width,
-                                                                     g_sdl2Video.height, bpp, format);
-            if (g_sdl2Video.placeholder == NULL) {
+            /*
+             * Fix (port change): the old placeholder was released before the
+             * replacement was allocated, so a failed allocation returned NULL
+             * with g_sdl2Video.placeholder NULL while Video_OnResize kept the
+             * borrowed g_screenSurface/g_videoSurface alias pointing at the
+             * freed surface -- the next frame read ->w/->h from released
+             * memory (AddressSanitizer: heap-use-after-free). Allocate first
+             * and free the old one only once the new one exists, so a refused
+             * resize leaves a live display as the caller expects.
+             */
+            SDL_Surface *new_placeholder = SDL_CreateRGBSurfaceWithFormat(0, g_sdl2Video.width,
+                                                                          g_sdl2Video.height, bpp, format);
+
+            if (new_placeholder == NULL) {
                 return NULL;
             }
+            if (g_sdl2Video.placeholder != NULL) {
+                SDL_FreeSurface(g_sdl2Video.placeholder);
+            }
+            g_sdl2Video.placeholder = new_placeholder;
         }
         return g_sdl2Video.placeholder;
     }

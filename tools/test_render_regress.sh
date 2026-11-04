@@ -22,13 +22,19 @@ win32)
     PLAT_INC="-Ithird_party/sdk/include"
     ;;
 win64)
-    # The kit's gcc needs its own bin dir on PATH for cc1/as; an inherited
-    # i686 `as` rejects --64.
-    case "$PATH" in
-    */w64devkit/bin*) ;;
-    *) export PATH="/c/w64devkit/bin:$PATH" ;;
-    esac
     CC="${CC:-/c/w64devkit/bin/gcc}"
+    # The kit's gcc needs ITS OWN bin dir ahead of everything else on PATH for
+    # cc1/as; an inherited i686 `as` rejects --64. Checking only that the dir
+    # appears somewhere left i686 first when the caller's PATH had both, so the
+    # selected compiler's directory is always prepended.
+    case "$CC" in
+    */*) CC_DIR=${CC%/*} ;;
+    *) CC_DIR=$(command -v "$CC") ; CC_DIR=${CC_DIR%/*} ;;
+    esac
+    case ":$PATH:" in
+    "$CC_DIR:"*) ;;
+    *) export PATH="$CC_DIR:$PATH" ;;
+    esac
     ARCHFLAGS="-m64"
     PKGCONF="${PKG_CONFIG:-/c/w64devkit/bin/pkg-config}"
     PLAT_INC=""

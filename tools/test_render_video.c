@@ -102,6 +102,8 @@ void Timer_ResetFrame(void)
 }
 
 void Video_OnResize(int width, int height);
+/* MUGEN_SDL2_DIAG fault injection (src/sdl2compat.c). */
+void Sdl2_DiagFailNext(int which);
 
 static int failures;
 
@@ -144,7 +146,10 @@ static void test_r02_projection(void)
     printf("-- R02 projection\n");
     g_renderMode = RENDER_OPENGL_SCREEN;
     g_videoDepth = 16;
-    g_videoSdlFlags = 0;
+    /* SDL_OPENGL, as the engine passes for this mode: with flags 0 the
+     * backend silently becomes the System renderer and the GL placeholder
+     * (the surface g_screenSurface aliases here) is never exercised. */
+    g_videoSdlFlags = SDL_OPENGL;
 
     /* Twenty identical resizes must give identical matrices and pixels. */
     for (i = 0; i < 20; i++) {
@@ -201,6 +206,29 @@ static void test_r02_projection(void)
         glGetFloatv(GL_PROJECTION_MATRIX, got);
         check(matrix_equal(got, want), "R02: a refused resize keeps the projection");
         g_videoDepth = before_depth;
+    }
+
+    /*
+     * The GL placeholder must survive a failed replacement allocation. The
+     * backend used to free the old placeholder before allocating the new one,
+     * so a failure returned NULL while g_screenSurface kept aliasing freed
+     * memory and the next frame read ->w/->h from it (AddressSanitizer:
+     * heap-use-after-free). The dereference below is what catches it: the
+     * pointer is the same either way, only its liveness differs.
+     */
+    {
+        SDL_Surface *before_screen = g_screenSurface;
+
+        Sdl2_DiagFailNext(3);
+        Video_OnResize(800, 600);
+        check(g_screenSurface == before_screen, "R02: failed placeholder keeps g_screenSurface");
+        check(g_screenSurface != NULL && g_screenSurface->w == 640 && g_screenSurface->h == 480,
+              "R02: failed placeholder leaves a live 640x480 surface");
+
+        /* A retry at the same size must allocate and publish the new one. */
+        Video_OnResize(800, 600);
+        check(g_screenSurface != NULL && g_screenSurface->w == 800 && g_screenSurface->h == 600,
+              "R02: retry after failed placeholder gives 800x600");
     }
 }
 

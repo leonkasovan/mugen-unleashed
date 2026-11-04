@@ -25,14 +25,21 @@ win32)
     PLAT_INC="-Ithird_party/sdk/include"
     ;;
 win64)
-    # The kit's gcc is a wrapper that needs its own bin dir on PATH to find
-    # cc1/as for the right target; inheriting the i686 kit's as fails with
-    # "as: unrecognized option `--64'" (same reason test_abi_layout.sh sets it).
-    case "$PATH" in
-    */w64devkit/bin*) ;;
-    *) export PATH="/c/w64devkit/bin:$PATH" ;;
-    esac
     CC="${CC:-/c/w64devkit/bin/gcc}"
+    # The kit's gcc is a wrapper that needs ITS OWN bin dir ahead of everything
+    # else on PATH to find cc1/as for the right target. Merely checking that
+    # the dir appears somewhere was not enough: with i686/bin first, the
+    # inherited i686 `as` still won and rejected --64 ("as: unrecognized
+    # option `--64'"). Prepend the directory the chosen compiler lives in, so
+    # the assembler always matches the compiler, whatever the incoming order.
+    case "$CC" in
+    */*) CC_DIR=${CC%/*} ;;
+    *) CC_DIR=$(command -v "$CC") ; CC_DIR=${CC_DIR%/*} ;;
+    esac
+    case ":$PATH:" in
+    "$CC_DIR:"*) ;;
+    *) export PATH="$CC_DIR:$PATH" ;;
+    esac
     ARCHFLAGS="-m64"
     EXPECT_BITS=64
     PKGCONF="${PKG_CONFIG:-/c/w64devkit/bin/pkg-config}"

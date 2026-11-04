@@ -129,7 +129,8 @@ void Sdl2_DiagReset(void);
 void Sdl2_DiagCounters(int *present, int *tex_create, int *tex_destroy);
 int Sdl2_DiagTextureSize(int *w, int *h, Uint32 *format);
 /* which: 1 = fail the next texture creation, 2 = fail the next surface
- * creation. One-shot; consumed by the next creation call. */
+ * creation, 3 = fail the next SDL_CreateRGBSurfaceWithFormat (the
+ * OpenGLScreen placeholder). One-shot; consumed by the next creation call. */
 void Sdl2_DiagFailNext(int which);
 
 /* Audio: SDL 1.2's SDL_AudioDriverName; SDL2 only has the no-length form. */
