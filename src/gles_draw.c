@@ -69,7 +69,8 @@ static unsigned int gles_compile(GLenum type, const char *src, const char *label
     return shader;
 }
 
-int GlesDraw_LoadProgram(GlesProgram *out, const char *vert_src, const char *frag_src, const char *label)
+int GlesDraw_LoadProgram(GlesProgram *out, const char *vert_src, const char *frag_src, const char *label,
+                         const char *defines)
 {
     char *vs;
     char *fs;
@@ -94,11 +95,10 @@ int GlesDraw_LoadProgram(GlesProgram *out, const char *vert_src, const char *fra
     out->texsize = -1;
     out->src_alphamul = -1;
 
-    /* No variant defines: the ES shaders take their defaults (INDEX_SAFE,
-     * PERSPECTIVE_EVEN, full PalFX). Callers that need a variant splice the
-     * defines in before calling. */
-    vs = gles_insert_at_marker(vert_src, "");
-    fs = gles_insert_at_marker(frag_src, "");
+    /* Variant defines ("#define X\n" each), spliced at the marker. NULL means
+     * the shaders' defaults: INDEX_SAFE, PERSPECTIVE_EVEN, full PalFX. */
+    vs = gles_insert_at_marker(vert_src, defines != NULL ? defines : "");
+    fs = gles_insert_at_marker(frag_src, defines != NULL ? defines : "");
     if (vs == NULL || fs == NULL) {
         free(vs);
         free(fs);

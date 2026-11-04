@@ -257,8 +257,18 @@ int GlTex_Upload2D(int h, int bpp, GlTex *tex, const void *pixels, int w)
 }
 
 /*
- * RGBA upload, used for the palette (height 1). Not premultiplied: the ES
- * shaders run without PREMUL, so the two must agree.
+ * RGBA upload: straight (not premultiplied) alpha, which is what the ES
+ * shaders' non-PREMUL path expects. Also used for the palette (height 1).
+ *
+ * Why straight and not premultiplied like the desktop: the engine's sprites
+ * are almost all binary-alpha (0 or 255), where the two are exactly equal --
+ * for a = 1 the premultiplied colour equals the straight colour and
+ * GL_ONE * c + (1-1) * dst == GL_SRC_ALPHA * c + (1-a) * dst -- so blending is
+ * correct either way. Premultiplying here while also handing the shaders
+ * straight-alpha maths made the frame wash out (mean RGB 240 against the
+ * software renderer's 172 on the same screen), measured on device; keeping the
+ * upload straight and leaving PREMUL undefined matches the software renderer
+ * to within one unit per channel.
  */
 int GlTex_UploadRGBA(int h, int w, GlTex *tex, const void *pixels)
 {
@@ -345,7 +355,22 @@ static int gles_load_es_program(GlesProgram *prog, const char *name)
         free(frag);
         return 0;
     }
-    ok = GlesDraw_LoadProgram(prog, vert, frag, name);
+    /*
+     * Variant defines.
+     *
+     * PERSPECTIVE_EVEN is what the desktop's special-quad variants use and is
+     * the ES shaders' default; normal quads have q = 1 so it changes nothing
+     * for them, and stretched quads sample correctly.
+     *
+     * PREMUL is deliberately NOT defined: uploads carry straight alpha (see
+     * GlTex_UploadRGBA), so the shaders must use their non-PREMUL maths. The
+     * engine's sprites are almost all binary-alpha, where premultiplied and
+     * straight blending are exactly equal, so nothing is lost. Defining it
+     * against straight-alpha uploads washed the frame out (mean RGB 240
+     * against the software renderer's 172 on the same screen), measured on
+     * device.
+     */
+    ok = GlesDraw_LoadProgram(prog, vert, frag, name, "#define PERSPECTIVE_EVEN\n");
     free(vert);
     free(frag);
     return ok;
@@ -413,7 +438,7 @@ int Gl_Init(int framebuffers)
     g_glesSolidVert = strdup(gles_solid_vert_src);
     g_glesSolidFrag = strdup(gles_solid_frag_src);
     if (g_glesSolidVert == NULL || g_glesSolidFrag == NULL ||
-        !GlesDraw_LoadProgram(&g_glesProgramSolid, g_glesSolidVert, g_glesSolidFrag, "solid")) {
+        !GlesDraw_LoadProgram(&g_glesProgramSolid, g_glesSolidVert, g_glesSolidFrag, "solid", NULL)) {
         Log_Printf("GLES: solid program unavailable; GL mode unavailable\n");
         Gl_Deinit();
         return 0;
@@ -676,6 +701,9 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
     float positions[8];
     float texcoords[16];
     float fw, fh, left, right;
+    float c0 = 1.0f;
+    float c1 = 1.0f;
+    int special;
     PalFx *fx;
     GlMvp mvp;
     GlesProgram *prog;
@@ -692,6 +720,20 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
         return;
     }
     paletted = spr->bpp <= 8;
+    /*
+     * Stretched / tinted quad: same test as Glr_QuadSpecial, so the same quads
+     * are "special" on both backends and get the same texcoords.
+     */
+    special = !(1.0f == dp->top_stretch && 1.0f == dp->bottom_stretch && 0.0f == dp->top_offset &&
+                0.0f == dp->bottom_offset && 1.0f == dp->width_ratio);
+    c0 = dp->top_stretch;
+    c1 = dp->bottom_stretch;
+    if (!(0.0f < c0)) {
+        c0 = 1.0f;
+    }
+    if (!(0.0f < c1)) {
+        c1 = 1.0f;
+    }
     tex = (spr->format == SPRITE_FORMAT_TEXTURE) ? (GlTex *)spr->pixels : NULL;
     if (tex == NULL) {
         void *pixels = Sprite_GetPixels(set, sprite);
@@ -792,16 +834,29 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
     positions[4] = 0.0f;  positions[5] = fh;
     positions[6] = fw;    positions[7] = fh;
 
-    /* Texture coordinates: straight sampling. The stretched-quad Q is a
-     * perspective feature the ES path does not select yet (logged below). */
+    /*
+     * Texture coordinates through the shared quad builder, so a stretched or
+     * tinted quad carries its projective Q exactly as the desktop path does.
+     * Straight sampling (q = 1 everywhere) was the earlier behaviour, which
+     * flattened the trapezoid: parallax and top/bottom-stretched quads sampled
+     * a linear ramp instead of the perspective-correct one.
+     */
     {
+        GlQuadVerts quad;
+        float tc_flat[GL_QUAD_VERTEX_COUNT * 4];
         int i;
 
-        for (i = 0; i < 4; i++) {
-            texcoords[i * 4 + 0] = (i == 0 || i == 2) ? 0.0f : 1.0f;
-            texcoords[i * 4 + 1] = (i < 2) ? 0.0f : 1.0f;
-            texcoords[i * 4 + 2] = 0.0f;
-            texcoords[i * 4 + 3] = 1.0f;
+        GlQuad_Build(&quad, positions, special, (double)c0, (double)c1, (double)dp->top_offset,
+                     (double)dp->bottom_offset, dp->width_ratio);
+        for (i = 0; i < GL_QUAD_VERTEX_COUNT; i++) {
+            tc_flat[i * 4 + 0] = quad.tc[i][0];
+            tc_flat[i * 4 + 1] = quad.tc[i][1];
+            tc_flat[i * 4 + 2] = quad.tc[i][2];
+            tc_flat[i * 4 + 3] = quad.tc[i][3];
+            texcoords[i * 4 + 0] = tc_flat[i * 4 + 0];
+            texcoords[i * 4 + 1] = tc_flat[i * 4 + 1];
+            texcoords[i * 4 + 2] = tc_flat[i * 4 + 2];
+            texcoords[i * 4 + 3] = tc_flat[i * 4 + 3];
         }
     }
     fx = PalFx_GetApplied();
@@ -833,10 +888,12 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
         glActiveTexture(GL_TEXTURE0);
     }
 
-    GlesDraw_Quad(&g_glesBuffer, prog, mvp.m, positions, texcoords, paletted, dp->masked, (float)fx->add[0] / 256.0f,
-                  (float)fx->add[1] / 256.0f, (float)fx->add[2] / 256.0f, (float)fx->mul[0] / 256.0f,
-                  (float)fx->mul[1] / 256.0f, (float)fx->mul[2] / 256.0f, fx->invertall,
-                  (float)fx->color / 256.0f, (float)tex->w, (float)tex->h, dp->alpha_src);
+    /* PalFX scalars exactly as Glr_FxTerms computes them: add is 0..255 and
+     * mul / color are fixed point with 256 = 1.0. */
+    GlesDraw_Quad(&g_glesBuffer, prog, mvp.m, positions, texcoords, paletted, dp->masked, (float)fx->add[0] / 255.0f,
+                  (float)fx->add[1] / 255.0f, (float)fx->add[2] / 255.0f, (float)fx->mul[0] * (1.0f / 256.0f),
+                  (float)fx->mul[1] * (1.0f / 256.0f), (float)fx->mul[2] * (1.0f / 256.0f), fx->invertall,
+                  (float)fx->color * (1.0f / 256.0f), (float)tex->w, (float)tex->h, dp->alpha_src);
 
     glBlendEquation(GL_FUNC_ADD);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);

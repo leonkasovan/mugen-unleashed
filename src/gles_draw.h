@@ -60,9 +60,10 @@ typedef struct GlesBuffer {
 
 /* Creates the program from GLSL ES source text. Returns 1 on success and
  * fills *out (its uniform locations included). Attribute locations are bound
- * before linking. The source may carry the engine's defines marker; the
- * backend splices variant defines into it. */
-int GlesDraw_LoadProgram(GlesProgram *out, const char *vert_src, const char *frag_src, const char *label);
+ * before linking. The source may carry the engine's defines marker; `defines`
+ * is spliced there (NULL or "" for none). */
+int GlesDraw_LoadProgram(GlesProgram *out, const char *vert_src, const char *frag_src, const char *label,
+                         const char *defines);
 
 /* Deletes the program and clears the struct. */
 void GlesDraw_FreeProgram(GlesProgram *prog);
