@@ -104,6 +104,23 @@ list(REMOVE_ITEM LUA_SRC "${TP}/lua-5.1.4/src/lua.c" "${TP}/lua-5.1.4/src/luac.c
 list(APPEND MUGEN_ENGINE_SOURCES ${LUA_SRC})
 list(APPEND ANDROID_INCLUDES "${TP}/lua-5.1.4/src")
 
+# Lua 5.1.4 and bionic's FORTIFY disagree, fatally.
+#
+# Lua stores a string's bytes *after* its TString header and reaches them with
+# getstr(ts) == (char *)(ts + 1) (third_party/lua-5.1.4/src/lobject.h). When
+# bionic's fortified strchr is inlined -- which it is inside lgc.c's
+# traversetable, called from propagatemark -- clang computes the object size of
+# that expression as 0 bytes (a pointer one past the object), so
+# __strchr_chk aborts with "strchr: prevented read past end of buffer" on the
+# first table that has a __mode metafield. Observed as an instant crash in
+# Lua_Init -> luaL_openlibs -> luaopen_os on Android arm64; the same code is
+# fine on the desktop builds, which do not use bionic.
+#
+# The read is legitimate: the bytes are inside the allocation, just not inside
+# the declared subobject. FORTIFY is therefore disabled for the Lua translation
+# units only -- the engine and every other third-party unit keep it.
+set_source_files_properties(${LUA_SRC} PROPERTIES COMPILE_OPTIONS "-U_FORTIFY_SOURCE;-D_FORTIFY_SOURCE=0")
+
 # minizip (inside zlib's contrib), for the .zip-based modes
 file(GLOB MINIZIP_SRC "${TP}/minizip-0.15/*.c")
 list(APPEND ANDROID_INCLUDES "${TP}/minizip-0.15")
