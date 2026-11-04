@@ -3,26 +3,66 @@
 # No video device needed (surfaces live in memory only).
 #
 # Usage: tools/test_render_host.sh       (from the repository root)
+#   MUGEN_TEST_TARGET=win32|win64 selects the compiler and pointer width;
+#   tools/test_qualify.sh sets it from --target. win32 uses the i686 kit with
+#   -m32, win64 uses w64devkit with -m64. The harness prints its pointer width
+#   and the script fails when it does not match the target, so a 64-bit
+#   qualification cannot be met by a 32-bit build.
 # Artefacts go under build/render-host per AGENTS.md.
 set -eu
 
 cd "$(dirname "$0")/.."
 
+TARGET="${MUGEN_TEST_TARGET:-win32}"
 OUT=build/render-host
-CC="${CC:-gcc}"
+
+case "$TARGET" in
+win32)
+    CC="${CC:-gcc}"
+    ARCHFLAGS="-m32"
+    EXPECT_BITS=32
+    PKGCONF="${PKG_CONFIG:-pkg-config}"
+    PLAT_INC="-Ithird_party/sdk/include"
+    ;;
+win64)
+    # The kit's gcc is a wrapper that needs its own bin dir on PATH to find
+    # cc1/as for the right target; inheriting the i686 kit's as fails with
+    # "as: unrecognized option `--64'" (same reason test_abi_layout.sh sets it).
+    case "$PATH" in
+    */w64devkit/bin*) ;;
+    *) export PATH="/c/w64devkit/bin:$PATH" ;;
+    esac
+    CC="${CC:-/c/w64devkit/bin/gcc}"
+    ARCHFLAGS="-m64"
+    EXPECT_BITS=64
+    PKGCONF="${PKG_CONFIG:-/c/w64devkit/bin/pkg-config}"
+    PLAT_INC=""
+    ;;
+*)
+    echo "unsupported MUGEN_TEST_TARGET $TARGET (win32|win64)" >&2
+    exit 2
+    ;;
+esac
 
 mkdir -p "$OUT"
 
+echo "target $TARGET: $CC $ARCHFLAGS ($("$CC" -dumpmachine 2>/dev/null || echo unknown))"
+
 # shellcheck disable=SC2086
-$CC -m32 -std=gnu11 -O1 -g -Wall \
+"$CC" $ARCHFLAGS -std=gnu11 -O1 -g -Wall \
     -DMUGEN_SDL2 -DSDL_MAIN_HANDLED \
     -Isrc -Ithird_party/glad-2.1 -Ithird_party/minizip-0.15 \
-    -Ithird_party/lua-5.1.4/src -Ithird_party/sdk/include \
-    $(pkg-config --cflags sdl2 | sed 's/-Dmain=SDL_main//') \
+    -Ithird_party/lua-5.1.4/src $PLAT_INC \
+    $("$PKGCONF" --cflags sdl2 | sed 's/-Dmain=SDL_main//') \
     tools/test_render_host.c src/sprite.c src/keyedarray.c src/softrender.c \
     -o "$OUT/test_render_host" \
-    $(pkg-config --libs --static sdl2 | sed 's/-lSDL2main//') \
+    $("$PKGCONF" --libs --static sdl2 | sed 's/-lSDL2main//') \
     -lwinmm -lm
 
 echo "built $OUT/test_render_host"
-"$OUT/test_render_host"
+result="$("$OUT/test_render_host")"
+printf '%s\n' "$result"
+if ! printf '%s\n' "$result" | grep -q "^abi: $EXPECT_BITS-bit build$"; then
+    echo "FAIL: harness is not a $EXPECT_BITS-bit build" >&2
+    exit 1
+fi

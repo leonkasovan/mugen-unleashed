@@ -1103,8 +1103,20 @@ static void Soft_TrueColourBlit(SpriteSet *set, int sprite, int x, int y, int fl
         for (n = ncols; n != 0; n--) {
             int palpha;
             unsigned int c = Soft_TrueColourPixel(spr, s, 0, &palpha);
-            if (c != 0) {
-                int a = palpha * dp_alpha >> 8;
+            /*
+             * Fix (port change): the test was `c != 0`, which drops an opaque
+             * black pixel -- 0x000000FF packs to RGB 0, the same value a
+             * transparent pixel produces. The alpha, not the colour, says
+             * whether there is anything to draw.
+             */
+            if (c != 0 || palpha != 0) {
+                /*
+                 * Fix (port change): palpha is 0..255 and dp_alpha is 0..256,
+                 * so `palpha * dp_alpha >> 8` reaches only 255 and an opaque
+                 * pixel blended at 255/256 left a trace of the background.
+                 * Dividing by 255 reaches the engine's 256 = opaque.
+                 */
+                int a = palpha * dp_alpha / 255;
                 if (a >= 256) {
                     *d = Soft_TrueColour565(c);
                 } else {
@@ -1248,8 +1260,20 @@ static void Soft_TrueColourScale(SpriteSet *set, int sprite, float x, float y, f
         for (n = ncols; n != 0; n--) {
             int palpha;
             unsigned int c = Soft_TrueColourPixel(spr, s, 0, &palpha);
-            if (c != 0) {
-                int a = palpha * dp_alpha >> 8;
+            /*
+             * Fix (port change): the test was `c != 0`, which drops an opaque
+             * black pixel -- 0x000000FF packs to RGB 0, the same value a
+             * transparent pixel produces. The alpha, not the colour, says
+             * whether there is anything to draw.
+             */
+            if (c != 0 || palpha != 0) {
+                /*
+                 * Fix (port change): palpha is 0..255 and dp_alpha is 0..256,
+                 * so `palpha * dp_alpha >> 8` reaches only 255 and an opaque
+                 * pixel blended at 255/256 left a trace of the background.
+                 * Dividing by 255 reaches the engine's 256 = opaque.
+                 */
+                int a = palpha * dp_alpha / 255;
                 if (a >= 256) {
                     *d = Soft_TrueColour565(c);
                 } else {

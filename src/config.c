@@ -70,6 +70,24 @@ static void Config_FillUnassigned(int *keys, int none)
 }
 
 /*
+ * Fix (port change): the RenderMode the config asked for, kept apart from
+ * g_game->render_mode.
+ *
+ * Platform policy rewrites g_game->render_mode to the mode that will really
+ * run (Android's capability fallback below; the Vita's recovery lives in
+ * system.c). By the time System_Init logs "requested=... effective=..." and
+ * enforces MUGEN_STRICT_RENDERER, the request was therefore gone: a cfg of
+ * OpenGL ran as System, logged requested=system, and strict mode never failed.
+ * -1 means "not parsed yet"; RENDER_SYSTEM is 0, so it cannot be the sentinel.
+ */
+static int g_configuredRenderMode = -1;
+
+int Config_RequestedRenderMode(void)
+{
+    return g_configuredRenderMode;
+}
+
+/*
  * 0x0045DE80: loads data/mugen.cfg into the game variables. Returns 0 (with
  * an error message) on a missing mandatory group or an invalid value; as in
  * the original the Ini is then not freed.
@@ -282,6 +300,8 @@ int Config_Load(void)
             return 0;
         }
     }
+    /* The request as written, before any platform fallback rewrites it. */
+    g_configuredRenderMode = g_game->render_mode;
     g = g_game;
     if (g->render_mode == RENDER_OPENGL) {
         Ini_GetInt(ini, "safemode", &g->safe_mode);

@@ -248,8 +248,12 @@ static void test_r03_single_present(void)
 int main(void)
 {
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+        /*
+         * Exit 77 is the qualification runner's SKIP status. Returning 0 here
+         * made an unexercised gate indistinguishable from a passing one.
+         */
         printf("SKIP: SDL_Init failed: %s\n", SDL_GetError());
-        return 0;
+        return 77;
     }
     test_r01_transaction();
     test_r03_single_present();

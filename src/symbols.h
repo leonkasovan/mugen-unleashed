@@ -1183,6 +1183,8 @@ int __cdecl Con_CmdLuaExec(CmdTable *ctx, char *name, char *args);
 /* 0x0045daa0 */ void __cdecl System_ReloadMotif(void);
 /* 0x0045dd80 */ void __cdecl System_UnloadMotif(void);
 /* 0x0045de80 */ int __cdecl Config_Load(void);
+/* Port addition: the RenderMode parsed from mugen.cfg, before platform fallbacks. */
+int __cdecl Config_RequestedRenderMode(void);
 /* 0x0045f100 */ void __cdecl Options_SetDefaults(void);
 /* 0x0045f170 */ void __cdecl Options_Load(void);
 /* 0x0045f5b0 */ void __cdecl Options_Save(void);

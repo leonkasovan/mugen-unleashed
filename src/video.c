@@ -427,6 +427,7 @@ int Video_SetMode(int game_width, int game_height, int width, int height, int de
  * game size (the screen buffer keeps its own); OpenGLScreen resets the
  * projection and clears the window to red (sic: glClearColor(1, 0, 0, 0)).
  */
+#ifndef ANDROID_PORT
 /*
  * M2 helper (RENDERING_PLAN.md section 6.1): explicit OpenGLScreen
  * projection reset. Selects projection, loads identity, sets the ortho for
@@ -435,6 +436,13 @@ int Video_SetMode(int game_width, int game_height, int width, int height, int de
  * 6.7). Never multiplies the previous matrix: SDL2 can deliver RESIZED and
  * SIZE_CHANGED for one user resize, and each pass used to compose another
  * projection on top of the last until the picture shrank away.
+ *
+ * Fix (port change): desktop-only, like the OpenGLScreen mode that calls it.
+ * glMatrixMode, GL_PROJECTION, glLoadIdentity and gluOrtho2D are fixed-
+ * function GL; the Android build compiles against GLES, where none of them
+ * exists ("GL_PROJECTION undeclared"), and Video_OnResize's Android branch
+ * never reaches the mode. Without this guard the helper alone broke the
+ * Android build.
  */
 static void Video_ResetGLScreenProjection(int width, int height)
 {
@@ -464,6 +472,7 @@ static void Video_ResetGLScreenProjection(int width, int height)
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
 }
+#endif /* !ANDROID_PORT */
 
 void Video_OnResize(int width, int height)
 {
@@ -488,6 +497,20 @@ void Video_OnResize(int width, int height)
     switch (g_renderMode) {
     case RENDER_SYSTEM: {
         SDL_Surface *surface = SDL_SetVideoMode(width, height, g_videoDepth, g_videoSdlFlags);
+
+        /*
+         * Fix (port change): the pointers were overwritten with the return
+         * value whatever it was. A refused resize therefore set
+         * g_videoSurface and g_screenSurface to NULL although the backend
+         * still held a valid pair at the old size, and every draw or recovery
+         * path after it had no display to work with. Publish the new pointers
+         * and sizes only after the mode was actually set; on failure the old
+         * display keeps running (Sdl2_Present scales it to the new window).
+         */
+        if (surface == NULL) {
+            MatchLog_Printf(1, "Video resize to %ix%i failed; keeping the current display\n", width, height);
+            break;
+        }
         g_videoGameWidth = width;
         g_videoSurface = surface;
         g_screenSurface = surface;
@@ -495,9 +518,17 @@ void Video_OnResize(int width, int height)
         g_videoGamePixels = width * height;
         break;
     }
-    case RENDER_OPENGL_SCREEN:
-        g_videoSurface = SDL_SetVideoMode(width, height, g_videoDepth, g_videoSdlFlags);
-        if (width != glscreen_w || height != glscreen_h || g_screenSurface != g_videoSurface) {
+    case RENDER_OPENGL_SCREEN: {
+        SDL_Surface *surface = SDL_SetVideoMode(width, height, g_videoDepth, g_videoSdlFlags);
+
+        /* Same rule as System: a failed mode keeps the working display. */
+        if (surface == NULL) {
+            MatchLog_Printf(1, "Video resize to %ix%i failed; keeping the current display\n", width, height);
+            break;
+        }
+        g_videoSurface = surface;
+        g_screenSurface = surface;
+        if (width != glscreen_w || height != glscreen_h) {
             Video_ResetGLScreenProjection(width, height);
             glClearColor(1.0f, 0.0f, 0.0f, 0.0f);
             glClearDepth(1.0);
@@ -506,8 +537,8 @@ void Video_OnResize(int width, int height)
             glscreen_h = height;
         }
         g_glScreenResized = 1;
-        g_screenSurface = g_videoSurface;
         break;
+    }
     case RENDER_OPENGL:
         g_videoWidth = width;
         g_videoHeight = height;

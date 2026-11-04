@@ -2,13 +2,19 @@
 # M9 qualification runner (RENDERING_PLAN.md section 13).
 #
 # Maps each test ID to the harness that implements it and stores evidence
-# under build/render-validation/<sha>/<target>/<mode>/ (plan section 13.3).
+# under build/render-validation/<sha>/<target>/ (plan section 13.3).
 # Test IDs without an implemented harness are reported as OPEN with the
 # reason -- never as pass (plan section 13.4).
 #
 # Usage: tools/test_qualify.sh [--target win32|win64] [--engine <exe>]
-#   --target win32 (default): host gates + Win32 SDL2 E2E log comparison.
-#   --target win64: Win64 layout + E2E log comparison (needs w64devkit).
+#   --target win32 (default): i686 kit, -m32 harnesses, Win32 SDL2 E2E.
+#   --target win64: w64devkit, -m64 harnesses and a Win64 E2E binary. The
+#     target is passed to the harnesses as MUGEN_TEST_TARGET, which changes
+#     the compiler, the bitness and the dependency kit -- it is not just an
+#     evidence directory name. A harness whose built pointer width does not
+#     match the target fails (tools/test_render_host.sh checks it).
+# A harness that cannot run here exits 77 and is recorded as SKIP, which is
+# listed with the OPEN rows; an exit 0 alone is never evidence of a pass.
 # Artefacts go under build/render-validation per AGENTS.md.
 set -eu
 
@@ -24,20 +30,28 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+case "$TARGET" in
+win32|win64) ;;
+*) echo "unsupported --target $TARGET (win32|win64)" >&2; exit 2;;
+esac
+export MUGEN_TEST_TARGET="$TARGET"
+
 SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 OUT="build/render-validation/$SHA/$TARGET"
 mkdir -p "$OUT"
 
 PASS=0
 FAIL=0
+SKIP=0
 OPEN=""
 
 record() {
-    # $1 = id, $2 = status (PASS/FAIL/OPEN), $3 = detail
+    # $1 = id, $2 = status (PASS/FAIL/SKIP/OPEN), $3 = detail
     printf '%-8s %-4s %s\n' "$1" "$2" "$3" | tee -a "$OUT/results.txt"
     case "$2" in
     PASS) PASS=$((PASS + 1)) ;;
     FAIL) FAIL=$((FAIL + 1)) ;;
+    SKIP) SKIP=$((SKIP + 1)); OPEN="$OPEN $1" ;;
     OPEN) OPEN="$OPEN $1" ;;
     esac
 }
@@ -45,14 +59,26 @@ record() {
 echo "# M9 qualification: $TARGET @ $SHA" | tee "$OUT/results.txt"
 echo "# $(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a "$OUT/results.txt"
 
+# Whose compiler, whose kit: the evidence has to say what produced it.
+{
+    echo "target: $TARGET"
+    echo "host gcc: $(gcc -dumpmachine 2>/dev/null || echo unknown) $(gcc -dumpversion 2>/dev/null || echo '')"
+    echo "x86devkit: $(/c/x86devkit/bin/gcc -dumpmachine 2>/dev/null || echo absent)"
+    echo "w64devkit: $(/c/w64devkit/bin/gcc -dumpmachine 2>/dev/null || echo absent)"
+} >"$OUT/toolchain.txt"
+cat "$OUT/toolchain.txt" | tee -a "$OUT/results.txt"
+
 run_host() {
-    # $1 = id, $2... = command
+    # $1 = id, $2... = command. 0 is PASS, 77 is SKIP (the harness could not
+    # run here), anything else is FAIL.
     id="$1"; shift
-    if "$@" >"$OUT/$id.log" 2>&1; then
-        record "$id" PASS "see $id.log"
-    else
-        record "$id" FAIL "see $id.log"
-    fi
+    rc=0
+    "$@" >"$OUT/$id.log" 2>&1 || rc=$?
+    case "$rc" in
+    0) record "$id" PASS "see $id.log" ;;
+    77) record "$id" SKIP "harness skipped, see $id.log" ;;
+    *) record "$id" FAIL "exit $rc, see $id.log" ;;
+    esac
 }
 
 echo "== host gates (no GPU) =="
@@ -74,7 +100,7 @@ if [ -n "$ENGINE" ] && [ -x "$ENGINE" ]; then
     run_host CF01 bash tools/test_render_select.sh "$ENGINE" install
     rm -f install/mugen.log
 else
-    record CF01 OPEN "needs a built Win32 SDL2 engine binary (--engine <exe>)"
+    record CF01 OPEN "needs a built $TARGET SDL2 engine binary (--engine <exe>)"
 fi
 
 echo "== gates requiring a device or GPU context =="
@@ -89,5 +115,5 @@ record E2E01 OPEN "menu/select/match/screenshot matrix needs scripted runs"
 echo "== layout evidence =="
 bash tools/test_abi_layout.sh >"$OUT/layout.log" 2>&1 && record LAYOUT PASS "see layout.log" || record LAYOUT FAIL "see layout.log"
 
-echo "== summary: PASS=$PASS FAIL=$FAIL OPEN:$OPEN ==" | tee -a "$OUT/results.txt"
+echo "== summary: PASS=$PASS FAIL=$FAIL SKIP=$SKIP OPEN:$OPEN ==" | tee -a "$OUT/results.txt"
 [ "$FAIL" = 0 ]

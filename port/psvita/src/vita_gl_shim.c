@@ -250,9 +250,9 @@ void MugenVita_LogicOp(GLenum opcode)
 
 /*
  * Fills the capability flags Gl_Init() reads. Returns 1 when a GL 2.0 context
- * with the required extensions is present, 0 otherwise -- the caller ignores
- * the value and re-checks the flags, exactly like the original ignored
- * glewInit()'s status.
+ * with the required extensions is present, 0 otherwise. Gl_Init() now treats 0
+ * as fatal: the flags are published before the checks run, so a caller that
+ * only re-checked them would accept a context the probe has just rejected.
  */
 int VitaGl_Probe(void)
 {
@@ -324,16 +324,36 @@ int VitaGl_Probe(void)
      */
     if (ok && caps.fbo) {
         GLuint probe_fbo = 0;
-        GLenum status;
+        GLuint probe_tex = 0;
+        GLenum status = GL_FRAMEBUFFER_UNSUPPORTED;
 
+        /*
+         * Fix (port change): the probe used to check a framebuffer with no
+         * attachment. That is incomplete by definition -- GLES reports
+         * GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT (0x8CD7) -- so the
+         * check rejected every driver that could actually render, including
+         * the one it was meant to qualify. Attach a colour texture of the kind
+         * the renderer itself draws into, then check. 16x16 keeps the render
+         * target inside every GLES2 limit.
+         */
         glGenFramebuffers(1, &probe_fbo);
-        if (probe_fbo != 0) {
+        glGenTextures(1, &probe_tex);
+        if (probe_fbo != 0 && probe_tex != 0) {
             GLint prev = 0;
+            GLint prev_tex = 0;
             glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev);
+            glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev_tex);
+            glBindTexture(GL_TEXTURE_2D, probe_tex);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
             glBindFramebuffer(GL_FRAMEBUFFER, probe_fbo);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, probe_tex, 0);
             status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
             glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev);
+            glBindTexture(GL_TEXTURE_2D, (GLuint)prev_tex);
             glDeleteFramebuffers(1, &probe_fbo);
+            glDeleteTextures(1, &probe_tex);
             Log_Printf("GL: FBO probe status 0x%X (complete=0x%X)\n", (unsigned)status,
                        (unsigned)GL_FRAMEBUFFER_COMPLETE);
             if (status != GL_FRAMEBUFFER_COMPLETE) {
@@ -341,6 +361,12 @@ int VitaGl_Probe(void)
                 ok = 0;
             }
         } else {
+            if (probe_fbo != 0) {
+                glDeleteFramebuffers(1, &probe_fbo);
+            }
+            if (probe_tex != 0) {
+                glDeleteTextures(1, &probe_tex);
+            }
             Log_Printf("GL: could not create a probe framebuffer\n");
             ok = 0;
         }

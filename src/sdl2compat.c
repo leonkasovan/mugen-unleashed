@@ -58,6 +58,13 @@ typedef struct Sdl2Video {
     Uint32 texture_format;
     int texture_w;
     int texture_h;
+    /*
+     * Size of the storage pair the texture must match -- the surface the
+     * engine actually draws into. Not the window size: after a refused resize
+     * the window has already moved while the old pair survives.
+     */
+    int storage_w;
+    int storage_h;
     int logical_w;
     int logical_h;
     int width;
@@ -319,20 +326,29 @@ static int Sdl2_CreateRendererAndTexture(void)
         g_sdl2Video.logical_h = g_sdl2Video.height;
     }
     if (g_sdl2Video.texture == NULL) {
-        if (g_sdl2Video.texture_format == 0) {
+        if (g_sdl2Video.texture_format == 0 || g_sdl2Video.storage_w <= 0 ||
+            g_sdl2Video.storage_h <= 0) {
             return -1;      /* nothing was ever set up to rebuild from */
         }
+        /*
+         * Fix (port change): the texture is rebuilt at the size of the storage
+         * that survived, not the window's. When a resize failed its allocation
+         * the old surface stayed (say 640x480) while g_sdl2Video.width/height
+         * had already taken the requested 800x600; a device reset then made an
+         * 800x600 texture for a 640x480 surface and the next upload read past
+         * the buffer. So the rebuild size is the pair's, not the window's.
+         */
         g_sdl2Video.texture = SDL_CreateTexture(g_sdl2Video.renderer, g_sdl2Video.texture_format,
-                                                SDL_TEXTUREACCESS_STREAMING, g_sdl2Video.width,
-                                                g_sdl2Video.height);
+                                                SDL_TEXTUREACCESS_STREAMING, g_sdl2Video.storage_w,
+                                                g_sdl2Video.storage_h);
         if (g_sdl2Video.texture == NULL) {
             return -1;
         }
 #ifdef MUGEN_SDL2_DIAG
         g_sdl2DiagTextureCreate++;
 #endif
-        g_sdl2Video.texture_w = g_sdl2Video.width;
-        g_sdl2Video.texture_h = g_sdl2Video.height;
+        g_sdl2Video.texture_w = g_sdl2Video.storage_w;
+        g_sdl2Video.texture_h = g_sdl2Video.storage_h;
     }
     return 0;
 }
@@ -526,6 +542,15 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
              * blitters, so upload-time blending would darken the image. */
             SDL_SetSurfaceBlendMode(g_sdl2Video.surface, SDL_BLENDMODE_NONE);
         }
+    }
+    /*
+     * Record what the pair really is. Only reached after both replacements
+     * succeeded, so this is the storage a later reset must rebuild from --
+     * equal to the window size here, but not after a refused resize.
+     */
+    if (g_sdl2Video.surface != NULL) {
+        g_sdl2Video.storage_w = g_sdl2Video.surface->w;
+        g_sdl2Video.storage_h = g_sdl2Video.surface->h;
     }
     g_sdl2Video.texture_w = g_sdl2Video.width;
     g_sdl2Video.texture_h = g_sdl2Video.height;

@@ -181,6 +181,27 @@ static void test_r02_projection(void)
     glGetFloatv(GL_PROJECTION_MATRIX, got);
     expected_ortho(want, 640, 480);
     check(matrix_equal(got, want), "R02: restore after minimize gives the expected ortho");
+
+    /*
+     * A refused mode must not empty the display. Depth 7 has no SDL pixel
+     * format, so Sdl2_SetVideoMode returns NULL; the pointers used to be
+     * overwritten with that NULL even though the backend still held a working
+     * pair, which left every later Present with nothing to draw into and the
+     * projection reset with no surface to match.
+     */
+    {
+        SDL_Surface *before_video = g_videoSurface;
+        SDL_Surface *before_screen = g_screenSurface;
+        int before_depth = g_videoDepth;
+
+        g_videoDepth = 7;
+        Video_OnResize(800, 600);
+        check(g_videoSurface == before_video, "R02: a refused resize keeps g_videoSurface");
+        check(g_screenSurface == before_screen, "R02: a refused resize keeps g_screenSurface");
+        glGetFloatv(GL_PROJECTION_MATRIX, got);
+        check(matrix_equal(got, want), "R02: a refused resize keeps the projection");
+        g_videoDepth = before_depth;
+    }
 }
 
 int main(void)
@@ -188,8 +209,9 @@ int main(void)
     SDL_Surface *glsurf;
 
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+        /* Exit 77 is the qualification runner's SKIP status, not a pass. */
         printf("SKIP: SDL_Init failed: %s\n", SDL_GetError());
-        return 0;
+        return 77;
     }
     /* A real GL context: the projection matrix only exists there. The
      * engine loads glad in Gl_Init; this harness is not the engine, so it
@@ -198,7 +220,7 @@ int main(void)
     if (glsurf == NULL) {
         printf("SKIP: no GL context: %s\n", SDL_GetError());
         SDL_Quit();
-        return 0;
+        return 77;
     }
     gladLoadGL();
     test_r02_projection();

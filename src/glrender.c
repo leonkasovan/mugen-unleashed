@@ -573,7 +573,17 @@ int Gl_Init(int framebuffers)
      * GL 2.1 entry points directly and fills the same capability flags from
      * glGetString, which is all gladLoadGL() did for this code.
      */
-    VitaGl_Probe();
+    /*
+     * Fix (port change): the probe's result used to be ignored, and it
+     * publishes the capability flags before it finishes checking them -- so a
+     * context the probe had just rejected (no FBO, no NPOT) still passed
+     * Gl_Init's flag tests. The caller of this function expects 0 to mean "this
+     * renderer cannot run here", which is exactly what the probe reports.
+     */
+    if (!VitaGl_Probe()) {
+        MatchLog_Printf(3, "GL: Vita capability probe failed; renderer unavailable.\n");
+        return 0;
+    }
 #else
     gladLoadGL();
 #endif

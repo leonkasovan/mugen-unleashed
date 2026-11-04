@@ -128,6 +128,7 @@ void System_Init(void)
 #endif
     GameVars *g;
     int mode;
+    int requested;
 
 #ifndef ANDROID_PORT
     SDL_putenv("SDL_DISABLE_LOCK_KEYS=1");
@@ -293,6 +294,21 @@ void System_Init(void)
     Log_Printf("render mode %i_%i...", g_game->render_mode, g_game->video_flags);
     g = g_game;
     mode = g->render_mode;
+    /*
+     * Fix (port change): report and validate against the mode the config
+     * requested, not the one platform policy already substituted for it.
+     * config.c's Android fallback rewrites g_game->render_mode before this
+     * point, so `mode` alone always read System: the startup line claimed
+     * requested=system for an OpenGL cfg, and MUGEN_STRICT_RENDERER could
+     * never fail. The rewrite stays -- the effective mode must still be the
+     * one that can run -- and only the request is carried separately.
+     */
+    requested = mode;
+#ifdef ANDROID_PORT
+    if (Config_RequestedRenderMode() >= RENDER_SYSTEM) {
+        requested = Config_RequestedRenderMode();
+    }
+#endif
     if (mode < RENDER_SYSTEM || mode > RENDER_OPENGL) {
         Error_Exit();
     }
@@ -354,9 +370,10 @@ void System_Init(void)
      * Normal runs keep the recovery with its reason. */
     {
         int directx = (g->video_flags & VIDEO_DIRECTX) != 0;
-        Gfx_LogRenderer(mode, g_renderMode, directx);
-        if (mode != g_renderMode && getenv("MUGEN_STRICT_RENDERER") != NULL) {
-            Log_Printf("strict renderer: requested mode %d unavailable (effective %d)\n", mode, g_renderMode);
+        Gfx_LogRenderer(requested, g_renderMode, directx);
+        if (requested != g_renderMode && getenv("MUGEN_STRICT_RENDERER") != NULL) {
+            Log_Printf("strict renderer: requested mode %d unavailable (effective %d)\n", requested,
+                       g_renderMode);
             Error_Exit();
         }
     }

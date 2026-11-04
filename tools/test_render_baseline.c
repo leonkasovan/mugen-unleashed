@@ -107,15 +107,34 @@ static void fixture_idx8(const char *dir)
     for (i = 0; i < 16; i++) {
         ((unsigned char *)s->pixels)[i] = px[i];
     }
-    /* palette bytes followed by pixel bytes: both must survive the round trip */
+    /*
+     * Palette bytes followed by pixel bytes: both must survive the round trip.
+     *
+     * Fix (port change): these bytes used to come from the local pal[] and px[]
+     * arrays, so the dump recorded the input rather than SDL's result -- zeroing
+     * every pixel in the surface left all 31 bytes identical and the fixture
+     * could not detect a broken 8-bit path. Read the palette and the pixels
+     * back out of the surface instead, row by row through its pitch.
+     */
     {
         unsigned char buf[5 * 3 + 16];
-        for (i = 0; i < 5; i++) {
-            buf[i * 3] = pal[i].r;
-            buf[i * 3 + 1] = pal[i].g;
-            buf[i * 3 + 2] = pal[i].b;
+        SDL_Palette *actual = (s->format != NULL) ? s->format->palette : NULL;
+        int y;
+
+        check(actual != NULL && actual->ncolors >= 5, "F-IDX8 surface palette");
+        if (actual != NULL && actual->ncolors >= 5) {
+            for (i = 0; i < 5; i++) {
+                buf[i * 3] = actual->colors[i].r;
+                buf[i * 3 + 1] = actual->colors[i].g;
+                buf[i * 3 + 2] = actual->colors[i].b;
+            }
+        } else {
+            memset(buf, 0xEE, 15);     /* visible as a mismatch, not as pal[] */
         }
-        memcpy(buf + 15, px, 16);
+        for (y = 0; y < 4; y++) {
+            const unsigned char *row = (const unsigned char *)s->pixels + y * s->pitch;
+            memcpy(buf + 15 + y * 4, row, 4);
+        }
         write_raw(dir, "F-IDX8.raw", buf, sizeof(buf));
     }
     SDL_FreeSurface(s);

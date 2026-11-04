@@ -197,12 +197,28 @@ static void test_cf01_capability(void)
 static void test_r04_layout(void)
 {
     printf("-- R04 layout\n");
-    check(offsetof(Bg, legacy) == 0x64, "R04: Bg.legacy at 0x64");
-    check(offsetof(BgElem, y) == 0x88, "R04: BgElem.y at 0x88");
-    check(offsetof(InputBuf, keys) == 0x78, "R04: InputBuf.keys at 0x78");
-    check(offsetof(Projectile, afterimage) == 0x504, "R04: Projectile.afterimage at 0x504");
-    check(sizeof(Bg) == 0x68, "R04: sizeof Bg");
-    check(sizeof(Projectile) == 0x508, "R04: sizeof Projectile");
+    /*
+     * The reference offsets are the 32-bit ones. A 64-bit build legitimately
+     * moves the members that follow a pointer (AGENTS.md measures Bg.legacy
+     * 0x64 -> 0x7c and Projectile.afterimage 0x504 -> 0x548), so asserting the
+     * 32-bit values there fails a correct 64-bit build. The qualifier's win64
+     * target now really builds this harness with -m64, so the gate checks the
+     * offsets the running ABI implies instead of the reference's.
+     */
+    if (sizeof(void *) == 4) {
+        check(offsetof(Bg, legacy) == 0x64, "R04: Bg.legacy at 0x64");
+        check(offsetof(BgElem, y) == 0x88, "R04: BgElem.y at 0x88");
+        check(offsetof(InputBuf, keys) == 0x78, "R04: InputBuf.keys at 0x78");
+        check(offsetof(Projectile, afterimage) == 0x504, "R04: Projectile.afterimage at 0x504");
+        check(sizeof(Bg) == 0x68, "R04: sizeof Bg");
+        check(sizeof(Projectile) == 0x508, "R04: sizeof Projectile");
+    } else {
+        check(offsetof(Bg, legacy) == 0x7c, "R04: Bg.legacy at 0x7c on 64-bit");
+        check(offsetof(Projectile, afterimage) == 0x548,
+              "R04: Projectile.afterimage at 0x548 on 64-bit");
+        check(offsetof(BgElem, y) == 0x88, "R04: BgElem.y stays at 0x88 on 64-bit");
+        check(offsetof(InputBuf, keys) == 0x78, "R04: InputBuf.keys stays at 0x78 on 64-bit");
+    }
 
     /* Neighbour-sentinel semantics: legacy lives where the camera reads it.
      * A Bg with legacy=0 and every neighbouring int nonzero must still read
@@ -414,11 +430,87 @@ static void test_r05_truecolour(void)
         /* RGB565(0,0,255) = 0x001F, two pixels wide. */
         check(row0[1] == 0x001F && row0[2] == 0x001F, "R05: 24-bit blue scaled 2x is pixel-exact");
     }
+
+    /*
+     * Opaque black over white. Its packed RGB is 0, the same value a
+     * transparent pixel produces, so a `c != 0` test skips it and leaves the
+     * white background in place. The alpha says it must be drawn.
+     */
+    {
+        int i, n = (dst->pitch * 2) / 2;
+        unsigned short *p = (unsigned short *)dst->pixels;
+
+        for (i = 0; i < n; i++) {
+            p[i] = 0xFFFF;
+        }
+        srcpx[0] = 0;
+        srcpx[1] = 0;
+        srcpx[2] = 0;
+        srcpx[3] = 255;
+        srcpx[4] = 0;
+        srcpx[5] = 0;
+        srcpx[6] = 0;
+        srcpx[7] = 0;
+        memset(&dp, 0, sizeof(dp));
+        dp.scale_x = 1.0f;
+        dp.scale_y = 1.0f;
+        dp.scale2_x = 1.0f;
+        dp.scale2_y = 1.0f;
+        dp.alpha_src = 1.0f;
+        dp.alpha_dst = 0.0f;
+        dp.x = 1.0f;
+        dp.y = 0.0f;
+        dp.blend = BLEND_NONE;
+        dp.masked = 1;
+        Sprite_DrawSoft(sset, 0, &dp);
+        row0 = (unsigned short *)dst->pixels;
+        check(row0[1] == 0x0000, "R05: opaque black overwrites the background");
+        check(row0[2] == 0xFFFF, "R05: its transparent neighbour is still untouched");
+    }
+
+    /*
+     * Alpha 255 at full DrawParams alpha is opaque. (248,0,0) must stay 248
+     * (RGB565 0xF800); blending at 255/256 instead of 256/256 drops it to
+     * 247 and packs as 0xF000.
+     */
+    {
+        int i, n = (dst->pitch * 2) / 2;
+        unsigned short *p = (unsigned short *)dst->pixels;
+
+        for (i = 0; i < n; i++) {
+            p[i] = 0x0000;
+        }
+        srcpx[0] = 248;
+        srcpx[1] = 0;
+        srcpx[2] = 0;
+        srcpx[3] = 255;
+        srcpx[4] = 0;
+        srcpx[5] = 0;
+        srcpx[6] = 0;
+        srcpx[7] = 0;
+        memset(&dp, 0, sizeof(dp));
+        dp.scale_x = 1.0f;
+        dp.scale_y = 1.0f;
+        dp.scale2_x = 1.0f;
+        dp.scale2_y = 1.0f;
+        dp.alpha_src = 1.0f;
+        dp.alpha_dst = 0.0f;
+        dp.x = 1.0f;
+        dp.y = 0.0f;
+        dp.blend = BLEND_NONE;
+        dp.masked = 1;
+        Sprite_DrawSoft(sset, 0, &dp);
+        row0 = (unsigned short *)dst->pixels;
+        check(row0[1] == 0xF800, "R05: alpha 255 is fully opaque (0xF800, not 0xF000)");
+    }
     SDL_FreeSurface(dst);
 }
 
 int main(void)
 {
+    /* The runner compares this against --target: a 64-bit qualification must
+     * not be satisfied by a 32-bit harness. */
+    printf("abi: %u-bit build\n", (unsigned)(sizeof(void *) * 8));
     test_r04_layout();
     test_r05_truecolour();
 
