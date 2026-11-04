@@ -177,8 +177,7 @@ if(MUGEN_GLES)
     target_include_directories(main PRIVATE "${MUGEN_ROOT}/third_party/glad-es-3.0")
     target_link_libraries(main PRIVATE GLESv3 EGL)
     message(STATUS "M8 GLES backend: probe+loader enabled (draw path not yet landed)")
-endif
-
+endif()
 target_compile_options(main PRIVATE
     # libresample's public header is written for MSVC: it uses __declspec
     # attributes behind RESAMPLE_DECL. clang needs this to parse it. The engine
@@ -237,6 +236,6 @@ set_target_properties(main PROPERTIES
 # Reject accidental SDL 1.2 libraries from a caller-supplied prefix/APK inputs.
 add_custom_command(TARGET main POST_BUILD
     COMMAND "${CMAKE_COMMAND}" "-DREADELF=${CMAKE_READELF}"
-            "-DLIBRARIES=$<TARGET_FILE:main>;${MUGEN_ANDROID_SHARED_LIBS}"
+            "-DLIBRARIES=${MUGEN_ANDROID_SHARED_LIBS}"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/check_sdl2.cmake"
     VERBATIM)
