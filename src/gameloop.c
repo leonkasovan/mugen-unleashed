@@ -914,6 +914,23 @@ int Screen_Tick(ScreenLoop *screen)
         screen->fade_ticks = 0;
         screen->done = 1;
     }
+    /*
+     * Port addition (M8, RENDERING_PLAN 12.6): a renderer recovery requested
+     * from the event pump is consumed here, at the frame boundary.
+     *
+     * The request used to be honoured only after Gameflow_Run returned, but the
+     * gameflow loop never checked it, so the engine kept drawing into a dead
+     * renderer for as long as the current screen lasted -- indefinitely on the
+     * title screen. Ending the screen through the same fields as the quit path
+     * makes the loop break and run its normal cleanup, which is what leaves the
+     * renderer safe to tear down.
+     */
+    if (g_rendererFallbackRequested && screen->fade_out == 0) {
+        Log_Printf("Renderer fallback requested; unwinding the current screen.\n");
+        screen->fade_out = 1;
+        screen->fade_ticks = 0;
+        screen->done = 1;
+    }
     if (screen->fade_out != 0 && screen->fade_ticks > 0 && !paused) {
         screen->fade_ticks--;
     }

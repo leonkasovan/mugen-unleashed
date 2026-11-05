@@ -315,9 +315,14 @@ int GlTex_Free(GlTex *tex)
     if (tex == NULL) {
         return 0;
     }
-    if (tex->id != 0) {
-        GlTex_Delete(tex);
-    }
+    /*
+     * Release the CPU side unconditionally. It used to run only when tex->id was
+     * non-zero, which skipped GlTex_Delete entirely after a context loss (loss
+     * clears every id), so the backing bytes and their table entry survived the
+     * free. The GL name and the object are different lifetimes: Delete already
+     * handles id == 0 and reference counting, so it is always safe to call.
+     */
+    GlTex_Delete(tex);
     gles_unregister_tex(tex);
     free(tex);
     return 1;
@@ -697,6 +702,22 @@ int Gles_OnContextRestore(int drawable_w, int drawable_h)
     if (g_glesReady) {
         return 1;
     }
+    /*
+     * Failure rehearsal, alongside the context-loss hook in frame.c: a file
+     * named "gl_fail_restore" makes one rebuild fail, so the GL -> System
+     * recovery can be exercised on a device without breaking a shader by hand.
+     * Renamed on use, so it fires once per run.
+     */
+    {
+        FILE *probe = fopen("gl_fail_restore", "r");
+
+        if (probe != NULL) {
+            fclose(probe);
+            remove("gl_fail_restore");
+            Log_Printf("GLES: rebuild failed on request (gl_fail_restore)\n");
+            return 0;
+        }
+    }
     if (!Gles_Probe(&caps)) {
         Log_Printf("GLES: restore failed: no usable context\n");
         return 0;
@@ -1051,21 +1072,58 @@ void Gfx_GlDrawLineAdd(float x1, float y1, float x2, float y2, unsigned int colo
     gles_prim_line(x1, y1, x2, y2, color, GLES_PRIM_DRAW_LINE_ADD);
 }
 
-/* Rectangle outline with the alpha pair its kind selects. */
+/*
+ * Rectangle outline with the alpha pair its kind selects.
+ *
+ * The four edges are emitted so that no pixel is covered twice: the horizontal
+ * rows run the full width, and the vertical sides sit strictly between them.
+ * Drawing each edge as a full-height/full-width quad instead made the four
+ * corners take part in two draws, which is invisible for an opaque outline but
+ * doubles an additive or subtractive one -- a red 64 additive outline read back
+ * as 128 at the corners and 64 along the edges.
+ *
+ * Degenerate shapes are handled explicitly: a zero-height rect is one row, a
+ * zero-width one is a column, and a 1x1 is a single pixel.
+ */
 static void gles_prim_outline(GlesPrimKind kind, int alpha_src, int alpha_dst, int x1, int y1, int x2, int y2,
                               unsigned int color)
 {
     GlesPrimState st = GlesPrim_Resolve(kind, alpha_src, alpha_dst);
     float fx1, fy1, fx2, fy2;
+    float row, col;
     float r, g, b, a;
 
     gles_prim_rect(x1, y1, x2, y2, &fx1, &fy1, &fx2, &fy2);
     GlesPrim_Color(color, st.scale, st.alpha, &r, &g, &b, &a);
     gles_prim_begin(&st);
-    gles_solid_quad(fx1, fy1, fx2, fy1 + 0.9999f, r, g, b, a);
-    gles_solid_quad(fx1, fy2 - 0.9999f, fx2, fy2, r, g, b, a);
-    gles_solid_quad(fx1, fy1, fx1 + 0.9999f, fy2, r, g, b, a);
-    gles_solid_quad(fx2 - 0.9999f, fy1, fx2, fy2, r, g, b, a);
+
+    /* One pixel of thickness, clamped to the rect itself so a 1x1 does not
+     * extend past its own corner. */
+    row = (float)((double)fy1 + 0.9999);
+    if (row > fy2) {
+        row = fy2;
+    }
+    col = (float)((double)fx1 + 0.9999);
+    if (col > fx2) {
+        col = fx2;
+    }
+
+    if (fy2 - fy1 <= 0.9999f) {
+        /* Single row (includes the 1x1 case). */
+        gles_solid_quad(fx1, fy1, fx2, fy2, r, g, b, a);
+    } else if (fx2 - fx1 <= 0.9999f) {
+        /* Single column. */
+        gles_solid_quad(fx1, fy1, fx2, fy2, r, g, b, a);
+    } else {
+        /* Top and bottom rows, full width. */
+        gles_solid_quad(fx1, fy1, fx2, row, r, g, b, a);
+        gles_solid_quad(fx1, fy2 - 0.9999f, fx2, fy2, r, g, b, a);
+        /* Sides, strictly between the rows: their corners are already drawn. */
+        if (fy2 - 0.9999f > row) {
+            gles_solid_quad(fx1, row, col, fy2 - 0.9999f, r, g, b, a);
+            gles_solid_quad(fx2 - 0.9999f, row, fx2, fy2 - 0.9999f, r, g, b, a);
+        }
+    }
     glDisable(GL_BLEND);
 }
 

@@ -1556,6 +1556,13 @@ void __cdecl Pads_HandleControllerEvent(const SDL_Event *ev);
 int __cdecl Pads_SlotUsesController(int slot);
 void __cdecl Pads_ControllerBindings(int slot, int *out);
 void __cdecl Pads_AttachController(int slot, int device_index);
+#ifdef ANDROID_PORT
+/* Re-applies a player's joystick binding policy and republishes g_keyMap. */
+void __cdecl Config_RepublishJoystick(int player);
+#endif
+/* Direction-source bookkeeping, shared by the event, deinit and hotplug paths. */
+void __cdecl Pads_ClearDirectionSources(int slot);
+void __cdecl Pads_ResetDirectionSources(void);
 int __cdecl Pads_ControllerCount(void);
 #endif
 /* 0x00474b30 */ long long __cdecl Input_FindKey(int *const *maps, int count, int code);

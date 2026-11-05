@@ -20,6 +20,9 @@ static int g_cfgGamepadMissing;
 static void Config_LoadGamepadGroups(Ini *ini);
 static void Config_WriteMissingGamepadGroups(void);
 /* Defined near Options_Load; Config_Load runs first. */
+/* The configured [P<n> Joystick] codes, kept across the controller policy. */
+static int g_cfgRawJoyKeys[2][KEY_COUNT];
+
 void Config_ApplyAndroidJoystick(void);
 /* Per-player version, used when a controller attaches after start-up. */
 void Config_ApplyJoystickSlot(int player);
@@ -582,6 +585,18 @@ int Config_Load(void)
     Config_ApplyVitaJoystick();
 #endif
     g = g_game;
+#ifdef ANDROID_PORT
+    /*
+     * Keep the [P<n> Joystick] codes as configured. Config_ApplyJoystickSlot
+     * overwrites joy_keys with the semantic controller layout for a slot that
+     * has a controller, and a slot that loses its controller (unplugged, or
+     * never had one) has to fall back to these raw codes. Without the snapshot
+     * the raw bindings were simply gone, so a detach left the player bound to
+     * codes no device would ever send.
+     */
+    memcpy(g_cfgRawJoyKeys[0], g->joy_keys[0], sizeof(g_cfgRawJoyKeys[0]));
+    memcpy(g_cfgRawJoyKeys[1], g->joy_keys[1], sizeof(g_cfgRawJoyKeys[1]));
+#endif
     memcpy(g->joy_keys_active[0], g->joy_keys[0], sizeof(g->joy_keys_active[0]));
     memcpy(g->joy_keys_active[1], g->joy_keys[1], sizeof(g->joy_keys_active[1]));
     if (!g->use_joystick[0]) {
@@ -852,12 +867,39 @@ void Config_ApplyJoystickSlot(int player)
     if (player < 0 || player >= 2) {
         return;
     }
+    jk = g_game->joy_keys[player];
+
     if (!Pads_SlotUsesController(player)) {
+        /*
+         * No controller in this slot: the raw [P<n> Joystick] codes are the
+         * only ones that can work. Restore the snapshot taken at load time,
+         * because an earlier attach may have replaced them with the semantic
+         * layout.
+         */
+        memcpy(jk, g_cfgRawJoyKeys[player], sizeof(g_cfgRawJoyKeys[player]));
+        if (g_game->use_joystick[player]) {
+            memcpy(g_game->joy_keys_active[player], jk, sizeof(g_game->joy_keys_active[player]));
+        }
+        Log_Printf("config: P%d has no game controller; raw [P%d Joystick] bindings in force\n",
+                   player + 1, player + 1);
         return;
     }
-    jk = g_game->joy_keys[player];
-    cfg = g_cfgGamepadKeys[player];
 
+    /*
+     * use_joystick is runtime state, not the preference: Input_InitPads clears
+     * it when no pad can be opened at start-up. The preference is
+     * joystick_type, read from the cfg (and written by the options screen). A
+     * controller plugged in later must be usable without restarting, so the
+     * slot is re-enabled here -- otherwise the semantic bindings were
+     * configured but never published: a pad-less start-up reported
+     * enabled=0, configured=5, active=13 for button A and pressed nothing.
+     */
+    if (g_game->joystick_type[player] != 0 && !g_game->nojoy) {
+        g_game->use_joystick[player] = 1;
+        g_game->force_feedback = g_game->use_joystick[0] || g_game->use_joystick[1];
+    }
+
+    cfg = g_cfgGamepadKeys[player];
     if (!g_cfgGamepadPresent[player]) {
         /* No [P<n> Gamepad] group: use the built-in compact layout. */
         Pads_ControllerBindings(player, jk);
@@ -884,10 +926,7 @@ void Config_ApplyJoystickSlot(int player)
      * Mirror into the active map. Input_InitPads copies joy_keys ->
      * joy_keys_active at its start, i.e. before the pads were opened, and this
      * policy runs after that (the pad's topology is only known once it is
-     * open). Without this second copy the runtime kept the pre-policy codes
-     * while mugen.log showed the translated ones -- the pad looked bound and
-     * still pressed nothing. use_joystick is honoured: a player with the
-     * joystick disabled keeps an empty active map.
+     * open).
      */
     if (g_game->use_joystick[player]) {
         memcpy(g_game->joy_keys_active[player], jk, sizeof(g_game->joy_keys_active[player]));
@@ -895,6 +934,20 @@ void Config_ApplyJoystickSlot(int player)
     Log_Printf("config: P%d bound through the game controller (%s)\n", player + 1,
                used_default ? "built-in layout, no [P<n> Gamepad] group" : "[P<n> Gamepad]");
 }
+
+/*
+ * Applies the policy for one player and publishes it to the input engine.
+ *
+ * Separate from Config_ApplyJoystickSlot because that one also runs during
+ * start-up, before the key map exists. An attach or detach happens at runtime,
+ * so g_keyMap has to be rebuilt from the new active bindings.
+ */
+void Config_RepublishJoystick(int player)
+{
+    Config_ApplyJoystickSlot(player);
+    Input_Remap();
+}
+
 #endif /* ANDROID_PORT */
 
 #ifdef MUGEN_VITA_GL

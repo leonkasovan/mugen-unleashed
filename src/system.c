@@ -34,7 +34,13 @@
 /* 0x0041A500: gives the SDL window the program icon. */
 void System_SetWindowIcon(void)
 {
-#ifdef _WIN32
+    /*
+     * Windows-desktop only. `_WIN32` alone is the host's answer, and a host
+     * probe of the Android configuration is still built by a Windows compiler;
+     * the Android target itself has no _WIN32 and no PE resources, so excluding
+     * it here makes the probe describe the real build instead of a hybrid.
+     */
+#if defined(_WIN32) && !defined(ANDROID_PORT)
     HMODULE module = GetModuleHandleA(NULL);
 #ifndef MUGEN_SDL2
     SDL_SysWMinfo info;
@@ -523,38 +529,125 @@ void System_Init(void)
 
 /* 0x0041AEA0: shuts everything down in reverse order and ends with SDL_Quit. */
 /*
- * Port addition (M8, RENDERING_PLAN 12.6): rebuilds the video subsystem on a
- * different renderer after a failed GL restore.
+ * Port addition (M8, RENDERING_PLAN 12.6): rebuilds video on the System renderer
+ * after a GL restore failed.
  *
- * main.c calls this between gameflow passes when a GL renderer could not be
- * rebuilt. It is deliberately small: tear down the renderer that failed, put
- * the requested mode back to the configured one, and re-run System_Init -- the
- * same code path a cold start takes, which is what makes the GL -> System
- * recovery verifiable rather than a second, drifting copy of it.
+ * Called from main.c between gameflow passes, once the active screen has been
+ * unwound through its normal cleanup. It is deliberately *not* a second
+ * System_Init:
  *
- * Assets are not reloaded here: gameflow re-enters at the mode select and
- * rebuilds what it needs, and the sprite textures have their backing bytes
- * (GlTex_SetBacking), so an unused one is rebuilt on first draw.
+ *   - System_Init re-reads mugen.cfg, so it would select OpenGL again and the
+ *     resume would loop back into a renderer that cannot start. The effective
+ *     mode is therefore forced to System here, while the *requested* mode stays
+ *     as configured for the log line and MUGEN_STRICT_RENDERER.
+ *   - System_Init also re-initialises audio, Lua and the game variables. None of
+ *     that is broken by losing a GL context, and repeating it would leak or
+ *     restart subsystems the user can hear.
+ *   - Only the video mode and the screen buffer belong to the renderer that
+ *     failed, so only those are rebuilt.
  */
 void System_ReinitVideo(void)
 {
-    Log_Printf("Reinitialising video after a renderer fallback...");
-#ifdef ANDROID_PORT
+    GameVars *g = g_game;
+
+    Log_Printf("Reinitialising video for the system renderer...");
+#if defined(ANDROID_PORT) && defined(MUGEN_GLES)
+    /* GL_Deinit and the GL window teardown exist only when the GLES backend is
+     * compiled in; the guard used to be ANDROID_PORT alone, which broke the
+     * default (MUGEN_GLES=OFF) APK build. */
     Gl_Deinit();
     Android_DestroyGLContext();
 #endif
-    Video_Deinit();
-    if (g_game != NULL) {
-        /* The configured request, so the policy re-resolves from scratch and
-         * the startup log reports requested != effective. */
-        g_game->render_mode = Config_RequestedRenderMode();
-        g_game->depth = 16;
-        g_game->stage_fit = 0;
-        g_game->system_fit = 0;
+    /* The screen buffer belongs to the renderer that failed: a GL vbuf cannot
+     * survive the context going away, and a surface would be the wrong depth. */
+    if (g != NULL && g->screen != NULL) {
+        Gfx_SetRenderTarget(NULL, 0);
+        SpriteSet_Free(g->screen);
+        g->screen = NULL;
+        g->render_target = NULL;
     }
+    /*
+     * Renderer-specific assets. Under the GL renderer the motif, its fonts and
+     * the system sprite sets hold GL textures, and the software renderer would
+     * read a GlTex as pixel data -- that is a null dereference, not a wrong
+     * picture. They are released here and reloaded below, after the software
+     * mode exists, so nothing outlives the renderer that created it.
+     */
+    System_FreeMotif();
+    if (g->font_small != NULL) {
+        Font_Free(g->font_small);
+        g->font_small = NULL;
+    }
+    if (g->font_medium != NULL) {
+        Font_Free(g->font_medium);
+        g->font_medium = NULL;
+    }
+    Video_Deinit();
+
+    g = g_game;
+    g_renderMode = RENDER_SYSTEM;
+    g->render_mode = RENDER_SYSTEM;
+    g->depth = 16;
+    g->stage_fit = 0;
+    g->system_fit = 0;
+    /* A cold start on System never sets this; the GL selection adds it. */
+    g->video_flags &= ~VIDEO_HWBLIT;
+    Gfx_SelectRenderer(RENDER_SYSTEM);
+
+    if (!Video_SetMode((int)g->game_coord[0], (int)g->game_coord[1], g->video_width, g->video_height,
+                       g->depth, g->video_flags)) {
+        Log_Printf("failed. ");
+        Error_Exit();
+    }
+    g = g_game;
+    g->screen = Screen_Create(g->depth, (int)g->game_coord[0], (int)g->game_coord[1]);
+    g = g_game;
+    if (g->screen == NULL) {
+        Log_Printf("Can't create screen buffer. ");
+        Error_Exit();
+    }
+    Gfx_SetRenderTarget(g->screen, 0);
+    g_gfxClear(0);
+    g = g_game;
+    g->render_target = g->screen;
+    Gfx_SetClipRect(0, 0, g_targetWidth, g_targetHeight);
+
+    /*
+     * Report the swap the same way start-up does: the *requested* mode is still
+     * the configured one, so the log distinguishes "restored on the requested
+     * renderer" from "fell back after a failed restore", and strict mode treats
+     * this fallback as disqualifying just as it does at start-up.
+     */
+    {
+        int requested = Config_RequestedRenderMode();
+        int directx = (g->video_flags & VIDEO_DIRECTX) != 0;
+
+        Gfx_LogRenderer(requested, g_renderMode, directx);
+        if (requested != g_renderMode && getenv("MUGEN_STRICT_RENDERER") != NULL) {
+            Log_Printf("strict renderer: requested mode %d unavailable (effective %d) after a failed "
+                       "context restore\n", requested, g_renderMode);
+            Error_Exit();
+        }
+    }
+
+    /* Rebuild what was released above, now against the software renderer. This
+     * is the same pair of calls System_Init makes; audio, Lua, the console and
+     * the game variables are untouched because losing a GL context does not
+     * affect them. */
+    Log_Printf("OK (%dx%d, depth %d); reloading system fonts and motif...", g_videoWidth, g_videoHeight,
+               g->depth);
+    if (!System_LoadFonts()) {
+        Error_Exit();
+    }
+    if (!System_LoadMotif()) {
+        Error_Printf("Error reloading system data after the renderer fallback\n");
+        Error_Exit();
+    }
+    g = g_game;
+    Gfx_SetCoordSpace((int)g->motif_coord[0], (int)g->motif_coord[1], g->system_fit);
     Log_Printf("OK\n");
-    System_Init();
 }
+
 
 void System_Deinit(void)
 {

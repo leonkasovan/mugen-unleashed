@@ -45,6 +45,30 @@ void Gameflow_Run(void)
     while (*state != 20) {
         GameVars *g;
 
+        /*
+         * Port addition (M8, RENDERING_PLAN 12.6): a renderer recovery has to
+         * leave this loop for main.c to rebuild video. Without this the request
+         * was never observed -- the loop advanced to the next screen and the
+         * next one unwound in turn, so "Renderer fallback requested" repeated
+         * for every screen while the effective renderer never changed.
+         *
+         * *state is left where it is, so the next Gameflow_Run resumes at the
+         * same screen, now on a working renderer.
+         */
+        if (g_rendererFallbackRequested) {
+            /*
+             * Leave the loop so main.c can rebuild video, and resume at the same
+             * state afterwards: the screen that was interrupted restarts from
+             * its own init, which is where its choices are made.
+             *
+             * Resetting the state here instead was tried and is wrong: jumping
+             * back to the mode select or to the flow entry left the arcade stage
+             * unset, and the next match load failed with "Can't open stage:".
+             * Verified end to end on the device with both restore failures.
+             */
+            Log_Printf("Renderer fallback: leaving the gameflow loop at state %i.\n", *state);
+            break;
+        }
         Log_Printf("Gameflow %i\n", *state);
         switch (*state) {
         case 0:

@@ -269,6 +269,13 @@ void Events_Poll(void)
                     Pads_SetButton(key, 0);
                 }
             }
+            /*
+             * The direction sources behind those buttons have to go too. They
+             * were left populated, so the next analog event recomposed the union
+             * and brought a direction back: hold Up, background the app, move the
+             * stick Right, and Up came back held as well.
+             */
+            Pads_ResetDirectionSources();
             if (g_onActivate != NULL) {
                 g_onActivate(0);
             }

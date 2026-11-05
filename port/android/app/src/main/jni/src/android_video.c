@@ -1,5 +1,6 @@
 /* Native Android SDL2 window, renderer and streaming texture. */
 #include "android_platform.h"
+#include <stdio.h>
 
 /*
  * Engine global (src/globals.c). This file deliberately does not include
@@ -229,6 +230,20 @@ void Android_GLDrawableSize(int *w, int *h)
  */
 int Android_GLRecreateContext(void)
 {
+    /* Failure rehearsal, paired with the restore and loss hooks: a file named
+     * "gl_fail_recreate" makes one recreate fail, so the recovery path for a
+     * context that never comes back can be exercised on a device. Renamed on
+     * use, so it fires once. */
+    {
+        FILE *probe = fopen("gl_fail_recreate", "r");
+
+        if (probe != NULL) {
+            fclose(probe);
+            remove("gl_fail_recreate");
+            SDL_Log("mugen: GL context recreate failed on request (gl_fail_recreate)");
+            return 0;
+        }
+    }
     if (display_window == NULL) {
         return 0;
     }

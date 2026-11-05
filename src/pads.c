@@ -13,8 +13,9 @@
 #include "mugen.h"
 
 #ifdef ANDROID_PORT
-/* Binding policy for one player (config.c), applied when a pad attaches. */
-void Config_ApplyJoystickSlot(int player);
+/* Binding policy for one player plus publication to the input map (config.c),
+ * applied when a pad attaches or detaches. */
+void Config_RepublishJoystick(int player);
 #endif
 
 /* Axis values beyond this press the axis' button. */
@@ -219,8 +220,27 @@ static void Pads_SetDirectionSource(int slot, int source, int code, int held)
     Pads_ComposeDirections(slot);
 }
 
+/*
+ * Forgets every slot's direction sources.
+ *
+ * Suspend and deinit release the engine buttons so a held key does not stay
+ * held across the pause, but the source masks behind them were left populated.
+ * The next analog event then recomposed the union and brought the old direction
+ * back: holding Up, backgrounding, and moving the stick Right produced Up=1 and
+ * Right=1. Clearing the masks together with the buttons keeps the two in step.
+ */
+void Pads_ResetDirectionSources(void)
+{
+    int slot;
+
+    for (slot = 0; slot < PAD_MAX; slot++) {
+        g_padDirHeld[0][slot] = 0;
+        g_padDirHeld[1][slot] = 0;
+    }
+}
+
 /* Forgets both sources for a slot (device removed or slot reassigned). */
-static void Pads_ClearDirectionSources(int slot)
+void Pads_ClearDirectionSources(int slot)
 {
     if (slot < 0 || slot >= PAD_MAX) {
         return;
@@ -435,7 +455,7 @@ void Pads_AttachController(int slot, int device_index)
     /* Controller events now drive this pad, so the raw path must stand aside
      * and the semantic layout must become the active binding. */
     SDL_GameControllerEventState(SDL_ENABLE);
-    Config_ApplyJoystickSlot(slot);
+    Config_RepublishJoystick(slot);
 }
 
 /*
@@ -543,6 +563,9 @@ void Input_DeinitPads(void)
     Pads_CloseControllers();
 #endif
     memset(g_padButtonState, 0, INPUT_PAD_COUNT + 1);
+    /* The slots go with the pads; a stale mask would resurface on the next
+     * analog event of a later session. */
+    Pads_ResetDirectionSources();
     g_padQueueWrite = 0;
     g_padQueueRead = 0;
 #if defined(ANDROID_PORT) || defined(MUGEN_SDL2_API)
@@ -949,6 +972,13 @@ void Pads_DeviceEvent(const SDL_Event *event)
 #endif
             Pads_ClearDirectionSources(i);
             memset(&g_pads[i], 0, sizeof(Pad));
+#ifdef ANDROID_PORT
+            /* The slot has no controller any more: put the raw [P<n> Joystick]
+             * bindings back and publish them, so the player is not left bound
+             * to semantic codes no device will send. The semantic path exists
+             * only on Android; the desktop keeps its raw-joystick lifecycle. */
+            Config_RepublishJoystick(i);
+#endif
         }
         return;
     }

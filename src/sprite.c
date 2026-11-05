@@ -171,63 +171,72 @@ int Sprite_Init(unsigned int flags, Sprite *spr, int format, void *data, size_t 
             GlTex_Free(tex);
             return 0;
         }
+#ifdef MUGEN_GLES
         /*
-         * Keep the uploaded bytes as the texture's backing instead of freeing
-         * them: a context loss drops every GL name, and without a source to
-         * re-upload from the sprite would draw black (the renderer still
-         * reports ready). GlTex_SetBacking takes ownership, so the buffer is
-         * freed with the texture rather than here.
+         * Keep the uploaded bytes as the texture's backing, so a context loss
+         * can rebuild it: Sprite_Init releases the CPU pixels below, and without
+         * a source to re-upload from the sprite would draw black after a
+         * restore (the renderer still reports ready).
          *
-         * The buffer handed over is the one that was actually uploaded. When we
-         * do not own it (the caller keeps its copy) a private copy is made, so
-         * ownership stays unambiguous.
+         * Ownership transfers only on success, and exactly one pointer is
+         * cleared per buffer actually handed over. The first version instead
+         * freed the buffer it had just handed over and then let the cleanup
+         * below free it again -- a double free for an owned caller buffer and
+         * for a downscaled sprite, on both the desktop build and this failure
+         * path.
          */
         {
             int upload_w = w / step_x;
             int upload_h = h / step_y;
             size_t bytes = (size_t)upload_w * (size_t)upload_h *
                            (size_t)(bpp <= 8 ? 1 : (bpp == 24 ? 3 : 4));
-            void *backing = NULL;
-            int backing_owned = 0;
+            void *backing;
+            int from_ours;
+            int registered;
 
             if (scaled != NULL) {
                 backing = scaled;
-                backing_owned = 1;
+                from_ours = 1;
             } else if (owns) {
                 backing = data;
-                backing_owned = 1;
+                from_ours = 1;
             } else {
+                /* The caller keeps its copy, so hand over a private one. */
                 backing = malloc(bytes);
                 if (backing != NULL) {
                     memcpy(backing, upload, bytes);
-                    backing_owned = 1;
                 }
+                from_ours = 0;
             }
-#ifdef MUGEN_GLES
-            if (backing == NULL || !GlTex_SetBacking(tex, backing, bytes, upload_h, upload_w, bpp)) {
-                /* Not fatal: the texture works until the next context loss. */
-                if (backing_owned) {
+            registered = (backing != NULL) &&
+                         GlTex_SetBacking(tex, backing, bytes, upload_h, upload_w, bpp);
+            if (!registered) {
+                /* Nothing was transferred: release the private copy here, then
+                 * let the single cleanup below free the original buffers and
+                 * fail the load. A texture we cannot rebuild after a context
+                 * loss is not worth keeping. */
+                if (!from_ours && backing != NULL) {
                     free(backing);
                 }
-            } else {
-                /* Ownership moved to the texture; do not free below. */
-                scaled = NULL;
-                if (backing == data && owns) {
-                    data = NULL;
+                if (scaled != NULL) {
+                    free(scaled);
                 }
+                if (owns) {
+                    free(data);
+                }
+                GlTex_Free(tex);
+                return 0;
             }
-#else
-            /* No backing sidecar outside the GLES backend: the desktop
-             * renderer keeps its own texture lifetime, so anything allocated
-             * here is released immediately. */
-            (void)upload_h;
-            (void)upload_w;
-            (void)bytes;
-            if (backing_owned) {
-                free(backing);
+            /* Ownership moved to the texture: clear only what was handed over,
+             * so a downscaled owned sprite still frees its original. */
+            if (backing == scaled) {
+                scaled = NULL;
             }
-#endif
+            if (backing == data) {
+                data = NULL;
+            }
         }
+#endif
         if (scaled != NULL) {
             free(scaled);
         }
