@@ -9,15 +9,17 @@ lands; keep the research sections true to the findings they were based on.
 
 | Area | State |
 |---|---|
-| Windows build (MSVC/CMake) | **done, verified** — outputs `mugen_unleashed.exe`; `docs/BUILD-MSVC.md` |
-| Windows static build (GNU Make + MinGW-x86) | **done, verified** — outputs `mugen-static.exe`, no game DLLs needed; `docs/BUILD-MINGW.md` |
+| Windows build (MSVC/CMake) | **done, verified** — `build/x86-release/mugen-msvc-win32-sdl1.exe`; `docs/BUILD-MSVC.md` |
+| Windows static build (GNU Make + MinGW-x86) | **done, verified** — `mugen-mingw-win32-sdl2.exe` by default, `mugen-mingw-win32-sdl1.exe` with `SDL_BACKEND=1`; no game DLLs needed; `docs/BUILD-MINGW.md` |
+| Windows 64-bit (GNU Make, experimental) | **builds, not log-verified** — `MUGEN_TARGET=win64` → `mugen-mingw-win64-sdl2.exe`; the struct reads that used hardcoded offsets are member accesses now, a win32-vs-win64 `mugen.log` diff is still outstanding; `docs/BUILD-MINGW64.md` |
+| SDL backend | **SDL2 is the default** (`SDL_BACKEND=2`: `src/sdl2compat.c`, `src/sdl2surface.c`); SDL 1.2 (`SDL_BACKEND=1`) is built on Windows for the differential log/render comparisons |
 | libresample | **vendored and ported** to multi-channel; `third_party/libresample/VENDORED.md` |
 | Lua | **done** — `lmode`/`lexec` implemented, full API documented in `docs/LUA.md` |
 | Renderer optimization | steps 1–3 **done and runtime-verified**; 4–6 pending |
 | OpenGL loader | **GLEW 1.5.4 → glad 2.1 done** — smaller, faster to build, exactly generated |
 | Linux rendering | primitives **fixed** (constant blend factors dead on Mesa); sprite blending **outstanding** |
 | Modern GL (3.3/4.6) / Vulkan | researched, **not recommended** — reasons below |
-| Linux port | **linux-x64 done and verified** — builds and runs, `mugen.log` identical to the Windows build; `docs/BUILD-LINUX.md`. arm64 selected but untested |
+| Linux port | **linux-x64 done and verified** — builds and runs, `mugen.log` identical to the Windows build; `docs/BUILD-LINUX.md`. linux-x86 and arm64 are selectable but untested |
 
 ## Codebase knowledge graph (codebase-memory-mcp)
 
@@ -30,14 +32,17 @@ Indexed as project `C-Projects-mugen-unleashed` (`mode: full`, status `ready`).
 | Scope | `src/` + root files | + `docs/`, `tools/`, `third_party/` |
 | `parse_unusable` | 1 (`src/symbols.h` whole file) | **0** |
 
-Notes, all verified by running the CLI:
+Notes, verified by running the CLI. **The figures are a snapshot**: the tree has
+changed since (SDL2 backend, `MUGEN_TARGET=win64`, `res/shaders/`), the index does
+not auto-update, and the CLI binary is not installed in every session. Re-run
+`index_repository` and re-read the counts before relying on them.
 
 - **`full` mode indexes far more than `src/`** — `third_party/` (Lua, libpng,
   GLEW, minizip, sdk headers) dominates the node count. Queries about the
   engine should filter on `src/` (e.g. `--file-pattern 'src/'`).
-- **`src/symbols.h` parses cleanly in `full` mode** (only `parse_partial`
-  ranges 7-75 and 152-1936 remain), closing the gap `fast` mode had. Use it as
-  a source of truth for prototypes/globals again.
+- **`src/symbols.h` is no longer `parse_unusable` in `full` mode**, which closes
+  the gap `fast` mode had. It still reports `parse_partial` ranges 7-75 and
+  152-1936, so read those ranges instead of treating the graph as the whole file.
 - **`parse_partial` = 43 files**, nearly all vendored third-party headers
   (`SDL_opengl.h`, `png.h`, `glew.h`, …). Engine-side ranges worth knowing:
   `src/cnsparse.c:127`, `src/font.c:17`, `src/sound.c:20`, `src/ini.c:896`,
@@ -92,21 +97,26 @@ from (see "Goal" and "Float precision per architecture").
 
 ## Static build (done)
 
-`make` on the `static` branch produces **`mugen-static.exe`**: one
-self-contained 32-bit Windows executable. Its entire import table is
+`make` (there is no `static` branch any more; `sdl2` is the main line)
+produces **`mugen-mingw-win32-sdl2.exe`**, and `make SDL_BACKEND=1` the
+SDL 1.2 variant `mugen-mingw-win32-sdl1.exe`: one self-contained 32-bit
+Windows executable either way. The SDL2 build's entire import table is
 
 ```
-ADVAPI32  GDI32  GLU32  KERNEL32  OPENGL32  SHELL32  SHLWAPI  USER32  WINMM  msvcrt
+ADVAPI32  GDI32  GLU32  IMM32  KERNEL32  OLEAUT32  ole32  SETUPAPI  SHELL32
+SHLWAPI  USER32  VERSION  WINMM  msvcrt
 ```
 
-i.e. Windows system DLLs plus MinGW's CRT. **No `Elecbyte.MUGEN.libs`.** SDL
-1.2, SDL_gfx, SDL_mixer, SDL_ttf, zlib, pthread and mpg123 come from
-`C:\x86devkit` as archives via `pkg-config --libs --static`; Lua, GLEW and
-minizip are built from `third_party/`; libresample is vendored.
+i.e. Windows system DLLs plus MinGW's CRT. **No `Elecbyte.MUGEN.libs`.** SDL2,
+SDL2_mixer, SDL2_ttf, zlib, pthread and mpg123 come from `C:\x86devkit` as
+archives via `pkg-config --libs --static`; Lua, glad and minizip are built from
+`third_party/`; libresample is vendored. (This list is the SDL2 build; the
+SDL 1.2 backend links the kit's SDL 1.2 stack instead and imports a different
+set, which is what the earlier note recorded.)
 
 Verified against the original `mugen.exe` by log diff: startup/mode-select and
 quick VS both produce an identical `mugen.log` after numeric normalisation.
-Stripped size ~3.5 MB. `make install` strips and copies it to `install/`.
+`make install` strips it (`-stripped`) and copies it into `install/`.
 
 ### Two ABI gaps the static link exposed
 
@@ -338,11 +348,12 @@ in memory only.
 x86-64 and arm64**, selected automatically from `uname` and the compiler's own
 target triple. No second build system, no per-platform fork of the source.
 
-Three targets, all from the existing `Makefile`:
+Four targets, all from the existing `Makefile`:
 
 | Target | Detection | Output | Fidelity |
 |---|---|---|---|
-| Windows i686 | `uname -s` = `Windows_NT`/`MINGW*`/`MSYS*` **and** triple `i686-w64-mingw32` | `mugen-static.exe` | **reference**: layouts and x87 bit-identical to the original |
+| Windows i686 | `uname -s` = `Windows_NT`/`MINGW*`/`MSYS*` **and** triple `i686-w64-mingw32` | `mugen-mingw-win32-sdl2.exe` (`-sdl1` for SDL 1.2) | **reference**: layouts and x87 bit-identical to the original |
+| Windows x86-64 (experimental) | opt-in `MUGEN_TARGET=win64`, triple `x86_64-w64-mingw32`, 64-bit kit | `mugen-mingw-win64-sdl2.exe` | **functional**: layouts are natural, not the original's; not log-verified yet |
 | Linux x86-64 | `uname -s` = `Linux`, triple `x86_64-*-linux-gnu` | `mugen-linux-x64` | **faithful**: x87 reproducible via `-mfpmath=387` (verified, see below) |
 | Linux arm64 | `uname -s` = `Linux`, triple `aarch64-*-linux-gnu` | `mugen-linux-arm64` | **functional**: no x87 exists, float drift accepted and log-diffed |
 
@@ -376,8 +387,10 @@ ABI, and the compiler wins on any disagreement. The selection:
 | `uname -s` | `-dumpmachine` | Target |
 |---|---|---|
 | `Windows_NT`, `MINGW*`, `MSYS*`, `CYGWIN*` | `i686-w64-mingw32` | win32 (default on Windows) |
+| `Windows_NT`, `MINGW*`, `MSYS*`, `CYGWIN*` | `x86_64-w64-mingw32` | error unless `MUGEN_TARGET=win64` is given (the 32-bit target cannot link) |
 | `Linux` | `x86_64-*-linux-gnu` | linux-x64 |
 | `Linux` | `aarch64-*-linux-gnu` | linux-arm64 |
+| `Linux` | `i686-*-linux-gnu` | linux-x86 |
 | anything else | — | **error**, naming the triple found and the supported list |
 
 `check-toolchain` gains the same logic, so an unsupported combination fails with
@@ -391,7 +404,8 @@ Only these differ; the file lists and the engine are shared.
 
 | Variable | win32 | linux-x64 | linux-arm64 |
 |---|---|---|---|
-| `TARGET` | `mugen-static.exe` | `mugen-linux-x64` | `mugen-linux-arm64` |
+| `TARGET` | `mugen-mingw-win32-sdl2.exe` (`-sdl1` with `SDL_BACKEND=1`) | `mugen-linux-x64` | `mugen-linux-arm64` |
+| `SDL_BACKEND` | `2` by default, `1` for the SDL 1.2 reference backend | `2` only | `2` only |
 | `-m32` / `-m64` | `-m32` | none (native) | none (native) |
 | float flags | `-mfpmath=387 -fexcess-precision=standard` | **same** — x87 still exists on x86-64 | **none** — no x87; SSE/NEON gives `FLT_EVAL_METHOD == 0` |
 | `-mwindows` | yes | no | no |
@@ -401,8 +415,11 @@ Only these differ; the file lists and the engine are shared.
 | `__int64` / `__cdecl` | provided by MinGW `_mingw.h` | **shim needed** (both) | **shim needed** (both) |
 | `MUGEN_LAYOUT_32BIT` | 1 | 0 | 0 |
 
-`MUGEN_LAYOUT_32BIT` is new and is what makes the 64-bit build possible at all;
-see "The struct layout question" below.
+`MUGEN_LAYOUT_32BIT` is what makes the 64-bit build possible at all; it is
+derived from `UINTPTR_MAX`, not from a compiler-specific predefined macro (see
+"The struct layout question" below). The `win64` column differs from `win32`
+only in pointer width, the 64-bit kit, and the two `SetClassLongPtr`-style
+fixes listed in `docs/BUILD-MINGW64.md`.
 
 ### Verified on WSL2 / Ubuntu 22.04
 
@@ -478,14 +495,15 @@ The Windows/x64-kit case is the one that matters most in practice: it turns the
 current confusing `skipping incompatible libkernel32.a` link failure into one
 sentence naming the fix.
 
-**Not done:** a full Linux build. `apt install` needs `sudo`, which needs a
-password this session does not have. Everything above is compiler-level
-verification; the first real build will still surface the Win32/CRT source work
-in steps 1–5.
+**At that point:** no full Linux build had been made. `apt install` needs
+`sudo`, which needs a password that session did not have, so everything above
+was compiler-level verification. The build has since been done: steps 1–5 and 7
+are complete (see the port work plan), with `mugen.log` identical to the Windows
+build.
 
 ### The struct layout question, measured
 
-The 32-bit build is checked by **205 `MUGEN_ASSERT_SIZE` and 669
+The 32-bit build is checked by **207 `MUGEN_ASSERT_SIZE` and 670
 `MUGEN_ASSERT_OFFSET`** `_Static_assert`s. On 64-bit, pointers double and every
 assertion downstream of one fails. Measured across `src/*.h`:
 
@@ -502,21 +520,26 @@ structs move. The saving grace is **how** the code reads them:
 
 | Check | Result |
 |---|---|
-| Raw byte-offset arithmetic into structs (`(char *)p + 0x…`) | **0 occurrences** |
+| Raw byte-offset reads (`(char *)p + 0x…`) | **1** — `src/sprite.c:32`, a texture field, not one of our structs |
 | Access is by named member everywhere | yes |
 | `memcpy`/`memset` with `sizeof(Type)` (scales automatically) | 116 |
 | `int`↔pointer casts that would truncate | **0** |
 
-Because nothing indexes structs by absolute offset, a 64-bit relayout is
+Because no struct of ours is read by absolute offset, a 64-bit relayout is
 **functionally safe**: the structs get bigger, offsets shift, and the code —
-which only ever uses member names — does not care. The offsets exist for
-fidelity diff-testing against the original, not for correctness.
+which only ever uses member names — does not care. The former hardcoded sites
+(`camera.c` `bg->legacy`/`e->y`, `char.c` `proj->afterimage`, `ai.c`
+`in->keys`) use member access now; only the `sprite.c` texture read remains.
+The offsets exist for fidelity diff-testing against the original, not for
+correctness.
 
-Therefore: wrap the assertions in `#if MUGEN_LAYOUT_32BIT` (defined when
-`sizeof(void *) == 4`). They stay fully active on the reference build, where
-they are the guard that keeps the reconstruction honest, and become no-ops on
-64-bit, where the original's offsets are meaningless by definition. Nothing else
-in the structs changes.
+Therefore: wrap the assertions in `#if MUGEN_LAYOUT_32BIT`, which `src/mugen.h`
+derives from `UINTPTR_MAX == 0xFFFFFFFFu` — a `sizeof`-style test would work too,
+but the macro is compiler-independent, so MSVC x86 keeps the checks that
+`__SIZEOF_POINTER__` used to hide. A `#error` rejects a 32-bit Windows build that
+fails to detect its own pointer width. The checks stay fully active on the
+reference build and become no-ops on 64-bit, where the original's offsets are
+meaningless by definition. Nothing else in the structs changes.
 
 One serialized format exists — the `.ai` character AI files (`src/ai.c`,
 `fread`/`fwrite` on `AiFileHeader`, `AiMove`, `AiMoveStep`, `AiStat`). All of
@@ -637,23 +660,18 @@ source portability, which is where the plan below spends its steps.
 
 Dependencies also change shape. Windows compiles Lua/GLEW/minizip from
 `third_party/` and links a kit's SDL; on Linux most come from the distro —
-`libsdl1.2-dev`, `libsdl-mixer1.2-dev`, `libsdl-ttf2.0-dev`,
-`libsdl-gfx1.2-dev`, `libpng-dev`, `zlib1g-dev`, `libmpg123-dev`,
-`libgl1-mesa-dev` — and only **Lua 5.1.4 stays vendored**, because distros no
-longer ship 5.1. GLEW 1.5.4 and minizip 0.15 can stay vendored or come from the
-distro; vendored is safer, since `src/symbols.h` pins their symbols.
+the SDL2 `-dev` packages (the list is in `docs/BUILD-LINUX.md`),
+`libpng-dev`, `zlib1g-dev`, `libgl1-mesa-dev` — and only **Lua 5.1.4 stays
+vendored**, because distros no longer ship 5.1. glad 2.1 and minizip 0.15 stay
+vendored too: `src/symbols.h` pins their symbols.
 
-**SDL 1.2 availability: resolved for Ubuntu 22.04, still worth checking per
-distro.** This was the plan's biggest risk — several newer distros ship SDL2
-only, and the engine is written against `SDL_SetVideoMode`. Ubuntu 22.04 carries
-`libsdl1.2-dev 1.2.15` (verified, see "Verified on WSL2"), so no shim and no
-vendoring is needed there. On a distro that has dropped 1.2, the answer is
-`sdl12-compat` over SDL2 — which is a real porting cost, not a drop-in — so
-confirm before starting:
-
-```sh
-pkg-config --exists sdl && pkg-config --modversion sdl   # want 1.2.15
-```
+**SDL 1.2 availability no longer gates the port.** At planning time it was the
+biggest risk, because the engine is written against `SDL_SetVideoMode`. The
+SDL2 backend resolved it: `SDL_BACKEND=2` is the default and `src/sdl2compat.c`
+implements the SDL 1.2 entry points over SDL2, so no distro needs an SDL 1.2
+package and no `sdl12-compat` shim is involved. `SDL_BACKEND=1` still builds the
+real SDL 1.2 backend on Windows, which is what the differential comparisons
+against the original use.
 
 ## Port work plan
 
@@ -664,7 +682,7 @@ today is modified incompatibly).
 Three things the static Windows build already settled for the Linux port:
 
 * **libresample is no longer a DLL to replace** — it is vendored source with a
-  known, tested API (step 2, partly done).
+  known, tested API (step 2, done).
 * **The "vendor every library" strategy is proven workable**, but it is not the
   cheapest route on Linux: there, most of these are one `apt install` away and
   only Lua 5.1.4 needs vendoring, because no distro ships 5.1 any more.
@@ -675,31 +693,28 @@ Three things the static Windows build already settled for the Linux port:
 
 | # | Step | What it involves | Status |
 |---|---|---|---|
-| 1 | Compat shim layer | `src/compat_linux.h` / `compat_linux.c`: CRT shims, `dlopen` typedefs for `HMODULE`/`GetProcAddress`, monotonic clock. Included from `crt.h`/`mugen.h` behind a platform check. Unblocks ~10 files with zero game-logic edits | pending |
+| 1 | Compat shim layer | `src/compat_linux.h` / `compat_linux.c`: CRT shims, `dlopen` typedefs for `HMODULE`/`GetProcAddress`, monotonic clock. Included from `crt.h`/`mugen.h` behind a platform check | **done** |
 | 2 | Vendor libresample | **done for Windows** — `third_party/libresample` is upstream 0.1.3 ported to the multi-channel ABI; see "Static build" above. zlib still comes from the kit on Windows and from the distro on Linux | resample **done** |
-| 3 | Remove pure-`windows.h` includes | `gfx.c`, `prim.c`, `glrender.c`, `gldetect.c`, `mugen.h` — mechanical; include `<GL/gl.h>` directly. Note `matchload.c` is **not** in this group: it calls `QueryPerformanceCounter`/`timeGetTime` | pending |
-| 4 | Port the 4 real Win32 spots | timer (monotonic clock), fullscreen (SDL), window icon + fonts dir, error dialog (SDL message box). ~200 lines total | pending |
-| 5 | SDL stack | distro packages: `libsdl1.2-dev` (1.2.15 confirmed on Ubuntu 22.04), `libsdl-mixer1.2-dev`, `libsdl-ttf2.0-dev`, `libsdl-gfx1.2-dev`; `sdlmain.c` gets a plain `main()` path on Linux; `mugen.rc`/manifest skipped (not a PE) | pending — dependency availability **verified** |
-| 6 | **Platform detection in the Makefile** | `UNAME_S`/`UNAME_M`/`$(CC) -dumpmachine` selection block, per-target variable blocks (`TARGET`, float flags, `-mwindows`, `RC_OBJ`, `STATIC_PKGS`, `ENGINE_DEFS`), `check-toolchain` reporting the detected target, `MUGEN_TARGET=` override for cross-compiles. Linux output names and `$(PREFIX)/bin` install. **Unsupported triple = hard error** naming what was found | pending — design in "Platform detection" above |
-| 7 | **`MUGEN_LAYOUT_32BIT` assertion guard** | Wrap the 205 `MUGEN_ASSERT_SIZE` + 669 `MUGEN_ASSERT_OFFSET` in `#if MUGEN_LAYOUT_32BIT` (defined when `sizeof(void *) == 4`). Active on the reference build, no-ops on 64-bit. No struct changes: 0 raw-offset accesses means relayout is functionally safe (measured above) | pending |
-| 8 | 64-bit correctness pass | Build x64, fix what the compiler finds. Two are already confirmed by compiling on WSL Linux: **`__int64`** (MinGW defines it in `_mingw.h`, glibc does not — `unknown type name`) and **`__cdecl`** (a MinGW/Windows attribute, **rejected by Linux GCC on x86-64 as well as arm64**) — 36 and 1607 uses respectively, so both are one `#define` in the compat header. Then whatever `long`-width assumptions remain | pending; the two known ones are verified |
-| 9 | arm64 build | native compile on AArch64; expect `FLT_EVAL_METHOD == 0` and accept float drift. Audit the numeric lines of `mugen.log` by hand rather than by exact diff | pending |
+| 3 | Remove pure-`windows.h` includes | `gfx.c`, `prim.c`, `glrender.c`, `gldetect.c`, `mugen.h` — mechanical; include `<GL/gl.h>` directly. Note `matchload.c` is **not** in this group: it calls `QueryPerformanceCounter`/`timeGetTime` | **done** — each include sits inside `#ifdef _WIN32`, so Linux never sees it |
+| 4 | Port the 4 real Win32 spots | timer (monotonic clock), fullscreen (SDL), window icon + fonts dir, error dialog (SDL message box) | **done** — `timer.c`/`compat_linux.c`, `video.c`, `system.c` (`/usr/share/fonts`), `error.c` |
+| 5 | SDL stack | SDL2 is the only backend on Linux (`SDL_BACKEND=1` is win32-only); `sdlmain.c` has a non-`WinMain` path; `mugen.rc`/manifest skipped (not a PE) | **done** — `src/sdl2compat.c` over SDL2, packages listed in `docs/BUILD-LINUX.md` |
+| 6 | **Platform detection in the Makefile** | `UNAME_S`/`$(CC) -dumpmachine` selection block, per-target variable blocks (`TARGET`, float flags, `-mwindows`, `RC_OBJ`, `STATIC_PKGS`, `ENGINE_DEFS`, `SDL_BACKEND`), `check-toolchain` reporting the detected target, `MUGEN_TARGET=` override for cross-compiles. Linux installs into the same `install/` tree as `mugen-linux-<arch>` (never a `.exe`). **Unsupported triple = hard error** naming what was found | **done** |
+| 7 | **`MUGEN_LAYOUT_32BIT` assertion guard** | Wrap the 207 `MUGEN_ASSERT_SIZE` + 670 `MUGEN_ASSERT_OFFSET` in `#if MUGEN_LAYOUT_32BIT`, derived from `UINTPTR_MAX == 0xFFFFFFFFu` (`src/mugen.h`). Active on the reference build, no-ops on 64-bit; no struct changes | **done** |
+| 8 | 64-bit correctness pass | **`__int64`** (38 uses) and **`__cdecl`** (1629 uses) are shimmed in `src/compat_linux.h`; the struct reads that used hardcoded offsets (`camera.c`, `char.c`, `ai.c`) are member accesses now, leaving only `src/sprite.c:32`, a texture field that is not one of our structs; `make MUGEN_TARGET=win64` builds it against the 64-bit kit and no log comparison has been run | **builds; win32-vs-win64 `mugen.log` diff outstanding** |
+| 9 | arm64 build | native compile on AArch64; expect `FLT_EVAL_METHOD == 0` and accept float drift. Audit the numeric lines of `mugen.log` by hand rather than by exact diff | **pending** — never built; `linux-arm64` is selectable in the `Makefile` |
 
-Order rationale: steps 1–5 make **one** Linux target build; 6 makes the
-`Makefile` choose between them; 7–8 turn the third target on; 9 is the fourth.
-Steps 6 and 7 are independent of each other and of the source port, so they can
-land first if a Linux target is not yet available to test against.
-
-Effort estimate: steps 1, 3, 6, 7 are mechanical (~2–3 days total); 4 is
-behavioural (~1–2 days); 5 is unblocked on Ubuntu 22.04 (SDL 1.2.15 packaged); 8 is
-unknown-but-bounded by the compiler's error list; **9 has no fixed end**, because
-float drift on arm64 is a per-symptom investigation, not a checklist.
+Steps 1–5 built the first Linux target and 6–7 added the `Makefile`'s platform
+choice and the layout guard; 8 took the 64-bit targets as far as "builds and
+runs". What is left is the win32-vs-win64 log comparison (8) and arm64 (9).
+**9 has no fixed end**, because float drift on arm64 is a per-symptom
+investigation, not a checklist.
 
 ### What "done" means per target
 
 | Target | Done when |
 |---|---|
 | win32 | `mugen.log` identical to the original (already true) |
+| win64 | `mugen.log` identical to the win32 build after numeric normalisation (not yet run) |
 | linux-x64 | `mugen.log` identical to the original **on the numeric lines** — the x87 flags make bit equality the expectation, not a hope |
 | linux-arm64 | runs a full match without crashing; numeric differences enumerated and explained. Exact equality is **not** a goal here |
 
@@ -897,16 +912,19 @@ buy, concretely:
 - **4.6 / compute** offers nothing here: the workload is 2D quads with a 256-
   entry texture lookup. Persistence, DSA, `glMultiDraw*` are conveniences, not
   speedups, for a few thousand quads a frame.
-- **Shaders** would go `#version 120` → 330 core (`in`/`out`, `texture()`). Note
-  the shaders are **not in this repo**; they are loaded from the game's
-  `data/<name>.vert|.frag` at runtime with `#defines` injected at
-  `////*EB_DEFINES*////`. A core-profile renderer would need new shader files
-  and a fallback, i.e. a data-side dependency the modding community would feel.
-- **Context creation is the real blocker**: the game gets its context from
-  `SDL_SetVideoMode` (`video.c:194`), i.e. SDL 1.2, which cannot request a core
-  profile or a specific version. Any 3.3+ path means moving to SDL2 window +
-  `SDL_GL_CreateContext` with attributes — which is the same fork of the video
-  layer the Linux port already needs (see the port plan: SDL 1.2 → `sdl12-compat`).
+- **Shaders** would go `#version 120` → 330 core (`in`/`out`, `texture()`). The
+  desktop shaders are **not in this repo** — they come from the game's
+  `data/<name>.vert|.frag` at runtime, with `#defines` injected by
+  `ShaderSrc_InsertDefines` at `////*EB_DEFINES*////`. The project does own the
+  GLES and vitaGL copies (`res/shaders/gles/`, `res/shaders/vita/`, same four
+  file names); a core-profile renderer would need a third desktop set and a
+  fallback, i.e. a data-side dependency the modding community would feel.
+- **Context creation used to be the blocker**: with SDL 1.2 the game gets its
+  context from `SDL_SetVideoMode` (`video.c:323`), which cannot request a core
+  profile or a version. The default SDL2 backend already creates the window and
+  context itself (`src/sdl2compat.c`, `SDL_CreateWindow` + `SDL_GL_CreateContext`),
+  so a 3.3+ path only has to add `SDL_GL_SetAttribute` requests there — no fork
+  of the video layer and no `sdl12-compat` involvement.
 
 **Verdict**: keep the GL2 renderer as the faithful default and as the
 reference for diff-testing. Put batching in behind a flag on the existing GL2
