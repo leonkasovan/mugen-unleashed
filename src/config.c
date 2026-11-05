@@ -19,6 +19,18 @@ static int g_cfgGamepadPresent[2];
 static int g_cfgGamepadMissing;
 static void Config_LoadGamepadGroups(Ini *ini);
 static void Config_WriteMissingGamepadGroups(void);
+/* Local semantic codes, independent of the runtime player's slot offset. */
+static const struct {
+    const char *name;
+    int key;
+    int code;
+} gamepad_bindings[] = {
+    { "Jump", KEY_JUMP, 1 }, { "Crouch", KEY_CROUCH, 2 },
+    { "Left", KEY_LEFT, 3 }, { "Right", KEY_RIGHT, 4 },
+    { "A", KEY_A, 5 }, { "B", KEY_B, 6 }, { "C", KEY_C, 7 },
+    { "X", KEY_X, 8 }, { "Y", KEY_Y, 9 }, { "Z", KEY_Z, 10 },
+    { "Start", KEY_START, 11 },
+};
 /* Defined near Options_Load; Config_Load runs first. */
 /* The configured [P<n> Joystick] codes, kept across the controller policy. */
 static int g_cfgRawJoyKeys[2][KEY_COUNT];
@@ -715,6 +727,7 @@ static void Config_LoadGamepadGroups(Ini *ini)
 {
     int player;
 
+    g_cfgGamepadMissing = 0;
     for (player = 0; player < 2; player++) {
         char group[16];
         int i;
@@ -726,108 +739,117 @@ static void Config_LoadGamepadGroups(Ini *ini)
         g_cfgGamepadPresent[player] = Config_ReadKeys(ini, group, g_cfgGamepadKeys[player]);
         if (!g_cfgGamepadPresent[player]) {
             g_cfgGamepadMissing = 1;
+            for (i = 0; i < (int)(sizeof(gamepad_bindings) / sizeof(gamepad_bindings[0])); i++) {
+                g_cfgGamepadKeys[player][gamepad_bindings[i].key] = gamepad_bindings[i].code;
+            }
             Log_Printf("config: no [%s] group; the built-in gamepad layout applies\n", group);
         }
+        Config_FillUnassigned(g_cfgGamepadKeys[player], JOY_NONE);
     }
 }
 
 /*
- * Port addition: writes the built-in [P<n> Gamepad] groups into mugen.cfg when
- * it does not have them.
- *
- * The groups are self-documenting once they are in the file, and a user who
- * wants to remap the pad should not have to invent the section. This runs after
- * Config_Load has read the file (so nothing the user wrote is disturbed) and
- * before Options_Save could rewrite it, appending at the end with the file's own
- * line endings.
- *
- * Only the missing groups are added; an existing group is never touched, even
- * partially. Failure is logged and ignored: a read-only config must not stop the
- * game from starting.
+ * Port fix: save canonical gamepad codes into their own sections. Existing
+ * comments and unknown keys stay in place; missing sections and keys are added.
  */
+static int Config_SaveGamepadGroup(Ini *ini, int player)
+{
+    char group[32];
+    char line[64];
+    int present, i;
+
+    snprintf(group, sizeof(group), "P%d Gamepad", player + 1);
+    present = Ini_SelectGroup(ini, group) != -1;
+    if (!present) {
+        if (!Ini_AppendLine(ini, "")) {
+            return 0;
+        }
+        snprintf(line, sizeof(line), "[%s]", group);
+        if (!Ini_AppendLine(ini, line)) {
+            return 0;
+        }
+    }
+    for (i = 0; i < (int)(sizeof(gamepad_bindings) / sizeof(gamepad_bindings[0])); i++) {
+        const char *name = gamepad_bindings[i].name;
+        int value = g_cfgGamepadKeys[player][gamepad_bindings[i].key];
+
+        if (value == JOY_NONE) {
+            value = 0;
+        }
+        if (present && Ini_GetValue(ini, name) != NULL) {
+            if (Ini_SetValuef(ini, name, "%i", value) != 1) {
+                return 0;
+            }
+        } else {
+            snprintf(line, sizeof(line), "%-6s = %d", name, value);
+            if (present ? !Ini_AppendGroupLine(ini, line) : !Ini_AppendLine(ini, line)) {
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+/* Make missing groups visible at startup, using the loaded/default mappings. */
 static void Config_WriteMissingGamepadGroups(void)
 {
     Ini *ini;
-    Stream *s;
     int player;
 
     if (!g_cfgGamepadMissing) {
         return;
     }
-    if (!g_cfgGamepadPresent[0] && !g_cfgGamepadPresent[1]) {
-        /* Nothing to distinguish from: append the whole section. */
-    }
-    s = Stream_OpenFile(CONFIG_PATH, "rt");
-    if (s == NULL) {
+    ini = Ini_OpenEditable(CONFIG_PATH);
+    if (ini == NULL) {
         Log_Printf("config: could not reopen %s to add the gamepad groups\n", CONFIG_PATH);
         return;
     }
-    ini = Ini_Parse(s, INI_MODE_EDIT);
-    Stream_Close(s);
-    if (ini == NULL) {
-        Log_Printf("config: could not parse %s to add the gamepad groups\n", CONFIG_PATH);
-        return;
-    }
-    if (!Ini_AppendLine(ini, "")) {
-        Ini_Free(ini);
-        return;
-    }
-    if (!Ini_AppendLine(ini, ";-------------------------------------------------------")) {
-        Ini_Free(ini);
-        return;
-    }
-    if (!Ini_AppendLine(ini, "; Gamepad config (Android: SDL game-controller mapping)")) {
-        Ini_Free(ini);
-        return;
-    }
-    if (!Ini_AppendLine(ini, "; Added automatically because these groups were missing.")) {
-        Ini_Free(ini);
-        return;
-    }
-    if (!Ini_AppendLine(ini, "; These are NOT the [P<n> Joystick] device indices: the Android build")) {
-        Ini_Free(ini);
-        return;
-    }
-    if (!Ini_AppendLine(ini, "; binds a pad through SDL's game-controller API and maps it onto this")) {
-        Ini_Free(ini);
-        return;
-    }
-    if (!Ini_AppendLine(ini, "; compact layout -- 1 up, 2 down, 3 left, 4 right, 5 A, 6 B, 7 C (RB),")) {
-        Ini_Free(ini);
-        return;
-    }
-    if (!Ini_AppendLine(ini, "; 8 X, 9 Y, 10 Z (LB), 11 Start. Select (Back) opens the in-match menu.")) {
-        Ini_Free(ini);
-        return;
-    }
     for (player = 0; player < 2; player++) {
-        static const char *const names[] = { "Jump", "Crouch", "Left", "Right", "A", "B", "C", "X", "Y", "Z", "Start" };
-        static const int codes[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 };
-        char line[64];
-        int i;
-
-        if (g_cfgGamepadPresent[player]) {
-            continue;
-        }
-        snprintf(line, sizeof(line), "[P%d Gamepad]", player + 1);
-        if (!Ini_AppendLine(ini, line)) {
+        if (!g_cfgGamepadPresent[player] && !Config_SaveGamepadGroup(ini, player)) {
+            Log_Printf("config: could not add the gamepad groups\n");
             Ini_Free(ini);
             return;
-        }
-        for (i = 0; i < (int)(sizeof(names) / sizeof(names[0])); i++) {
-            snprintf(line, sizeof(line), "%-6s = %d", names[i], codes[i]);
-            if (!Ini_AppendLine(ini, line)) {
-                Ini_Free(ini);
-                return;
-            }
         }
     }
     if (!Ini_Save(ini, CONFIG_PATH)) {
         Log_Printf("config: could not write the gamepad groups to %s\n", CONFIG_PATH);
-    } else {
-        Log_Printf("config: wrote the default gamepad groups to %s\n", CONFIG_PATH);
     }
     Ini_Free(ini);
+}
+
+/*
+ * Port fix: commit the key menu to the appropriate mapping before publishing
+ * runtime bindings. A semantic code is local in the cfg (P2's runtime 37 is 5).
+ */
+int Config_SetJoystickKeys(int player, int gamepad, const int *keys)
+{
+    int local[KEY_COUNT];
+    int i;
+
+    if (player < 0 || player >= 2) {
+        return 0;
+    }
+    if (gamepad) {
+        for (i = 0; i < KEY_COUNT; i++) {
+            int value = keys[i];
+
+            local[i] = JOY_NONE;
+            if (value == JOY_NONE || value == 0) {
+                continue;
+            }
+            if (value < player * PAD_BUTTONS + 1 ||
+                value > player * PAD_BUTTONS + PAD_GAMEPAD_LAST) {
+                return 0;
+            }
+            local[i] = value - player * PAD_BUTTONS;
+        }
+        memcpy(g_cfgGamepadKeys[player], local, sizeof(local));
+        g_cfgGamepadPresent[player] = 1;
+    } else {
+        memcpy(g_cfgRawJoyKeys[player], keys, sizeof(g_cfgRawJoyKeys[player]));
+    }
+    Config_ApplyJoystickSlot(player);
+    return 1;
 }
 
 void Config_ApplyAndroidJoystick(void)
@@ -900,27 +922,20 @@ void Config_ApplyJoystickSlot(int player)
     }
 
     cfg = g_cfgGamepadKeys[player];
-    if (!g_cfgGamepadPresent[player]) {
-        /* No [P<n> Gamepad] group: use the built-in compact layout. */
-        Pads_ControllerBindings(player, jk);
-        used_default = 1;
-    } else {
-        for (i = 0; i < KEY_COUNT; i++) {
-            jk[i] = JOY_NONE;
-        }
-        for (i = 0; i < KEY_COUNT; i++) {
-            int v = cfg[i];
+    used_default = !g_cfgGamepadPresent[player];
+    for (i = 0; i < KEY_COUNT; i++) {
+        int value = cfg[i];
 
-            if (v == JOY_NONE) {
-                continue;
-            }
-            if (v < 1 || v >= PAD_BUTTONS) {
-                Log_Printf("config: [P%d Gamepad] key %d = %d is outside the gamepad range "
-                           "1..%d; ignored\n", player + 1, i, v, PAD_BUTTONS - 1);
-                continue;
-            }
-            jk[i] = player * PAD_BUTTONS + v;
+        jk[i] = JOY_NONE;
+        if (value == JOY_NONE) {
+            continue;
         }
+        if (value < 1 || value > PAD_GAMEPAD_LAST) {
+            Log_Printf("config: [P%d Gamepad] key %d = %d is outside the gamepad range "
+                       "1..%d; ignored\n", player + 1, i, value, PAD_GAMEPAD_LAST);
+            continue;
+        }
+        jk[i] = player * PAD_BUTTONS + value;
     }
     /*
      * Mirror into the active map. Input_InitPads copies joy_keys ->
@@ -1155,6 +1170,9 @@ void Options_Load(void)
     g->joystick_type[1] = g->option_input[1][1];
     g->use_joystick[0] = g->option_input[0][1] != 0;
     g->use_joystick[1] = g->option_input[1][1] != 0;
+#ifdef ANDROID_PORT
+    memcpy(g->joy_keys, g_cfgRawJoyKeys, sizeof(g_cfgRawJoyKeys));
+#endif
     Config_ReadKeys(ini, "P1 joystick", g->joy_keys[0]);
     Config_ReadKeys(ini, "P2 joystick", g_game->joy_keys[1]);
 #ifdef ANDROID_PORT
@@ -1176,6 +1194,9 @@ void Options_Load(void)
     g = g_game;
     Config_FillUnassigned(g->joy_keys[0], JOY_NONE);
     Config_FillUnassigned(g->joy_keys[1], JOY_NONE);
+#ifdef ANDROID_PORT
+    memcpy(g_cfgRawJoyKeys, g->joy_keys, sizeof(g_cfgRawJoyKeys));
+#endif
 #ifdef MUGEN_VITA_GL
     /*
      * Fix (port change): this reload rereads both [P1 Joystick] and
@@ -1264,8 +1285,17 @@ void Options_Save(void)
     }
     Options_SaveKeys(ini, "p1 keys", g_game->keys[0], KEY_NONE);
     Options_SaveKeys(ini, "p2 keys", g_game->keys[1], KEY_NONE);
+#ifdef ANDROID_PORT
+    Options_SaveKeys(ini, "p1 joystick", g_cfgRawJoyKeys[0], JOY_NONE);
+    Options_SaveKeys(ini, "p2 joystick", g_cfgRawJoyKeys[1], JOY_NONE);
+    if (!Config_SaveGamepadGroup(ini, 0) || !Config_SaveGamepadGroup(ini, 1)) {
+        Ini_Free(ini);
+        Error_Fatal("Cannot save gamepad bindings\n");
+    }
+#else
     Options_SaveKeys(ini, "p1 joystick", g_game->joy_keys[0], JOY_NONE);
     Options_SaveKeys(ini, "p2 joystick", g_game->joy_keys[1], JOY_NONE);
+#endif
     if (!Ini_Save(ini, CONFIG_PATH)) {
         Error_Fatal("Error saving %s\n", CONFIG_PATH);
     }

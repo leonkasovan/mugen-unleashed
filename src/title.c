@@ -1505,6 +1505,10 @@ int KeyConfig_Run(int joystick, int ticks)
     int item = 0;
     int entry = 0;          /* next entry to assign */
     int p, i;
+#ifdef ANDROID_PORT
+    int gamepad[2];
+    SDL_JoystickID pad_id[2];
+#endif
 
     bg_color = Video_MapRGB(0x80, 0x60, 0x40);
     border_color = Video_MapRGB(0x40, 0x30, 0x20);
@@ -1520,6 +1524,10 @@ int KeyConfig_Run(int joystick, int ticks)
         keys[1] = g_game->joy_keys[1];
     }
     for (p = 0; p < 2; p++) {
+#ifdef ANDROID_PORT
+        gamepad[p] = joystick && Pads_SlotUsesController(p);
+        pad_id[p] = g_pads[p].joystick != NULL ? SDL_JoystickInstanceID(g_pads[p].joystick) : -1;
+#endif
         for (i = 0; i < KEYCONFIG_ENTRIES; i++) {
             cur[p][i] = keys[p][keyconfig_slots[i]];
         }
@@ -1562,6 +1570,21 @@ int KeyConfig_Run(int joystick, int ticks)
 
         /* input: a key, a joystick button */
         Events_Poll();
+#ifdef ANDROID_PORT
+        /* A reconnect can change both the slot's code space and its bindings.
+         * Cancel the pending edits before they can overwrite the new device. */
+        if (joystick) {
+            for (p = 0; p < 2; p++) {
+                SDL_JoystickID current = g_pads[p].joystick != NULL ?
+                                        SDL_JoystickInstanceID(g_pads[p].joystick) : -1;
+
+                if (current != pad_id[p] || Pads_SlotUsesController(p) != gamepad[p]) {
+                    Log_Printf("Pad configuration cancelled: controller topology changed\n");
+                    goto restore_input;
+                }
+            }
+        }
+#endif
         if (g_keyboardQueueRead != g_keyboardQueueWrite) {
             if (!g_keyboardActive) {
                 key = 0;
@@ -1690,8 +1713,19 @@ int KeyConfig_Run(int joystick, int ticks)
                 cur[state - 1][entry] = key == SDLK_SPACE ? none : key;
                 assigned = 1;
             } else if (joystick == 1 && pad != 0 && !(pad & 0x100)) {
+#ifdef ANDROID_PORT
+                int local = pad - (state - 1) * PAD_BUTTONS;
+
+                /* P1 cannot assign P2's event, and Select remains a menu key. */
+                if (local > 0 && local < PAD_BUTTONS &&
+                    (!gamepad[state - 1] || local <= PAD_GAMEPAD_LAST)) {
+                    cur[state - 1][entry] = pad;
+                    assigned = 1;
+                }
+#else
                 cur[state - 1][entry] = key == SDLK_SPACE ? none : pad;
                 assigned = 1;
+#endif
             } else if (key == SDLK_SPACE) {
                 cur[state - 1][entry] = none;
                 assigned = 1;
@@ -1838,6 +1872,11 @@ int KeyConfig_Run(int joystick, int ticks)
         for (i = 0; i < KEYCONFIG_ENTRIES; i++) {
             keys[p][keyconfig_slots[i]] = cur[p][i];
         }
+#ifdef ANDROID_PORT
+        if (joystick && !Config_SetJoystickKeys(p, gamepad[p], keys[p])) {
+            Error_Fatal("Invalid gamepad configuration\n");
+        }
+#endif
     }
     if (joystick == 1) {
         g = g_game;
@@ -1850,6 +1889,9 @@ int KeyConfig_Run(int joystick, int ticks)
     }
     Log_Printf("Setting up input\n");
     Input_Remap();
+#ifdef ANDROID_PORT
+restore_input:
+#endif
     g_keyboardKeepRepeat = saved_key_flag;
     Timer_SetFps(saved_rate);
     return ticks;

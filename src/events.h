@@ -52,6 +52,7 @@ typedef void (__cdecl *KeyEventFn)(unsigned int unicode, int sym, int pressed);
  * (which interprets it) need the same number.
  */
 #define PAD_SELECT_CODE     12
+#define PAD_GAMEPAD_LAST    11      /* last semantic code assignable to a player action */
 #endif
 #define PAD_BUTTONS         0x20    /* button codes per joystick: pad * PAD_BUTTONS + 1.. */
 

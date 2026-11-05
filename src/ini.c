@@ -777,6 +777,11 @@ int Ini_SetValuef(Ini *ini, const char *key, const char *fmt, ...)
             out[n++] = *p;
         }
     }
+    /* Preserve a CRLF source line on hosts whose text mode retains the CR. */
+    i = (int)strlen(raw);
+    if (i > 0 && raw[i - 1] == '\r' && (n == 0 || out[n - 1] != '\r')) {
+        out[n++] = '\r';
+    }
     out[n++] = '\0';
     copy = malloc(n);
     if (copy == NULL) {
@@ -989,5 +994,47 @@ int Ini_AppendLine(Ini *ini, const char *text)
     copy[len] = '\0';
     src->src_lines[src->src_count] = copy;
     src->src_count++;
+    return 1;
+}
+
+/*
+ * Port addition: append a source line inside the selected editable group.
+ * Like Ini_AppendLine, this edits source lines only; lookups keep using the
+ * parsed snapshot until the file is saved and reopened.
+ */
+int Ini_AppendGroupLine(Ini *ini, const char *text)
+{
+    IniSource *src = ini != NULL ? ini->src : NULL;
+    char *line;
+    int insert, last, i;
+
+    if (src == NULL || ini->group < 0 || ini->group >= ini->group_count) {
+        return 0;
+    }
+    /* Source-only appends may have added groups after the parsed snapshot. */
+    insert = src->line_map[ini->group_lines[ini->group]] + 1;
+    for (; insert < src->src_count; insert++) {
+        const char *start = src->src_lines[insert];
+
+        while (Ini_IsBlank(*start)) {
+            start++;
+        }
+        if (*start == '[') {
+            break;
+        }
+    }
+    if (!Ini_AppendLine(ini, text)) {
+        return 0;
+    }
+    last = src->src_count - 1;
+    line = src->src_lines[last];
+    memmove(&src->src_lines[insert + 1], &src->src_lines[insert],
+            (size_t)(last - insert) * sizeof(*src->src_lines));
+    src->src_lines[insert] = line;
+    for (i = 0; i < ini->line_count; i++) {
+        if (src->line_map[i] >= insert) {
+            src->line_map[i]++;
+        }
+    }
     return 1;
 }

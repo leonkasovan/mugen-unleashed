@@ -291,8 +291,13 @@ into the engine's pause key, which is the same path the Pause key uses.
 
 If `[P1 Gamepad]` / `[P2 Gamepad]` are absent, the built-in layout above is
 used *and* both groups are appended to `data/mugen.cfg` at start-up, so the file
-becomes self-documenting and editable. An existing group is never touched, and a
-read-only config only logs the failure.
+becomes editable. Configure buttons in the input menu, then choose
+**Options → Save** to write the changes to these gamepad groups. Codes in the
+file are local to each pad (1..11); player 2's runtime code 37 is saved as 5.
+Cleared bindings are saved as 0. Raw joystick mappings are kept separately in
+the [P<n> Joystick] groups. Save also creates missing gamepad groups or keys.
+If a controller is connected or removed while assigning buttons, the pending
+edit is cancelled; reopen the input menu for the new device.
 
 Saved numeric key IDs remain compatible with `mugen.cfg`. These are engine
 configuration identifiers, not SDL2 keycodes or scancodes. Native SDL2 events

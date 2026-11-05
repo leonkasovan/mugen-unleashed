@@ -1386,6 +1386,7 @@ int __cdecl Config_RequestedRenderMode(void);
 /* 0x0046a150 */ int __cdecl Ini_Save(Ini *ini, const char *path);
 /* Port addition: appends a line to an editable Ini. */
 int __cdecl Ini_AppendLine(Ini *ini, const char *text);
+int __cdecl Ini_AppendGroupLine(Ini *ini, const char *text);
 /* 0x0046a1d0 */ int __cdecl Ini_FindGroup(Ini *ini, const char *name);
 /* 0x0046a2f0 */ int __cdecl Ini_SelectGroup(Ini *ini, const char *name);
 /* 0x0046a360 */ int __cdecl Ini_SelectGroupIndex(Ini *ini, int index);
@@ -1559,6 +1560,8 @@ void __cdecl Pads_AttachController(int slot, int device_index);
 #ifdef ANDROID_PORT
 /* Re-applies a player's joystick binding policy and republishes g_keyMap. */
 void __cdecl Config_RepublishJoystick(int player);
+/* Commits a key-menu mapping to its raw or semantic configuration. */
+int __cdecl Config_SetJoystickKeys(int player, int gamepad, const int *keys);
 #endif
 /* Direction-source bookkeeping, shared by the event, deinit and hotplug paths. */
 void __cdecl Pads_ClearDirectionSources(int slot);
