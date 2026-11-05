@@ -99,6 +99,8 @@ run_host ES01-struct bash tools/test_gles_shader.sh
 run_host BUILD01 bash tools/test_compile_gates.sh
 # GLES blend factors vs the engine equation (BLEND01).
 run_host BLEND01 bash tools/test_blend_math.sh
+# GLES clip rect must reach the GL renderer (CLIP01).
+run_host CLIP01 bash tools/test_clip_gate.sh
 run_host VT01-caps bash tools/test_vita_caps.sh
 run_host GL-MVP bash tools/test_gl_mvp.sh
 run_host CF01-policy bash tools/test_render_policy.sh

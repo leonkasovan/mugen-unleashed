@@ -235,6 +235,35 @@ fi
 cp "$OUT/reset.fixed.c" src/sdl2compat.c
 bash tools/test_render_regress.sh >"$OUT/reset.fixed.log" 2>&1 && echo "MUT RESET: fixed code passes again" || missed RESET "revert did not restore a passing gate"
 
+# ---------------------------------------------------------------- MUT-CLIP --
+# Put the GL clip call back behind the pre-fix "not Android" guard. That is the
+# exact regression that painted the title screen white under RenderMode=OpenGL:
+# with no scissor set, the window-clipped additive background strips covered the
+# whole frame and saturated it.
+cp src/gfx.c "$OUT/clip.fixed.c"
+"$PYBIN" - "$OUT/clip.fixed.c" src/gfx.c <<'PYEOF'
+import sys
+src = open(sys.argv[1], encoding="utf-8").read()
+s = open(sys.argv[2], encoding="utf-8").read()
+start = s.index("#if !defined(ANDROID_PORT) || defined(MUGEN_GLES)\n    /*")
+end = s.index("#endif\n", s.index("Gl_ApplyClipRect();", start)) + len("#endif\n")
+s = s[:start] + "#ifndef ANDROID_PORT\n    if (g_renderMode == RENDER_OPENGL) {\n        Gl_ApplyClipRect();\n    }\n#endif\n" + s[end:]
+open(sys.argv[2], "w", newline="").write(s)
+print("MUT-CLIP applied")
+PYEOF
+
+if bash tools/test_clip_gate.sh >"$OUT/clip.mut.log" 2>&1; then
+    missed CLIP "gate passed with the pre-fix guard"
+else
+    if grep -q 'reaches Gl_ApplyClipRect' "$OUT/clip.mut.log"; then
+        caught CLIP "the GL clip call is missing on the GLES build"
+    else
+        missed CLIP "failed elsewhere"
+    fi
+fi
+cp "$OUT/clip.fixed.c" src/gfx.c
+bash tools/test_clip_gate.sh >"$OUT/clip.fixed.log" 2>&1 && echo "MUT CLIP: fixed code passes again" || missed CLIP "revert did not restore a passing gate"
+
 echo "== mutations: caught=$CAUGHT missed=$MISSED =="
 if [ -n "$(git status --porcelain -- src/)" ]; then
     echo "TREE DIRTY after mutations -- reverting" >&2
