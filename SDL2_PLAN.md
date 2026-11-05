@@ -6,10 +6,28 @@ Port the desktop M.U.G.E.N reconstruction from SDL 1.2 to SDL2 while preserving 
 
 The repository already has an Android port that uses SDL2. Treat it as a source of project-specific experience and reusable code, but do not assume its mobile video/input backend is interchangeable with the desktop engine.
 
+## Status (2026-11-06)
+
+Implemented and verified. The record below is kept as a history — each stage
+says what was measured at the time, and a few of those measurements have since
+been superseded. Read [Current status and what is still open](#current-status-and-what-is-still-open-2026-11-06)
+at the end for the state of the tree today; it is the section that matters for
+decisions, and the numbers in the stage narrative (engine names, case counts,
+"the default") are historical.
+
+- SDL2 is the **default** backend of the Makefile (`SDL_BACKEND ?= 2`);
+  `make SDL_BACKEND=1` builds the SDL 1.2 reference on `MUGEN_TARGET=win32`
+  only, and every other target rejects it outright.
+- The MSVC/CMake build is still **SDL 1.2** by decision (see `CMakeLists.txt`
+  and "Current status"): the migration did not move it.
+- The engine is unchanged in behaviour: the eight deterministic scenario
+  comparisons against SDL 1.2 still decide regressions, not the fact that the
+  SDL2 build runs.
+
 ## Findings and constraints
 
 - The desktop engine is a C reconstruction of the original 32-bit Windows executable. It uses SDL 1.2 and SDL add-ons, with MSVC/CMake and MinGW/Make build paths.
-- `src/sdlmain.c` contains the reconstructed SDL 1.2 `SDLmain` behavior. SDL2's `SDL_main` is optional and has a different role; review this file and the entry point before deciding whether to retain, replace, or bypass it.
+- `src/sdlmain.c` contains the reconstructed SDL 1.2 `SDLmain` behavior. SDL2's `SDL_main` is optional and has a different role; review this file and the entry point before deciding whether to retain, replace, or bypass it. *Resolved:* retained and bypassed. The SDL2 build defines `SDL_MAIN_HANDLED` and filters `-Dmain=SDL_main`/`-lSDL2main` out of the pkg-config flags, so the engine's own entry point still calls `main()` and the reconstructed `WinMain` keeps its address annotations.
 - Existing Linux, Windows, and Android ports mean the migration should be isolated behind a small platform layer or compile-time backend selection. Avoid broad changes to engine logic and reconstructed data structures.
 - Rendering has both System/software and legacy OpenGL paths. Preserve both. Use an SDL2 window and GL context for GL; retain CPU surfaces for System and choose one explicit presentation backend for it.
 - SDL2 has separate versioned add-ons (SDL2_gfx, SDL2_mixer, SDL2_ttf, etc.). Verify exact API and ABI requirements for every linked library and the compatibility shim `src/sdlmixercompat.c`.
@@ -30,7 +48,7 @@ Record each call site, current behavior, proposed SDL2 equivalent, and test case
 
 ### 2. Add SDL2 dependencies and a selectable build
 
-- Add an explicit SDL2 build option/preset while retaining SDL 1.2 as the temporary default.
+- Add an explicit SDL2 build option/preset while retaining SDL 1.2 as the temporary default. *Resolved:* done the other way round in the end — the Makefile switch landed first and became the default once the comparison gates passed (commit range from `838bd70` to `0461db3`); SDL 1.2 stayed buildable as the reference, which is what the "temporary default" was protecting.
 - Update both `CMakeLists.txt` and `Makefile` to discover SDL2 and the matching SDL2 add-ons. Keep SDL1 and SDL2 include/library paths isolated to prevent header or linker mixing.
 - Update CI to build both configurations where dependencies are available.
 - Pin/document supported SDL2 and add-on versions, static versus shared linking, runtime DLL deployment, and Windows/Linux package requirements.
@@ -54,9 +72,11 @@ SDL2 keeps surfaces but changes video presentation. Identify whether the desktop
 
 For GL modes, retain the existing OpenGL renderer. For System mode, retain CPU rasterization and present through a dedicated streaming texture/SDL_Renderer or a window-surface backend. Select and validate one System presentation strategy; never use SDL_Renderer and direct GL on the same window. Verify SDL_gfx calls against SDL2_gfx equivalents and preserve their rasterization results.
 
+*Resolved:* the System strategy is a streaming texture drawn with `SDL_Renderer` and `SDL_GL_SwapWindow` for GL, chosen per backend so the two never share a window (`src/sdl2compat.c`, `Sdl2_Present`). `SDL_gfx` was **not** replaced by `SDL2_gfx`: `zoomSurface` is reimplemented in `src/sdl2surface.c` and proven byte-identical against `libSDL_gfx.a` (Stage 4 below).
+
 ### 6. Port audio and add-ons
 
-- Link SDL2_mixer and SDL2_ttf (and SDL2_gfx if required) instead of SDL 1.2 variants.
+- Link SDL2_mixer and SDL2_ttf (and SDL2_gfx if required) instead of SDL 1.2 variants. *Resolved:* `SDL2_mixer` and `SDL2_ttf` are linked; `SDL2_gfx` is not, because the only function the engine used from it (`zoomSurface`) moved into `src/sdl2surface.c`. See `CHECK_LIBS` in the Makefile, which lists exactly `SDL2 SDL2_mixer SDL2_ttf z mpg123`.
 - Audit `Mix_QuerySpecEx` compatibility shim against the SDL2_mixer API and the engine's expected ABI.
 - SDL2 audio callbacks must fully initialize every byte of the output buffer on every callback, including underrun paths; explicitly write silence where needed.
 - Re-check audio format, channel count, callback size, music/sound loading, pause/resume, and shutdown behavior.
@@ -81,7 +101,7 @@ Only make SDL2 the default after both build systems pass and the behavior compar
 | `SDL_SetVideoMode` | `SDL_CreateWindow` + `SDL_GL_CreateContext` for this OpenGL renderer |
 | `SDL_GL_SwapBuffers` | `SDL_GL_SwapWindow(window)` |
 | `SDL_GL_SWAP_CONTROL` attribute | `SDL_GL_SetSwapInterval` |
-| `SDL_Flip` / `SDL_UpdateRect` | Present through the existing OpenGL path; use `SDL_RenderPresent` only if a future backend deliberately adopts SDL_Renderer |
+| `SDL_Flip` / `SDL_UpdateRect` | `SDL_RenderPresent` for System (streaming texture) and `SDL_GL_SwapWindow` for GL — the backend decides, and only one of the two owns the window. `SDL_UpdateRect` marks the display dirty; the single upload+present happens once at the frame boundary |
 | `SDL_VIDEORESIZE` | `SDL_WINDOWEVENT_RESIZED` / `SDL_WINDOWEVENT_SIZE_CHANGED` |
 | `SDL_Keysym.unicode` / `SDL_EnableUNICODE` | `SDL_TEXTINPUT` where text input is required |
 | Joystick device index assumptions | SDL2 joystick instance IDs and device add/remove events |
@@ -290,8 +310,14 @@ against your distribution if you build with something other than this kit.
 ## Stage 0-1 implemented (SDL_BACKEND=2)
 
 The build switch and the compatibility layer are in. `make SDL_BACKEND=2` builds
-`build/mingw-sdl2/mugen-static-sdl2.exe` from the same `src/`, and
-`make SDL_BACKEND=1` (the default) still builds the reference executable.
+from the same `src/`, and `make SDL_BACKEND=1` still builds the reference
+executable.
+
+The output names quoted in this section are the ones the backend had at the
+time. They were renamed in `948380c` to `<toolchain>-<target>-<backend>`, so the
+two configurations are now `build/mingw/mugen-mingw-win32-sdl2.exe` and
+`build/mingw-sdl1/mugen-mingw-win32-sdl1.exe`. Likewise `SDL_BACKEND=2` is the
+default now, not `1` (see "Current status").
 
 ### How it is wired
 
@@ -312,8 +338,12 @@ The build switch and the compatibility layer are in. `make SDL_BACKEND=2` builds
   (`SDL_SetVideoMode`, `SDL_Flip`, `SDL_UpdateRect`, `SDL_WM_SetCaption`,
   `SDL_WM_ToggleFullScreen`, `SDL_GL_SwapBuffers`, `SDL_GL_SWAP_CONTROL`,
   `SDL_AudioDriverName`, `SDL_GetKeyState`, `SDL_EnableKeyRepeat`,
-  `SDL_EnableUNICODE`, `SDL_GetWMInfo`'s one field, `zoomSurface`) so the
-  reconstructed call sites keep their shape and their address comments.
+  `SDL_EnableUNICODE`, `SDL_GetWMInfo`'s one field) so the reconstructed call
+  sites keep their shape and their address comments. `zoomSurface` is the
+  exception: it outgrew the shim and lives in `src/sdl2surface.c` as the shared
+  SDL2 nearest-neighbour scaler, so backends that must not pull in the desktop
+  window/present code (Android, the Vita) still scale identically. Pure surface
+  math, no window or renderer state.
 - One window, one backend at a time: a GL window + context for
   `RENDER_OPENGL`/`RENDER_OPENGL_SCREEN`, and for `RENDER_SYSTEM` a plain
   software surface (the engine writes `surface->pixels` and never locks) that is
@@ -338,8 +368,8 @@ pattern for the held-modifier tests and are translated the same way.
 to the SDL 1.2 build's after numeric normalisation (`tools/compare_logs.py`,
 exit 0, 102 fragments); the log ends at `Match loop init`, i.e. the match is
 running, not merely loading. The SDL 1.2 executable is unchanged by this work
-(`build/mingw/mugen-static.exe` is byte-identical with `sdl2compat.c` excluded
-from its build).
+(the reference executable was byte-identical with `sdl2compat.c` excluded from
+its build; the file is now `build/mingw-sdl1/mugen-mingw-win32-sdl1.exe`).
 
 ### Review findings fixed after the first SDL2 commit
 
@@ -382,8 +412,10 @@ first two were memory-unsafety, not cosmetic.
 `tools/test_sdl2shim.sh` builds `tools/test_sdl2shim.c` against
 `src/sdl2compat.c` and asserts, without a display:
 
-- 25 known key pairs translate both ways (arrows, F-keys, modifiers, PAUSE,
-  keypad, printable ASCII);
+- 32 known key entries translate both ways (arrows, F-keys, modifiers, PAUSE,
+  lock keys, keypad digits, printable ASCII); the table grew when the keypad and
+  lock keys were found to be pressed-but-never-released (see the second review
+  below);
 - **every** SDL2 keycode — a sampled sweep of the whole 32-bit space, the dense
   low range, and every scancode-derived keycode — translates to 0 or to a value
   inside `g_keyState[0x201]`;
@@ -543,8 +575,9 @@ handler and line buffer, not the debug commands themselves.
 ### Stage 4: zoomSurface rebuilt to match SDL_gfx
 
 `tools/test_zoomdiff.sh` builds one source file twice -- once against SDL 1.2 +
-the kit's `libSDL_gfx.a`, once against SDL2 + `src/sdl2compat.c` -- and compares
-the resulting images byte for byte across 14 cases. Running it first against the
+the kit's `libSDL_gfx.a`, once against SDL2 + `src/sdl2surface.c` -- and compares
+the resulting images byte for byte. It started at 14 cases and has grown as
+fixtures were added for each defect found; it runs 21 today. Running it first against the
 `SDL_BlitScaled` substitute showed the substitute was **not** equivalent; four
 distinct defects, all fixed:
 
@@ -602,8 +635,9 @@ now populated from a single `SDL_GetColorKey`/flag query, and a fixture with a
 wrong-valued key detectable. Checked by breaking the shim to drop the key and to
 set the wrong one: both now fail.
 
-The result is **19 of 19 cases byte-identical to `libSDL_gfx.a`, with no
-exemptions** (previously 11 identical plus two allowed to differ arbitrarily).
+The result is **every case byte-identical to `libSDL_gfx.a`, with no
+exemptions** — 19 at the time, 21 now (`tools/test_zoomdiff.sh` prints the
+number it ran) (previously 11 identical plus two allowed to differ arbitrarily).
 The 32-bit fixtures were added specifically because the behaviour belongs to the
 RGBA sampler: `rgba32_16to12`, `rgba32_10to15` and `rgba32_13to20` exercise the
 truncated step on a path with no 16-bit conversion in the way.
@@ -672,26 +706,60 @@ This does not cover the SDL_mixer **music** path (`Sdlmix_Open` /
 `Mix_LoadMUS_RW`) end to end, because no tracker or MIDI file is loaded by the
 quick-VS scenario; nor effect playback, which needs audible verification.
 
+## Current status and what is still open (2026-11-06)
+
+This section is the one to act on. Everything above it is the record of how the
+migration got here, including the claims that were wrong on the way — those are
+kept deliberately, with the correction next to them, because the same wrong
+hypothesis was easy to believe twice.
+
+### Verified
+
+| Area | Evidence |
+|---|---|
+| Engine behaviour | 8/8 deterministic scenarios match the SDL 1.2 baseline byte-for-byte after numeric normalisation (three render modes × windowed/fullscreen, plus `-nomusic` and sound-enabled quick VS); `tools/compare_logs.py` |
+| `zoomSurface` | 21/21 cases byte-identical to `libSDL_gfx.a`, no exemptions, including 16-bit sources, fractional factors and nonzero colour keys (`tools/test_zoomdiff.sh`) |
+| Keyboard translation | 32 known entries both ways plus a whole-keycode-space sweep, so no SDL2 key can index past `g_keyState[0x201]` (`tools/test_sdl2shim.sh`) |
+| Input integration | pad slot mapping by instance id, key delivery, UTF-8 text of 1–4 bytes, console navigation/Backspace/Enter/multi-codepoint (`tools/test_sdl2input.sh`) |
+| Audio | whole-buffer callback images with a guard area, `Mix_QuerySpecEx`, RWops size, and the measured callback length (frames × channels × bytes, not a 4× quirk) (`tools/test_sdl2audio.sh`) |
+| Build | Makefile default `SDL_BACKEND=2` for `win32` and `win64`; `make SDL_BACKEND=1` still builds the reference on `win32` |
+
 ### Still open
 
-- `zoomSurface` is byte-identical to SDL_gfx across all 17 differential cases,
-  including 16-bit sources and fractional scale factors.
-- Windowed/fullscreen *transitions* at runtime (rather than starts) and display
-  selection have not been exercised.
-- **Console editing and command submission** are covered against the handler
-  and its line buffer, but not end to end: the submitted line is queued, not
-  executed, because the debug commands need a running match.
-- Joystick **hot-plug** is still unverified: the pad test attaches virtual
-  devices before `Pads_Init` runs. The engine has no
-  `SDL_JOYDEVICEADDED`/`REMOVED` handling at all — SDL 1.2 had none either — so
-  a pad plugged in mid-session is invisible until restart. That is faithful to
-  the original, not a port gap.
-- Audio: the hook callback, `Mix_QuerySpecEx` and RWops size are unit-tested and
-  a real device opens, but **audible** output has not been checked.
- `Sdlmix_Open`
-  / `Mix_LoadMUS_RW` are not exercised end to end (no tracker or MIDI file is
-  loaded by the quick-VS scenario), and neither is effect playback.
-- The Linux target has not been built with `SDL_BACKEND=2`.
+- **Windowed/fullscreen *transitions* at runtime** (rather than starts) and
+  display selection have not been exercised.
+- **Console command execution** is covered only up to the submitted line: it is
+  queued, not run, because the debug commands need a running match.
+- **Audio is verified by buffer contents, not by ear**: the hook callback,
+  `Mix_QuerySpecEx` and the RWops size are unit-tested and a real device opens,
+  but nobody has listened to it. `Sdlmix_Open` / `Mix_LoadMUS_RW` are not
+  exercised end to end (no tracker or MIDI file is loaded by the quick-VS
+  scenario), and neither is effect playback.
+- **Controller hot-plug has no desktop test.** It *is* implemented and wired on
+  both SDL2 backends: `events.c` dispatches `SDL_JOYDEVICEADDED`/`REMOVED` to
+  `Pads_DeviceEvent`, and `Pads_Init` refuses to disable joystick events when no
+  pad opens, which is what made hot-plug work only if a pad was present at
+  start-up. The earlier entry here ("the engine has no hot-plug handling at all
+  — faithful to the original") described the code before that and was wrong
+  afterwards. What is missing is a test: the only exercise is the Android device
+  run, and `tools/test_sdl2input.sh` still attaches its virtual devices before
+  `Pads_Init`.
+- **Linux with SDL2 has not been built.** The Linux x64 verification in
+  `docs/BUILD-LINUX.md` dates from `812ea19`, when the Linux target linked SDL
+  1.2; that document never names the backend. Since `948380c`, `SDL_BACKEND=1`
+  is an error outside `MUGEN_TARGET=win32`, so the verified Linux configuration
+  can no longer be produced and the SDL2 one is untested. This is the largest
+  real gap in the migration.
+- **The MSVC/CMake build never moved to SDL2.** `CMakeLists.txt` still links the
+  game's SDL 1.2 DLLs and does not define `MUGEN_SDL2`; that is why its output
+  is named `mugen-msvc-win32-sdl1`. The plan's rollout rule ("make SDL2 the
+  default once *both* build systems pass") was therefore not satisfied — the
+  default changed in the Makefile only. That is a deliberate scope decision, not
+  an oversight, but it means the MSVC path is a second, SDL-1.2-only backend to
+  maintain.
+
+The Android renderer work is tracked separately in `RENDERING_PLAN.md` §12;
+`SDL2_PLAN.md` covers only the desktop backend.
 
 ### Verified (Stage 6): 8/8 deterministic scenarios match SDL1 exactly
 

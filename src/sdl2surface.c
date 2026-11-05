@@ -7,7 +7,8 @@
  * implementation (Android, Vita SDL2) can still scale identically. The
  * sampling rules, palette handling, colour-key capture, blend-mode
  * inheritance and 16-bit promotion are byte-identical to the desktop shim;
- * tools/test_zoomdiff.sh (19 differential cases) is the proof. No window,
+ * tools/test_zoomdiff.sh (21 differential cases, and it prints the number it
+ * actually ran) is the proof. No window,
  * renderer, texture or audio state here -- pure surface math.
  */
 #include "sdl2surface.h"

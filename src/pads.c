@@ -645,8 +645,11 @@ static void pad_set_flag(int code, int value)
  *
  * SDL 1.2's `which` was the device index, which is the slot. SDL2 replaced it
  * with an instance id that is unrelated to the slot, so the engine's handle is
- * matched back to its slot here. Hot-plug (SDL_JOYDEVICEADDED/REMOVED) is not
- * handled: SDL 1.2 had none, so the pad table is fixed at start-up.
+ * matched back to its slot here. The table is not fixed at start-up: SDL2 sends
+ * SDL_JOYDEVICEADDED/REMOVED and Pads_DeviceEvent (below) opens or releases the
+ * slot on those events. This function only answers "which of the currently open
+ * pads sent this", which is why an event from a device that is not open yet
+ * returns -1.
  *
  * -1 means "not one of ours" and the caller drops the event. The original's
  * unchecked indexing below is preserved for the events that do match.
