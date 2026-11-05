@@ -14,37 +14,7 @@
 
 #include "gl_mvp.h"
 #include "gles_draw.h"
-
-/* Shader source with the given defines spliced in at the ES dialect's
- * marker. The ES shaders put the marker after their precision statement, so
- * a plain textual replace is enough (same approach as Gl_InsertDefines). */
-static char *gles_insert_at_marker(const char *src, const char *defines)
-{
-    static const char marker[] = "////*EB_DEFINES*////";
-    const char *at;
-    size_t head, def_len, tail_len;
-    char *out;
-
-    if (src == NULL) {
-        return NULL;
-    }
-    at = strstr(src, marker);
-    if (at == NULL || defines == NULL) {
-        return strdup(src);
-    }
-    head = (size_t)(at - src);
-    def_len = strlen(defines);
-    tail_len = strlen(at + sizeof(marker) - 1);
-    out = malloc(head + def_len + tail_len + 1);
-    if (out == NULL) {
-        return NULL;
-    }
-    memcpy(out, src, head);
-    memcpy(out + head, defines, def_len);
-    memcpy(out + head + def_len, at + sizeof(marker) - 1, tail_len);
-    out[head + def_len + tail_len] = '\0';
-    return out;
-}
+#include "shader_src.h"
 
 static unsigned int gles_compile(GLenum type, const char *src, const char *label)
 {
@@ -96,9 +66,11 @@ int GlesDraw_LoadProgram(GlesProgram *out, const char *vert_src, const char *fra
     out->src_alphamul = -1;
 
     /* Variant defines ("#define X\n" each), spliced at the marker. NULL means
-     * the shaders' defaults: INDEX_SAFE, PERSPECTIVE_EVEN, full PalFX. */
-    vs = gles_insert_at_marker(vert_src, defines != NULL ? defines : "");
-    fs = gles_insert_at_marker(frag_src, defines != NULL ? defines : "");
+     * the shaders' defaults: INDEX_SAFE, PERSPECTIVE_EVEN, full PalFX. The
+     * marker and the replacement are shared with Gl_InsertDefines; see
+     * src/shader_src.h. */
+    vs = ShaderSrc_InsertDefines(vert_src, defines);
+    fs = ShaderSrc_InsertDefines(frag_src, defines);
     if (vs == NULL || fs == NULL) {
         free(vs);
         free(fs);

@@ -34,6 +34,7 @@
  */
 
 #include "mugen.h"
+#include "shader_src.h"
 
 #ifdef MUGEN_VITA_GL
 /* port/psvita/src/vita_gl_shim.h is included by mugen.h; nothing extra here. */
@@ -56,9 +57,6 @@
 #define GLR_COLOR_ATTACHMENT0           0x8CE0
 #define GLR_DEPTH_ATTACHMENT            0x8D00
 #define GLR_FRAMEBUFFER_COMPLETE        0x8CD5
-
-/* Marker in shader sources replaced by the #define lines. */
-#define GLR_DEFINES_MARK "////*EB_DEFINES*////"
 
 /* Size of the #define text of a program. */
 #define GLR_DEFINES_SIZE 0x1FA0
@@ -1369,37 +1367,15 @@ void Gl_AttachFramebuffer(unsigned int texture, unsigned int depth)
 
 /*
  * 0x0047C460: a malloc'ed copy of the shader source src with defines
- * replacing its GLR_DEFINES_MARK (src as it is without the mark).
+ * replacing its marker (src as it is without the mark).
+ *
+ * The marker and the replacement live in src/shader_src.h: the GLES loader
+ * inserts into the same marker in the same shader families, so the two must
+ * not drift apart.
  */
 char *Gl_InsertDefines(const char *src, const char *defines)
 {
-    size_t len_src = strlen(src);
-    size_t len_def = strlen(defines);
-    size_t len_mark = strlen(GLR_DEFINES_MARK);
-    const char *mark = strstr(src, GLR_DEFINES_MARK);
-    size_t pos, total;
-    char *out;
-
-    if (mark == NULL) {
-        out = malloc(len_src + 1);
-        if (out == NULL) {
-            return NULL;
-        }
-        strncpy(out, src, len_src);
-        out[len_src] = '\0';
-        return out;
-    }
-    pos = (size_t)(mark - src);
-    total = len_def - len_mark + len_src;
-    out = malloc(total + 1);
-    if (out == NULL) {
-        return NULL;
-    }
-    strncpy(out, src, pos);
-    strncpy(out + pos, defines, len_def);
-    strncpy(out + pos + len_def, src + pos + len_mark, total - pos - len_def);
-    out[total] = '\0';
-    return out;
+    return ShaderSrc_InsertDefines(src, defines);
 }
 
 /* path = "data/" name ext, as the original builds it with strncat. */

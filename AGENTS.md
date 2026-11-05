@@ -51,6 +51,9 @@ third_party/    Lua 5.1.4, libpng 1.2.38, glad 2.1, minizip 0.15, sdk,
                 libresample, glew-1.5.4 (reference only, no longer built), vitagl
 cmake/          build helpers (MugenSdk.cmake, ThirdParty.cmake)
 res/icons/      the window/bubble icon as one .ico per size (see below)
+res/shaders/    project-owned shader dialects: gles/ (staged as data/gles by the
+                Android build) and vita/ (substituted into the VPK); the desktop
+                shaders are the game installation's own data/*.{vert,frag}
 tools/          msvc_env.bat, extract_icon.py, iconpack.py, compare_logs.py, test_*.sh
 port/           android/ and psvita/ — the mobile ports
 docs/           ANALYSIS.md, BUILD-MSVC.md, BUILD-MINGW.md, BUILD-LINUX.md, LUA.md

@@ -1,4 +1,7 @@
-/* M8 GLES RGBA fragment shader (GLSL ES 1.00).
+/* GLES RGBA fragment shader (GLSL ES 1.00).
+ *
+ * Lives in res/shaders/gles/ and is deployed next to the game data as
+ * data/gles/rgba.frag, which is where src/gles_render.c loads it from.
  *
  * Port of rgba.frag: gl_TexCoord[] -> varying v_texcoord, precision
  * declared, sampler2D only (already 2D upstream). PalFX equations and
@@ -50,17 +53,17 @@ void palfx(inout vec4 color)
 #if !defined(PALFX_DISABLE_COLORBAL)
   apply_colorbal(color);
 #endif
-  
+
 #if !defined(PALFX_DISABLE_INVERTALL)
   apply_invertall(color);
 #endif
-    
+
 #if !defined(PREMUL)
   color.rgb = (color.rgb + add) * mul;
 #else
   color.rgb = (color.rgb + color.a * add) * mul;
 #endif
-  
+
   //Clamp:Required//color = clamp(color, 0.0, 1.0);
 }
 
@@ -84,13 +87,13 @@ vec4 texcol()
   // Hack to mask transparency when src_alphamul+dst_alphamul != 1 or 2
   if (color.a == 0.0)
     discard;
-  
+
 #if !defined(PREMUL)
   color.a *= src_alphamul;
 #else
   color *= src_alphamul;
 #endif
-  
+
   return color;
 }
 
@@ -104,6 +107,6 @@ void main()
 #if !defined(PALFX_DISABLE)
   palfx(color);
 #endif
- 
+
   gl_FragColor = color;
 }

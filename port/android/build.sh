@@ -133,6 +133,20 @@ if [ "$PACK_ASSETS" = 1 ]; then
     COUNT=$((COUNT + 1))
   done < "$OUT/asset-list.txt"
   printf '    %s file(s)\n' "$COUNT"
+  # The GLES shader dialect is project code, not game data: stage it into
+  # data/gles/ so the loader (src/gles_render.c) finds it, and append it to
+  # the asset list so the manifest covers what the APK actually carries.
+  say "Staging GLES shaders from res/shaders/gles"
+  [ -d "$ROOT/res/shaders/gles" ] ||
+    fail "res/shaders/gles is missing; the GLES backend cannot load shaders"
+  mkdir -p "$ASSETS/data/gles"
+  for shader in "$ROOT"/res/shaders/gles/*; do
+    cp -f "$shader" "$ASSETS/data/gles/"
+    printf 'data/gles/%s\n' "$(basename "$shader")" >> "$OUT/asset-list.txt"
+  done
+  sort -o "$OUT/asset-list.txt" "$OUT/asset-list.txt"
+  printf '    %s GLES shader(s)\n' \
+    "$(find "$ASSETS/data/gles" -type f | wc -l | tr -d '[:space:]')"
   # Platform config: port/android/mugen.cfg holds the Android defaults
   # (RenderMode=System, the [P<n> Gamepad] groups). Installed over the staged
   # copy so the APK ships settings that suit the device rather than a desktop's;

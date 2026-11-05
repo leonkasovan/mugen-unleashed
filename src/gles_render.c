@@ -10,7 +10,8 @@
  * What is here:
  *   - the GlTex_* texture object over GLES (8-bit index, 24-bit RGB, RGBA),
  *     with the palette as a 256x1 2D texture because GLES has no 1D textures;
- *   - shader programs from the *_es shader files (GLSL ES 1.00);
+ *   - shader programs from res/shaders/gles/*.vert|.frag (GLSL ES 1.00),
+ *     deployed next to the game data as data/gles/*.vert|.frag;
  *   - the sprite path: CPU modelview (src/gl_mvp.c) + VBO quad submission
  *     (src/gles_draw.c);
  *   - the dispatch entries Gfx_SelectRenderer(RENDER_OPENGL) installs:
@@ -546,7 +547,8 @@ static const char *gles_solid_frag_src =
     "uniform vec4 u_color;\n"
     "void main() { gl_FragColor = u_color; }\n";
 
-/* Reads a shader file next to the game data. */
+/* Reads a shader file from data/gles/, where the port stages the dialect
+ * sources (res/shaders/gles/) next to the game data. */
 static char *gles_read_shader(const char *name)
 {
     char path[512];
@@ -554,7 +556,7 @@ static char *gles_read_shader(const char *name)
     long size;
     char *text;
 
-    snprintf(path, sizeof(path), "data/%s", name);
+    snprintf(path, sizeof(path), "data/gles/%s", name);
     f = fopen(path, "rb");
     if (f == NULL) {
         Log_Printf("GLES: cannot open %s\n", path);
@@ -582,6 +584,41 @@ static char *gles_read_shader(const char *name)
     return text;
 }
 
+/*
+ * Dialect variant: one entry per define the ES shaders are compiled with.
+ * This mirrors the desktop loader's "no extra defines" program -- INDEX_SAFE
+ * (the #else branch), PERSPECTIVE_EVEN (the mode the desktop uses for
+ * stretched quads) and full PalFX. Spelled out as data so a future variant is
+ * a table edit rather than a new call site (RENDERING_PLAN.md section 12,
+ * item 3). PREMUL is absent deliberately; see the call site.
+ */
+static const char *const g_glesShaderDefines[] = {
+    "INDEX_SAFE",
+    "PERSPECTIVE_EVEN",
+    NULL
+};
+
+/* Joins the table into the "#define X\n" block both loaders insert at the
+ * marker. The table is fixed and tiny, so truncation cannot happen today; the
+ * guard keeps a future entry from overflowing the buffer silently. */
+static void gles_build_defines(char *out, size_t cap)
+{
+    size_t n = 0;
+    int i;
+
+    out[0] = '\0';
+    for (i = 0; g_glesShaderDefines[i] != NULL; i++) {
+        int wrote = snprintf(out + n, cap - n, "#define %s\n", g_glesShaderDefines[i]);
+
+        if (wrote < 0 || (size_t)wrote >= cap - n) {
+            out[n] = '\0';
+            Log_Printf("GLES: variant define list does not fit (%s)\n", g_glesShaderDefines[i]);
+            return;
+        }
+        n += (size_t)wrote;
+    }
+}
+
 /* Loads one program from the ES dialect files. */
 static int gles_load_es_program(GlesProgram *prog, const char *name)
 {
@@ -589,10 +626,11 @@ static int gles_load_es_program(GlesProgram *prog, const char *name)
     char frag_name[64];
     char *vert;
     char *frag;
+    char defines[256];
     int ok;
 
-    snprintf(vert_name, sizeof(vert_name), "%s_es.vert", name);
-    snprintf(frag_name, sizeof(frag_name), "%s_es.frag", name);
+    snprintf(vert_name, sizeof(vert_name), "%s.vert", name);
+    snprintf(frag_name, sizeof(frag_name), "%s.frag", name);
     vert = gles_read_shader(vert_name);
     frag = gles_read_shader(frag_name);
     if (vert == NULL || frag == NULL) {
@@ -601,7 +639,7 @@ static int gles_load_es_program(GlesProgram *prog, const char *name)
         return 0;
     }
     /*
-     * Variant defines.
+     * Variant defines, built from the table above.
      *
      * PERSPECTIVE_EVEN is what the desktop's special-quad variants use and is
      * the ES shaders' default; normal quads have q = 1 so it changes nothing
@@ -615,7 +653,8 @@ static int gles_load_es_program(GlesProgram *prog, const char *name)
      * against the software renderer's 172 on the same screen), measured on
      * device.
      */
-    ok = GlesDraw_LoadProgram(prog, vert, frag, name, "#define PERSPECTIVE_EVEN\n");
+    gles_build_defines(defines, sizeof(defines));
+    ok = GlesDraw_LoadProgram(prog, vert, frag, name, defines);
     free(vert);
     free(frag);
     return ok;

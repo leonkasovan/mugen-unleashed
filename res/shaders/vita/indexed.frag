@@ -22,7 +22,7 @@
  *     what it is.
  *
  * The marker must stay: Gl_InsertDefines (src/glrender.c) replaces
- * ////*EB_DEFINES*//// with the engine's #define block, and the variants below
+ * the EB_DEFINES marker with the engine's #define block, and the variants below
  * (PERSPECTIVE_*, INDEX_*, PALFX_*, PREMUL) select behaviour from it.
  */
 ////*EB_DEFINES*////

@@ -158,7 +158,7 @@ optimisasi, penambahan fitur, atau perubahan default backend.
 | `src/config.c`, `src/system.c`, `src/globals.c`, `src/mugen.h`, `src/symbols.h` | Requested/effective mode, startup, capability dan dispatch table | M6–M8 |
 | `src/glrender.c`, `src/gldetect.c` | Kontrak renderer desktop, geometry/PalFX reference, calibration | M2, M7, M8 |
 | `port/android/app/src/main/jni/src/` dan CMake-nya | Presenter native/lifecycle; backend GLES baru hanya pada M8 | M1, M3, M8 |
-| `port/psvita/src/`, `port/psvita/shaders/`, CMake Vita dan `cmake/VitaGl.cmake` | Provider/context, programmable draw, shader, target dan VPK | M7 |
+| `port/psvita/src/`, `res/shaders/vita/`, CMake Vita dan `cmake/VitaGl.cmake` | Provider/context, programmable draw, shader, target dan VPK | M7 |
 | `tools/`, `port/android/tests/`, validation/CI yang sesuai | Harness produksi, fault injection, golden/counter dan device probes | M0, M9 |
 | `SDL2_PLAN.md`, kedua plan/README port, panduan build, `AGENTS.md` | Status, kemampuan aktual, nama output dan bukti gate | Setiap milestone terkait |
 
@@ -641,7 +641,7 @@ yang diuji otomatis di host, dan apa yang hanya punya bukti capture perangkat.
 
 Fondasi yang selesai: loader GLES 3.0 terpisah (`third_party/glad-es-3.0` via
 `src/glad_es.h`, tidak pernah dicampur dengan glad desktop), probe capability
-(`src/gles_probe.c`), shader GLSL ES (`data/*_es.vert/frag`, palette sampler2D
+(`src/gles_probe.c`), shader GLSL ES (`res/shaders/gles/*.vert|frag`, palette sampler2D
 256×1, MVP uniform), draw path VBO dengan attribute binding eksplisit
 (`src/gles_draw.c`), matematika vertex di CPU (`src/gl_mvp.c`), jalur tekstur dan
 render target FBO serta present di `src/gles_render.c`, dan pemilihan mode

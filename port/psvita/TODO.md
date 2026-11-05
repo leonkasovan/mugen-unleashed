@@ -17,7 +17,7 @@ Nothing here is a device result unless it says so. Everything marked
 | `ARB_fragment_program` gate dropped for the Vita | `ffd5980` | `src/glrender.c` skips it under `MUGEN_VITA_GL`; the real qualification is shader compile+link and FBO completeness |
 | FBO completeness probed with a real attachment | `ffd5980` | `vita_gl_shim.c` attaches a 16x16 colour texture before `glCheckFramebufferStatus`; failure stops `Gl_Init` |
 | Blending gaps stated instead of hidden | `ffd5980` | `MugenVita_BlendColor` records the value, exposes `MugenVita_ConstantAlphaSupported` (0 on vitaGL) and logs once what degrades; `MugenVita_LogicOp` declares unsupported once |
-| Shader dialect gated structurally | `ffd5980` | `tools/test_vita_caps.sh` runs `tools/test_gles_shader.c` in `vita` mode over `port/psvita/shaders/` |
+| Shader dialect gated structurally | `ffd5980` | `tools/test_vita_caps.sh` runs `tools/test_gles_shader.c` in `vita` mode over `res/shaders/vita/` |
 | Vita's own `mugen.cfg` | `f76426d` | `port/psvita/mugen.cfg`: `RenderMode = System`, 640x480 render size, `FullScreen = 1`, `[P<n> Joystick]` in the driver's engine codes; packed via `MUGEN_VITA_CFG` |
 
 ## V1 — Dependencies, link and a single GPU owner

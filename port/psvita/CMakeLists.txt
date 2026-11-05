@@ -844,7 +844,7 @@ if(MUGEN_VITA_DATA_DIR)
   # data/{indexed,rgba}.{vert,frag} ship with M.U.G.E.N 1.1b1 and are written in
   # GLSL 1.20 built-ins (gl_Vertex, gl_MultiTexCoord0, gl_TexCoord[0]) that
   # vitaGL's translator does not handle, plus sampler1D/texture1D which its GLSL
-  # shim does not provide. port/psvita/shaders/ holds rewritten equivalents whose
+  # shim does not provide. res/shaders/vita/ holds rewritten equivalents whose
   # PalFX maths is unchanged. They are substituted here rather than edited in the
   # tree, so install/ stays pristine and the Windows/Linux builds keep using the
   # originals.
@@ -854,7 +854,7 @@ if(MUGEN_VITA_DATA_DIR)
   # (glBegin/glEnd) always renders with its own fixed-function shaders and never
   # consults a bound program, so src/glrender.c's glUseProgram has no effect
   # there. See README.md, "The OpenGL renderer".
-  set(MUGEN_VITA_SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
+  set(MUGEN_VITA_SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/../../res/shaders/vita")
   foreach(_shader indexed.vert indexed.frag rgba.vert rgba.frag)
     if(EXISTS "${MUGEN_VITA_SHADERS}/${_shader}")
       set(MUGEN_VITA_SHADER_${_shader} "${MUGEN_VITA_SHADERS}/${_shader}")

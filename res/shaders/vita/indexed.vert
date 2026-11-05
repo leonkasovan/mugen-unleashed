@@ -9,7 +9,7 @@
  * replaced by explicit attribute/varying declarations here.
  *
  * The marker below must stay: Gl_InsertDefines (src/glrender.c) replaces
- * ////*EB_DEFINES*//// with the engine's #define block, and the engine keys
+ * the EB_DEFINES marker with the engine's #define block, and the engine keys
  * several shader variants off those defines (PERSPECTIVE_*, INDEX_*, PALFX_*,
  * PREMUL).
  */

@@ -68,7 +68,7 @@ Scope constraints:
 | GL initialization | The port probes vitaGL capabilities, then can fall back to System | Add functional probes and strict verification |
 | Main sprite drawing | `Gl_DrawQuadIndexed` and `Gl_DrawQuadRgba` use `glBegin/glEnd` | They must submit explicit attributes through the programmable draw path |
 | vitaGL immediate mode | The pinned `ffp.c` reloads fixed-function shaders in `glEnd` | Binding a custom program is insufficient |
-| Shader assets | Four rewritten `port/psvita/shaders/{indexed,rgba}.{vert,frag}` files already exist and are selected for VPK substitution | Audit and finish integration; do not list the rewrite as entirely unimplemented |
+| Shader assets | Four rewritten `res/shaders/vita/{indexed,rgba}.{vert,frag}` files already exist and are selected for VPK substitution | Audit and finish integration; do not list the rewrite as entirely unimplemented |
 | Calibration | `gldetect.c` still embeds legacy GLSL, 1D samplers and immediate-mode draws | Packaging four shaders alone does not fix startup calibration |
 | GL gaps | The shim stores blend color without applying it and drops projective coordinates in its four-component texcoord wrapper | Implement correct behavior in the new renderer |
 | Vendored vitaGL | The option creates `vitagl_vita`, but the executable's current library list is populated by SDK `find_library(vitaGL)` | Building the vendored target is not evidence that the game links it |
@@ -888,7 +888,7 @@ Paths marked “new” are proposed; they do not exist in the inspected baseline
 | `port/psvita/src/vita_gl_renderer.c/.h` (new) | Vertex/program/texture metadata, draw submission and compositor |
 | `port/psvita/src/vita_input.c/.h` (new if extracted) | Target-specific menu bridge and default binding policy |
 | `port/psvita/src/vita_gl_shim.c/.h` | Honest capabilities; replace incomplete blend/texcoord behavior for the new path |
-| `port/psvita/shaders/*` | Existing asset qualification plus calibration, color/copy/compositor programs |
+| `res/shaders/vita/*` | Existing asset qualification plus calibration, color/copy/compositor programs |
 | `port/psvita/tests/` (new) | CMake-built device probes, render/input/audio fixtures and result capture |
 | `port/psvita/input-mapper/*` | Matching SDL2 build/presentation and raw-to-action diagnostics |
 | `src/mugen.h`, `sdl2compat.c/.h` | Reused SDL2 API bridge with narrow hooks for Vita policy |

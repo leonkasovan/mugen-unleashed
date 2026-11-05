@@ -34,4 +34,4 @@ run_harness "$OUT/test_vita_caps"
 "$CC" $ARCHFLAGS -std=gnu11 -O1 -g -Wall \
     tools/test_gles_shader.c \
     -o "$OUT/test_vita_shader"
-run_harness "$OUT/test_vita_shader" port/psvita/shaders vita
+run_harness "$OUT/test_vita_shader" res/shaders/vita vita

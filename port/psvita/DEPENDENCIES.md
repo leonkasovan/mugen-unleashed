@@ -59,6 +59,6 @@ abandoning start-up; both are in-tree and covered by the SDL1 log comparison.
 |---|---|
 | V1 | `cmake` configure succeeds with both `MUGEN_VITA_BUILD_VITAGL` values; the `vitaGL` status line names the vendored target when ON |
 | V2 | `tools/test_vita_caps.sh` (host): version parsing, OES/ARB NPOT equivalence, FBO-by-version, no ARB_fragment_program requirement |
-| V3 | `port/psvita/shaders/*` stay GLSL-ES-compatible (sampler2D palette, attribute/varying); structural checks as for GLES |
+| V3 | `res/shaders/vita/*` stay GLSL-ES-compatible (sampler2D palette, attribute/varying); structural checks as for GLES |
 | V4 | `MugenVita_BlendColor`/`LogicOp` state what degrades, once, in `mugen.log`; capability flag `MugenVita_ConstantAlphaSupported` is 0 |
 | V5 | needs the console: strict mode, cold boot, suspend/resume, readback |

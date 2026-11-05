@@ -20,7 +20,8 @@
 
 /* Parse "OpenGL ES X.Y ..." -- plan 12.3: a GLES 3.x string does NOT make
  * GLSL 120 valid; the dialect is selected from these numbers, and only the
- * ES shaders (indexed_es/rgba_es) are ever offered to this context. */
+ * ES shaders (res/shaders/gles, deployed as data/gles) are ever offered to
+ * this context. */
 static int Gles_ParseVersion(const char *s, int *major, int *minor)
 {
     const char *p = s;

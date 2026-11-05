@@ -1,4 +1,8 @@
-/* M8 GLES vertex shader (GLSL ES 1.00).
+/*
+ * GLES vertex shader (GLSL ES 1.00) for 32-bit RGBA sprites.
+ *
+ * Lives in res/shaders/gles/ and is deployed next to the game data as
+ * data/gles/rgba.vert, which is where src/gles_render.c loads it from.
  *
  * The desktop indexed.vert/rgba.vert use GLSL 120 built-ins
  * (gl_MultiTexCoord0, gl_ModelViewProjectionMatrix, gl_TexCoord) that do

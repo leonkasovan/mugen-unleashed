@@ -1061,7 +1061,7 @@ working renderer by itself, for the reason in the next section.
 
 ### The shaders have been rewritten
 
-`port/psvita/shaders/` holds vitaGL-compatible versions of all four renderer
+`res/shaders/vita/` holds vitaGL-compatible versions of all four renderer
 shaders, substituted into the VPK in place of `data/indexed.{vert,frag}` and
 `data/rgba.{vert,frag}`. `install/` stays pristine and the Windows/Linux builds
 keep the originals.
@@ -1142,7 +1142,7 @@ are **game content** shipping with M.U.G.E.N 1.1b1.
 | Rewrite all four shaders for `in`/`out` instead of `gl_TexCoord`/`gl_MultiTexCoord` | **substantial** | written, packaged, runtime verification open |
 | `glBlendColor` absent -> constant-alpha blending becomes additive | accepted loss | documented |
 
-The shader rewrite is done as source (four assets in `port/psvita/shaders/`,
+The shader rewrite is done as source (four assets in `res/shaders/vita/`,
 selected at packaging by `port/psvita/CMakeLists.txt`), but it is not verified:
 compiling, linking, drawing actual geometry and reading pixels back on hardware
 are all still open -- present shaders are not proof of working rendering. The

@@ -1,16 +1,19 @@
-/* M8 GLES indexed fragment shader (GLSL ES 1.00).
+/* GLES indexed fragment shader (GLSL ES 1.00).
+ *
+ * Lives in res/shaders/gles/ and is deployed next to the game data as
+ * data/gles/indexed.frag, which is where src/gles_render.c loads it from.
  *
  * Port of indexed.frag with the desktop-only constructs replaced:
  * - sampler1D texunit1 -> sampler2D texunit1: GLES has no 1D textures.
  *   The palette uploads as a 256x1 2D texture (nearest, clamp); the index
  *   samples texel (index_correction(idx), 0.5). Mapping is tested for
  *   0/1/254/255 and every entry (plan section 12, ES01 gate).
- * - gl_TexCoord[] -> varying v_texcoord from indexed_es.vert.
+ * - gl_TexCoord[] -> varying v_texcoord from indexed.vert.
  * - precision mediump float declared (required in GLSL ES fragment).
  * - inout params, mix(), discard: valid GLSL ES 1.00, kept as-is.
  * Perspective modes (PERSPECTIVE_*), index modes (INDEX_*) and PalFX
- * disable flags (PALFX_*) keep their desktop meanings; ////*EB_DEFINES*////
- * is the same insertion marker the loader uses.
+ * disable flags (PALFX_*) keep their desktop meanings; the EB_DEFINES marker
+ * below is the same insertion marker the loader uses.
  */
 /* Perspective modes:
  *  PERSPECTIVE_NONE
