@@ -27,6 +27,19 @@ AudioFormat g_bgmThreadFormat;
 void *g_bgmScratch;
 
 static int failures;
+/*
+ * A SKIP is not a pass: the device-dependent assertions can only run where
+ * there is an audio device, and this harness has to say so through its exit
+ * status or a qualifier that wraps it would count "could not measure" as
+ * "measured". 77 is the convention tools/test_qualify.sh already uses.
+ */
+static int skips;
+
+static void skip(const char *what, const char *detail)
+{
+    printf("SKIP: %s (%s)\n", what, detail);
+    skips++;
+}
 
 static void check(int cond, const char *what)
 {
@@ -60,6 +73,20 @@ BgmEvent g_bgmEvents[BGM_EVENT_QUEUE_SIZE];
 int g_bgmBackgroundChanged;
 BgmStream *g_bgmStream;
 unsigned int g_bgmPauseFlags;
+
+/*
+ * Bgm_MutexPtr() is defined in globals.c, which this test does not link, and
+ * BGM_MUTEX_LOCK/UNLOCK reach it from every BGM site. Without it the harness
+ * stopped linking when the mutex became a function (122e0ee / 0461db3) and
+ * nothing noticed, because no gate ran it -- so for three days it reported
+ * nothing while SDL2_PLAN.md cited it as audio evidence. This is the 32-bit
+ * Windows definition from globals.c: the mutex lives in the g_bgmMutex slot
+ * itself.
+ */
+void *Bgm_MutexPtr(void)
+{
+    return &g_bgmMutex;
+}
 
 BgmRing *BgmRing_Create(int size)
 {
@@ -298,12 +325,12 @@ static void test_query_spec_ex(void)
     check(rc == 0, "Mix_QuerySpecEx reports 0 when no device is open");
 
     if (SDL_Init(SDL_INIT_AUDIO) != 0) {
-        printf("SKIP: no audio subsystem (%s); Mix_OpenAudio not exercised\n", SDL_GetError());
+        skip("no audio subsystem; Mix_OpenAudio not exercised", SDL_GetError());
         return;
     }
     g_sndChunkSize = 1024;
     if (Mix_OpenAudio(44100, AUDIO_S16LSB, 2, g_sndChunkSize) < 0) {
-        printf("SKIP: no audio device (%s); Mix_OpenAudio not exercised\n", SDL_GetError());
+        skip("no audio device; Mix_OpenAudio not exercised", SDL_GetError());
         return;
     }
     freq = channels = chunk = 0;
@@ -342,7 +369,7 @@ static void test_query_spec_ex(void)
     }
     Mix_SetPostMix(NULL, NULL);
     if (posts == 0 || measured_len <= 0) {
-        printf("SKIP: the device produced no callback in 1s; real buffer length not measured\n");
+        skip("the device produced no callback in 1s; real buffer length not measured", "");
     } else {
         /*
          * Mix_OpenAudio's chunksize is in sample FRAMES, and the callback's len
@@ -391,12 +418,12 @@ static void test_rwops_size(void)
 
     st = Stream_OpenMemory((void *)payload, (int)sizeof(payload) - 1);
     if (st == NULL) {
-        printf("SKIP: Stream_OpenMemory failed\n");
+        skip("Stream_OpenMemory failed", "");
         return;
     }
     rw = Stream_ToRWops(st);
     if (rw == NULL) {
-        printf("SKIP: Stream_ToRWops returned NULL\n");
+        skip("Stream_ToRWops returned NULL", "");
         Stream_Close(st);
         return;
     }
@@ -426,8 +453,13 @@ int main(void)
     test_query_spec_ex();
     printf("RWops size:\n");
     test_rwops_size();
-    if (failures == 0) {
-        printf("ok: sdl2 audio tests passed\n");
+    if (failures != 0) {
+        return 1;
     }
-    return failures != 0;
+    if (skips != 0) {
+        printf("skip: %d check(s) could not run here\n", skips);
+        return 77;
+    }
+    printf("ok: sdl2 audio tests passed\n");
+    return 0;
 }

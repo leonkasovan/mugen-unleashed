@@ -721,8 +721,17 @@ hypothesis was easy to believe twice.
 | `zoomSurface` | 21/21 cases byte-identical to `libSDL_gfx.a`, no exemptions, including 16-bit sources, fractional factors and nonzero colour keys (`tools/test_zoomdiff.sh`) |
 | Keyboard translation | 32 known entries both ways plus a whole-keycode-space sweep, so no SDL2 key can index past `g_keyState[0x201]` (`tools/test_sdl2shim.sh`) |
 | Input integration | pad slot mapping by instance id, key delivery, UTF-8 text of 1–4 bytes, console navigation/Backspace/Enter/multi-codepoint (`tools/test_sdl2input.sh`) |
-| Audio | whole-buffer callback images with a guard area, `Mix_QuerySpecEx`, RWops size, and the measured callback length (frames × channels × bytes, not a 4× quirk) (`tools/test_sdl2audio.sh`) |
+| Audio | whole-buffer callback images with a guard area, `Mix_QuerySpecEx`, RWops size, and the measured callback length (frames × channels × bytes, not a 4× quirk) (`tools/test_sdl2audio.sh`, qualifier gate `SDL2A01`) |
 | Build | Makefile default `SDL_BACKEND=2` for `win32` and `win64`; `make SDL_BACKEND=1` still builds the reference on `win32` |
+| Qualifier | `tools/test_qualify.sh` PASS=21 FAIL=0 SKIP=0 on `--target win32` and on `--target win64` |
+
+The audio harness is worth one line of history: it was cited as evidence here
+while it did not link at all. `Bgm_MutexPtr()` moved into `globals.c` in
+`122e0ee`, the test still stubbed only `g_bgmMutex`, and because no gate ran the
+harness the breakage went unnoticed — the section below had been quoting a run
+that could not happen. It is fixed, it now exits 77 when the device-dependent
+checks cannot run instead of printing "SKIP" and returning 0, and it is in the
+qualifier so the next break is visible immediately.
 
 ### Still open
 
@@ -731,8 +740,10 @@ hypothesis was easy to believe twice.
 - **Console command execution** is covered only up to the submitted line: it is
   queued, not run, because the debug commands need a running match.
 - **Audio is verified by buffer contents, not by ear**: the hook callback,
-  `Mix_QuerySpecEx` and the RWops size are unit-tested and a real device opens,
-  but nobody has listened to it. `Sdlmix_Open` / `Mix_LoadMUS_RW` are not
+  `Mix_QuerySpecEx`, the RWops size and the real callback length are measured
+  against an expected image on a machine with an audio device, and the harness
+  reports SKIP (exit 77, counted as SKIP, not PASS) where there is none. Nobody
+  has *listened* to the output. `Sdlmix_Open` / `Mix_LoadMUS_RW` are not
   exercised end to end (no tracker or MIDI file is loaded by the quick-VS
   scenario), and neither is effect playback.
 - **Controller hot-plug has no desktop test.** It *is* implemented and wired on
