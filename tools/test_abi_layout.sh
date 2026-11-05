@@ -21,16 +21,6 @@ esac
 CC32="${CC32:-/c/x86devkit/bin/gcc}"
 CC64="${CC64:-gcc}"
 
-# "PATH already has a w64devkit entry" is not the same as "gcc is the 64-bit
-# one": with both kits on PATH -- and this shell inherits one that has both --
-# `gcc` is whichever comes first, and the i686 cc1 then prints "unimplemented:
-# 64-bit mode not compiled in" halfway down the log. Say it plainly instead.
-if ! "$CC64" -dumpmachine 2>/dev/null | grep -q '^x86_64'; then
-    echo "CC64=$CC64 is not a 64-bit compiler ($("$CC64" -dumpmachine 2>/dev/null))" >&2
-    echo "Set CC64=/c/w64devkit/bin/gcc and put that bin dir first on PATH." >&2
-    exit 1
-fi
-
 mkdir -p "$OUT"
 
 # shellcheck disable=SC2086
@@ -40,6 +30,23 @@ $CC32 -m32 -std=gnu11 -O1 -g -Wall \
     -IC:/x86devkit/include/SDL \
     tools/test_abi_layout.c -o "$OUT/layout32.exe" -lwinmm
 "$OUT/layout32.exe" | tee "$OUT/layout32.txt"
+
+# Only now put the 64-bit kit first. "PATH already contains a w64devkit entry"
+# is not the same as "the tools in use are the 64-bit ones": this shell can have
+# both kits on PATH, and whichever comes first wins. The 32-bit step above still
+# needs the 32-bit `as`, so the reordering happens after it, not at the top.
+# Seen as "as: unrecognized option `--64'" and "unimplemented: 64-bit mode not
+# compiled in" -- which read as a 64-bit build failure rather than a PATH
+# problem, and made MUT R04 report a broken layout gate.
+case "$PATH" in
+/c/w64devkit/bin:*) ;;
+*) PATH="/c/w64devkit/bin:$PATH"; export PATH;;
+esac
+if ! "$CC64" -dumpmachine 2>/dev/null | grep -q '^x86_64'; then
+    echo "CC64=$CC64 is not a 64-bit compiler ($("$CC64" -dumpmachine 2>/dev/null))" >&2
+    echo "Put /c/w64devkit/bin first on PATH, or set CC64 to that gcc." >&2
+    exit 1
+fi
 
 $CC64 -m64 -std=gnu11 -O1 -g -Wall \
     -Isrc -Ithird_party/glad-2.1 -Ithird_party/minizip-0.15 \
