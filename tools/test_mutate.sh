@@ -300,6 +300,33 @@ fi
 cp "$OUT/prim.fixed.h" src/gles_prim.h
 bash tools/test_prim_math.sh >"$OUT/prim.fixed.log" 2>&1 && echo "MUT PRIM: fixed code passes again" || missed PRIM "revert did not restore a passing gate"
 
+# --------------------------------------------------------------- MUT-BLEND --
+# Invert the destination factor for additive/subtractive sprite blending, which
+# is the bug that made an additive sprite erase its background (1 - alpha_dst
+# instead of alpha_dst).
+cp src/gles_blend.h "$OUT/blend.fixed.h"
+"$PYBIN" - "$OUT/blend.fixed.h" src/gles_blend.h <<'PYEOF2'
+import sys
+s = open(sys.argv[2], encoding="utf-8").read()
+old = "        st.dst = GLES_BLEND_FACTOR_CONSTANT_ALPHA;"
+new = "        st.dst = GLES_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;"
+assert old in s
+open(sys.argv[2], "w", newline="").write(s.replace(old, new, 1))
+print("MUT-BLEND applied")
+PYEOF2
+
+if bash tools/test_blend_math.sh >"$OUT/blend.mut.log" 2>&1; then
+    missed BLEND "gate passed with the inverted destination factor"
+else
+    if grep -q 'additive' "$OUT/blend.mut.log" || grep -q 'ADD matches' "$OUT/blend.mut.log"; then
+        caught BLEND "additive blending no longer matches the engine equation"
+    else
+        missed BLEND "failed elsewhere"
+    fi
+fi
+cp "$OUT/blend.fixed.h" src/gles_blend.h
+bash tools/test_blend_math.sh >"$OUT/blend.fixed.log" 2>&1 && echo "MUT BLEND: fixed code passes again" || missed BLEND "revert did not restore a passing gate"
+
 echo "== mutations: caught=$CAUGHT missed=$MISSED =="
 if [ -n "$(git status --porcelain -- src/)" ]; then
     echo "TREE DIRTY after mutations -- reverting" >&2
