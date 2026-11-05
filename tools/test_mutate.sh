@@ -264,6 +264,42 @@ fi
 cp "$OUT/clip.fixed.c" src/gfx.c
 bash tools/test_clip_gate.sh >"$OUT/clip.fixed.log" 2>&1 && echo "MUT CLIP: fixed code passes again" || missed CLIP "revert did not restore a passing gate"
 
+# ---------------------------------------------------------------- MUT-PRIM --
+# Resolve the additive fill as an opaque one, which is what the GLES primitives
+# did: g_gfxFillRectColor (the title screen's active-cursor bar) painted over
+# the menu instead of adding to it.
+cp src/gles_prim.h "$OUT/prim.fixed.h"
+"$PYBIN" - "$OUT/prim.fixed.h" src/gles_prim.h <<'PYEOF2'
+import sys
+s = open(sys.argv[2], encoding="utf-8").read()
+old = """    case GLES_PRIM_DRAW_RECT_ADD:
+    case GLES_PRIM_FILL_RECT_ADD:
+        /* prim.c: Gfx_GlBlendRect(..., 0x100, 0x100) -- additive. */
+        st.scale = 1.0f;
+        st.alpha = 1.0f;
+        break;"""
+new = """    case GLES_PRIM_DRAW_RECT_ADD:
+    case GLES_PRIM_FILL_RECT_ADD:
+        st.scale = 1.0f;
+        st.alpha = 0.0f;
+        break;"""
+assert old in s
+open(sys.argv[2], "w", newline="").write(s.replace(old, new, 1))
+print("MUT-PRIM applied")
+PYEOF2
+
+if bash tools/test_prim_math.sh >"$OUT/prim.mut.log" 2>&1; then
+    missed PRIM "gate passed with an opaque additive fill"
+else
+    if grep -q 'additive' "$OUT/prim.mut.log"; then
+        caught PRIM "the additive fill is resolved as opaque"
+    else
+        missed PRIM "failed elsewhere"
+    fi
+fi
+cp "$OUT/prim.fixed.h" src/gles_prim.h
+bash tools/test_prim_math.sh >"$OUT/prim.fixed.log" 2>&1 && echo "MUT PRIM: fixed code passes again" || missed PRIM "revert did not restore a passing gate"
+
 echo "== mutations: caught=$CAUGHT missed=$MISSED =="
 if [ -n "$(git status --porcelain -- src/)" ]; then
     echo "TREE DIRTY after mutations -- reverting" >&2

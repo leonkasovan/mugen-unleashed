@@ -101,6 +101,8 @@ run_host BUILD01 bash tools/test_compile_gates.sh
 run_host BLEND01 bash tools/test_blend_math.sh
 # GLES clip rect must reach the GL renderer (CLIP01).
 run_host CLIP01 bash tools/test_clip_gate.sh
+# GLES primitive colour/blend vs prim.c (PRIM01).
+run_host PRIM01 bash tools/test_prim_math.sh
 run_host VT01-caps bash tools/test_vita_caps.sh
 run_host GL-MVP bash tools/test_gl_mvp.sh
 run_host CF01-policy bash tools/test_render_policy.sh

@@ -33,6 +33,7 @@
 
 #include "gles_probe.h"
 #include "gles_blend.h"
+#include "gles_prim.h"
 #include "gles_render.h"
 #include "gl_mvp.h"
 #include "gles_draw.h"
@@ -879,43 +880,122 @@ static void gles_solid_quad(float x0, float y0, float x1, float y1, float r, flo
                   1.0f, 1.0f, 0, 1.0f, 1.0f, 1.0f, 1.0f);
 }
 
-/* Splits an RGB565 colour into normalised components. */
-static void gles_split565(unsigned int color, float *r, float *g, float *b)
+/*
+ * Primitives (rectangles, lines, pixels).
+ *
+ * These mirror the desktop's prim.c exactly; only the submission differs, since
+ * GLES has no immediate mode. Two things were wrong before, and both showed on
+ * the title screen's active-cursor bar, which is drawn through
+ * g_gfxFillRectColor (mapped to Gfx_GlFillRectAdd for GL in globals.c):
+ *
+ *   - The colour was decoded as RGB565. Video_MapRGB returns 0x00BBGGRR when a
+ *     GL renderer is active (video.c), which is what Prim_GlColor reads, so
+ *     every primitive in the GLES backend had the wrong hue: the pulsing blue
+ *     cursor came out a solid dark navy instead of the pale blue the desktop
+ *     produces.
+ *
+ *   - The blend model was wrong. prim.c uses
+ *
+ *         rgb * alpha_src                     (Prim_GlColor's scale)
+ *         glBlendFunc(GL_ONE, GL_SRC_ALPHA)
+ *         fragment alpha = alpha_dst
+ *
+ *     which gives dst' = rgb*alpha_src + dst*alpha_dst -- the same equation the
+ *     engine uses for sprites. The GLES path used CONSTANT_ALPHA /
+ *     ONE_MINUS_CONSTANT_ALPHA, i.e. dst' = rgb*a + dst*(1-a), and it mapped
+ *     g_gfxFillRectColor to an opaque fill, so an additive highlight painted
+ *     over the menu instead of adding to it.
+ */
+
+/* Maps the pure enum onto the GL equation it names. */
+static GLenum gles_prim_gl_eq(GlesPrimEq eq)
 {
-    *r = (float)((color >> 11) & 0x1F) / 31.0f;
-    *g = (float)((color >> 5) & 0x3F) / 63.0f;
-    *b = (float)(color & 0x1F) / 31.0f;
+    return (eq == GLES_PRIM_EQ_REVERSE_SUBTRACT) ? GL_FUNC_REVERSE_SUBTRACT : GL_FUNC_ADD;
+}
+
+/* Prim_GlBlend: blending on, GL_ONE against the fragment alpha, and the
+ * equation the kind resolved to. */
+static void gles_prim_begin(const GlesPrimState *st)
+{
+    if (!st->blend) {
+        glDisable(GL_BLEND);
+        return;
+    }
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_SRC_ALPHA);
+    glBlendEquation(gles_prim_gl_eq(st->eq));
+}
+
+/* Prim_GlRect: ordered corners, extended by 0.9999 so a rect covers its last
+ * row and column without spilling into the next one. */
+static void gles_prim_rect(int x1, int y1, int x2, int y2, float *fx1, float *fy1, float *fx2, float *fy2)
+{
+    float t;
+
+    *fx1 = (float)x1;
+    *fy1 = (float)y1;
+    *fx2 = (float)x2;
+    *fy2 = (float)y2;
+    if (*fx2 < *fx1) {
+        t = *fx1;
+        *fx1 = *fx2;
+        *fx2 = t;
+    }
+    if (*fy2 < *fy1) {
+        t = *fy1;
+        *fy1 = *fy2;
+        *fy2 = t;
+    }
+    *fx2 = (float)((double)*fx2 + 0.9999);
+    *fy2 = (float)((double)*fy2 + 0.9999);
+}
+
+/* Submits one primitive with the colour and blend state its kind resolves to. */
+static void gles_prim_draw(GlesPrimKind kind, int alpha_src, int alpha_dst, float x1, float y1, float x2, float y2,
+                           unsigned int color)
+{
+    GlesPrimState st = GlesPrim_Resolve(kind, alpha_src, alpha_dst);
+    float r, g, b, a;
+
+    GlesPrim_Color(color, st.scale, st.alpha, &r, &g, &b, &a);
+    gles_prim_begin(&st);
+    gles_solid_quad(x1, y1, x2, y2, r, g, b, a);
+    glDisable(GL_BLEND);
 }
 
 void Gfx_GlClear(unsigned int color)
 {
+    unsigned char src[4], dst[4];
+    unsigned int mapped;
     float r, g, b;
 
     if (!g_glesReady) {
         return;
     }
-    gles_split565(color, &r, &g, &b);
+    /* Same path as the desktop: palettised then mapped, cleared with alpha 0. */
+    src[0] = (unsigned char)color;
+    src[1] = (unsigned char)(color >> 8);
+    src[2] = (unsigned char)(color >> 16);
+    src[3] = 0xFF;
+    PalFx_ApplyColor(src, dst);
+    mapped = Video_MapRGB(dst[0], dst[1], dst[2]);
+    GlesPrim_SplitColor(mapped, &r, &g, &b);
     glDisable(GL_SCISSOR_TEST);
-    glClearColor(r, g, b, 1.0f);
+    glClearColor(r, g, b, 0.0f);
     glClear(GL_COLOR_BUFFER_BIT);
+    Gl_ApplyClipRect();
 }
 
 void Gfx_GlPutPixel(int x, int y, unsigned int color)
 {
-    float r, g, b;
-
-    gles_split565(color, &r, &g, &b);
-    gles_solid_quad((float)x, (float)y, (float)(x + 1), (float)(y + 1), r, g, b, 1.0f);
+    gles_prim_draw(GLES_PRIM_PUT_PIXEL, GLES_PRIM_ALPHA_ONE, GLES_PRIM_ALPHA_ONE, (float)x, (float)y,
+                   (float)x + 0.9999f, (float)y + 0.9999f, color);
 }
 
 void Gfx_GlAddPixel(int x, int y, unsigned int color)
 {
-    float r, g, b;
-
-    gles_split565(color, &r, &g, &b);
-    glBlendEquation(GL_FUNC_ADD);
-    gles_solid_quad((float)x, (float)y, (float)(x + 1), (float)(y + 1), r, g, b, 1.0f);
-    glBlendEquation(GL_FUNC_ADD);
+    gles_prim_draw(GLES_PRIM_ADD_PIXEL, GLES_PRIM_ALPHA_ONE, GLES_PRIM_ALPHA_ONE, (float)x, (float)y,
+                   (float)x + 0.9999f, (float)y + 0.9999f, color);
 }
 
 void Gfx_GlInvertPixel(int x, int y)
@@ -932,105 +1012,117 @@ void Gfx_GlInvertPixel(int x, int y)
     (void)y;
 }
 
-void Gfx_GlDrawLine(float x1, float y1, float x2, float y2, unsigned int color)
+/* A line as quads: GLES has no GL_LINES. Axis-aligned edges (collision boxes)
+ * stay exact; diagonals step pixel by pixel, as the software renderer does. */
+static void gles_prim_line(float x1, float y1, float x2, float y2, unsigned int color, GlesPrimKind kind)
 {
-    float r, g, b;
+    GlesPrimState st = GlesPrim_Resolve(kind, GLES_PRIM_ALPHA_ONE, GLES_PRIM_ALPHA_ONE);
+    float r, g, b, a;
     float t;
 
-    gles_split565(color, &r, &g, &b);
-    /* Axis-aligned lines are the common case (collision-box edges): draw them
-     * as a rect so they are exact. Diagonal ones step pixel by pixel. */
+    GlesPrim_Color(color, st.scale, st.alpha, &r, &g, &b, &a);
+    gles_prim_begin(&st);
     if (y1 == y2) {
-        gles_solid_quad(x1 < x2 ? x1 : x2, y1, (x1 < x2 ? x2 : x1) + 1.0f, y1 + 1.0f, r, g, b, 1.0f);
-        return;
-    }
-    if (x1 == x2) {
-        gles_solid_quad(x1, y1 < y2 ? y1 : y2, x1 + 1.0f, (y1 < y2 ? y2 : y1) + 1.0f, r, g, b, 1.0f);
-        return;
-    }
-    {
-        int n = (int)((x2 - x1 > 0 ? x2 - x1 : x1 - x2) > (y2 - y1 > 0 ? y2 - y1 : y1 - y2)
-                          ? (x2 - x1 > 0 ? x2 - x1 : x1 - x2)
-                          : (y2 - y1 > 0 ? y2 - y1 : y1 - y2));
+        gles_solid_quad(x1 < x2 ? x1 : x2, y1, (x1 < x2 ? x2 : x1) + 0.9999f, y1 + 0.9999f, r, g, b, a);
+    } else if (x1 == x2) {
+        gles_solid_quad(x1, y1 < y2 ? y1 : y2, x1 + 0.9999f, (y1 < y2 ? y2 : y1) + 0.9999f, r, g, b, a);
+    } else {
+        float dx = (x2 - x1 > 0) ? x2 - x1 : x1 - x2;
+        float dy = (y2 - y1 > 0) ? y2 - y1 : y1 - y2;
+        int n = (int)(dx > dy ? dx : dy);
         int i;
 
         for (i = 0; i <= n; i++) {
             t = (n == 0) ? 0.0f : (float)i / (float)n;
-            gles_solid_quad(x1 + (x2 - x1) * t, y1 + (y2 - y1) * t, x1 + (x2 - x1) * t + 1.0f,
-                            y1 + (y2 - y1) * t + 1.0f, r, g, b, 1.0f);
+            gles_solid_quad(x1 + (x2 - x1) * t, y1 + (y2 - y1) * t, x1 + (x2 - x1) * t + 0.9999f,
+                            y1 + (y2 - y1) * t + 0.9999f, r, g, b, a);
         }
     }
+    glDisable(GL_BLEND);
+}
+
+void Gfx_GlDrawLine(float x1, float y1, float x2, float y2, unsigned int color)
+{
+    gles_prim_line(x1, y1, x2, y2, color, GLES_PRIM_DRAW_LINE);
 }
 
 void Gfx_GlDrawLineAdd(float x1, float y1, float x2, float y2, unsigned int color)
 {
-    Gfx_GlDrawLine(x1, y1, x2, y2, color);
+    gles_prim_line(x1, y1, x2, y2, color, GLES_PRIM_DRAW_LINE_ADD);
+}
+
+/* Rectangle outline with the alpha pair its kind selects. */
+static void gles_prim_outline(GlesPrimKind kind, int alpha_src, int alpha_dst, int x1, int y1, int x2, int y2,
+                              unsigned int color)
+{
+    GlesPrimState st = GlesPrim_Resolve(kind, alpha_src, alpha_dst);
+    float fx1, fy1, fx2, fy2;
+    float r, g, b, a;
+
+    gles_prim_rect(x1, y1, x2, y2, &fx1, &fy1, &fx2, &fy2);
+    GlesPrim_Color(color, st.scale, st.alpha, &r, &g, &b, &a);
+    gles_prim_begin(&st);
+    gles_solid_quad(fx1, fy1, fx2, fy1 + 0.9999f, r, g, b, a);
+    gles_solid_quad(fx1, fy2 - 0.9999f, fx2, fy2, r, g, b, a);
+    gles_solid_quad(fx1, fy1, fx1 + 0.9999f, fy2, r, g, b, a);
+    gles_solid_quad(fx2 - 0.9999f, fy1, fx2, fy2, r, g, b, a);
+    glDisable(GL_BLEND);
 }
 
 void Gfx_GlDrawRect(int x1, int y1, int x2, int y2, unsigned int color)
 {
-    float r, g, b;
-
-    gles_split565(color, &r, &g, &b);
-    gles_solid_quad((float)x1, (float)y1, (float)(x2 + 1), (float)(y1 + 1), r, g, b, 1.0f);
-    gles_solid_quad((float)x1, (float)y2, (float)(x2 + 1), (float)(y2 + 1), r, g, b, 1.0f);
-    gles_solid_quad((float)x1, (float)y1, (float)(x1 + 1), (float)(y2 + 1), r, g, b, 1.0f);
-    gles_solid_quad((float)x2, (float)y1, (float)(x2 + 1), (float)(y2 + 1), r, g, b, 1.0f);
+    gles_prim_outline(GLES_PRIM_DRAW_RECT, GLES_PRIM_ALPHA_ONE, 0, x1, y1, x2, y2, color);
 }
 
 void Gfx_GlDrawRectAdd(int x1, int y1, int x2, int y2, unsigned int color)
 {
-    Gfx_GlDrawRect(x1, y1, x2, y2, color);
+    gles_prim_outline(GLES_PRIM_DRAW_RECT_ADD, GLES_PRIM_ALPHA_ONE, GLES_PRIM_ALPHA_ONE, x1, y1, x2, y2, color);
 }
 
 void Gfx_GlDrawRectBlend(int x1, int y1, int x2, int y2, unsigned int color, int alpha_src, int alpha_dst)
 {
-    float r, g, b;
-
-    gles_split565(color, &r, &g, &b);
-    glBlendColor(r, g, b, (float)alpha_dst / 256.0f);
-    glBlendFunc(GL_CONSTANT_ALPHA, GL_ONE_MINUS_CONSTANT_ALPHA);
-    gles_solid_quad((float)x1, (float)y1, (float)(x2 + 1), (float)(y2 + 1), r, g, b, (float)alpha_src / 256.0f);
-    glBlendColor(0.0f, 0.0f, 0.0f, 0.0f);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    gles_prim_outline(GLES_PRIM_DRAW_RECT_BLEND, alpha_src, alpha_dst, x1, y1, x2, y2, color);
 }
 
 void Gfx_GlDrawRectSub(int x1, int y1, int x2, int y2, unsigned int color)
 {
-    float r, g, b;
-
-    gles_split565(color, &r, &g, &b);
-    glBlendEquation(GL_FUNC_REVERSE_SUBTRACT);
-    gles_solid_quad((float)x1, (float)y1, (float)(x2 + 1), (float)(y2 + 1), r, g, b, 1.0f);
-    glBlendEquation(GL_FUNC_ADD);
+    gles_prim_outline(GLES_PRIM_DRAW_RECT_SUB, GLES_PRIM_ALPHA_ONE, GLES_PRIM_ALPHA_ONE, x1, y1, x2, y2, color);
 }
 
 void Gfx_GlFillRect(int x1, int y1, int x2, int y2, unsigned int color)
 {
-    float r, g, b;
+    /* Desktop: Gfx_GlBlendRect(..., 0x100, 0). */
+    float fx1, fy1, fx2, fy2;
 
-    gles_split565(color, &r, &g, &b);
-    gles_solid_quad((float)x1, (float)y1, (float)(x2 + 1), (float)(y2 + 1), r, g, b, 1.0f);
+    gles_prim_rect(x1, y1, x2, y2, &fx1, &fy1, &fx2, &fy2);
+    gles_prim_draw(GLES_PRIM_FILL_RECT, GLES_PRIM_ALPHA_ONE, 0, fx1, fy1, fx2, fy2, color);
 }
 
 void Gfx_GlFillRectAdd(int x1, int y1, int x2, int y2, unsigned int color)
 {
-    Gfx_GlFillRect(x1, y1, x2, y2, color);
+    /* Desktop: Gfx_GlBlendRect(..., 0x100, 0x100). This is what
+     * g_gfxFillRectColor maps to for GL (globals.c), so it is the title
+     * screen's active-cursor bar: additive, not opaque. */
+    float fx1, fy1, fx2, fy2;
+
+    gles_prim_rect(x1, y1, x2, y2, &fx1, &fy1, &fx2, &fy2);
+    gles_prim_draw(GLES_PRIM_FILL_RECT_ADD, GLES_PRIM_ALPHA_ONE, GLES_PRIM_ALPHA_ONE, fx1, fy1, fx2, fy2, color);
 }
 
 void Gfx_GlFillRectSub(int x1, int y1, int x2, int y2, unsigned int color)
 {
-    float r, g, b;
+    float fx1, fy1, fx2, fy2;
 
-    gles_split565(color, &r, &g, &b);
-    glBlendEquation(GL_FUNC_REVERSE_SUBTRACT);
-    gles_solid_quad((float)x1, (float)y1, (float)(x2 + 1), (float)(y2 + 1), r, g, b, 1.0f);
-    glBlendEquation(GL_FUNC_ADD);
+    gles_prim_rect(x1, y1, x2, y2, &fx1, &fy1, &fx2, &fy2);
+    gles_prim_draw(GLES_PRIM_FILL_RECT_SUB, GLES_PRIM_ALPHA_ONE, GLES_PRIM_ALPHA_ONE, fx1, fy1, fx2, fy2, color);
 }
 
 void Gfx_GlBlendRect(int x1, int y1, int x2, int y2, unsigned int color, int alpha_src, int alpha_dst)
 {
-    Gfx_GlDrawRectBlend(x1, y1, x2, y2, color, alpha_src, alpha_dst);
+    float fx1, fy1, fx2, fy2;
+
+    gles_prim_rect(x1, y1, x2, y2, &fx1, &fy1, &fx2, &fy2);
+    gles_prim_draw(GLES_PRIM_BLEND_RECT, alpha_src, alpha_dst, fx1, fy1, fx2, fy2, color);
 }
 
 /* --------------------------------------------------------- sprites */
