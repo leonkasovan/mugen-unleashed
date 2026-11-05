@@ -44,6 +44,22 @@ static int g_glesReady;
 static GlMvp g_glesProjection;
 static int g_glesProjectionValid;
 
+/*
+ * The single framebuffer object every render target is attached to.
+ *
+ * File scope rather than a function-local static because a context loss has to
+ * invalidate it: the name belongs to the destroyed context, and leaving it set
+ * made Gl_AttachFramebuffer skip glGenFramebuffers after a restore and bind a
+ * dead name. The status check then reported the target incomplete and the draw
+ * fell back to the window, so the screen buffer silently disappeared.
+ *
+ * One object is enough -- the engine has exactly one current render target
+ * (g_renderTarget, a single global, as in the original at 0x005042a4), never a
+ * stack of them, and every bind re-specifies the attachment. The desktop
+ * renderer does the same with its own single g_glFramebuffer.
+ */
+static GLuint g_glesFbo;
+
 /* Defined below; the context-restore path calls it, so it is declared first. */
 static int gles_build_programs(void);
 
@@ -643,6 +659,9 @@ void Gles_OnContextLost(void)
     memset(&g_glesProgramRgba, 0, sizeof(g_glesProgramRgba));
     memset(&g_glesProgramSolid, 0, sizeof(g_glesProgramSolid));
     memset(&g_glesBuffer, 0, sizeof(g_glesBuffer));
+    /* The framebuffer name is dead with the context; a zero here makes the
+     * next attach generate a fresh one instead of binding the stale name. */
+    g_glesFbo = 0;
     g_glesReady = 0;
     g_glesProjectionValid = 0;
 
@@ -1468,21 +1487,19 @@ int GlTex_AllocDepth(GlTex *tex)
 
 void Gl_AttachFramebuffer(unsigned int texture, unsigned int depth)
 {
-    static GLuint fbo;
-
     if (!g_glesReady) {
         /* Context lost: the framebuffer name belongs to a dead context. */
         g_glBoundFramebuffer = 0;
         return;
     }
-    if (fbo == 0) {
-        glGenFramebuffers(1, &fbo);
-        if (fbo == 0) {
+    if (g_glesFbo == 0) {
+        glGenFramebuffers(1, &g_glesFbo);
+        if (g_glesFbo == 0) {
             Log_Printf("GLES: glGenFramebuffers failed\n");
             return;
         }
     }
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_glesFbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, (GLuint)texture, 0);
     if (depth != 0) {
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, (GLuint)depth);
