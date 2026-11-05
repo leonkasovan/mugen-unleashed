@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # Toolchain bootstrap used by ../build.sh. No sudo, shell-profile edits or
 # automatic SDK license acceptance. All default caches/installations are local.
+# Empty is a legal input: cygpath refuses it ("can't convert empty path") and
+# aborts the caller with that message instead of the real diagnostic. Values the
+# fixtures deliberately clear from the environment reach here as empty strings.
 android_shell_path() {
+  if [ -z "$1" ]; then printf '\n'; return 0; fi
   if command -v cygpath >/dev/null 2>&1; then cygpath -u "$1"; else printf '%s\n' "$1"; fi
 }
 android_native_path() {
+  if [ -z "$1" ]; then printf '\n'; return 0; fi
   if command -v cygpath >/dev/null 2>&1; then cygpath -am "$1"; else printf '%s\n' "$1"; fi
 }
 android_jdk_ok() {

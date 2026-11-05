@@ -133,6 +133,13 @@ int Sdl2_DiagTextureSize(int *w, int *h, Uint32 *format);
  * OpenGLScreen placeholder). One-shot; consumed by the next creation call. */
 void Sdl2_DiagFailNext(int which);
 
+/* Placeholder lifetime identity (R02). Frees a surface's allocation from the
+ * gate's point of view without changing its address, so an early free is
+ * detectable on a build without AddressSanitizer. */
+int Sdl2_DiagPlaceholderSerial(void);
+void Sdl2_DiagPlaceholderCounts(unsigned long *allocs, unsigned long *frees);
+int Sdl2_DiagSurfaceIsLive(const void *surface, int serial);
+
 /* Audio: SDL 1.2's SDL_AudioDriverName; SDL2 only has the no-length form. */
 char *Sdl2_AudioDriverName(char *namebuf, int maxlen);
 

@@ -341,6 +341,10 @@ extern int g_bufferedRead; /* 0x00504274 */
 extern int g_iniCaseSensitive; /* 0x00504278 */
 extern char g_iniLang[3]; /* 0x0050427c */
 extern int g_quitRequested; /* 0x00504280 */
+/* Port addition (M8): a GL renderer failed to restore; re-run System_Init. */
+/* Port addition (M8): rebuilds video on the recovered renderer. */
+void __cdecl System_ReinitVideo(void);
+extern int g_rendererFallbackRequested;
 extern int * g_keyMap; /* 0x00504284 */
 extern IntArray g_keyQueue; /* 0x00504288 */
 extern GfxCaptureFn g_gfxCapture; /* 0x00504298 */
@@ -1551,6 +1555,7 @@ void __cdecl Pads_LogBindings(void);
 void __cdecl Pads_HandleControllerEvent(const SDL_Event *ev);
 int __cdecl Pads_SlotUsesController(int slot);
 void __cdecl Pads_ControllerBindings(int slot, int *out);
+void __cdecl Pads_AttachController(int slot, int device_index);
 int __cdecl Pads_ControllerCount(void);
 #endif
 /* 0x00474b30 */ long long __cdecl Input_FindKey(int *const *maps, int count, int code);
@@ -1646,6 +1651,12 @@ int __cdecl Pads_ControllerCount(void);
 /* 0x00479e00 */ int __cdecl GlTex_Alloc(GlTex *tex, int w, int h);
 /* 0x00479ec0 */ int __cdecl GlTex_Upload2D(int h, int bpp, GlTex *tex, const void *pixels, int w);
 /* 0x00479f60 */ int __cdecl GlTex_UploadRGBA(int h, int w, GlTex *tex, const void *pixels);
+#ifdef MUGEN_GLES
+/* M8 GLES backend, no original address. Backing pixels let a texture be
+ * rebuilt after Android destroys the GL context (RENDERING_PLAN 12.6). */
+int __cdecl GlTex_SetBacking(GlTex *tex, void *pixels, size_t bytes, int h, int w, int bpp);
+int __cdecl GlTex_Revive(GlTex *tex);
+#endif
 /* 0x00479fe0 */ int __cdecl GlTex_Upload(GlTex *tex, int h, int internal_format, int w, int format, const void *pixels);
 /* 0x0047a0e0 */ int __cdecl GlTex_Upload1D(GlTex *tex, int width, const void *pixels);
 /* 0x0047a1f0 */ int __cdecl GlTex_AllocDepth(GlTex *tex);

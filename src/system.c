@@ -522,6 +522,40 @@ void System_Init(void)
 }
 
 /* 0x0041AEA0: shuts everything down in reverse order and ends with SDL_Quit. */
+/*
+ * Port addition (M8, RENDERING_PLAN 12.6): rebuilds the video subsystem on a
+ * different renderer after a failed GL restore.
+ *
+ * main.c calls this between gameflow passes when a GL renderer could not be
+ * rebuilt. It is deliberately small: tear down the renderer that failed, put
+ * the requested mode back to the configured one, and re-run System_Init -- the
+ * same code path a cold start takes, which is what makes the GL -> System
+ * recovery verifiable rather than a second, drifting copy of it.
+ *
+ * Assets are not reloaded here: gameflow re-enters at the mode select and
+ * rebuilds what it needs, and the sprite textures have their backing bytes
+ * (GlTex_SetBacking), so an unused one is rebuilt on first draw.
+ */
+void System_ReinitVideo(void)
+{
+    Log_Printf("Reinitialising video after a renderer fallback...");
+#ifdef ANDROID_PORT
+    Gl_Deinit();
+    Android_DestroyGLContext();
+#endif
+    Video_Deinit();
+    if (g_game != NULL) {
+        /* The configured request, so the policy re-resolves from scratch and
+         * the startup log reports requested != effective. */
+        g_game->render_mode = Config_RequestedRenderMode();
+        g_game->depth = 16;
+        g_game->stage_fit = 0;
+        g_game->system_fit = 0;
+    }
+    Log_Printf("OK\n");
+    System_Init();
+}
+
 void System_Deinit(void)
 {
     GameVars *g;

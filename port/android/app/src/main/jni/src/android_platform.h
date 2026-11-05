@@ -32,6 +32,8 @@ int Android_GLContextValid(void);
 int Android_GLForceContextLoss(void);
 /* Tears the GL window and context down for the System fallback. */
 void Android_DestroyGLContext(void);
+/* Requests the GL -> System recovery after a failed context restore. */
+void Android_RequestRendererFallback(void);
 #endif
 int Android_PresentFrame(void);
 void Android_MarkDisplayDirty(SDL_Surface *surface);

@@ -12,6 +12,11 @@
 
 #include "mugen.h"
 
+#ifdef ANDROID_PORT
+/* Binding policy for one player (config.c), applied when a pad attaches. */
+void Config_ApplyJoystickSlot(int player);
+#endif
+
 /* Axis values beyond this press the axis' button. */
 #define PAD_AXIS_THRESHOLD 16000
 
@@ -131,6 +136,100 @@ int Pads_Init(void)
     return found;
 }
 
+/*
+ * Compact engine codes of the semantic controls.
+ *
+ * These are numbers rather than Android state, and the direction bookkeeping
+ * below needs them on every backend (Pads_DeviceEvent is compiled for desktop
+ * SDL2 as well), so they are defined outside the ANDROID_PORT block.
+ */
+#define PAD_CTRL_UP     1
+#define PAD_CTRL_DOWN   2
+#define PAD_CTRL_LEFT   3
+#define PAD_CTRL_RIGHT  4
+#define PAD_CTRL_A      5
+#define PAD_CTRL_B      6
+#define PAD_CTRL_C      7
+#define PAD_CTRL_X      8
+#define PAD_CTRL_Y      9
+#define PAD_CTRL_Z      10
+#define PAD_CTRL_START  11
+/*
+ * Select opens the in-match menu: the engine's menu key is PAUSE, which
+ * Game_ReadInput turns into defocus_paused (the pause screen) while a match is
+ * running. A pad has no keyboard, so Select is bound to that code here -- a
+ * gamepad's Back/Select is the conventional button for it.
+ */
+#define PAD_CTRL_SELECT PAD_SELECT_CODE
+
+/*
+ * Direction sources (fix for the port's d-pad/analog overlap).
+ *
+ * The stick and the d-pad both drive the same four engine buttons, and the
+ * first version wrote the button state directly from each source. Moving the
+ * stick back inside its deadzone therefore released a direction the d-pad was
+ * still holding, because the stick could not tell that the d-pad owned it.
+ *
+ * Each slot now records what the stick and the pad are each holding, and the
+ * engine-visible button state is their union. The masks use the PAD_CTRL_*
+ * direction codes as bit positions (1..4, so bits 1..4 of a byte).
+ */
+#define PAD_DIR_SOURCES 2 /* 0 = stick, 1 = d-pad */
+
+/* Sidecars, not fields on Pad: the reconstructed struct has a fixed layout. */
+static unsigned char g_padDirHeld[PAD_DIR_SOURCES][PAD_MAX];
+
+static void Pads_ComposeDirections(int slot)
+{
+    int code;
+
+    if (slot < 0 || slot >= PAD_MAX) {
+        return;
+    }
+    for (code = PAD_CTRL_UP; code <= PAD_CTRL_RIGHT; code++) {
+        int bit = 1 << code;
+        int held = ((g_padDirHeld[0][slot] | g_padDirHeld[1][slot]) & bit) != 0;
+        int index = slot * PAD_BUTTONS + code;
+
+        /* Send only real changes: the engine's queue must not fill with
+         * release/press pairs for a direction that never moved. */
+        if (g_padButtonState[index] != held) {
+            Pads_SetButton(index, held);
+        }
+    }
+}
+
+/* Records what one source holds for one direction and re-derives the union. */
+static void Pads_SetDirectionSource(int slot, int source, int code, int held)
+{
+    int bit;
+
+    if (slot < 0 || slot >= PAD_MAX || source < 0 || source >= PAD_DIR_SOURCES) {
+        return;
+    }
+    if (code < PAD_CTRL_UP || code > PAD_CTRL_RIGHT) {
+        return;
+    }
+    bit = 1 << code;
+    if (held) {
+        g_padDirHeld[source][slot] |= (unsigned char)bit;
+    } else {
+        g_padDirHeld[source][slot] &= (unsigned char)~bit;
+    }
+    Pads_ComposeDirections(slot);
+}
+
+/* Forgets both sources for a slot (device removed or slot reassigned). */
+static void Pads_ClearDirectionSources(int slot)
+{
+    if (slot < 0 || slot >= PAD_MAX) {
+        return;
+    }
+    g_padDirHeld[0][slot] = 0;
+    g_padDirHeld[1][slot] = 0;
+    Pads_ComposeDirections(slot);
+}
+
 #ifdef ANDROID_PORT
 /*
  * Port fix: the Android controller path uses SDL's game-controller semantics.
@@ -162,24 +261,8 @@ int Pads_Init(void)
  * third punch and third kick on the top row, and a modern gamepad's only
  * remaining buttons are RB/LB. Logged at start-up so the choice is visible.
  */
-#define PAD_CTRL_UP     1
-#define PAD_CTRL_DOWN   2
-#define PAD_CTRL_LEFT   3
-#define PAD_CTRL_RIGHT  4
-#define PAD_CTRL_A      5
-#define PAD_CTRL_B      6
-#define PAD_CTRL_C      7
-#define PAD_CTRL_X      8
-#define PAD_CTRL_Y      9
-#define PAD_CTRL_Z      10
-#define PAD_CTRL_START  11
-/*
- * Select opens the in-match menu: the engine's menu key is PAUSE, which
- * Game_ReadInput turns into defocus_paused (the pause screen) while a match is
- * running. A pad has no keyboard, so Select is bound to that code here -- a
- * gamepad's Back/Select is the conventional button for it.
- */
-#define PAD_CTRL_SELECT PAD_SELECT_CODE
+/* (The PAD_CTRL_* codes are defined above the ANDROID_PORT block: the direction
+ * bookkeeping needs them on every backend.) */
 
 /* Sidecar, not a field on Pad: the reconstructed struct has a fixed layout
  * (MUGEN_ASSERT_SIZE(Pad, 0x14)) and backend state must not extend it. */
@@ -319,6 +402,43 @@ void Pads_ControllerBindings(int slot, int *out)
 }
 
 /*
+ * Opens the semantic controller for a device that just appeared, in the slot
+ * its raw joystick was given, and rebinds that player.
+ *
+ * Finding: the handle was opened but the bindings were not. A controller
+ * plugged in after a pad-less start-up then pressed code 5 while the active
+ * map still expected 13 -- it looked bound and pressed nothing. Only this
+ * slot is rebound, so plugging in player 2's pad cannot disturb player 1.
+ */
+void Pads_AttachController(int slot, int device_index)
+{
+    if (slot < 0 || slot >= PAD_MAX) {
+        return;
+    }
+    if (g_padController[slot] != NULL) {
+        SDL_GameControllerClose(g_padController[slot]);
+        g_padController[slot] = NULL;
+    }
+    if (!SDL_IsGameController(device_index)) {
+        /* No mapping: the raw joystick codes are the only ones that can work,
+         * so leave the existing bindings alone. */
+        Log_Printf("Pads: slot %d attached with no game-controller mapping; bindings unchanged\n", slot);
+        return;
+    }
+    g_padController[slot] = SDL_GameControllerOpen(device_index);
+    if (g_padController[slot] == NULL) {
+        Log_Printf("Pads: controller slot %d attached but could not be opened: %s\n", slot, SDL_GetError());
+        return;
+    }
+    Log_Printf("Pads: controller slot %d opened on attach (%s)\n", slot,
+               SDL_GameControllerName(g_padController[slot]));
+    /* Controller events now drive this pad, so the raw path must stand aside
+     * and the semantic layout must become the active binding. */
+    SDL_GameControllerEventState(SDL_ENABLE);
+    Config_ApplyJoystickSlot(slot);
+}
+
+/*
  * Handles an SDL controller event by mapping the semantic control onto the
  * compact layout above.
  */
@@ -365,7 +485,15 @@ void Pads_HandleControllerEvent(const SDL_Event *ev)
                 Log_Printf("pads: controller %s %s -> code %d (slot %d)\n", pad_ctrl_map[i].name,
                            pressed ? "down" : "up", slot * PAD_BUTTONS + pad_ctrl_map[i].code, slot);
             }
-            Pads_SetButton(slot * PAD_BUTTONS + pad_ctrl_map[i].code, pressed ? 1 : 0);
+            if (pad_ctrl_map[i].code >= PAD_CTRL_UP && pad_ctrl_map[i].code <= PAD_CTRL_RIGHT) {
+                /* Directions are shared with the stick, so they go through the
+                 * source bookkeeping instead of writing the button directly:
+                 * a d-pad release must not clear a direction the stick holds,
+                 * and vice versa. */
+                Pads_SetDirectionSource(slot, 1, pad_ctrl_map[i].code, pressed);
+            } else {
+                Pads_SetButton(slot * PAD_BUTTONS + pad_ctrl_map[i].code, pressed ? 1 : 0);
+            }
             return;
         }
         return;
@@ -383,39 +511,18 @@ void Pads_HandleControllerEvent(const SDL_Event *ev)
             return;
         }
         {
-            /*
-             * first is the negative direction (left / up) and first + 1 the
-             * positive one (right / down).
-             *
-             * Fix (port change): the release tests were inverted. `dir <= 0`
-             * released the *negative* button, which is the one a negative
-             * deflection just pressed, while the previous direction stayed
-             * held. A stick swept from -20000 to +20000 therefore held Left and
-             * Right at the same time.
-             *
-             * Each edge now releases only the opposite direction, and only
-             * presses when the button is not already down, so a stick that
-             * stays on one side does not emit a release/press pair per event.
-             */
             int neg;
             int pos;
 
             first = (axis == SDL_CONTROLLER_AXIS_LEFTX) ? PAD_CTRL_LEFT : PAD_CTRL_UP;
-            neg = slot * PAD_BUTTONS + first;
-            pos = neg + 1;
+            neg = first;
+            pos = first + 1;
             dir = (value < -PAD_AXIS_THRESHOLD) ? -1 : ((value > PAD_AXIS_THRESHOLD) ? 1 : 0);
-            if (dir <= 0 && g_padButtonState[pos] != 0) {
-                Pads_SetButton(pos, 0);
-            }
-            if (dir >= 0 && g_padButtonState[neg] != 0) {
-                Pads_SetButton(neg, 0);
-            }
-            if (dir < 0 && g_padButtonState[neg] == 0) {
-                Pads_SetButton(neg, 1);
-            }
-            if (dir > 0 && g_padButtonState[pos] == 0) {
-                Pads_SetButton(pos, 1);
-            }
+            /* Same inversion fix as before, now recorded per source: only the
+             * stick's own view of these two directions changes, so a d-pad
+             * press survives a stick that returns to centre. */
+            Pads_SetDirectionSource(slot, 0, neg, dir < 0);
+            Pads_SetDirectionSource(slot, 0, pos, dir > 0);
         }
     }
 }
@@ -822,6 +929,7 @@ void Pads_DeviceEvent(const SDL_Event *event)
                 }
             }
             SDL_JoystickClose(g_pads[i].joystick);
+#ifdef ANDROID_PORT
             /*
              * The semantic handle for this slot has to go with the raw one.
              * Leaving it open left g_padController[i] pointing at the old
@@ -829,11 +937,17 @@ void Pads_DeviceEvent(const SDL_Event *event)
              * while the controller was still the old one, raw events stayed
              * blocked because the slot "uses a controller", and the new
              * semantic events never matched, so the pad stopped working.
+             *
+             * Android only: the semantic handle array exists only when the
+             * Android input path is compiled (see the sidecar declaration).
+             * The desktop backend keeps its raw-joystick-only lifecycle here.
              */
             if (g_padController[i] != NULL) {
                 SDL_GameControllerClose(g_padController[i]);
                 g_padController[i] = NULL;
             }
+#endif
+            Pads_ClearDirectionSources(i);
             memset(&g_pads[i], 0, sizeof(Pad));
         }
         return;
@@ -855,26 +969,10 @@ void Pads_DeviceEvent(const SDL_Event *event)
     }
     pad = &g_pads[slot];
     pad->joystick = joystick;
-    /*
-     * Reopen the semantic handle for the newly attached device, in the same
-     * slot as its raw joystick, so the two lifecycles agree again. Without
-     * this a controller plugged in after start-up was seen only as a raw
-     * joystick (the semantic path had no handle) or not at all (the slot was
-     * still marked as controller-driven by the stale handle).
-     */
-    if (g_padController[slot] != NULL) {
-        SDL_GameControllerClose(g_padController[slot]);
-        g_padController[slot] = NULL;
-    }
-    if (SDL_IsGameController(event->jdevice.which)) {
-        g_padController[slot] = SDL_GameControllerOpen(event->jdevice.which);
-        if (g_padController[slot] == NULL) {
-            Log_Printf("Pads: controller slot %d attached but could not be opened: %s\n", slot, SDL_GetError());
-        } else {
-            Log_Printf("Pads: controller slot %d opened on reconnect (%s)\n", slot,
-                       SDL_GameControllerName(g_padController[slot]));
-        }
-    }
+#ifdef ANDROID_PORT
+    Pads_AttachController(slot, event->jdevice.which);
+#endif
+    Pads_ClearDirectionSources(slot);
     pad->hat_base = SDL_JoystickNumAxes(joystick) * 2;
     pad->button_base = pad->hat_base + SDL_JoystickNumHats(joystick) * 4;
     pad->button_count = pad->button_base + SDL_JoystickNumButtons(joystick);

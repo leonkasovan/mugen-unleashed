@@ -161,20 +161,80 @@ int Sprite_Init(unsigned int flags, Sprite *spr, int format, void *data, size_t 
             return 0;
         }
         ok = GlTex_Upload2D(h / step_y, bpp, tex, upload, w / step_x);
-        if (scaled != NULL) {
-            free(scaled);
-        }
         if (!ok) {
+            if (scaled != NULL) {
+                free(scaled);
+            }
             if (owns) {
                 free(data);
             }
             GlTex_Free(tex);
             return 0;
         }
+        /*
+         * Keep the uploaded bytes as the texture's backing instead of freeing
+         * them: a context loss drops every GL name, and without a source to
+         * re-upload from the sprite would draw black (the renderer still
+         * reports ready). GlTex_SetBacking takes ownership, so the buffer is
+         * freed with the texture rather than here.
+         *
+         * The buffer handed over is the one that was actually uploaded. When we
+         * do not own it (the caller keeps its copy) a private copy is made, so
+         * ownership stays unambiguous.
+         */
+        {
+            int upload_w = w / step_x;
+            int upload_h = h / step_y;
+            size_t bytes = (size_t)upload_w * (size_t)upload_h *
+                           (size_t)(bpp <= 8 ? 1 : (bpp == 24 ? 3 : 4));
+            void *backing = NULL;
+            int backing_owned = 0;
+
+            if (scaled != NULL) {
+                backing = scaled;
+                backing_owned = 1;
+            } else if (owns) {
+                backing = data;
+                backing_owned = 1;
+            } else {
+                backing = malloc(bytes);
+                if (backing != NULL) {
+                    memcpy(backing, upload, bytes);
+                    backing_owned = 1;
+                }
+            }
+#ifdef MUGEN_GLES
+            if (backing == NULL || !GlTex_SetBacking(tex, backing, bytes, upload_h, upload_w, bpp)) {
+                /* Not fatal: the texture works until the next context loss. */
+                if (backing_owned) {
+                    free(backing);
+                }
+            } else {
+                /* Ownership moved to the texture; do not free below. */
+                scaled = NULL;
+                if (backing == data && owns) {
+                    data = NULL;
+                }
+            }
+#else
+            /* No backing sidecar outside the GLES backend: the desktop
+             * renderer keeps its own texture lifetime, so anything allocated
+             * here is released immediately. */
+            (void)upload_h;
+            (void)upload_w;
+            (void)bytes;
+            if (backing_owned) {
+                free(backing);
+            }
+#endif
+        }
+        if (scaled != NULL) {
+            free(scaled);
+        }
         spr->pixels = tex;
         spr->owns_pixels = 1;
         spr->pixels_size = 4;
-        if (owns) {
+        if (owns && data != NULL) {
             free(data);
         }
     } else

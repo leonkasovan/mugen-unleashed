@@ -219,17 +219,73 @@ static void test_r02_projection(void)
      */
     {
         SDL_Surface *before_screen = g_screenSurface;
+        int before_serial = Sdl2_DiagPlaceholderSerial();
+        unsigned long before_allocs = 0;
+        unsigned long before_frees = 0;
+        unsigned long after_allocs = 0;
+        unsigned long after_frees = 0;
 
+        Sdl2_DiagPlaceholderCounts(&before_allocs, &before_frees);
         Sdl2_DiagFailNext(3);
         Video_OnResize(800, 600);
+        Sdl2_DiagPlaceholderCounts(&after_allocs, &after_frees);
+
         check(g_screenSurface == before_screen, "R02: failed placeholder keeps g_screenSurface");
-        check(g_screenSurface != NULL && g_screenSurface->w == 640 && g_screenSurface->h == 480,
-              "R02: failed placeholder leaves a live 640x480 surface");
+        /*
+         * Lifetime assert that does not depend on AddressSanitizer.
+         *
+         * The R02 fix is "allocate the replacement before freeing the old one".
+         * A wrong order leaves the pointer unchanged and only the liveness
+         * differs, so the dereference alone cannot tell them apart on a plain
+         * build. These three checks can: no allocation happened, no surface was
+         * freed, and the published surface still carries the serial of the live
+         * placeholder rather than one that has been retired.
+         */
+        /*
+         * Liveness is checked before the surface is dereferenced below: with
+         * the bug the pointer still matches but the allocation is gone, so
+         * reading ->w is a use-after-free.
+         *
+         * On a plain build the "free before allocate" mutation does not even
+         * reach this check -- SDL itself faults first, inside
+         * Video_OnResize, and the harness exits 139. That still fails the gate
+         * (tools/test_qualify.sh maps any non-zero exit to FAIL), so the
+         * mutation is caught either way; the checks below make the *other*
+         * half of the fix -- never releasing the old placeholder -- report as
+         * an assertion failure instead of a leak.
+         */
+        check(Sdl2_DiagPlaceholderSerial() == before_serial,
+              "R02: a failed resize keeps the same placeholder serial");
+        check(after_allocs == before_allocs, "R02: failed placeholder allocated nothing");
+        check(after_frees == before_frees, "R02: failed placeholder freed nothing");
+        check(Sdl2_DiagSurfaceIsLive(g_screenSurface, before_serial),
+              "R02: failed placeholder is still the live allocation (not freed early)");
+        if (Sdl2_DiagSurfaceIsLive(g_screenSurface, before_serial)) {
+            check(g_screenSurface->w == 640 && g_screenSurface->h == 480,
+                  "R02: failed placeholder leaves a live 640x480 surface");
+        }
 
         /* A retry at the same size must allocate and publish the new one. */
         Video_OnResize(800, 600);
+        Sdl2_DiagPlaceholderCounts(&after_allocs, &after_frees);
         check(g_screenSurface != NULL && g_screenSurface->w == 800 && g_screenSurface->h == 600,
               "R02: retry after failed placeholder gives 800x600");
+        check(Sdl2_DiagPlaceholderSerial() != before_serial,
+              "R02: the successful retry publishes a new placeholder identity");
+        check(Sdl2_DiagSurfaceIsLive(g_screenSurface, Sdl2_DiagPlaceholderSerial()),
+              "R02: the published surface is the live allocation after a retry");
+        /*
+         * A successful replacement must both allocate and release exactly once.
+         * The count is what makes the two halves of the R02 fix checkable
+         * independently:
+         *   - free before allocate  -> frees moved during the *failed* resize
+         *     (asserted above) and the surface is no longer live;
+         *   - never free the old one -> allocs increments here but frees does
+         *     not, which is a leak the counters catch and AddressSanitizer's
+         *     use-after-free check would not.
+         */
+        check(after_allocs == before_allocs + 1, "R02: the retry allocated exactly one placeholder");
+        check(after_frees == before_frees + 1, "R02: the retry released exactly the old placeholder");
     }
 }
 

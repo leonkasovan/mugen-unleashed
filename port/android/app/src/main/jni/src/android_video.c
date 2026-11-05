@@ -1,6 +1,13 @@
 /* Native Android SDL2 window, renderer and streaming texture. */
 #include "android_platform.h"
 
+/*
+ * Engine global (src/globals.c). This file deliberately does not include
+ * symbols.h -- it is the platform layer, not an engine module -- so the one
+ * global it sets is declared here.
+ */
+extern int g_rendererFallbackRequested;
+
 static SDL_Window *display_window;
 static SDL_Renderer *display_renderer;
 #ifdef MUGEN_GLES
@@ -285,6 +292,20 @@ void Android_DestroyGLContext(void)
         display_window = NULL;
     }
     SDL_Log("mugen: GL window and context destroyed");
+}
+
+/*
+ * Asks the engine to leave the screen it is on so System_Init runs again and
+ * performs the verified GL -> System recovery (RENDERING_PLAN 12.6).
+ *
+ * Set here rather than acted on immediately: the event pump runs inside the
+ * screen loop, and tearing the renderer down under a live draw would use names
+ * the engine is about to draw with.
+ */
+void Android_RequestRendererFallback(void)
+{
+    g_rendererFallbackRequested = 1;
+    SDL_Log("mugen: renderer fallback requested; restarting the renderer");
 }
 
 /* 1 when a GL context is current (0 when the GL path is not in use). */

@@ -32,6 +32,7 @@
 #include <string.h>
 
 #include "gles_probe.h"
+#include "gles_blend.h"
 #include "gles_render.h"
 #include "gl_mvp.h"
 #include "gles_draw.h"
@@ -80,39 +81,171 @@ static GlesTexFormat g_glesTexFormat[GLES_TEX_FORMAT_SLOTS];
  * long-lived statics. A small registry of pointers solves both without touching
  * the struct.
  */
-#define GLES_TEX_MAX 64
-static GlTex *g_glesTextures[GLES_TEX_MAX];
+static GlTex **g_glesTextures;
+static int g_glesTextureCount;
+static int g_glesTextureCapacity;
 
-static void gles_register_tex(GlTex *tex)
+/*
+ * Registers a texture for context-loss cleanup.
+ *
+ * The first version used a fixed 64-slot array and silently dropped anything
+ * past it, so with more than 64 live textures the extra ones kept their stale
+ * GL names and were never invalidated on a context loss (texture 1 was cleared
+ * to id 0 while texture 65 still held id 65). The list grows instead.
+ *
+ * Returns 1 on success. A NULL return from realloc is propagated so the caller
+ * can fail the allocation rather than create a texture it cannot track.
+ */
+static int gles_register_tex(GlTex *tex)
 {
     int i;
 
     if (tex == NULL) {
+        return 0;
+    }
+    for (i = 0; i < g_glesTextureCount; i++) {
+        if (g_glesTextures[i] == tex) {
+            return 1;
+        }
+    }
+    if (g_glesTextureCount == g_glesTextureCapacity) {
+        int capacity = (g_glesTextureCapacity == 0) ? 64 : g_glesTextureCapacity * 2;
+        GlTex **grown = realloc(g_glesTextures, (size_t)capacity * sizeof(*grown));
+
+        if (grown == NULL) {
+            Log_Printf("GLES: out of memory growing the texture registry (%d entries)\n",
+                       g_glesTextureCount);
+            return 0;
+        }
+        g_glesTextures = grown;
+        g_glesTextureCapacity = capacity;
+    }
+    g_glesTextures[g_glesTextureCount++] = tex;
+    return 1;
+}
+
+/*
+ * Backing pixels for sprites, so a texture can be rebuilt after a context loss.
+ *
+ * The sprite path uploads once at load time and then frees the CPU pixels
+ * (Sprite_Init), which is what stopped the per-frame re-upload that cost the
+ * frame budget. The cost is that a context loss left SPRITE_FORMAT_TEXTURE
+ * sprites with id 0 and no source to re-upload from, so they drew black.
+ *
+ * This keeps the already-decoded bytes (the same buffer Sprite_Init would have
+ * freed -- no extra copy) plus the upload parameters, and Gl_DrawSprite revives
+ * the texture lazily when it sees id 0.
+ *
+ * Keyed by GlTex pointer in a small growable table, because GlTex has a fixed
+ * 32-bit layout that must not gain fields.
+ */
+typedef struct GlesBacking {
+    GlTex *tex;
+    unsigned char *pixels;
+    size_t bytes;
+    int h;
+    int w;
+    int bpp;
+} GlesBacking;
+
+static GlesBacking *g_glesBacking;
+static int g_glesBackingCount;
+static int g_glesBackingCapacity;
+
+static GlesBacking *gles_backing_find(GlTex *tex)
+{
+    int i;
+
+    for (i = 0; i < g_glesBackingCount; i++) {
+        if (g_glesBacking[i].tex == tex) {
+            return &g_glesBacking[i];
+        }
+    }
+    return NULL;
+}
+
+/*
+ * Takes ownership of `pixels` (which the caller would otherwise free) and
+ * records the parameters needed to re-upload it. Returns 0 when the record
+ * cannot be stored, in which case the caller still owns `pixels`.
+ */
+int GlTex_SetBacking(GlTex *tex, void *pixels, size_t bytes, int h, int w, int bpp)
+{
+    GlesBacking *slot;
+
+    if (tex == NULL || pixels == NULL || bytes == 0) {
+        return 0;
+    }
+    slot = gles_backing_find(tex);
+    if (slot == NULL) {
+        if (g_glesBackingCount == g_glesBackingCapacity) {
+            int capacity = (g_glesBackingCapacity == 0) ? 64 : g_glesBackingCapacity * 2;
+            GlesBacking *grown = realloc(g_glesBacking, (size_t)capacity * sizeof(*grown));
+
+            if (grown == NULL) {
+                return 0;
+            }
+            g_glesBacking = grown;
+            g_glesBackingCapacity = capacity;
+        }
+        slot = &g_glesBacking[g_glesBackingCount++];
+        slot->tex = tex;
+        slot->pixels = NULL;
+    }
+    free(slot->pixels);
+    slot->pixels = pixels;
+    slot->bytes = bytes;
+    slot->h = h;
+    slot->w = w;
+    slot->bpp = bpp;
+    return 1;
+}
+
+static void gles_backing_release(GlTex *tex)
+{
+    GlesBacking *slot = gles_backing_find(tex);
+
+    if (slot == NULL) {
         return;
     }
-    for (i = 0; i < GLES_TEX_MAX; i++) {
-        if (g_glesTextures[i] == tex) {
-            return;
-        }
+    free(slot->pixels);
+    *slot = g_glesBacking[g_glesBackingCount - 1];
+    g_glesBackingCount--;
+}
+
+/*
+ * Re-uploads a texture whose GL name was dropped by a context loss.
+ *
+ * Returns 1 when the texture has a live name afterwards (including the case
+ * where it never lost one), 0 when it cannot be revived.
+ */
+int GlTex_Revive(GlTex *tex)
+{
+    GlesBacking *slot;
+
+    if (tex == NULL || !g_glesReady) {
+        return 0;
     }
-    for (i = 0; i < GLES_TEX_MAX; i++) {
-        if (g_glesTextures[i] == NULL) {
-            g_glesTextures[i] = tex;
-            return;
-        }
+    if (tex->id != 0) {
+        return 1;
     }
-    /* Full (more than GLES_TEX_MAX live textures): the registry only drives
-     * context-loss cleanup, so dropping the entry costs a stale name, not a
-     * leak. */
+    slot = gles_backing_find(tex);
+    if (slot == NULL) {
+        return 0;
+    }
+    return GlTex_Upload2D(slot->h, slot->bpp, tex, slot->pixels, slot->w);
 }
 
 static void gles_unregister_tex(GlTex *tex)
 {
     int i;
 
-    for (i = 0; i < GLES_TEX_MAX; i++) {
+    for (i = 0; i < g_glesTextureCount; i++) {
         if (g_glesTextures[i] == tex) {
-            g_glesTextures[i] = NULL;
+            /* Order does not matter here, so move the last entry down instead
+             * of shifting the tail. */
+            g_glesTextures[i] = g_glesTextures[g_glesTextureCount - 1];
+            g_glesTextureCount--;
             return;
         }
     }
@@ -148,8 +281,14 @@ GlTex *GlTex_Create(void)
 {
     GlTex *tex = calloc(1, sizeof(GlTex));
 
-    if (tex != NULL) {
-        gles_register_tex(tex);
+    if (tex == NULL) {
+        return NULL;
+    }
+    if (!gles_register_tex(tex)) {
+        /* Cannot track it, so cannot invalidate its name on a context loss --
+         * fail the allocation rather than create an uncorrectable object. */
+        free(tex);
+        return NULL;
     }
     return tex;
 }
@@ -209,6 +348,7 @@ int GlTex_Delete(GlTex *tex)
         slot->h = 0;
         slot->internal_format = 0;
     }
+    gles_backing_release(tex);
     tex->id = 0;
     tex->size = 0;
     tex->refs = 0;
@@ -508,7 +648,7 @@ void Gles_OnContextLost(void)
 
     /* Textures keep their dimensions so GlTex_Upload/GlVbuf_Bind can revive
      * them; only the names and the depth renderbuffer go. */
-    for (i = 0; i < GLES_TEX_MAX; i++) {
+    for (i = 0; i < g_glesTextureCount; i++) {
         GlTex *tex = g_glesTextures[i];
 
         if (tex == NULL) {
@@ -516,9 +656,9 @@ void Gles_OnContextLost(void)
         }
         tex->id = 0;
         tex->depth = 0;
-        memset(g_glesTexFormat, 0, sizeof(g_glesTexFormat));
     }
-    Log_Printf("GLES: context lost; object names dropped (%d textures tracked)\n", GLES_TEX_MAX);
+    memset(g_glesTexFormat, 0, sizeof(g_glesTexFormat));
+    Log_Printf("GLES: context lost; object names dropped (%d textures tracked)\n", g_glesTextureCount);
 }
 
 /*
@@ -622,6 +762,14 @@ int Gl_Init(int framebuffers)
     if (g_glesReady) {
         return 1;
     }
+    /*
+     * Getting here with a live context but no programs means a previous GL
+     * session was torn down without Gles_OnContextLost (a mode reload, say).
+     * Rebuilding is the whole point of this call, so drop the stale program and
+     * buffer state first -- refusing early made an in-match GL -> System switch
+     * impossible: the caller saw "unavailable" while nothing had been tried.
+     */
+    Gles_OnContextLost();
     if (!Gles_Probe(&caps)) {
         Log_Printf("GLES: capability probe failed; GL mode unavailable\n");
         return 0;
@@ -873,6 +1021,30 @@ void Gfx_GlBlendRect(int x1, int y1, int x2, int y2, unsigned int color, int alp
  * texture the sprite already owns), upload the palette as a 256x1 2D texture,
  * build the modelview, hand the quad to the VBO submitter.
  */
+/* Maps the pure blend-factor choice onto the GL enum it names. Kept next to the
+ * draw code so GlesBlend_Resolve (src/gles_blend.h) stays testable without GL --
+ * tools/test_blend_math.sh links it on the host and checks it against the
+ * engine's own blend equation. */
+static GLenum gles_gl_factor(GlesBlendFactor f)
+{
+    switch (f) {
+    case GLES_BLEND_FACTOR_ZERO:
+        return GL_ZERO;
+    case GLES_BLEND_FACTOR_ONE:
+        return GL_ONE;
+    case GLES_BLEND_FACTOR_SRC_ALPHA:
+        return GL_SRC_ALPHA;
+    case GLES_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA:
+        return GL_ONE_MINUS_SRC_ALPHA;
+    case GLES_BLEND_FACTOR_CONSTANT_ALPHA:
+        return GL_CONSTANT_ALPHA;
+    case GLES_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA:
+        return GL_ONE_MINUS_CONSTANT_ALPHA;
+    default:
+        return GL_ONE;
+    }
+}
+
 void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
 {
     Sprite *spr;
@@ -916,6 +1088,19 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
         c1 = 1.0f;
     }
     tex = (spr->format == SPRITE_FORMAT_TEXTURE) ? (GlTex *)spr->pixels : NULL;
+    if (tex != NULL && tex->id == 0) {
+        /*
+         * A context loss dropped this sprite's GL name. The sprite path uploads
+         * once at load time and frees the CPU pixels, so without the backing
+         * sidecar there is nothing to rebuild from and the sprite drew black --
+         * the renderer reported ready while every SPRITE_FORMAT_TEXTURE sprite
+         * still had id 0. Revive from the backing bytes; if that fails, fall
+         * through to the per-draw scratch upload below, which still works.
+         */
+        if (!GlTex_Revive(tex)) {
+            tex = NULL;
+        }
+    }
     if (tex == NULL) {
         void *pixels = Sprite_GetPixels(set, sprite);
 
@@ -1049,29 +1234,27 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
     fx = PalFx_GetApplied();
     prog = paletted ? &g_glesProgramIndexed : &g_glesProgramRgba;
 
-    /* Blend state, as the desktop path sets it. */
-    if (dp->blend != BLEND_NONE) {
-        glEnable(GL_BLEND);
-        /*
-         * Straight alpha: the shader outputs colour * a. Multiplying it by
-         * alpha again (GL_ONE, GL_CONSTANT_ALPHA) double-counts, which measured
-         * as a fully opaque result for a 50%-alpha sprite (255 where 128 was
-         * expected). SRC_ALPHA * the engine's alpha_src is the same equation
-         * the software renderer applies.
-         */
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_CONSTANT_ALPHA);
-        glBlendColor(dp->alpha_src, dp->alpha_src, dp->alpha_src, dp->alpha_dst);
-        if (dp->blend == BLEND_ADD) {
-            glBlendEquation(GL_FUNC_ADD);
-        } else if (dp->blend == BLEND_SUB) {
-            glBlendEquation(GL_FUNC_REVERSE_SUBTRACT);
+    /*
+     * Blend state. The factors come from GlesBlend_ResolveOp (src/gles_blend.h),
+     * which tools/test_blend_math.sh checks against the engine's own equation --
+     * dst = src * alpha_src + dst * alpha_dst -- so the GPU and the software
+     * renderer cannot drift apart without a test failing.
+     *
+     * The shader folds alpha_src into its output alpha (`color.a *=
+     * src_alphamul`), which is why the source factor is GL_SRC_ALPHA and the
+     * constant only carries alpha_dst.
+     */
+    {
+        GlesBlendState blend = GlesBlend_ResolveOp(dp->blend, dp->masked, dp->blend == BLEND_SUB);
+
+        if (!blend.enabled) {
+            glDisable(GL_BLEND);
+        } else {
+            glEnable(GL_BLEND);
+            glBlendFunc(gles_gl_factor(blend.src), gles_gl_factor(blend.dst));
+            glBlendColor(dp->alpha_src, dp->alpha_src, dp->alpha_src, dp->alpha_dst);
+            glBlendEquation(blend.eq == GLES_BLEND_EQ_REVERSE_SUBTRACT ? GL_FUNC_REVERSE_SUBTRACT : GL_FUNC_ADD);
         }
-    } else if (dp->masked != 0) {
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glBlendEquation(GL_FUNC_ADD);
-    } else {
-        glDisable(GL_BLEND);
     }
 
     glActiveTexture(GL_TEXTURE0);
@@ -1213,22 +1396,38 @@ void *Gl_Capture(void)
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
 
-    /* Flip in place by swapping rows, so the result is one buffer as promised
-     * (the caller's free() must match a single malloc). */
-    flipped = malloc((size_t)w * 4);
-    if (flipped == NULL) {
-        free(rgba);
-        return NULL;
-    }
-    for (y = 0; y < h / 2; y++) {
-        unsigned char *top = rgba + (size_t)y * w * 4;
-        unsigned char *bottom = rgba + (size_t)(h - 1 - y) * w * 4;
+    /*
+     * Row order depends on which framebuffer was read, because the engine
+     * projects the two differently (GlMvp_SetupView): the window framebuffer
+     * gets an inverted ortho (top = 0), a render target gets the ordinary one
+     * (top = height). glReadPixels always returns GL's bottom-up order, so
+     *
+     *   window  -> rows come out bottom-up, flip to the top-down order SDL and
+     *              PNG use;
+     *   FBO     -> the engine already drew them inverted, so GL's order is the
+     *              top-down order and flipping again would turn the image
+     *              upside down (a red-on-top, blue-on-bottom fixture came out
+     *              blue-on-top).
+     *
+     * Flipped in place by swapping rows so the result is still one buffer, as
+     * the caller's free() expects.
+     */
+    if (g_glBoundFramebuffer == 0) {
+        flipped = malloc((size_t)w * 4);
+        if (flipped == NULL) {
+            free(rgba);
+            return NULL;
+        }
+        for (y = 0; y < h / 2; y++) {
+            unsigned char *top = rgba + (size_t)y * w * 4;
+            unsigned char *bottom = rgba + (size_t)(h - 1 - y) * w * 4;
 
-        memcpy(flipped, top, (size_t)w * 4);
-        memcpy(top, bottom, (size_t)w * 4);
-        memcpy(bottom, flipped, (size_t)w * 4);
+            memcpy(flipped, top, (size_t)w * 4);
+            memcpy(top, bottom, (size_t)w * 4);
+            memcpy(bottom, flipped, (size_t)w * 4);
+        }
+        free(flipped);
     }
-    free(flipped);
     return rgba;
 }
 

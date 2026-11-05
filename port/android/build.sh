@@ -142,7 +142,10 @@ if [ "$PACK_ASSETS" = 1 ]; then
     cp -f "$GAME_CFG" "$ASSETS/data/mugen.cfg"
     printf '    data/mugen.cfg <- %s\n' "$(cd "$(dirname "$GAME_CFG")" && pwd)/$(basename "$GAME_CFG")"
   else
-    fail "platform config $GAME_CFG not found"
+    # Name the expected file, not just the path: GAME_CFG defaults to the
+    # platform template, and a caller who deleted it needs to know what to
+    # restore. tools/test_build.py asserts on this message.
+    fail "platform mugen.cfg not found at $GAME_CFG"         " (set GAME_CFG=<path>, or restore port/android/mugen.cfg)"
   fi
 else
   say "Skipping game data (--no-assets)"

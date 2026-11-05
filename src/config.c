@@ -21,6 +21,8 @@ static void Config_LoadGamepadGroups(Ini *ini);
 static void Config_WriteMissingGamepadGroups(void);
 /* Defined near Options_Load; Config_Load runs first. */
 void Config_ApplyAndroidJoystick(void);
+/* Per-player version, used when a controller attaches after start-up. */
+void Config_ApplyJoystickSlot(int player);
 #endif
 
 #define CONFIG_PATH "data/mugen.cfg"
@@ -824,48 +826,74 @@ void Config_ApplyAndroidJoystick(void)
         return;
     }
     for (player = 0; player < 2; player++) {
-        int *jk = g_game->joy_keys[player];
-        const int *cfg = g_cfgGamepadKeys[player];
-        int used_default = 0;
-        int i;
-
-        if (!g_cfgGamepadPresent[player]) {
-            /* No [P<n> Gamepad] group: use the built-in compact layout. */
-            Pads_ControllerBindings(player, jk);
-            used_default = 1;
-        } else {
-            for (i = 0; i < KEY_COUNT; i++) {
-                jk[i] = JOY_NONE;
-            }
-            for (i = 0; i < KEY_COUNT; i++) {
-                int v = cfg[i];
-
-                if (v == JOY_NONE) {
-                    continue;
-                }
-                if (v < 1 || v >= PAD_BUTTONS) {
-                    Log_Printf("config: [P%d Gamepad] key %d = %d is outside the gamepad range "
-                               "1..%d; ignored\n", player + 1, i, v, PAD_BUTTONS - 1);
-                    continue;
-                }
-                jk[i] = player * PAD_BUTTONS + v;
-            }
-        }
-        /*
-         * Mirror into the active map. Input_InitPads copies joy_keys ->
-         * joy_keys_active at its start, i.e. before the pads were opened, and
-         * this policy runs after that (the pad's topology is only known once it
-         * is open). Without this second copy the runtime kept the pre-policy
-         * codes while mugen.log showed the translated ones -- the pad looked
-         * bound and still pressed nothing. use_joystick is honoured: a player
-         * with the joystick disabled keeps an empty active map.
-         */
-        if (g_game->use_joystick[player]) {
-            memcpy(g_game->joy_keys_active[player], jk, sizeof(g_game->joy_keys_active[player]));
-        }
-        Log_Printf("config: P%d bound through the game controller (%s)\n", player + 1,
-                   used_default ? "built-in layout, no [P<n> Gamepad] group" : "[P<n> Gamepad]");
+        Config_ApplyJoystickSlot(player);
     }
+}
+
+/*
+ * Applies the binding policy for one player.
+ *
+ * Split out of Config_ApplyAndroidJoystick so a controller that is plugged in
+ * after start-up can be bound then and there (Pads_AttachController). Doing
+ * all slots on a hotplug was wrong: Pads_ControllerBindings returns JOY_NONE
+ * for a slot with no controller, so plugging in player 2's pad would have
+ * blanked player 1's bindings.
+ *
+ * A slot with no controller is left completely alone -- neither its joy_keys
+ * nor its active map is touched, so the raw [P<n> Joystick] codes survive.
+ */
+void Config_ApplyJoystickSlot(int player)
+{
+    int *jk;
+    const int *cfg;
+    int used_default = 0;
+    int i;
+
+    if (player < 0 || player >= 2) {
+        return;
+    }
+    if (!Pads_SlotUsesController(player)) {
+        return;
+    }
+    jk = g_game->joy_keys[player];
+    cfg = g_cfgGamepadKeys[player];
+
+    if (!g_cfgGamepadPresent[player]) {
+        /* No [P<n> Gamepad] group: use the built-in compact layout. */
+        Pads_ControllerBindings(player, jk);
+        used_default = 1;
+    } else {
+        for (i = 0; i < KEY_COUNT; i++) {
+            jk[i] = JOY_NONE;
+        }
+        for (i = 0; i < KEY_COUNT; i++) {
+            int v = cfg[i];
+
+            if (v == JOY_NONE) {
+                continue;
+            }
+            if (v < 1 || v >= PAD_BUTTONS) {
+                Log_Printf("config: [P%d Gamepad] key %d = %d is outside the gamepad range "
+                           "1..%d; ignored\n", player + 1, i, v, PAD_BUTTONS - 1);
+                continue;
+            }
+            jk[i] = player * PAD_BUTTONS + v;
+        }
+    }
+    /*
+     * Mirror into the active map. Input_InitPads copies joy_keys ->
+     * joy_keys_active at its start, i.e. before the pads were opened, and this
+     * policy runs after that (the pad's topology is only known once it is
+     * open). Without this second copy the runtime kept the pre-policy codes
+     * while mugen.log showed the translated ones -- the pad looked bound and
+     * still pressed nothing. use_joystick is honoured: a player with the
+     * joystick disabled keeps an empty active map.
+     */
+    if (g_game->use_joystick[player]) {
+        memcpy(g_game->joy_keys_active[player], jk, sizeof(g_game->joy_keys_active[player]));
+    }
+    Log_Printf("config: P%d bound through the game controller (%s)\n", player + 1,
+               used_default ? "built-in layout, no [P<n> Gamepad] group" : "[P<n> Gamepad]");
 }
 #endif /* ANDROID_PORT */
 

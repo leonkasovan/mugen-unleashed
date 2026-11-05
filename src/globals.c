@@ -373,6 +373,14 @@ int g_bufferedRead; /* 0x00504274 */
 int g_iniCaseSensitive; /* 0x00504278 */
 char g_iniLang[3]; /* 0x0050427c */
 int g_quitRequested; /* 0x00504280 */
+/*
+ * Port addition (M8, RENDERING_PLAN 12.6): set when a GL renderer cannot be
+ * rebuilt after Android destroyed its context. main.c reacts by re-running
+ * System_Init, which takes the verified GL -> System recovery. Not an original
+ * global, and deliberately separate from g_quitRequested, which ends the
+ * program instead.
+ */
+int g_rendererFallbackRequested;
 int * g_keyMap; /* 0x00504284 */
 IntArray g_keyQueue; /* 0x00504288 */
 GfxCaptureFn g_gfxCapture; /* 0x00504298 */

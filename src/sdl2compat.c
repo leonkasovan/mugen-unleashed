@@ -78,6 +78,43 @@ typedef struct Sdl2Video {
 
 static Sdl2Video g_sdl2Video;
 
+/*
+ * Placeholder lifetime identity (R02).
+ *
+ * These live outside MUGEN_SDL2_DIAG because the placeholder allocation itself
+ * maintains them: the gate then reads them from a test build, but an engine
+ * build must still keep the counts correct rather than compiling the
+ * bookkeeping away.
+ */
+static int g_sdl2PlaceholderSerial;
+static int g_sdl2PlaceholderLiveSerial;
+static unsigned long g_sdl2PlaceholderAllocs;
+static unsigned long g_sdl2PlaceholderFrees;
+
+#define SDL2_PLACEHOLDER_KNOWN 8
+static const void *g_sdl2PlaceholderAddr[SDL2_PLACEHOLDER_KNOWN];
+static int g_sdl2PlaceholderAddrSerial[SDL2_PLACEHOLDER_KNOWN];
+
+static void Sdl2_DiagNotePlaceholderSerial(const void *surface, int serial)
+{
+    int i;
+
+    for (i = 0; i < SDL2_PLACEHOLDER_KNOWN; i++) {
+        if (g_sdl2PlaceholderAddr[i] == surface) {
+            g_sdl2PlaceholderAddrSerial[i] = serial;
+            return;
+        }
+        if (g_sdl2PlaceholderAddr[i] == NULL) {
+            g_sdl2PlaceholderAddr[i] = surface;
+            g_sdl2PlaceholderAddrSerial[i] = serial;
+            return;
+        }
+    }
+    /* Table full: overwrite slot 0. The tests use a handful of placeholders. */
+    g_sdl2PlaceholderAddr[0] = surface;
+    g_sdl2PlaceholderAddrSerial[0] = serial;
+}
+
 #ifdef MUGEN_SDL2_DIAG
 /*
  * Diagnostic counters for the M0/M3 regression harness (RENDERING_PLAN.md
@@ -91,11 +128,63 @@ static int g_sdl2DiagPresent;
 static int g_sdl2DiagTextureCreate;
 static int g_sdl2DiagTextureDestroy;
 
+/*
+ * Placeholder lifetime identity.
+ *
+ * The R02 resize fix depends on the old placeholder being released only after
+ * the replacement exists. AddressSanitizer catches a violation, but the gate
+ * must also fail on a plain build, where freeing early leaves the pointer
+ * unchanged and the surface's w/h still readable.
+ *
+ * So each allocation gets a serial number and every published surface records
+ * the serial it was created with. If a surface's serial is no longer the one
+ * belonging to its address, or no allocation owns it any more, the surface has
+ * been freed and the test says so without needing a sanitizer. A serial (not
+ * just the pointer) is what makes an address reuse visible: the second
+ * allocation at the same address gets a different, higher serial.
+ */
+
 void Sdl2_DiagReset(void)
 {
     g_sdl2DiagPresent = 0;
     g_sdl2DiagTextureCreate = 0;
     g_sdl2DiagTextureDestroy = 0;
+    g_sdl2PlaceholderSerial = 0;
+    g_sdl2PlaceholderLiveSerial = 0;
+    g_sdl2PlaceholderAllocs = 0;
+    g_sdl2PlaceholderFrees = 0;
+}
+
+/* Serial of the placeholder that is currently allocated, 0 when none is. */
+int Sdl2_DiagPlaceholderSerial(void)
+{
+    return g_sdl2PlaceholderLiveSerial;
+}
+
+void Sdl2_DiagPlaceholderCounts(unsigned long *allocs, unsigned long *frees)
+{
+    if (allocs != NULL) {
+        *allocs = g_sdl2PlaceholderAllocs;
+    }
+    if (frees != NULL) {
+        *frees = g_sdl2PlaceholderFrees;
+    }
+}
+
+/*
+ * Serial per placeholder address.
+ *
+ * Keeping it beside the surface (rather than in it) means the check reads only
+ * a table this file owns: a stale surface pointer is never dereferenced, which
+ * is what lets the gate work without AddressSanitizer.
+ */
+
+
+/* 1 when `surface` is the live placeholder of serial `serial`. */
+int Sdl2_DiagSurfaceIsLive(const void *surface, int serial)
+{
+    return surface != NULL && g_sdl2Video.placeholder == surface && serial != 0 &&
+           serial == g_sdl2PlaceholderLiveSerial;
 }
 
 void Sdl2_DiagCounters(int *present, int *tex_create, int *tex_destroy)
@@ -279,6 +368,8 @@ static void Sdl2_DestroyVideo(void)
     if (g_sdl2Video.placeholder != NULL) {
         SDL_FreeSurface(g_sdl2Video.placeholder);
         g_sdl2Video.placeholder = NULL;
+        g_sdl2PlaceholderFrees++;
+        g_sdl2PlaceholderLiveSerial = 0;
     }
     g_sdl2Video.texture_format = 0;
     g_sdl2Video.vsync_applied = 0;
@@ -485,8 +576,19 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
             }
             if (g_sdl2Video.placeholder != NULL) {
                 SDL_FreeSurface(g_sdl2Video.placeholder);
+                g_sdl2PlaceholderFrees++;
             }
             g_sdl2Video.placeholder = new_placeholder;
+            {
+                /* New identity, strictly greater than any before it, so an
+                 * address reused by this allocation cannot look like the old
+                 * surface. */
+                int serial = ++g_sdl2PlaceholderSerial;
+
+                g_sdl2PlaceholderLiveSerial = serial;
+                g_sdl2PlaceholderAllocs++;
+                Sdl2_DiagNotePlaceholderSerial(new_placeholder, serial);
+            }
         }
         return g_sdl2Video.placeholder;
     }

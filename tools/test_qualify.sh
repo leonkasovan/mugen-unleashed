@@ -93,6 +93,12 @@ run_host R05 bash tools/test_render_host.sh
 run_host R02 bash tools/test_render_video.sh
 run_host GL01 bash tools/test_render_video.sh
 run_host ES01-struct bash tools/test_gles_shader.sh
+# Portable-module compile gate: the Android input path shares src/pads.c with
+# the desktop, and a change that only compiled under -DANDROID_PORT broke the
+# desktop SDL2 build. This compiles the shared modules under every backend.
+run_host BUILD01 bash tools/test_compile_gates.sh
+# GLES blend factors vs the engine equation (BLEND01).
+run_host BLEND01 bash tools/test_blend_math.sh
 run_host VT01-caps bash tools/test_vita_caps.sh
 run_host GL-MVP bash tools/test_gl_mvp.sh
 run_host CF01-policy bash tools/test_render_policy.sh

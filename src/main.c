@@ -76,16 +76,41 @@ int main(int argc, char *argv[])
     if (g_cmdline->storyboard[0] != '\0') {
         Storyboard_PlayFile(g_cmdline->storyboard);
     } else {
-        if (g_game->quick_vs) {
-            Log_Printf("Playing quick VS.\n");
-        }
-        Log_Printf("\nEntering gameflow loop");
-        Log_Printf("\n");
-        Gameflow_Run();
-        if (g_gameflowState != NULL) {
-            free(g_gameflowState);
-            g_gameflowState = NULL;
-        }
+        /*
+         * Port addition (M8, RENDERING_PLAN 12.6): a GL renderer that cannot be
+         * rebuilt after Android destroyed its context sets
+         * g_rendererFallbackRequested. Re-running System_Init takes the same
+         * verified GL -> System recovery the start-up path uses, including the
+         * asset reload, instead of leaving the engine in mode=OpenGL with a
+         * dead renderer. Bounded so a renderer that keeps failing cannot spin.
+         */
+        int attempts = 0;
+
+        do {
+            g_rendererFallbackRequested = 0;
+            if (g_game->quick_vs) {
+                Log_Printf("Playing quick VS.\n");
+            }
+            Log_Printf("\nEntering gameflow loop");
+            Log_Printf("\n");
+            Gameflow_Run();
+            if (g_gameflowState != NULL) {
+                free(g_gameflowState);
+                g_gameflowState = NULL;
+            }
+            if (!g_rendererFallbackRequested) {
+                break;
+            }
+            attempts++;
+            if (attempts > 1) {
+                Log_Printf("\nRenderer fallback requested again; not retrying.");
+                Log_Printf("\n");
+                break;
+            }
+            Log_Printf("\nRenderer fallback: restarting the renderer.");
+            Log_Printf("\n");
+            System_ReinitVideo();
+        } while (1);
         Log_Printf("Returned from gameflow loop");
         Log_Printf("\n");
     }

@@ -292,16 +292,25 @@ void Events_Poll(void)
                 int dw = 0;
                 int dh = 0;
 
+                int restored = 0;
+
                 Android_GLDrawableSize(&dw, &dh);
                 Gles_OnContextLost();
                 if (Android_GLRecreateContext()) {
-                    if (!Gles_OnContextRestore(dw, dh)) {
-                        Log_Printf("GLES: renderer could not be rebuilt after restore; "
-                                   "recreate the video mode to fall back to System\n");
-                    }
-                } else {
-                    Log_Printf("GLES: context could not be recreated; recreate the video mode "
-                               "to fall back to System\n");
+                    restored = Gles_OnContextRestore(dw, dh);
+                }
+                if (!restored) {
+                    /*
+                     * The renderer cannot be rebuilt. Leaving the engine in
+                     * mode=OpenGL with ready=0 means it never draws again, so
+                     * ask for the screen to be relaunched: the next
+                     * Video/Gl_Init pass then takes the verified GL -> System
+                     * recovery in System_Init, with its assets rebuilt, instead
+                     * of silently presenting nothing.
+                     */
+                    Log_Printf("GLES: context could not be restored; requesting the system "
+                               "renderer fallback\n");
+                    Android_RequestRendererFallback();
                 }
             }
 #endif

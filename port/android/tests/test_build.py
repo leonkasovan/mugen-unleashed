@@ -89,7 +89,11 @@ class BuildTests(unittest.TestCase):
         self.base = Path(self.temp.name)
         self.project = self.base / "project"
         self.android = self.project / "port/android"
-        for rel in ("build.sh", "tools/bootstrap_toolchains.sh", "tools/toolchain_metadata.py", "app/build.gradle"):
+        # mugen.cfg is staged into the APK by build.sh and is required: without
+        # it the build refuses to proceed, so a fixture project that omitted it
+        # could never exercise staging at all.
+        for rel in ("build.sh", "mugen.cfg", "tools/bootstrap_toolchains.sh",
+                    "tools/toolchain_metadata.py", "app/build.gradle"):
             dest = self.android / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ANDROID / rel, dest)
@@ -257,11 +261,63 @@ class BuildTests(unittest.TestCase):
         self.env["GAME_DATA_DIR"]=str(data)
         self.run_build()
         assets=self.android/"app/src/main/assets"
-        self.assertEqual((assets/"data/mugen.cfg").read_text(),cfg)
+        # The cfg in the APK is the platform template, not the game tree's copy
+        # (that is what --game-cfg / GAME_CFG exists for). See
+        # test_platform_cfg_template_is_staged_over_the_game_cfg.
+        template=(self.project/"port/android/mugen.cfg").read_text()
+        self.assertEqual((assets/"data/mugen.cfg").read_text(),template)
         self.assertTrue((assets/"character file.sff").exists())
         self.assertFalse((assets/"original.exe").exists())
         self.assertFalse((assets/"original.dll").exists())
+        # The source tree is only ever read. A staging step that rewrote it
+        # would corrupt the reference installation for the next run.
         self.assertEqual((data/"data/mugen.cfg").read_text(),cfg)
+
+    def test_platform_cfg_template_is_staged_over_the_game_cfg(self):
+        """
+        port/android/mugen.cfg is the platform default: device-appropriate
+        RenderMode, the gamepad groups, and the render size. It has to reach
+        the APK, because the game tree's own data/mugen.cfg is written for a
+        desktop and asks for a renderer Android may not have.
+        """
+        self.setup_tools(); self.native_fixtures()
+        data=self.base/"game data"
+        (data/"data").mkdir(parents=True)
+        # A desktop-style cfg with a value the template must override.
+        (data/"data/mugen.cfg").write_text('[Video]\nRenderMode = System\n')
+        self.env["GAME_DATA_DIR"]=str(data)
+        self.run_build()
+        staged=(self.android/"app/src/main/assets/data/mugen.cfg").read_text()
+        template=(self.project/"port/android/mugen.cfg").read_text()
+        self.assertEqual(staged,template,
+                         "the staged cfg must be the platform template, not the game tree's")
+        self.assertIn("RenderMode = OpenGL",staged)
+
+    def test_game_cfg_override_is_staged_instead_of_the_template(self):
+        """GAME_CFG selects a different cfg; the template must not win."""
+        self.setup_tools(); self.native_fixtures()
+        data=self.base/"game data"
+        (data/"data").mkdir(parents=True)
+        (data/"data/mugen.cfg").write_text('[Video]\nRenderMode = System\n')
+        custom=self.base/"custom.cfg"
+        custom.write_text('[Video]\nRenderMode = System\n; custom override\n')
+        self.env["GAME_DATA_DIR"]=str(data)
+        self.env["GAME_CFG"]=str(custom)
+        self.run_build()
+        staged=(self.android/"app/src/main/assets/data/mugen.cfg").read_text()
+        self.assertEqual(staged,custom.read_text())
+        self.assertNotIn("gamepad",staged.lower())
+
+    def test_missing_cfg_template_and_override_fails_with_a_message(self):
+        """No template and no GAME_CFG: the build must say so, not stage nothing."""
+        self.setup_tools(); self.native_fixtures()
+        data=self.base/"game data"
+        (data/"data").mkdir(parents=True)
+        (data/"data/mugen.cfg").write_text('[Video]\nRenderMode = System\n')
+        self.env["GAME_DATA_DIR"]=str(data)
+        self.env["GAME_CFG"]=str(self.base/"no such cfg")
+        result=self.run_build(ok=False)
+        self.assertIn("mugen.cfg",result.stdout.lower())
 
     def test_bad_sdk_checksum_never_installs_cli(self):
         old=self.sdk_xml.read_text()
