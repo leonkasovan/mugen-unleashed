@@ -18,6 +18,9 @@
 #include <sys/stat.h>
 #endif
 
+/* UINTPTR_MAX, used below to detect the pointer width on every compiler. */
+#include <stdint.h>
+
 /*
  * Port addition: does the build use the native pthread_t/pthread_mutex_t/
  * pthread_cond_t instead of the 32-bit pthreads-win32 shapes the original
@@ -174,10 +177,21 @@ static inline int Sdl2_putenv_inline(const char *kv)
  * MUGEN_LAYOUT_32BIT is 1 on every 32-bit target, so the reference builds keep
  * every check.
  */
-#if defined(__SIZEOF_POINTER__) && __SIZEOF_POINTER__ == 4
+/*
+ * PORTABILITY FIX: this used __SIZEOF_POINTER__, which is a GCC predefined
+ * macro. MSVC does not define it, so on MSVC x86 the reference checks below
+ * were compiled out even though pointers are 4 bytes there. UINTPTR_MAX comes
+ * from <stdint.h> on every compiler and means the same thing.
+ */
+#if UINTPTR_MAX == 0xFFFFFFFFu
 #define MUGEN_LAYOUT_32BIT 1
 #else
 #define MUGEN_LAYOUT_32BIT 0
+#endif
+
+/* A 32-bit Windows build is the reference: it must keep the checks. */
+#if defined(_WIN32) && !defined(_WIN64) && !MUGEN_LAYOUT_32BIT
+#error "32-bit Windows build without MUGEN_LAYOUT_32BIT: pointer width not detected"
 #endif
 
 #if MUGEN_LAYOUT_32BIT

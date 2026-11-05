@@ -76,7 +76,21 @@ int StateDef_Parse(const char *header, StateDef *sd, Ini *ini, CharData *owner)
     int saved_group = ini->group;
     int number, count, i, k, n;
 
-    number = atoi(header + 10);
+    /*
+     * PORTABILITY FIX: atoi() wrapped a state number that does not fit (the
+     * result depends on the width of long), which silently selected another
+     * state. Out-of-range numbers are rejected instead.
+     */
+    {
+        char *num_end;
+        long long number64 = strtoll(header + 10, &num_end, 10);
+
+        if (number64 < -2147483648LL || number64 > 2147483647LL) {
+            Error_Printf("Statedef number out of range: %s\n", header);
+            return 0;
+        }
+        number = (int)number64;
+    }
     memset(sd, 0, sizeof(StateDef));
     if (g_game->keep_sources != 0) {
         StateCtrlSource *src = calloc(1, sizeof(StateCtrlSource));
@@ -89,8 +103,16 @@ int StateDef_Parse(const char *header, StateDef *sd, Ini *ini, CharData *owner)
         }
         sd->source->line = Ini_SourceLine(ini->cursor, ini);
     }
-    /* the group name without the brackets (not terminated for 64 characters or more) */
-    strncpy(name, header + 1, sizeof(name));
+    /*
+     * The group name without the brackets. PORTABILITY FIX: strncpy() did not
+     * terminate a header of 64 characters or more, and the strlen() right after
+     * it then read past the local buffer.
+     */
+    if (strlen(header) < 2 || strlen(header) >= sizeof(name)) {
+        Error_Printf("Statedef header too long or too short: %s\n", header);
+        return 0;
+    }
+    strcpy(name, header + 1);
     name[strlen(name) - 1] = '\0';
     if (Ini_SelectGroup(ini, name) == -1) {
         Error_Printf("Can't access %s\n", header);
@@ -106,6 +128,13 @@ int StateDef_Parse(const char *header, StateDef *sd, Ini *ini, CharData *owner)
     Ini_SelectGroup(ini, name);
     if (count <= 0) {
         Error_Printf("Need at least one state controller\n");
+        return 0;
+    }
+    /* PORTABILITY FIX: rejected while compiling; Player_RunState used to write
+       sctrl_wait[] before its own check. */
+    if (count > STATEDEF_MAX_CTRLS) {
+        Error_Printf("State %i has %i controllers; the maximum is %i (%s)\n", number, count, STATEDEF_MAX_CTRLS,
+                     header);
         return 0;
     }
     sd->ctrls = KeyedArray_Create(count, sizeof(StateCtrl));
@@ -418,12 +447,13 @@ int Player_RunState(Player *p)
             if (sd->has_sprpriority) {
                 p->sprpriority = Expr_EvalInt(p, &sd->sprpriority, 1);
             }
-            for (index = 0; index < sd->ctrls->count; index++) {
-                p->sctrl_wait[index] = 0;
-            }
+            /* Checked before sctrl_wait[] is touched (see StateDef_Parse). */
             if (sd->ctrls->count > STATEDEF_MAX_CTRLS) {
                 Error_Printf("State %i can only have max of %i controllers\n", p->state_no, STATEDEF_MAX_CTRLS);
                 Error_Exit();
+            }
+            for (index = 0; index < sd->ctrls->count; index++) {
+                p->sctrl_wait[index] = 0;
             }
             if (sd->type != STATEDEF_UNCHANGED) {
                 p->statetype = sd->type;

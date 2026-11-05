@@ -13,14 +13,15 @@
  *   names and values, command labels, DisplayToClipboard texts.
  *
  * Quirks kept from the original:
- * - The value parsers check a value's terminator against the source text
- *   instead of the format's terminator list (they scan the text from the
- *   argument count on until they meet the character), so any terminator is
- *   accepted for the last value; Cns_ParseExprList shrinks its array with
- *   realloc but keeps the old pointer (with fewer than three values the
- *   low fragmentation heap moves the block, so the array returned is freed
- *   memory, which the cond() trigger then frees again); failed values are
- *   not freed by it.
+ * - PORTABILITY FIX: the value parsers used to check a value's terminator
+ *   against the source text instead of the format's terminator list (they
+ *   scanned the text from the argument count on until they met the character,
+ *   reading past its end when it was absent). The terminator is now looked up
+ *   in fmt. Cns_ParseExprList used to shrink its array with realloc and ignore
+ *   the result, returning a freed block for fewer than three values (which the
+ *   cond() trigger then freed again); it keeps its three slots and frees
+ *   everything on failure instead. Cns_ParseValues frees a value it drops
+ *   (a NULL argument used to leak it).
  * - HitDefAttr_Parse reads a lone "A" as 0x920 (the value of "H": HA+HT+HP)
  *   instead of AA+AT+AP.
  * - GetHitVar_Get returns xveladd/yveladd and the others as ints read from
@@ -55,6 +56,23 @@ static int want_of(char c)
         Error_Exit();
     }
     return EXPR_WANT_ANY;
+}
+
+/*
+ * Is c one of the terminators fmt lists after its ':'? Only those are accepted
+ * after the last value of a list (PORTABILITY FIX: this used to scan the input
+ * text, from an offset taken from the format, for the character).
+ */
+static int format_accepts(const char *fmt, int count, int c)
+{
+    int i;
+
+    for (i = count + 1; fmt[i] != '\0'; i++) {
+        if (fmt[i] == c) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /* Values in fmt: its 'n', 'i' and 'f' characters, which must come first (then ':' or the end). */
@@ -111,7 +129,7 @@ int Cns_ParseValues(const char *s, const char *fmt, CharData *owner, const char 
     Expr tmp;
     Expr *out;
     va_list ap;
-    int count, i, k, want;
+    int count, i, want;
 
     memset(&tmp, 0, sizeof(tmp));
     if (s == NULL) {
@@ -133,14 +151,7 @@ int Cns_ParseValues(const char *s, const char *fmt, CharData *owner, const char 
                 e++;
             }
         } else if (*e != '\0') {
-            if (i != count - 1) {
-                Expr_Free(&tmp);
-                break;
-            }
-            /* meant to check the terminator against fmt; s always holds it (see the top) */
-            for (k = count + 1; s[k] != *e; k++) {
-            }
-            if (s[k] == '\0') {
+            if (i != count - 1 || !format_accepts(fmt, count, *e)) {
                 Expr_Free(&tmp);
                 break;
             }
@@ -149,6 +160,8 @@ int Cns_ParseValues(const char *s, const char *fmt, CharData *owner, const char 
         if (out != NULL) {
             Expr_Free(out);
             *out = tmp;
+        } else {
+            Expr_Free(&tmp);    /* nobody takes it */
         }
         memset(&tmp, 0, sizeof(tmp));
     }
@@ -175,6 +188,10 @@ int Cns_ParseExprList(const char *s, CharData *owner, const char **end, Expr **o
     Expr *exprs;
     int count, i, k;
 
+    if (out == NULL) {
+        return 0;
+    }
+    *out = NULL;
     if (s == NULL) {
         return 0;
     }
@@ -182,6 +199,11 @@ int Cns_ParseExprList(const char *s, CharData *owner, const char **end, Expr **o
     if (fmt[count] != ':' && fmt[count] != '\0') {
         return 0;
     }
+    /*
+     * All slots are allocated up front and none is given back: the original
+     * shrank the array with realloc and kept the old pointer, so a partial list
+     * handed its caller freed memory (PORTABILITY FIX).
+     */
     exprs = calloc(count, sizeof(Expr));
     if (exprs == NULL) {
         g_outOfMemory = 1;
@@ -196,13 +218,7 @@ int Cns_ParseExprList(const char *s, CharData *owner, const char **end, Expr **o
                 e++;
             }
         } else if (*e != '\0') {
-            /* the value just compiled is not freed */
-            if (i != count - 1) {
-                break;
-            }
-            for (k = count + 1; s[k] != *e; k++) {
-            }
-            if (s[k] == '\0') {
+            if (i != count - 1 || !format_accepts(fmt, count, *e)) {
                 break;
             }
         }
@@ -215,12 +231,11 @@ int Cns_ParseExprList(const char *s, CharData *owner, const char **end, Expr **o
         *end = cur;
     }
     if (i < count) {
-        if (i == 0) {
-            free(exprs);
-            return 0;
+        for (k = 0; k < count; k++) {
+            Expr_Free(&exprs[k]);
         }
-        /* the result is ignored: the block keeps its address when it shrinks */
-        realloc(exprs, i * sizeof(Expr));
+        free(exprs);
+        return 0;
     }
     *out = exprs;
     return i;
@@ -236,7 +251,7 @@ int Cns_ParseArgs(const char *s, const char *fmt, CharData *owner, const char **
 {
     const char *cur = s;
     const char *e;
-    int nargs, i, k, n;
+    int nargs, i, n;
     int ntok = 0;
 
     if (s == NULL) {
@@ -262,9 +277,7 @@ int Cns_ParseArgs(const char *s, const char *fmt, CharData *owner, const char **
                 ntok -= n;
                 break;
             }
-            for (k = nargs; s[k] != *e; k++) {
-            }
-            if (s[k] == '\0') {
+            if (!format_accepts(fmt, nargs, *e)) {
                 ntok -= n;
                 break;
             }

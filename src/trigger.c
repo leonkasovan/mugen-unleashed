@@ -17,10 +17,13 @@
  * the state controller parser (its string literals follow ours in .rdata).
  *
  * Quirks kept from the original (see the functions for details):
- * - Trigger_Copy clones the redirection argument over a bitwise copy of it, so
- *   Expr_Clone first frees the token arrays of the source (use after free for
- *   computed redirection arguments). Copying an authorname or stagevar trigger
- *   is a fatal "Unrecognized trigger data block".
+ * - Trigger_Copy used to clone the redirection argument over a bitwise copy of
+ *   the source, so Expr_Clone freed the token arrays it then read (use after
+ *   free for computed redirection arguments such as helper(var(0))), and it
+ *   classified a string payload by trigger id range only, so copying
+ *   authorname or a stagevar string was a fatal "Unrecognized trigger data
+ *   block". PORTABILITY FIX: the copy is built in a temporary whose owned
+ *   fields start empty, and one classification serves parse, copy and free.
  * - ifelse tests its operands' types against 3 and 2 instead of EXPR_BOTTOM and
  *   EXPR_FLOAT: a float condition is tested by its bits, bottom is not propagated.
  * - Redirected life/power read the team leader of the caller when GameType is
@@ -146,7 +149,7 @@ int Trigger_PopInt(Player *p, int *out)
     type = g_exprStackType[top];
     g_exprStackTop = top - 1;
     if (type == EXPR_FLOAT) {
-        *out = (int)v.f;
+        *out = Ftol((double)v.f);
         if (p != NULL) {
             Player_Warn(p, "trigger arg truncated to int");
         }
@@ -259,7 +262,7 @@ int Trigger_ParseCompare(const char *s, Trigger *t, const char **end)
     case '(':
     case '[':
         if (t->is_float == 0) {
-            t->value = atoi(p);
+            t->value = Expr_Atoi32(p);
         } else {
             t->fvalue = (float)atof(p);
         }
@@ -271,7 +274,7 @@ int Trigger_ParseCompare(const char *s, Trigger *t, const char **end)
         }
         p = s + i;
         if (t->is_float == 0) {
-            t->value2 = atoi(p);
+            t->value2 = Expr_Atoi32(p);
         } else {
             t->fvalue2 = (float)atof(p);
         }
@@ -304,7 +307,7 @@ int Trigger_ParseCompare(const char *s, Trigger *t, const char **end)
         return 0;
     }
     if (t->is_float == 0) {
-        t->value = strtol(p, (char **)end, 10);
+        t->value = Expr_Strtol32(p, (char **)end);
     } else {
         t->fvalue = (float)strtod(p, (char **)end);
     }
@@ -459,8 +462,13 @@ static const TriggerName trigger_names[] = {
 };
 #define TRIGGER_NAME_COUNT (int)(sizeof(trigger_names) / sizeof(trigger_names[0]))
 
-/* Copies an identifier ([A-Za-z0-9_], or with '.' for gethitvar/const/stagevar words) without a length check. */
-static int read_word(const char *s, int pos, char *out, int with_dot, int *len)
+/*
+ * Copies an identifier ([A-Za-z0-9_], or with '.' for gethitvar/const/stagevar
+ * words) into out (cap bytes, terminator included). Returns the position after
+ * it, or -1 when it does not fit. PORTABILITY FIX: the original copied without
+ * a check, so an identifier longer than the 0x100-byte buffer ran past it.
+ */
+static int read_word(const char *s, int pos, char *out, int cap, int with_dot, int *len)
 {
     int n = 0;
     char c;
@@ -469,6 +477,9 @@ static int read_word(const char *s, int pos, char *out, int with_dot, int *len)
         c = s[pos];
         if (!isalnum(c) && c != '_' && (!with_dot || s[pos] != '.')) {
             break;
+        }
+        if (n >= cap - 1) {
+            return -1;
         }
         out[n++] = s[pos];
         pos++;
@@ -500,7 +511,11 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
     int pos, len, id, n, i, c;
 
     memset(&t, 0, sizeof(t));
-    pos = read_word(s, 0, name, 0, &len);
+    pos = read_word(s, 0, name, (int)sizeof(name), 0, &len);
+    if (pos < 0) {
+        Error_Printf("Trigger name too long\n");
+        return 0;
+    }
     while (is_blank(s[pos])) {
         pos++;
     }
@@ -563,7 +578,11 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
         do {
             s++;
         } while (is_blank(*s));
-        pos = read_word(s, 0, name, 0, &len);
+        pos = read_word(s, 0, name, (int)sizeof(name), 0, &len);
+        if (pos < 0) {
+            Error_Printf("Trigger name too long\n");
+            return 0;
+        }
     }
 
     /* The trigger name. */
@@ -701,10 +720,10 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
         pos = (int)(e - s) + 1;
     }
     if (t.id == TRIGGER_PROJHIT) {
-        t.arg = atoi(name + 7);
+        t.arg = Expr_Atoi32(name + 7);
     }
     if (t.id == TRIGGER_PROJGUARDED || t.id == TRIGGER_PROJCONTACT) {
-        t.arg = atoi(name + 11);
+        t.arg = Expr_Atoi32(name + 11);
     }
     if (t.id == TRIGGER_WIN || t.id == TRIGGER_LOSE) {
         const char *kind = name + (t.id == TRIGGER_WIN ? 3 : 4);
@@ -728,7 +747,11 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
         do {
             pos++;
         } while (is_blank(s[pos]));
-        pos = read_word(s, pos, word, 1, &len);
+        pos = read_word(s, pos, word, (int)sizeof(word), 1, &len);
+        if (pos < 0) {
+            Error_Printf("Trigger word too long in: %s\n", name);
+            return 0;
+        }
         while (is_blank(s[pos])) {
             pos++;
         }
@@ -754,7 +777,11 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
         do {
             pos++;
         } while (is_blank(s[pos]));
-        pos = read_word(s, pos, word, 1, &len);
+        pos = read_word(s, pos, word, (int)sizeof(word), 1, &len);
+        if (pos < 0) {
+            Error_Printf("Trigger word too long in: %s\n", name);
+            return 0;
+        }
         while (is_blank(s[pos])) {
             pos++;
         }
@@ -785,7 +812,11 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
         do {
             pos++;
         } while (is_blank(s[pos]));
-        pos = read_word(s, pos, word, 1, &len);
+        pos = read_word(s, pos, word, (int)sizeof(word), 1, &len);
+        if (pos < 0) {
+            Error_Printf("Trigger word too long in: %s\n", name);
+            return 0;
+        }
         while (is_blank(s[pos])) {
             pos++;
         }
@@ -879,7 +910,7 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
             if (s[pos] < '0' || s[pos] > '9') {
                 return 0;
             }
-            t.arg = atoi(s + pos);
+            t.arg = Expr_Atoi32(s + pos);
             if (t.id == TRIGGER_ANIMELEM) {
                 t.arg--;
             }
@@ -916,7 +947,7 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
             if (!Char_IsDigit(s[pos])) {
                 return 0;
             }
-            t.arg2 = atoi(s + pos);
+            t.arg2 = Expr_Atoi32(s + pos);
             while (Char_IsDigit(s[pos]) || Char_IsSpace(s[pos])) {
                 pos++;
             }
@@ -1103,6 +1134,9 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
                 }
             }
         }
+        if (stop - pos >= (int)sizeof(word)) {
+            return 0;
+        }
         strncpy(word, s + pos, stop - pos);
         word[stop - pos] = '\0';
         _strlwr(word);
@@ -1175,73 +1209,121 @@ finish:
 
 /* ------------------------------------------------------------ copy / free */
 
-/* 0x00458830 */
-void Trigger_Free(Trigger *t)
+/* What Trigger.data owns: the parser, the copy and the free must agree. */
+enum {
+    TRIGGER_DATA_NONE = 0,
+    TRIGGER_DATA_STRING,    /* the name of a string trigger (authorname, stagevar info.*) */
+    TRIGGER_DATA_EXPRS      /* cond(): three Exprs */
+};
+
+#define TRIGGER_DATA_UNKNOWN (-1)
+
+static int Trigger_DataKind(const Trigger *t)
+{
+    if (t->data == NULL) {
+        return TRIGGER_DATA_NONE;
+    }
+    if ((t->id >= TRIGGER_P1NAME && t->id <= TRIGGER_AUTHORNAME) || Trigger_IsStageVarString(t)) {
+        return TRIGGER_DATA_STRING;
+    }
+    if (t->id == TRIGGER_COND) {
+        return TRIGGER_DATA_EXPRS;
+    }
+    return TRIGGER_DATA_UNKNOWN;
+}
+
+/* Frees the payload and the redirection argument of t, but not t itself. */
+static void Trigger_FreeOwned(Trigger *t)
 {
     Expr *e;
     int i;
 
-    if (t->id == TRIGGER_COND) {
-        e = (Expr *)t->data;
-        for (i = 0; i < t->data_count; i++) {
-            Expr_Free(e);
-            e++;
+    if (t->data != NULL) {
+        if (t->id == TRIGGER_COND) {
+            e = (Expr *)t->data;
+            for (i = 0; i < t->data_count; i++) {
+                Expr_Free(e);
+                e++;
+            }
         }
         free(t->data);
-    } else if (t->data != NULL) {
-        free(t->data);
+        t->data = NULL;
     }
     Expr_Free(&t->redirect_arg);
+}
+
+/* 0x00458830 */
+void Trigger_Free(Trigger *t)
+{
+    Trigger_FreeOwned(t);
     free(t);
 }
 
 /*
- * 0x004588A0: deep copy of src into dst. The redirection argument is cloned
- * over the bitwise copy, so Expr_Clone frees the tokens it shares with src
- * before reading them (original bug, harmless for constant arguments).
+ * 0x004588A0: deep copy of src into dst.
+ *
+ * PORTABILITY FIX: the copy is built in a temporary whose owned fields start
+ * empty, then published. The original did *dst = *src and cloned the
+ * redirection argument over that bitwise copy, so Expr_Clone freed the token
+ * arrays it was about to read from src (heap-use-after-free for a computed
+ * redirection argument, e.g. helper(var(0)), time). The payload is now
+ * classified by Trigger_DataKind, which accepts authorname and the stagevar
+ * strings the parser produces -- the original's id range sent them to the
+ * "Unrecognized trigger data block" fatal error.
  */
 int Trigger_Copy(const Trigger *src, Trigger *dst)
 {
-    int i;
+    Trigger tmp;
+    const char *s;
+    size_t n;
+    int kind, i;
 
-    *dst = *src;
-    Expr_Clone(&dst->redirect_arg, &src->redirect_arg);
-    if (src->data == NULL) {
-        return 1;
-    }
-    if (src->id < TRIGGER_P1NAME) {
+    memset(&tmp, 0, sizeof(tmp));
+    tmp.id = src->id;
+    tmp.redirect = src->redirect;
+    tmp.op = src->op;
+    tmp.is_float = src->is_float;
+    tmp.value = src->value;     /* also data_count for cond() */
+    tmp.value2 = src->value2;
+    tmp.arg = src->arg;
+    tmp.arg2 = src->arg2;
+    tmp.fvalue = src->fvalue;
+    tmp.fvalue2 = src->fvalue2;
+    Expr_Clone(&tmp.redirect_arg, &src->redirect_arg);
+    kind = Trigger_DataKind(src);
+    if (kind == TRIGGER_DATA_STRING) {
+        s = (const char *)src->data;
+        n = strlen(s) + 1;
+        tmp.data = calloc(1, n);
+        if (tmp.data == NULL) {
+            goto oom;
+        }
+        memcpy(tmp.data, s, n);
+    } else if (kind == TRIGGER_DATA_EXPRS) {
+        tmp.data = calloc(src->data_count, sizeof(Expr));
+        if (tmp.data == NULL) {
+            goto oom;
+        }
+        for (i = 0; i < src->data_count; i++) {
+            Expr_Clone((Expr *)tmp.data + i, (const Expr *)src->data + i);
+        }
+    } else if (kind == TRIGGER_DATA_UNKNOWN) {
         goto unrecognized;
     }
-    if (src->id <= TRIGGER_P4NAME) {
-        dst->data = calloc(1, strlen((const char *)src->data) + 1);
-        if (dst->data == NULL) {
-            g_outOfMemory = 1;
-        }
-        if (dst->data != NULL) {
-            strcpy((char *)dst->data, (const char *)src->data);
-            return 1;
-        }
-    } else {
-        if (src->id != TRIGGER_COND) {
-            goto unrecognized;
-        }
-        dst->data = calloc(src->data_count, sizeof(Expr));
-        if (dst->data == NULL) {
-            g_outOfMemory = 1;
-        }
-        if (dst->data != NULL) {
-            for (i = 0; i < src->data_count; i++) {
-                Expr_Clone((Expr *)dst->data + i, (const Expr *)src->data + i);
-            }
-            return 1;
-        }
-    }
+    *dst = tmp;
+    return 1;
+
+oom:
+    Trigger_FreeOwned(&tmp);
+    g_outOfMemory = 1;
     sprintf(g_libraryErrorText, "Out of memory while attempting trigcpy");
     Error_Exit();
 
 unrecognized:
+    Trigger_FreeOwned(&tmp);
     sprintf(g_libraryErrorText, "Unrecognized trigger data block -- engine's fault");
     Error_Exit();
+    return 0;
 }
 
 /* ------------------------------------------------------------ trigger lists */
@@ -2481,7 +2563,7 @@ bottom_arg:
     return;
 bottom_fval:
     /* bottom keeps the value it was popped with (through float) */
-    ExprStack_Push((int)fval, EXPR_BOTTOM);
+    ExprStack_Push(Ftol((double)fval), EXPR_BOTTOM);
     return;
 bottom_zero:
     ExprStack_Push(0, EXPR_BOTTOM);

@@ -1298,12 +1298,12 @@ int StateCtrl_Parse(Ini *ini, StateDef *sd, int number, CharData *owner)
     sc.persistent = 1;
     s = Ini_GetValue(ini, "persistent");
     if (s != NULL) {
-        sc.persistent = atoi(s);
+        sc.persistent = Expr_Atoi32(s);
     }
     sc.ignorehitpause = 0;
     s = Ini_GetValue(ini, "ignorehitpause");
     if (s != NULL) {
-        sc.ignorehitpause = atoi(s);
+        sc.ignorehitpause = Expr_Atoi32(s);
     }
     if (!StateCtrl_ParseParams(ini, &sc, owner)) {
         return 0;

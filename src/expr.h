@@ -23,6 +23,7 @@
 #define EXPR_MAX_TOKENS     128 /* tokens of one expression */
 #define EXPR_OP_STACK_SIZE  64  /* parser operator stack */
 #define EXPR_STACK_SIZE     128 /* evaluation stack (g_exprStack*) */
+#define EXPR_MAX_DEPTH      64  /* nested Expr_Parse calls (parentheses, intervals, trigger args) */
 
 /* Expr_Parse/Expr_Compile "want": what a lone constant must be. */
 #define EXPR_WANT_ANY       0
@@ -63,6 +64,35 @@
 /* Trigger ids the expression code knows about (Trigger.id). */
 #define TRIGGER_VAR         0x157
 #define TRIGGER_FVAR        0x158
+
+/*
+ * strtol() with the 32-bit long the original's CRT had.
+ *
+ * On an LP64 ABI a literal such as 2147483648 stays a 64-bit long and is then
+ * narrowed by the cast to int, which gives INT_MIN; the original's 32-bit long
+ * saturated at LONG_MAX first. Clamping the 64-bit result reproduces the
+ * reference on every ABI (strtoll saturates beyond 64 bits, so even absurd
+ * literals give the same answer). Callers that store the result in an int keep
+ * doing so: the value is always inside INT32_MIN..INT32_MAX.
+ */
+static __inline int Expr_Strtol32(const char *s, char **end)
+{
+    long long v = strtoll(s, end, 10);
+
+    if (v > 2147483647LL) {
+        return 2147483647;
+    }
+    if (v < -2147483648LL) {
+        return -2147483648LL;
+    }
+    return (int)v;
+}
+
+/* atoi() with the same 32-bit long saturation. */
+static __inline int Expr_Atoi32(const char *s)
+{
+    return Expr_Strtol32(s, NULL);
+}
 
 struct Trigger;
 

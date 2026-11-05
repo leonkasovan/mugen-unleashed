@@ -18,14 +18,16 @@
  *   right-associativity test, the "only unary operators after an operator"
  *   test and the evaluator's unary test, so "a && ~b" does not parse and the
  *   evaluator pops two operands for ~ (stealing one from the stack or failing).
- * - var(60) := x writes fvar(0) and fvar(40) := x writes past the fvars.
+ * - var(60) := x writes fvar(0) and fvar(40) := x writes sysvar(0). PORTABILITY FIX:
+ *   those two writes go through the following member instead of indexing past
+ *   the end of the array; the storage and the bits are the same.
  * - int 0 ** 0 yields an uninitialized value (0 here) and the INT_MAX warning.
  * - Expr_Halve reallocates the type array with 4 bytes per token.
  * - Expr_Parse: after a failed sub-parse of "(" (e.g. "x = ()") the original reads an
  *   uninitialized end pointer (usually crashing); here it points to the start of the
- *   expression. Popping operators writes to the output without a room check, so it can
- *   run past EXPR_MAX_TOKENS into the sub-parse buffers, which are laid out after it as in
- *   the original.
+ *   expression. Popping operators used to write to the output without a room
+ *   check, running past EXPR_MAX_TOKENS into the sub-parse buffers (PORTABILITY
+ *   FIX: every output write is now room-checked).
  * - pow() goes through MSVCR90's _CIpow via mugen.exe's import thunk, as in the original.
  */
 #include "mugen.h"
@@ -220,8 +222,8 @@ int Expr_ReadOp(const char *s)
  * a closing bracket is an error. Returns the token count, 0 on errors (with a
  * message in g_libraryErrorText for some of them), -1 when s is NULL.
  */
-int Expr_Parse(const char *s, ExprValue *out_tokens, char *out_types, CharData *owner, int max, const char **end,
-               int want)
+static int Expr_ParseBody(const char *s, ExprValue *out_tokens, char *out_types, CharData *owner, int max,
+                          const char **end, int want)
 {
     /*
      * The output and the sub-parse buffers are adjacent, as in the original:
@@ -272,7 +274,7 @@ int Expr_Parse(const char *s, ExprValue *out_tokens, char *out_types, CharData *
             if (n >= max) {
                 goto fail;
             }
-            tokens[n].i = strtol(cur, &num_end, 10);
+            tokens[n].i = Expr_Strtol32(cur, &num_end);
             if (*num_end == '.' || (cur[0] == '-' && cur[1] == '.')) {
                 tokens[n].f = (float)strtod(cur, &num_end);
                 types[n] = EXPR_FLOAT;
@@ -336,7 +338,10 @@ int Expr_Parse(const char *s, ExprValue *out_tokens, char *out_types, CharData *
                     if (top == -1) {
                         break;
                     }
-                    /* No room check here, unlike the other output writes. */
+                    /* PORTABILITY FIX: the original wrote here without a room check. */
+                    if (n >= max) {
+                        goto fail;
+                    }
                     tokens[n].i = ops[top--];
                     types[n] = EXPR_OP;
                     n++;
@@ -427,6 +432,9 @@ int Expr_Parse(const char *s, ExprValue *out_tokens, char *out_types, CharData *
                     if (*paren_end != ')') {
                         goto fail;
                     }
+                    if (n + count1 > max) {
+                        goto fail;
+                    }
                     memcpy(&tokens[n], sub_tokens, count1 * sizeof(ExprValue));
                     memcpy(&types[n], sub_types, count1);
                     n += count1;
@@ -473,7 +481,7 @@ int Expr_Parse(const char *s, ExprValue *out_tokens, char *out_types, CharData *
         } else if (isalnum(c) || c == '_') {
             count = Trigger_Parse(cur, owner, &tokens[n], &types[n], max - n, &trig_end);
             if (count == 0) {
-                sprintf(g_libraryErrorText, "Died parsing %s", s);
+                _snprintf(g_libraryErrorText, 0x100, "Died parsing %s", s);
                 goto fail;
             }
             n += count;
@@ -513,6 +521,9 @@ int Expr_Parse(const char *s, ExprValue *out_tokens, char *out_types, CharData *
             }
         }
         count = count1 + count2;
+        if (n + count > max) {
+            goto fail;
+        }
         memcpy(&tokens[n], sub_tokens, count * sizeof(ExprValue));
         memcpy(&types[n], sub_types, count);
         n += count;
@@ -631,7 +642,7 @@ int Expr_Parse(const char *s, ExprValue *out_tokens, char *out_types, CharData *
     }
 
 malformed:
-    sprintf(g_libraryErrorText, "Malformed expression encountered: %s", s);
+    _snprintf(g_libraryErrorText, 0x100, "Malformed expression encountered: %s", s);
 fail:
     for (i = 0; i < n; i++) {
         if (types[i] == EXPR_TRIGGER) {
@@ -639,6 +650,32 @@ fail:
         }
     }
     return 0;
+}
+
+/*
+ * The Expr_Parse calls in progress. Every kind of nesting -- a group, an
+ * interval, a trigger argument, a redirection argument -- recurses through
+ * Expr_Parse, and the 128-token limit does not bound an expression whose
+ * nesting adds no tokens ("((((1))))"), so a long enough run of parentheses
+ * would exhaust the stack (about 1.5 KiB per call on i386, 2.6 KiB on x86-64).
+ * PORTABILITY FIX: nesting is capped, deeper input is a parse error.
+ */
+static int expr_parse_depth;
+
+/* 0x004019D0; the body is Expr_ParseBody, this wrapper only adds the depth guard. */
+int Expr_Parse(const char *s, ExprValue *out_tokens, char *out_types, CharData *owner, int max, const char **end,
+               int want)
+{
+    int n;
+
+    if (expr_parse_depth >= EXPR_MAX_DEPTH) {
+        _snprintf(g_libraryErrorText, 0x100, "Expression too deeply nested");
+        return 0;
+    }
+    expr_parse_depth++;
+    n = Expr_ParseBody(s, out_tokens, out_types, owner, max, end, want);
+    expr_parse_depth--;
+    return n;
 }
 
 /*
@@ -873,7 +910,7 @@ int Expr_EvalInt(Player *p, const Expr *e, int warn)
         Error_Exit();
     }
     if (ret == 2) {
-        ival = (int)fval;
+        ival = Ftol((double)fval);
         if (warn) {
             TextRing_Printf(g_game->clipboard,
                             "%i Warning: expression truncated to integer:\nplayer %s (%i) in state %i: %f",
@@ -1007,7 +1044,9 @@ int Expr_Eval(Player *p, const Expr *e, int *iout, float *fout)
         switch (op) {
         case EXPR_OP_ADD:
             if (mode == 1) {
-                result.i = a.i + b.i;
+                /* PORTABILITY FIX: int overflow is undefined in C; the reference wraps
+                   modulo 2^32, which the unsigned computation reproduces. */
+                result.i = (int)((unsigned int)a.i + (unsigned int)b.i);
                 ExprStack_Push(result.i, EXPR_INT);
             } else {
                 result.f = fa + fb;
@@ -1016,7 +1055,7 @@ int Expr_Eval(Player *p, const Expr *e, int *iout, float *fout)
             break;
         case EXPR_OP_SUB:
             if (mode == 1) {
-                result.i = a.i - b.i;
+                result.i = (int)((unsigned int)a.i - (unsigned int)b.i);
                 ExprStack_Push(result.i, EXPR_INT);
             } else {
                 result.f = fa - fb;
@@ -1025,7 +1064,7 @@ int Expr_Eval(Player *p, const Expr *e, int *iout, float *fout)
             break;
         case EXPR_OP_MUL:
             if (mode == 1) {
-                result.i = a.i * b.i;
+                result.i = (int)((unsigned int)a.i * (unsigned int)b.i);
                 ExprStack_Push(result.i, EXPR_INT);
             } else {
                 result.f = fa * fb;
@@ -1036,6 +1075,13 @@ int Expr_Eval(Player *p, const Expr *e, int *iout, float *fout)
             if (mode == 1) {
                 if (b.i == 0) {
                     goto bottom;
+                }
+                if (b.i == -1 && a.i == (int)0x80000000) {
+                    /* PORTABILITY FIX: idiv traps (SIGFPE) here, the value is not
+                       representable; push bottom like the other failed operations. */
+                    Player_Warn(p, "Integer division overflow");
+                    ExprStack_Push(0, EXPR_BOTTOM);
+                    break;
                 }
                 result.i = a.i / b.i;
                 ExprStack_Push(result.i, EXPR_INT);
@@ -1051,7 +1097,8 @@ int Expr_Eval(Player *p, const Expr *e, int *iout, float *fout)
             if (b.i == 0) {
                 goto bottom;
             }
-            result.i = a.i % b.i;
+            /* PORTABILITY FIX: INT32_MIN % -1 traps; mathematically it is 0. */
+            result.i = b.i == -1 ? 0 : a.i % b.i;
             ExprStack_Push(result.i, EXPR_INT);
             break;
         case EXPR_OP_POW:
@@ -1083,13 +1130,17 @@ int Expr_Eval(Player *p, const Expr *e, int *iout, float *fout)
             if (bt == EXPR_INT) {
                 result.i = b.i;
             } else {
-                result.i = (int)b.f;
+                result.i = Ftol((double)b.f);
                 Player_Warn(p, "Float truncated to int in var assignment");
             }
             ExprStack_Push(result.i, EXPR_INT);
-            idx = at == EXPR_FLOAT ? (int)fa : a.i;
-            if ((unsigned int)idx <= PLAYER_VAR_COUNT) {
-                p->var[idx] = result.i;     /* var(60) is fvar(0): original off-by-one */
+            idx = at == EXPR_FLOAT ? Ftol((double)fa) : a.i;
+            if ((unsigned int)idx < PLAYER_VAR_COUNT) {
+                p->var[idx] = result.i;
+            } else if ((unsigned int)idx == PLAYER_VAR_COUNT) {
+                /* var(60) is fvar(0): same storage as the original's index past the
+                   end of the array, without the out-of-bounds access. */
+                memcpy(&p->fvar[0], &result.i, sizeof(result.i));
             } else {
                 Player_Warn(p, "Assignment to illegal variable ignored");
             }
@@ -1097,9 +1148,13 @@ int Expr_Eval(Player *p, const Expr *e, int *iout, float *fout)
         case EXPR_OP_FASSIGN:
             result.f = bt == EXPR_INT ? (float)b.i : b.f;
             ExprStack_Push(result.i, EXPR_FLOAT);
-            idx = at == EXPR_FLOAT ? (int)fa : a.i;
-            if ((unsigned int)idx <= PLAYER_FVAR_COUNT) {
-                p->fvar[idx] = result.f;    /* fvar(40) is past the fvars: original off-by-one */
+            idx = at == EXPR_FLOAT ? Ftol((double)fa) : a.i;
+            if ((unsigned int)idx < PLAYER_FVAR_COUNT) {
+                p->fvar[idx] = result.f;
+            } else if ((unsigned int)idx == PLAYER_FVAR_COUNT) {
+                /* fvar(40) is sysvar(0): same storage as the original's index past
+                   the end of the array, without the out-of-bounds access. */
+                memcpy(&p->sysvar[0], &result.f, sizeof(result.f));
             } else {
                 Player_Warn(p, "Assignment to illegal variable ignored");
             }
@@ -1197,7 +1252,7 @@ int Expr_Eval(Player *p, const Expr *e, int *iout, float *fout)
             break;
         case EXPR_OP_NEG:
             if (mode == 1) {
-                result.i = -b.i;
+                result.i = (int)(0u - (unsigned int)b.i);
                 ExprStack_Push(result.i, EXPR_INT);
             } else {
                 result.f = -fb;
