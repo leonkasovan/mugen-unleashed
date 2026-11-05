@@ -327,10 +327,37 @@ fi
 cp "$OUT/blend.fixed.h" src/gles_blend.h
 bash tools/test_blend_math.sh >"$OUT/blend.fixed.log" 2>&1 && echo "MUT BLEND: fixed code passes again" || missed BLEND "revert did not restore a passing gate"
 
+# ---------------------------------------------------------------- MUT-ICON --
+# Shrink the PS Vita bubble icon to 64x64, which is the artwork's own size and
+# therefore the tempting "no scaling needed" edit. The Vita expects 128x128, and
+# the gate has to notice.
+cp port/psvita/cmake/Icon.cmake "$OUT/icon.fixed.cmake"
+"$PYBIN" - "$OUT/icon.fixed.cmake" port/psvita/cmake/Icon.cmake <<'PYEOF2'
+import sys
+s = open(sys.argv[2], encoding="utf-8").read()
+old = 'set(MUGEN_VITA_ICON_SIZE "128")'
+new = 'set(MUGEN_VITA_ICON_SIZE "64")'
+assert old in s
+open(sys.argv[2], "w", newline="").write(s.replace(old, new, 1))
+print("MUT-ICON applied")
+PYEOF2
+
+if bash tools/test_vita_icon.sh >"$OUT/icon.mut.log" 2>&1; then
+    missed ICON "gate passed with a 64x64 Vita icon"
+else
+    if grep -q 'icon0.png' "$OUT/icon.mut.log"; then
+        caught ICON "the Vita icon is not 128x128"
+    else
+        missed ICON "failed elsewhere"
+    fi
+fi
+cp "$OUT/icon.fixed.cmake" port/psvita/cmake/Icon.cmake
+bash tools/test_vita_icon.sh >"$OUT/icon.fixed.log" 2>&1 && echo "MUT ICON: fixed code passes again" || missed ICON "revert did not restore a passing gate"
+
 echo "== mutations: caught=$CAUGHT missed=$MISSED =="
-if [ -n "$(git status --porcelain -- src/)" ]; then
+if [ -n "$(git status --porcelain -- src/ port/)" ]; then
     echo "TREE DIRTY after mutations -- reverting" >&2
-    git checkout -- src/
+    git checkout -- src/ port/
     echo "restored; re-verify gates pass"
     exit 1
 fi

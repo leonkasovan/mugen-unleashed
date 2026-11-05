@@ -46,11 +46,12 @@ src/            83 .c + 52 .h — the engine, one file per original module
   sdlmain.c     SDL 1.2's SDLmain (WinMain), rebuilt
   sdl2compat.c  SDL 1.2 entry points over SDL2 (only with SDL_BACKEND=2)
   sdl2surface.c shared SDL2 scaler, proven against SDL_gfx by test_zoomdiff
-  mugen.rc      error dialog (200), version info, optional icon
+  mugen.rc      error dialog (200), version info, icon 101 from res/icons
 third_party/    Lua 5.1.4, libpng 1.2.38, glad 2.1, minizip 0.15, sdk,
                 libresample, glew-1.5.4 (reference only, no longer built), vitagl
 cmake/          build helpers (MugenSdk.cmake, ThirdParty.cmake)
-tools/          msvc_env.bat, extract_icon.py, compare_logs.py, test_*.sh
+res/icons/      the window/bubble icon as one .ico per size (see below)
+tools/          msvc_env.bat, extract_icon.py, iconpack.py, compare_logs.py, test_*.sh
 port/           android/ and psvita/ — the mobile ports
 docs/           ANALYSIS.md, BUILD-MSVC.md, BUILD-MINGW.md, BUILD-LINUX.md, LUA.md
 install/        a real M.U.G.E.N 1.1b1 installation (untracked, for testing)
@@ -270,6 +271,28 @@ symbol. `get_code_snippet` needs the **fully qualified** name
 Config and index live outside this repository, in the CBM cache under the user
 profile — that is the one sanctioned exception to the temp-file rule, because it
 is the tool's own state, not ours.
+
+## The icon
+
+`res/icons/` holds the project's own artwork as one single-size `.ico` per size:
+`1.ico` 64x64, `2.ico` 48, `8.ico` 32, `3.ico` 24, `4.ico` 16 (all 32-bit with
+alpha); `5`, `6`, `7` and `9` are the same drawing as 8-bit palette images.
+Both platform builds use it:
+
+- The Windows Makefile merges the 32-bit set into `build/mingw/icon/mugen.ico`
+  with `tools/iconpack.py` and `windres` embeds it as icon group 101. Windows
+  picks the size it needs per context, so the file must carry all of them; a
+  single-size icon is scaled and looks soft. Without `python3` the first icon is
+  copied as-is and the build still works. `MUGEN_ICONS=` picks other files,
+  `MUGEN_GAME_DIR=` reverts to the original `mugen.exe`'s icon.
+- The PS Vita build converts `res/icons/1.ico` to the 128x128
+  `sce_sys/icon0.png` at configure time (`port/psvita/cmake/Icon.cmake`),
+  writing into the build tree; the committed sample asset is only packed when
+  the conversion cannot run.
+
+`tools/iconpack.py` is standard-library only, so neither build needs an imaging
+package. It is the only place that decodes `.ico` (BMP/DIB entries with an AND
+mask) and writes PNG; keep it that way rather than duplicating the decoder.
 
 ## Testing
 

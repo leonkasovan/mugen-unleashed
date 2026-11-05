@@ -176,11 +176,29 @@ first that works.
 
 ## Icon and manifest
 
-`src/mugen.rc` includes icon 101 only when `MUGEN_HAS_ICON` is defined, which
-the Makefile sets when `MUGEN_GAME_DIR` holds a `mugen.exe` the extraction
-script can read. The assembly manifest is embedded as resource `1 24`
-(RT_MANIFEST); it still names `Elecbyte.MUGEN.libs`, which is harmless now that
-nothing loads from it.
+The window icon comes from `res/icons/`, the artwork this repository ships. It
+is stored there as one single-size `.ico` per size — `1.ico` 64x64, `2.ico` 48,
+`8.ico` 32, `3.ico` 24, `4.ico` 16, all 32-bit with alpha (5, 6, 7 and 9 are the
+same drawing as 8-bit palette images). Windows wants all of them in one file: it
+picks 16 for the title bar, 32 for the task bar, 48 for Alt+Tab, and scales
+whatever is missing, so a single-size icon is blurry everywhere else.
+`tools/iconpack.py` merges them into `build/mingw-sdl2/icon/mugen.ico`, which
+`windres` embeds as icon group 101. Without a working `python3` the first icon is
+copied instead — the build still works, it just carries one size.
+
+Two other sources are possible:
+
+```sh
+make MUGEN_ICONS="res/icons/2.ico res/icons/4.ico"   # a different set, merged
+make MUGEN_GAME_DIR=C:/mugen-1.1b1                   # the original mugen.exe's icon
+```
+
+`windres` needs `-DMUGEN_HAS_ICON` on its own command line: it runs its own
+preprocessor, and passing the define to the C compiler alone left icon 101 out
+of the executable entirely.
+
+The assembly manifest is embedded as resource `1 24` (RT_MANIFEST); it still
+names `Elecbyte.MUGEN.libs`, which is harmless now that nothing loads from it.
 
 ## What the build does, in order
 

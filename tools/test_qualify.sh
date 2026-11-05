@@ -104,6 +104,8 @@ run_host CLIP01 bash tools/test_clip_gate.sh
 # GLES primitive colour/blend vs prim.c (PRIM01).
 run_host PRIM01 bash tools/test_prim_math.sh
 run_host VT01-caps bash tools/test_vita_caps.sh
+# PS Vita bubble icon derived from res/icons/*.ico (VT03-icon).
+run_host VT03-icon bash tools/test_vita_icon.sh
 run_host GL-MVP bash tools/test_gl_mvp.sh
 run_host CF01-policy bash tools/test_render_policy.sh
 if [ -n "$ENGINE" ] && [ -x "$ENGINE" ]; then

@@ -33,9 +33,13 @@
 #   make distclean    remove $(BUILD) entirely
 #   make check-toolchain   verify the compiler and the libraries this target needs
 #
+# The window icon comes from res/icons/*.ico (see "the window icon" below).
+#
 # Optional:
-#   make MUGEN_GAME_DIR=C:/mugen-1.1b1    embed the original's window icon
-#                                         (needs python3; see tools/extract_icon.py)
+#   make MUGEN_GAME_DIR=C:/mugen-1.1b1    embed the original mugen.exe's icon
+#                                         instead (needs python3;
+#                                         tools/extract_icon.py)
+#   make MUGEN_ICONS=res/icons/1.ico      a different icon, or several to merge
 #   make BUILD=build/mingw-debug DEBUG=1  unoptimised build with debug info
 #
 # See docs/BUILD-MINGW.md for what the dependencies are and where they come from.
@@ -406,17 +410,37 @@ ENGINE_CFLAGS := $(COMMONFLAGS) $(FORCE_INCLUDE) $(ENGINE_WARN) $(ENGINE_DEFS) $
 # Old third-party code: its warnings are not ours to fix, as /W0 in CMake.
 TP_CFLAGS     := $(COMMONFLAGS) -w $(ENGINE_DEFS)
 
-# --- the window icon of the original, only meaningful on Windows --------------
+# --- the window icon, only meaningful on Windows ------------------------------
+#
+# The artwork lives in res/icons/ as one single-size .ico per size: 1.ico is
+# 64x64, 2.ico 48, 8.ico 32, 3.ico 24, 4.ico 16, all 32-bit with an alpha
+# channel (5, 6, 7 and 9 are the same drawing as 8-bit palette images). One
+# .ico holding several sizes is what Windows wants: it picks 16 for the title
+# bar, 32 for the task bar, 48 for Alt+Tab and 64+ for the large views, and a
+# single-size file is scaled -- blurry -- for every other one. tools/iconpack.py
+# merges them; with no Python the first icon is copied as-is, which still builds
+# and still shows the right picture.
 ifeq ($(MUGEN_FAMILY),win32)
-ifneq ($(MUGEN_GAME_DIR),)
-  ifneq ($(wildcard $(MUGEN_GAME_DIR)/mugen.exe),)
-    ifeq ($(strip $(PYTHON3)),)
-      $(error MUGEN_GAME_DIR is set but no working Python was found; set PYTHON3=...)
+  ICON_ICO := $(ICON_DIR)/mugen.ico
+  ENGINE_CFLAGS += -DMUGEN_HAS_ICON -I$(ICON_DIR)
+  ifneq ($(MUGEN_GAME_DIR),)
+    ifneq ($(wildcard $(MUGEN_GAME_DIR)/mugen.exe),)
+      ifeq ($(strip $(PYTHON3)),)
+        $(error MUGEN_GAME_DIR is set but no working Python was found; set PYTHON3=...)
+      endif
+      ICON_MODE := extract
+    else
+      $(warning MUGEN_GAME_DIR is set but $(MUGEN_GAME_DIR)/mugen.exe is not there; using res/icons)
     endif
-    ICON_ICO := $(ICON_DIR)/mugen.ico
-    ENGINE_CFLAGS += -DMUGEN_HAS_ICON -I$(ICON_DIR)
   endif
-endif
+  ifeq ($(ICON_MODE),)
+    MUGEN_ICONS ?= res/icons/1.ico res/icons/2.ico res/icons/8.ico res/icons/3.ico res/icons/4.ico
+    ifeq ($(strip $(PYTHON3)),)
+      ICON_MODE := copy
+    else
+      ICON_MODE := merge
+    endif
+  endif
 endif
 
 # ------------------------------------------------------------------- sources
@@ -568,10 +592,25 @@ $(MINIZIP_OBJ): $(TP_DIR)/minizip-0.15/unzip.c $(CONFIG_STAMP)
 
 # --- resources --------------------------------------------------------------
 
-$(ICON_ICO):
-	@echo "  ICON    $@"
+ifeq ($(ICON_MODE),extract)
+$(ICON_ICO): $(MUGEN_GAME_DIR)/mugen.exe tools/extract_icon.py
+	@echo "  ICON    $@  (from $(MUGEN_GAME_DIR)/mugen.exe)"
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(PYTHON3) tools/extract_icon.py "$(MUGEN_GAME_DIR)/mugen.exe" $@
+else ifeq ($(ICON_MODE),merge)
+$(ICON_ICO): $(MUGEN_ICONS) tools/iconpack.py
+	@echo "  ICON    $@  (merging $(notdir $(MUGEN_ICONS)))"
+	$(Q)mkdir -p $(dir $@)
+	$(Q)$(PYTHON3) tools/iconpack.py ico $@ $(MUGEN_ICONS)
+else ifeq ($(ICON_MODE),copy)
+$(ICON_ICO): $(word 1,$(MUGEN_ICONS))
+	@echo "  ICON    $@  (copy of $(notdir $(word 1,$(MUGEN_ICONS))); no python3, so single size)"
+	$(Q)mkdir -p $(dir $@)
+	$(Q)cp $< $@
+else
+$(ICON_ICO):
+	@echo "  ICON    no icon source selected; nothing to do"
+endif
 
 MANIFEST := $(SRC_DIR)/mugen-static.manifest
 
@@ -586,9 +625,19 @@ endif
 	$(Q)printf '\n/* generated: the assembly manifest, RT_MANIFEST 1 */\n1 24 "%s"\n' \
 	    "$(CURDIR)/$(MANIFEST)" >> $@
 
+# windres runs its own preprocessor, so it needs the define on its command line
+# too: the .rc includes icon 101 only under MUGEN_HAS_ICON, and passing it to the
+# C compiler alone left the resource out entirely (no RT_GROUP_ICON, no RT_ICON,
+# and an executable whose icon silently stayed the default). CMake does this
+# through target_compile_definitions; this is the equivalent.
+RC_DEFS :=
+ifneq ($(ICON_ICO),)
+RC_DEFS += -DMUGEN_HAS_ICON
+endif
+
 $(RC_OBJ): $(ALL_RC) $(CONFIG_STAMP)
 	@echo "  WINDRES $<"
-	$(Q)$(WINDRES) -I$(SRC_DIR) -I$(ICON_DIR) -i $< -o $@
+	$(Q)$(WINDRES) $(RC_DEFS) -I$(SRC_DIR) -I$(ICON_DIR) -i $< -o $@
 
 # --- install ----------------------------------------------------------------
 # Strips the executable and copies it into the game directory, where it stays.

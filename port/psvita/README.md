@@ -416,8 +416,9 @@ port/psvita/
   README.md               this file
   src/vita_gl_shim.c      GL capability probe + the entry points vitaGL lacks
   src/vita_gl_shim.h
+  cmake/Icon.cmake        derives sce_sys/icon0.png from res/icons/*.ico
   sce_sys/                LiveArea assets (from the VitaSDK sample; MIT/zlib)
-    icon0.png
+    icon0.png             the fallback: replaced by the generated one
     livearea/contents/bg.png
     livearea/contents/startup.png
     livearea/contents/template.xml
@@ -427,6 +428,21 @@ port/psvita/
 
 `sce_sys/` is the VitaSDK sample's artwork. Replace it with your own before
 distributing a custom bubble — it is not this project's art.
+
+**The bubble icon** is the exception: it comes from `res/icons/*.ico`, the same
+artwork the Windows build embeds, so both platforms show one picture. At
+configure time `cmake/Icon.cmake` runs `tools/iconpack.py png` to turn
+`res/icons/1.ico` (64x64) into the 128x128 `sce_sys/icon0.png` the Vita wants,
+writing it into the build tree — the committed file above is left untouched and
+is only packed when the conversion cannot run (no Python3, or a missing `.ico`,
+both of which are reported at configure time). The conversion uses the Python
+standard library only; no imaging package is needed, and it runs on the host, so
+cross-compiling is unaffected. Pick a different source with
+`-DMUGEN_VITA_ICON_ICO=...`.
+
+`tools/test_vita_icon.sh` checks all of this without a VitaSDK: it runs the
+module through `cmake -P` and verifies the PNG's size, alpha and artwork, plus
+both fallbacks.
 
 ---
 

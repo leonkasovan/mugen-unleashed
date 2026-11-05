@@ -21,6 +21,16 @@ esac
 CC32="${CC32:-/c/x86devkit/bin/gcc}"
 CC64="${CC64:-gcc}"
 
+# "PATH already has a w64devkit entry" is not the same as "gcc is the 64-bit
+# one": with both kits on PATH -- and this shell inherits one that has both --
+# `gcc` is whichever comes first, and the i686 cc1 then prints "unimplemented:
+# 64-bit mode not compiled in" halfway down the log. Say it plainly instead.
+if ! "$CC64" -dumpmachine 2>/dev/null | grep -q '^x86_64'; then
+    echo "CC64=$CC64 is not a 64-bit compiler ($("$CC64" -dumpmachine 2>/dev/null))" >&2
+    echo "Set CC64=/c/w64devkit/bin/gcc and put that bin dir first on PATH." >&2
+    exit 1
+fi
+
 mkdir -p "$OUT"
 
 # shellcheck disable=SC2086
