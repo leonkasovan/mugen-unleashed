@@ -679,7 +679,19 @@ void Gfx_SetClipRect(int x1, int y1, int x2, int y2)
         rect.h = (Uint16)(y2 - y1);
         SDL_SetClipRect(spr->pixels, &rect);
     }
-#ifndef ANDROID_PORT
+#if !defined(ANDROID_PORT) || defined(MUGEN_GLES)
+    /*
+     * M8 fix: the GLES backend made Android a GL platform, but this call was
+     * still behind "not Android". Nothing then set the scissor rectangle, so
+     * every GLES draw ignored the clip rect and covered the whole target.
+     *
+     * The visible symptom was the title screen: its background is split into
+     * `window`-clipped strips (several only two pixels tall) and two of them are
+     * `trans = add`, so drawing them unclipped tiled an additive copy of the
+     * whole backdrop over the frame and saturated it to pure white. The same
+     * omission dropped the menu's own item window, so text never scrolled or
+     * clipped either.
+     */
     if (g_renderMode == RENDER_OPENGL) {
         Gl_ApplyClipRect();
     }
