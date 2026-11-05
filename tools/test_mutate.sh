@@ -261,8 +261,23 @@ else
         missed CLIP "failed elsewhere"
     fi
 fi
+# The same mutation on the 64-bit target. It is not redundant: the gate needed
+# -fno-asynchronous-unwind-tables for the PE64 linker to drop unreachable
+# functions at all, and only a 64-bit run exercises that flag. Without it the
+# gate fails to link instead of testing anything, which is how
+# MUGEN_TEST_TARGET=win64 reported CLIP01 FAIL for weeks.
+if MUGEN_TEST_TARGET=win64 bash tools/test_clip_gate.sh >"$OUT/clip.mut64.log" 2>&1; then
+    missed CLIP "64-bit gate passed with the pre-fix guard"
+else
+    if grep -q 'reaches Gl_ApplyClipRect' "$OUT/clip.mut64.log"; then
+        caught CLIP "the GL clip call is missing on the GLES build (win64)"
+    else
+        missed CLIP "64-bit gate failed elsewhere"
+    fi
+fi
 cp "$OUT/clip.fixed.c" src/gfx.c
 bash tools/test_clip_gate.sh >"$OUT/clip.fixed.log" 2>&1 && echo "MUT CLIP: fixed code passes again" || missed CLIP "revert did not restore a passing gate"
+MUGEN_TEST_TARGET=win64 bash tools/test_clip_gate.sh >"$OUT/clip.fixed64.log" 2>&1 && echo "MUT CLIP: 64-bit fixed code passes again" || missed CLIP "revert did not restore a passing 64-bit gate"
 
 # ---------------------------------------------------------------- MUT-PRIM --
 # Resolve the additive fill as an opaque one, which is what the GLES primitives

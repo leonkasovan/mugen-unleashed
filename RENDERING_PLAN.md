@@ -666,9 +666,16 @@ Gate host yang menjaga bagian-bagian yang bisa diuji tanpa GPU:
 | `CLIP01` | clip rect mencapai jalur GL tepat pada backend yang punya GL |
 | `BUILD01` | modul bersama tetap dapat dikompilasi di tiap backend |
 
-Ketujuh gate itu terdaftar di `tools/test_qualify.sh` (PASS=19, FAIL=0), dan
-empat di antaranya punya mutasi permanen di `tools/test_mutate.sh` (caught=10,
-missed=0): GL-MVP, BLEND01, CLIP01 dan PRIM01.
+Ketujuh gate itu terdaftar di `tools/test_qualify.sh` bersama `VT03-icon`
+(ikon Vita dari `res/icons/*.ico`): PASS=20, FAIL=0 pada `--target win32`
+**dan** `--target win64`. Sebelum `f0db965`+ era ini, CLIP01 gagal di win64
+karena linker PE64 tidak membuang fungsi `gfx.c` yang tak terjangkau selama
+tabel unwind (`.xdata`/`.pdata`) masih ada; gate-nya kini memakai
+`-fno-asynchronous-unwind-tables` (lihat komentar di skripnya).
+
+Lima di antaranya punya mutasi permanen di `tools/test_mutate.sh` (caught=11,
+missed=0): GL-MVP, BLEND01, CLIP01, PRIM01 dan ICON — dan mutasi CLIP dijalankan
+pada kedua target, karena flag tadi hanya teruji oleh jalur 64-bit.
 
 Tiga bug GLES sampai ke perangkat: clip rect tidak pernah disetel, warna
 primitif didekode sebagai RGB565, dan fill aditif dipetakan ke opaque. Ketiganya

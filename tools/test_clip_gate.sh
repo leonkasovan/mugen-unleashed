@@ -42,9 +42,20 @@ build_and_run() {
     fi
     # -ffunction-sections + --gc-sections: gfx.c carries the whole graphics core
     # and none of it is reachable from this test except the clip rect.
+    #
+    # -fno-asynchronous-unwind-tables is part of making that work on 64-bit PE.
+    # There, the compiler emits .xdata$<fn>/.pdata$<fn> beside every function,
+    # and the PE linker does not associate them with the function when it drops
+    # unreachable sections, so six of them (Screen_Create, Gfx_Present,
+    # Gfx_SetRenderTarget, Gfx_LogRenderer, Gfx_Capability, Fade_Update) stayed
+    # in the image and every global they touch had to resolve: the android-gles
+    # configuration failed to link with 52 undefined symbols, and MUGEN_TEST_TARGET
+    # win64 reported CLIP01 FAIL for this reason alone. The 32-bit PE object has
+    # no such tables, which is why only the 64-bit run was affected. Unwind data
+    # is worthless in a test harness, so drop it.
     # shellcheck disable=SC2086
     if ! $CC $ARCHFLAGS -std=gnu11 -O1 -g -Wall -Wno-unused-parameter \
-        -ffunction-sections -fdata-sections \
+        -ffunction-sections -fdata-sections -fno-asynchronous-unwind-tables \
         "$@" $INCS $SDL_CFLAGS \
         tools/test_clip_gate.c src/gfx.c \
         -Wl,--gc-sections -o "$OUT/$id" \
