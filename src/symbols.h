@@ -621,6 +621,8 @@ extern ExprValue g_exprStackValue[128]; /* 0x00505500 */
 /* 0x0041b1e0 */ void __cdecl Input_InitPads(void);
 /* 0x0041b340 */ void __cdecl Input_Init(void);
 /* 0x0041b380 */ int __cdecl Input_Remap(void);
+/* Port addition: table-only publication, preserving queued events. */
+int __cdecl Input_UpdateMap(void);
 /* 0x0041b500 */ int __cdecl Fight_Load(const char *path);
 /* 0x0041d9b0 */ void __cdecl Fight_Free(void);
 /* 0x0041dab0 */ int __cdecl GameVars_Init(void);
@@ -832,6 +834,9 @@ int __cdecl Con_CmdLuaExec(CmdTable *ctx, char *name, char *args);
 /* 0x00426c50 */ int __cdecl Con_CmdInvalid(CmdTable *ctx, char *name, char *args);
 /* 0x00426c70 */ int __cdecl Console_Create(void);
 /* 0x00427510 */ void __cdecl Console_Free(void);
+/* Port additions: reload renderer-owned fonts without clearing console history. */
+void __cdecl ConsoleView_ReleaseFont(ConsoleView *v);
+void __cdecl ConsoleView_LoadFont(ConsoleView *v);
 /* 0x00427650 */ int __cdecl ConsoleView_Init(ConsoleView *v);
 /* 0x00427720 */ void __cdecl ConsoleView_Free(ConsoleView *v);
 /* 0x00427790 */ int __cdecl ConsoleInput_Init(ConsoleInput *in);

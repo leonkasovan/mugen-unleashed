@@ -960,7 +960,12 @@ void Config_ApplyJoystickSlot(int player)
 void Config_RepublishJoystick(int player)
 {
     Config_ApplyJoystickSlot(player);
-    Input_Remap();
+    /* Port fix: hotplug must not restart Events_Init and drop other players'
+     * pending input. Recompose held state against the updated table only. */
+    if (!Input_UpdateMap()) {
+        Error_Fatal("Cannot update joystick input map\n");
+    }
+    Input_ResetState();
 }
 
 #endif /* ANDROID_PORT */

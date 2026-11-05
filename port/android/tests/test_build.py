@@ -97,6 +97,8 @@ class BuildTests(unittest.TestCase):
             dest = self.android / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ANDROID / rel, dest)
+        # build.sh stages project-owned shaders as well as the game payload.
+        shutil.copytree(ROOT / "res/shaders/gles", self.project / "res/shaders/gles")
         (self.android / "gradle/wrapper").mkdir(parents=True)
         (self.android / "gradle/wrapper/gradle-wrapper.jar").write_text("fixture")
         gradle_stub = self.android / "mock_gradle.py"
@@ -292,6 +294,14 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(staged,template,
                          "the staged cfg must be the platform template, not the game tree's")
         self.assertIn("RenderMode = OpenGL",staged)
+        shaders = self.project / "res/shaders/gles"
+        manifest = (self.project / "build/android/asset-list.txt").read_text().splitlines()
+        for source in shaders.iterdir():
+            rel = "data/gles/" + source.name
+            self.assertEqual((self.android / "app/src/main/assets" / rel).read_bytes(),
+                             source.read_bytes())
+            self.assertEqual(manifest.count(rel), 1)
+
 
     def test_game_cfg_override_is_staged_instead_of_the_template(self):
         """GAME_CFG selects a different cfg; the template must not win."""

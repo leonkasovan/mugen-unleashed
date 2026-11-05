@@ -67,6 +67,10 @@ static int format_accepts(const char *fmt, int count, int c)
 {
     int i;
 
+    /* A format without ':' has no terminator list (do not step past NUL). */
+    if (fmt[count] != ':') {
+        return 0;
+    }
     for (i = count + 1; fmt[i] != '\0'; i++) {
         if (fmt[i] == c) {
             return 1;

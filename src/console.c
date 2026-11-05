@@ -6,8 +6,6 @@
  * decompiled), the key bindings that run commands, drawing and the key
  * handler.
  */
-#include <SDL_ttf.h>
-
 #include "mugen.h"
 
 /* Lua constants of the API used here (as luaapi.c, luabind.c and luautil.c
@@ -650,6 +648,27 @@ void Console_Toggle(void)
     c->ticks[1] = 0;
 }
 
+/* Port addition: font lifetime is separate from the console's text/history. */
+void ConsoleView_ReleaseFont(ConsoleView *v)
+{
+    if (v->font_owned && v->font != NULL) {
+        Font_Free(v->font);
+    }
+    v->font = NULL;
+    v->font_owned = 0;
+}
+
+void ConsoleView_LoadFont(ConsoleView *v)
+{
+    v->font_owned = 0;
+    v->font = Font_Load("font/mssansserif-tt36.def", 0xC);
+    if (v->font == NULL) {
+        v->font = g_game->font_medium;
+    } else {
+        v->font_owned = 1;
+    }
+}
+
 /*
  * 0x00427650: the output pane: its font (the console font, else the
  * medium font of the game), a 10-pixel margin, 300 pixels high, room for
@@ -661,12 +680,7 @@ int ConsoleView_Init(ConsoleView *v)
     DynArray *a;
     void *d;
 
-    v->font = Font_Load("font/mssansserif-tt36.def", 0xC);
-    if (v->font == NULL) {
-        v->font = g_game->font_medium;
-    } else {
-        v->font_owned = 1;
-    }
+    ConsoleView_LoadFont(v);
     v->x = 10.0f;
     v->y = 10.0f;
     v->line_gap = 0.0f;
@@ -708,18 +722,7 @@ void ConsoleView_Free(ConsoleView *v)
         free(a);
         v->lines = NULL;
     }
-    if (v->font_owned != 0 && v->font != NULL) {
-        Font *f = v->font;
-        if (f->sprites != NULL) {
-            SpriteSet_Free(f->sprites);
-        }
-        if (f->ttf != NULL) {
-            TTF_CloseFont(f->ttf);
-        }
-        free(f);
-        v->font = NULL;
-        v->font_owned = 0;
-    }
+    ConsoleView_ReleaseFont(v);
 }
 
 /* 0x00427790: the line being edited (0x200 bytes) and its cursor. 0 when it cannot be allocated. */

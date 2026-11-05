@@ -549,15 +549,9 @@ void System_Init(void)
 void System_ReinitVideo(void)
 {
     GameVars *g = g_game;
+    ConsoleView *view = g_console != NULL ? &g_console->view : NULL;
 
     Log_Printf("Reinitialising video for the system renderer...");
-#if defined(ANDROID_PORT) && defined(MUGEN_GLES)
-    /* GL_Deinit and the GL window teardown exist only when the GLES backend is
-     * compiled in; the guard used to be ANDROID_PORT alone, which broke the
-     * default (MUGEN_GLES=OFF) APK build. */
-    Gl_Deinit();
-    Android_DestroyGLContext();
-#endif
     /* The screen buffer belongs to the renderer that failed: a GL vbuf cannot
      * survive the context going away, and a surface would be the wrong depth. */
     if (g != NULL && g->screen != NULL) {
@@ -574,6 +568,15 @@ void System_ReinitVideo(void)
      * mode exists, so nothing outlives the renderer that created it.
      */
     System_FreeMotif();
+    /* Port fix: clear cached borrowers before freeing the shared fonts, and
+     * release privately owned GL fonts before selecting the software renderer. */
+    if (view != NULL) {
+        ConsoleView_ReleaseFont(view);
+    }
+    if (g->options_font != NULL && g->options_font != g->font_medium) {
+        Font_Free(g->options_font);
+    }
+    g->options_font = NULL;
     if (g->font_small != NULL) {
         Font_Free(g->font_small);
         g->font_small = NULL;
@@ -582,6 +585,13 @@ void System_ReinitVideo(void)
         Font_Free(g->font_medium);
         g->font_medium = NULL;
     }
+#if defined(ANDROID_PORT) && defined(MUGEN_GLES)
+    /* GL_Deinit and the GL window teardown exist only when the GLES backend is
+     * compiled in; the guard used to be ANDROID_PORT alone, which broke the
+     * default (MUGEN_GLES=OFF) APK build. */
+    Gl_Deinit();
+    Android_DestroyGLContext();
+#endif
     Video_Deinit();
 
     g = g_game;
@@ -594,7 +604,9 @@ void System_ReinitVideo(void)
     g->video_flags &= ~VIDEO_HWBLIT;
     Gfx_SelectRenderer(RENDER_SYSTEM);
 
-    if (!Video_SetMode((int)g->game_coord[0], (int)g->game_coord[1], g->video_width, g->video_height,
+    /* Port fix: deinit also releases scratch storage and the rotation table. */
+    if (!Video_PreInit() ||
+        !Video_SetMode((int)g->game_coord[0], (int)g->game_coord[1], g->video_width, g->video_height,
                        g->depth, g->video_flags)) {
         Log_Printf("failed. ");
         Error_Exit();
@@ -638,6 +650,10 @@ void System_ReinitVideo(void)
                g->depth);
     if (!System_LoadFonts()) {
         Error_Exit();
+    }
+    if (view != NULL) {
+        ConsoleView_LoadFont(view);
+        view->w = (float)(g_videoWidth - 20);
     }
     if (!System_LoadMotif()) {
         Error_Printf("Error reloading system data after the renderer fallback\n");
@@ -837,13 +853,9 @@ void Input_Init(void)
     }
 }
 
-/*
- * 0x0041B380: rebuilds g_keyMap, which turns the configured keys and
- * joystick buttons (as input codes) into the built-in keys, then reinstalls
- * the input callbacks. Returns 0 if the map can't be allocated or the input
- * engine fails.
- */
-int Input_Remap(void)
+/* Port addition: the mapping-table part of 0x0041B380, separated so hotplug
+ * can publish bindings without clearing pending input events. */
+int Input_UpdateMap(void)
 {
     /* One spare entry: unassigned keys land on map[KEYMAP_NONE], which is never copied. */
     int map[KEYMAP_SIZE + 1];
@@ -909,6 +921,15 @@ int Input_Remap(void)
     }
     memcpy(g_keyMap, map, KEYMAP_SIZE * sizeof(int));
     Log_Printf("OK\n");
+    return 1;
+}
+
+/* 0x0041B380: full input reset, used on startup and explicit remapping. */
+int Input_Remap(void)
+{
+    if (!Input_UpdateMap()) {
+        return 0;
+    }
     Log_Printf("Reinitializing input engine...");
     g_keyHandler = 0;
     g_padHandler = 0;

@@ -1023,3 +1023,18 @@ fallback) diimplementasikan sebagai wrapper test-only di `Sdl2_Present` dan
 `SDL_UpdateTexture`/`SDL_CreateTexture` — bukan counter di produksi. Test
 memakai `SDL_QueryTexture` sebagai pemeriksaan independen, tidak pernah metadata
 yang baru ditulis. Mutasi wajib-gagal (§13.1) diverifikasi di CI M9.
+
+### Follow-up regression coverage (2026-11-06)
+
+`tools/test_review_regress.sh` (qualifier `REVIEW01`) runs the production
+`System_ReinitVideo`, video preinit/deinit, rotation-table construction, console
+font helpers and Options font cache against boundary font/video loaders. It
+checks two consecutive fallbacks for both owned and borrowed fonts, preserves
+console history, and checks the rebuilt sine-table samples. It also exercises
+the real hotplug mapping publication with pending P1 input while P2 is rebound.
+The parser portion covers formats with and without a terminator list.
+
+The native Linux 64-bit run and the parser/test ASan+UBSan run passed. Font
+loading, motif loading and video-mode creation are boundary stubs; this does
+not close the Android device/context-recreate or pixel-parity rows above.
+Windows, Android APK and Vita builds were not run in this follow-up.

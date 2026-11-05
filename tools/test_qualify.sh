@@ -111,6 +111,8 @@ run_host VT03-icon bash tools/test_vita_icon.sh
 # not link at all -- Bgm_MutexPtr moved into globals.c in 122e0ee and nothing
 # ran it, so nobody noticed. A gate is the fix.
 run_host SDL2A01 bash tools/test_sdl2audio.sh
+# CNS limits, hotplug queue and renderer font/rotation lifetime.
+run_host REVIEW01 bash tools/test_review_regress.sh
 run_host GL-MVP bash tools/test_gl_mvp.sh
 run_host CF01-policy bash tools/test_render_policy.sh
 if [ -n "$ENGINE" ] && [ -x "$ENGINE" ]; then

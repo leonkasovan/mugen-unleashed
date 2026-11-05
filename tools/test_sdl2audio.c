@@ -16,6 +16,11 @@ extern DECLSPEC int SDLCALL Mix_QuerySpecEx(int *frequency, Uint16 *format, int 
 
 #include <stdio.h>
 #include <string.h>
+#include <pthread.h>
+#include "test_abi.h"
+#ifdef TEST_EXPECT_BITS
+_Static_assert(sizeof(void *) * 8 == TEST_EXPECT_BITS, "wrong audio harness ABI");
+#endif
 
 /* Globals the callback reads. Declared in symbols.h with these types. */
 BgmRing *g_bgmRing;
@@ -74,18 +79,19 @@ int g_bgmBackgroundChanged;
 BgmStream *g_bgmStream;
 unsigned int g_bgmPauseFlags;
 
-/*
- * Bgm_MutexPtr() is defined in globals.c, which this test does not link, and
- * BGM_MUTEX_LOCK/UNLOCK reach it from every BGM site. Without it the harness
- * stopped linking when the mutex became a function (122e0ee / 0461db3) and
- * nothing noticed, because no gate ran it -- so for three days it reported
- * nothing while SDL2_PLAN.md cited it as audio evidence. This is the 32-bit
- * Windows definition from globals.c: the mutex lives in the g_bgmMutex slot
- * itself.
- */
+/* Same storage policy as globals.c: native pthread mutex on 64-bit,
+ * pointer-sized pthreads-win32 storage on the 32-bit reference build. */
+#ifdef BGM_NATIVE_PTHREAD
+static pthread_mutex_t test_bgm_mutex;
+#endif
 void *Bgm_MutexPtr(void)
 {
+#ifdef BGM_NATIVE_PTHREAD
+    return &test_bgm_mutex;
+#else
+    _Static_assert(sizeof(pthread_mutex_t) <= sizeof(g_bgmMutex), "BGM mutex storage too small");
     return &g_bgmMutex;
+#endif
 }
 
 BgmRing *BgmRing_Create(int size)
@@ -447,6 +453,19 @@ static void test_rwops_size(void)
 
 int main(void)
 {
+    TEST_REPORT_ABI();
+    /* Exercise the same lock storage the real callback will use. Native
+     * initialization must not overwrite the separate legacy presence flag. */
+#ifdef BGM_NATIVE_PTHREAD
+    g_bgmMutex = (void *)(uintptr_t)0x1234;
+#endif
+    check(pthread_mutex_init((pthread_mutex_t *)Bgm_MutexPtr(), NULL) == 0, "BGM mutex init");
+#ifdef BGM_NATIVE_PTHREAD
+    check(g_bgmMutex == (void *)(uintptr_t)0x1234, "native mutex init overwrote the legacy flag");
+#endif
+    BGM_MUTEX_LOCK();
+    BGM_MUTEX_UNLOCK();
+    check(pthread_mutex_destroy((pthread_mutex_t *)Bgm_MutexPtr()) == 0, "BGM mutex destroy");
     printf("bgm hook callback:\n");
     test_callback_fills_every_byte();
     printf("Mix_QuerySpecEx:\n");

@@ -47,6 +47,7 @@ void Error_Fatal(const char *fmt, ...)
 void Bgm_SetVolume(double volume) { (void)volume; }
 void Input_InitPads(void) {}
 int Input_Remap(void) { map_rebuilds++; return 1; }
+int Input_UpdateMap(void) { map_rebuilds++; return 1; }
 void Input_ResetState(void) {}
 int Input_CodePending(void) { return 0; }
 int Gfx_SetRenderTarget(SpriteSet *target, int index) { (void)target; (void)index; return 1; }

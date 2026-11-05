@@ -13,23 +13,32 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
-OUT=build/sdl2audio-test
-CC="${CC:-gcc}"
-PKGS="sdl2 SDL2_ttf SDL2_mixer zlib libpng16"
+# The qualifier exports MUGEN_TEST_TARGET; use its compiler, kit and ABI.
+. tools/lib_target.sh
+OUT="build/sdl2audio-test/$TARGET"
+PKGS="sdl2 SDL2_mixer zlib"
+PLATFORM_SOURCE=""
+mkdir -p "$OUT/tmp"
+export TMPDIR="$PWD/$OUT/tmp"
 
-mkdir -p "$OUT"
+SDL_CFLAGS="${SDL_CFLAGS:-$("$PKGCONF" --cflags $PKGS | sed 's/-Dmain=SDL_main//g')}"
+SDL_LIBS="${SDL_LIBS:-$("$PKGCONF" --libs --static $PKGS | sed 's/-lSDL2main//g;s/-mwindows//g')}"
+# A native Linux compiler is useful for host regression runs with CC/PKG_CONFIG
+# overrides. Windows kits still supply the actual win32/win64 qualification.
+case "$("$CC" -dumpmachine)" in
+*w64-mingw32*) SYSTEM_LIBS="-lopengl32 -lglu32 -lwinmm -lshell32 -luser32 -lgdi32 -lpthread" ;;
+*) SYSTEM_LIBS="-pthread"; PLATFORM_SOURCE="src/compat_linux.c" ;;
+esac
 
+echo "target $TARGET: $CC $ARCHFLAGS ($("$CC" -dumpmachine))"
 # shellcheck disable=SC2086
-$CC -m32 -std=gnu11 -O1 -g -Wall \
-    -DMUGEN_SDL2 -DSDL_MAIN_HANDLED -DPTW32_STATIC_LIB \
+$CC $ARCHFLAGS ${CFLAGS:-} -std=gnu11 -O1 -g -Wall \
+    -DMUGEN_SDL2 -DSDL_MAIN_HANDLED -DPTW32_STATIC_LIB -DTEST_EXPECT_BITS=$EXPECT_BITS \
     -Isrc -Ithird_party/glad-2.1 -Ithird_party/minizip-0.15 \
-    -Ithird_party/lua-5.1.4/src -Ithird_party/sdk/include \
-    -Ithird_party/libresample/include -Ithird_party/sdk/include \
-    $(pkg-config --cflags $PKGS | sed 's/-Dmain=SDL_main//') \
-    tools/test_sdl2audio.c src/bgmthread.c src/sdlmixercompat.c src/stream.c third_party/minizip-0.15/unzip.c \
-    -o "$OUT/test_sdl2audio" \
-    $(pkg-config --libs --static $PKGS | sed 's/-lSDL2main//;s/-mwindows//') \
-    -lopengl32 -lglu32 -lwinmm -lshell32 -luser32 -lgdi32 -lpthread -lm
+    -Ithird_party/lua-5.1.4/src -Ithird_party/libpng-1.2.38 \
+    -Ithird_party/libresample/include $PLAT_INC $SDL_CFLAGS \
+    tools/test_sdl2audio.c src/bgmthread.c src/sdlmixercompat.c src/stream.c third_party/minizip-0.15/unzip.c $PLATFORM_SOURCE \
+    -o "$OUT/test_sdl2audio" ${LDFLAGS:-} $SDL_LIBS $SYSTEM_LIBS -lm
 
 echo "built $OUT/test_sdl2audio"
-"$OUT/test_sdl2audio"
+run_harness "$OUT/test_sdl2audio"

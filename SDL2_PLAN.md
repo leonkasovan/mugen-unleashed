@@ -723,7 +723,7 @@ hypothesis was easy to believe twice.
 | Input integration | pad slot mapping by instance id, key delivery, UTF-8 text of 1–4 bytes, console navigation/Backspace/Enter/multi-codepoint (`tools/test_sdl2input.sh`) |
 | Audio | whole-buffer callback images with a guard area, `Mix_QuerySpecEx`, RWops size, and the measured callback length (frames × channels × bytes, not a 4× quirk) (`tools/test_sdl2audio.sh`, qualifier gate `SDL2A01`) |
 | Build | Makefile default `SDL_BACKEND=2` for `win32` and `win64`; `make SDL_BACKEND=1` still builds the reference on `win32` |
-| Qualifier | `tools/test_qualify.sh` PASS=21 FAIL=0 SKIP=0 on `--target win32` and on `--target win64` |
+| Qualifier | Historical runs reported PASS=21 FAIL=0 SKIP=0 on both targets; the audio row in the win64 run built 32-bit. Both Windows targets need a fresh run after the ABI correction below. |
 
 The audio harness is worth one line of history: it was cited as evidence here
 while it did not link at all. `Bgm_MutexPtr()` moved into `globals.c` in
@@ -732,6 +732,19 @@ harness the breakage went unnoticed — the section below had been quoting a run
 that could not happen. It is fixed, it now exits 77 when the device-dependent
 checks cannot run instead of printing "SKIP" and returning 0, and it is in the
 qualifier so the next break is visible immediately.
+
+### Audio ABI correction (2026-11-06)
+
+The original SDL2A01 addition still invoked a hardcoded `-m32` script, so its
+win64 PASS was 32-bit evidence. The harness now uses `tools/lib_target.sh`, the
+selected compiler/pkg-config and pointer width, a compile-time ABI assertion and
+`run_harness`. Its mutex stub mirrors globals.c's native pthread storage on
+64-bit. A Linux x86-64 host run with SDL's **dummy** audio driver passed the
+callback/RWops checks and measured 4096 bytes (1024 stereo S16 frames). This is
+host coverage, not Windows qualification or audible-output verification.
+`REVIEW01` also joins the qualifier for the CNS terminator, hotplug queue and
+renderer resource-lifetime regressions (`tools/test_review_regress.sh`). The
+Windows SDKs were unavailable for this follow-up; rerun both Windows targets.
 
 ### Still open
 
