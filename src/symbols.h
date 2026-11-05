@@ -1550,7 +1550,7 @@ void __cdecl Pads_LogBindings(void);
 /* Android controller path (SDL game-controller semantics). */
 void __cdecl Pads_HandleControllerEvent(const SDL_Event *ev);
 int __cdecl Pads_SlotUsesController(int slot);
-void __cdecl Pads_ControllerBindings(int *out);
+void __cdecl Pads_ControllerBindings(int slot, int *out);
 int __cdecl Pads_ControllerCount(void);
 #endif
 /* 0x00474b30 */ long long __cdecl Input_FindKey(int *const *maps, int count, int code);

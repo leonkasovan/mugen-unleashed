@@ -20,6 +20,7 @@ void RenderPolicy_Resolve(int requested, const RenderCaps *caps, RenderDecision 
         have.system = 1;
         have.gl_screen = 0;
         have.gl_sprite = 0;
+        have.gl_present = 0;
     }
 
     out->effective = RENDER_POLICY_SYSTEM;
@@ -41,10 +42,14 @@ void RenderPolicy_Resolve(int requested, const RenderCaps *caps, RenderDecision 
         return;
 
     case RENDER_POLICY_OPENGL:
-        /* The GPU sprite renderer needs both halves: the sprite programs and
-         * the ability to present. Selecting it with only one of them wired
-         * would draw through NULL/stub table entries (plan section 12.2). */
-        if (have.gl_sprite && have.gl_screen) {
+        /*
+         * The GPU sprite renderer needs its shaders and a complete framebuffer
+         * (gl_present), not the OpenGLScreen presenter. Requiring gl_screen
+         * here made every OpenGL request fall back to System as soon as the
+         * CPU-framebuffer presenter was withdrawn on Android -- the two are
+         * different capabilities.
+         */
+        if (have.gl_sprite && have.gl_present) {
             out->effective = RENDER_POLICY_OPENGL;
             return;
         }

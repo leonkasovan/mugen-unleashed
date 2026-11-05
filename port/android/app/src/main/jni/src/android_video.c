@@ -213,6 +213,86 @@ void Android_GLDrawableSize(int *w, int *h)
 
 /* Presents the GL frame. The GLES renderer has already drawn into the default
  * framebuffer, so this is the swap and nothing else. */
+/*
+ * Re-creates the GL context after Android destroyed it (RENDERING_PLAN 12.6).
+ *
+ * The window survives a context loss, so only the context and the GL objects
+ * have to be rebuilt. Returns 1 when a usable context is current again; the
+ * caller then asks the renderer to rebuild its own objects.
+ */
+int Android_GLRecreateContext(void)
+{
+    if (display_window == NULL) {
+        return 0;
+    }
+    if (display_gl != NULL) {
+        SDL_GL_DeleteContext(display_gl);
+        display_gl = NULL;
+    }
+    display_gl = SDL_GL_CreateContext(display_window);
+    if (display_gl == NULL) {
+        SDL_Log("mugen: GL context could not be recreated: %s", SDL_GetError());
+        return 0;
+    }
+    if (SDL_GL_MakeCurrent(display_window, display_gl) < 0) {
+        SDL_Log("mugen: GL context not current after recreate: %s", SDL_GetError());
+        SDL_GL_DeleteContext(display_gl);
+        display_gl = NULL;
+        return 0;
+    }
+    if (gladLoadGLES2Loader((GLADloadproc)SDL_GL_GetProcAddress) == 0) {
+        SDL_Log("mugen: GLES entry points not reloadable after recreate");
+        SDL_GL_DeleteContext(display_gl);
+        display_gl = NULL;
+        return 0;
+    }
+    SDL_Log("mugen: GL context recreated");
+    return 1;
+}
+
+/*
+ * Deliberately destroys the GL context, standing in for Android reclaiming it.
+ *
+ * RENDERING_PLAN 12.6 asks for the loss path to be exercised. Waiting for a
+ * real background/restore cycle is not reproducible, so this exists for the
+ * test build: it drops the context exactly as the system would, and the next
+ * foreground event must rebuild it.
+ */
+int Android_GLForceContextLoss(void)
+{
+    if (display_gl == NULL) {
+        return 0;
+    }
+    SDL_GL_DeleteContext(display_gl);
+    display_gl = NULL;
+    SDL_Log("mugen: GL context destroyed on request (loss simulation)");
+    return 1;
+}
+
+/*
+ * Tears the GL window and context down, so the System renderer can take the
+ * window over (RENDERING_PLAN 12.2: exactly one owner at a time). Used by the
+ * GL-to-System recovery in System_Init.
+ */
+void Android_DestroyGLContext(void)
+{
+    if (display_gl != NULL) {
+        SDL_GL_DeleteContext(display_gl);
+        display_gl = NULL;
+    }
+    if (display_window != NULL) {
+        SDL_DestroyWindow(display_window);
+        display_window = NULL;
+    }
+    SDL_Log("mugen: GL window and context destroyed");
+}
+
+/* 1 when a GL context is current (0 when the GL path is not in use). */
+int Android_GLContextValid(void)
+{
+    return display_gl != NULL;
+}
+
 int Android_GLPresent(void)
 {
     if (display_window == NULL || display_gl == NULL) {

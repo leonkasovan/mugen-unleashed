@@ -29,7 +29,8 @@ extern "C" {
 typedef struct RenderCaps {
     int system;         /* software renderer available (always 1) */
     int gl_screen;      /* OpenGLScreen presenter available */
-    int gl_sprite;      /* GPU sprite renderer available (shaders + FBO) */
+    int gl_sprite;
+    int gl_present;     /* GPU sprite renderer available (shaders + FBO) */
 } RenderCaps;
 
 /* The outcome. reason is a static string, NULL when nothing was overridden. */

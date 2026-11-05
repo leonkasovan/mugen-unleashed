@@ -365,11 +365,29 @@ int Config_Load(void)
          * that fails. Reporting 0 here would hide a working GLES path; claiming
          * it without validating it is the failure mode section 12.2 warns of.
          */
-        caps.gl_screen = 1;
+        /*
+         * gl_screen stays 0: OpenGLScreen blits the CPU framebuffer into a
+         * placeholder surface and the frame boundary then swaps the GL window
+         * without ever uploading that surface, so the mode would present a
+         * black window. It is advertised again once an Android presenter
+         * uploads the framebuffer to a GLES texture. gl_sprite is the mode that
+         * actually works (the screen buffer is a real render target).
+         */
+        caps.gl_screen = 0;
         caps.gl_sprite = 1;
+        /*
+         * gl_present: the sprite programs and FBO path exist, which is what the
+         * OpenGL mode needs. It is still only a claim about the build -- Gl_Init
+         * validates it against the real driver and system.c falls back if it
+         * fails. gl_screen above stays 0 because the CPU-framebuffer upload
+         * presenter does not exist on Android; those are different questions,
+         * and conflating them made every OpenGL request fall back to System.
+         */
+        caps.gl_present = 1;
 #else
         caps.gl_screen = 0;
         caps.gl_sprite = 0;
+        caps.gl_present = 0;
 #endif
         RenderPolicy_Resolve(g->render_mode, &caps, &decision);
         if (decision.fell_back) {
@@ -813,7 +831,7 @@ void Config_ApplyAndroidJoystick(void)
 
         if (!g_cfgGamepadPresent[player]) {
             /* No [P<n> Gamepad] group: use the built-in compact layout. */
-            Pads_ControllerBindings(jk);
+            Pads_ControllerBindings(player, jk);
             used_default = 1;
         } else {
             for (i = 0; i < KEY_COUNT; i++) {

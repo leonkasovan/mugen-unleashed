@@ -32,8 +32,19 @@
 #include <string.h>
 
 #include "gles_probe.h"
+#include "gles_render.h"
 #include "gl_mvp.h"
 #include "gles_draw.h"
+
+/* 1 once the programs are linked on a live context. Declared early because the
+ * texture and view entry points test it before the renderer proper. */
+static int g_glesReady;
+
+static GlMvp g_glesProjection;
+static int g_glesProjectionValid;
+
+/* Defined below; the context-restore path calls it, so it is declared first. */
+static int gles_build_programs(void);
 
 /* ------------------------------------------------------------ texture */
 
@@ -59,6 +70,53 @@ typedef struct GlesTexFormat {
 } GlesTexFormat;
 #define GLES_TEX_FORMAT_SLOTS 8
 static GlesTexFormat g_glesTexFormat[GLES_TEX_FORMAT_SLOTS];
+
+/*
+ * Registry of live GlTex objects.
+ *
+ * A context loss invalidates every GL name at once, so the renderer has to be
+ * able to walk what it owns and clear those names -- but GlTex has a fixed
+ * 32-bit layout that must not gain fields, and the sprite scratch textures are
+ * long-lived statics. A small registry of pointers solves both without touching
+ * the struct.
+ */
+#define GLES_TEX_MAX 64
+static GlTex *g_glesTextures[GLES_TEX_MAX];
+
+static void gles_register_tex(GlTex *tex)
+{
+    int i;
+
+    if (tex == NULL) {
+        return;
+    }
+    for (i = 0; i < GLES_TEX_MAX; i++) {
+        if (g_glesTextures[i] == tex) {
+            return;
+        }
+    }
+    for (i = 0; i < GLES_TEX_MAX; i++) {
+        if (g_glesTextures[i] == NULL) {
+            g_glesTextures[i] = tex;
+            return;
+        }
+    }
+    /* Full (more than GLES_TEX_MAX live textures): the registry only drives
+     * context-loss cleanup, so dropping the entry costs a stale name, not a
+     * leak. */
+}
+
+static void gles_unregister_tex(GlTex *tex)
+{
+    int i;
+
+    for (i = 0; i < GLES_TEX_MAX; i++) {
+        if (g_glesTextures[i] == tex) {
+            g_glesTextures[i] = NULL;
+            return;
+        }
+    }
+}
 
 static GlesTexFormat *gles_tex_format_slot(unsigned int id)
 {
@@ -90,6 +148,9 @@ GlTex *GlTex_Create(void)
 {
     GlTex *tex = calloc(1, sizeof(GlTex));
 
+    if (tex != NULL) {
+        gles_register_tex(tex);
+    }
     return tex;
 }
 
@@ -101,6 +162,7 @@ int GlTex_Free(GlTex *tex)
     if (tex->id != 0) {
         GlTex_Delete(tex);
     }
+    gles_unregister_tex(tex);
     free(tex);
     return 1;
 }
@@ -119,6 +181,19 @@ int GlTex_Delete(GlTex *tex)
     id = (GLuint)tex->id;
     if (id != 0) {
         glDeleteTextures(1, &id);
+    }
+    /*
+     * The depth renderbuffer a render target owns was never freed, so every
+     * screen/match switch leaked one. glIsRenderbuffer() stayed true after
+     * Sprite_Free() because of this, not because of the texture.
+     */
+    if (tex->depth != 0 && g_glesReady) {
+        GLuint depth = (GLuint)tex->depth;
+
+        glDeleteRenderbuffers(1, &depth);
+        tex->depth = 0;
+    } else {
+        tex->depth = 0;
     }
     /* The desktop Delete clamps at zero instead of going negative; kept. */
     if (g_glesTexMemory >= tex->size) {
@@ -148,6 +223,9 @@ int GlTex_Alloc(GlTex *tex, int w, int h)
     GLuint id = 0;
 
     if (tex == NULL || w <= 0 || h <= 0) {
+        return 0;
+    }
+    if (!g_glesReady) {
         return 0;
     }
     if (tex->id == 0) {
@@ -187,6 +265,11 @@ int GlTex_Upload(GlTex *tex, int h, int internal_format, int w, int format, cons
     GLuint id;
 
     if (tex == NULL || w <= 0 || h <= 0) {
+        return 0;
+    }
+    if (!g_glesReady) {
+        /* No context (lost, or never created): every GL call would be a no-op
+         * or an error, so refuse instead of pretending. */
         return 0;
     }
     /*
@@ -281,11 +364,11 @@ int GlTex_UploadRGBA(int h, int w, GlTex *tex, const void *pixels)
 
 /* ---------------------------------------------------------- programs */
 
+
 static GlesProgram g_glesProgramIndexed;
 static GlesProgram g_glesProgramRgba;
 static GlesProgram g_glesProgramSolid;
 static GlesBuffer g_glesBuffer;
-static int g_glesReady;
 static unsigned int g_glesCaps;
 static char *g_glesSolidVert;
 static char *g_glesSolidFrag;
@@ -394,6 +477,88 @@ int Gl_Deinit(void)
     return 1;
 }
 
+/*
+ * Context loss (RENDERING_PLAN.md 12.6).
+ *
+ * Android destroys the GL context when the app is backgrounded or the driver
+ * resets. Every name the renderer holds becomes invalid -- drawing with them
+ * goes nowhere and deleting them is undefined -- so the names are dropped here
+ * while the sizes stay, letting each object be recreated on next use. Nothing
+ * has to be re-queued from the engine: sprite pixels, palettes and draw
+ * parameters are CPU state and survive.
+ */
+void Gles_OnContextLost(void)
+{
+    int i;
+
+    if (!g_glesReady && g_glesProgramIndexed.program == 0) {
+        return;
+    }
+    /*
+     * Programs and the vertex buffer are simply forgotten. Calling
+     * glDeleteProgram/glDeleteBuffers here would use names that belong to a
+     * context that no longer exists.
+     */
+    memset(&g_glesProgramIndexed, 0, sizeof(g_glesProgramIndexed));
+    memset(&g_glesProgramRgba, 0, sizeof(g_glesProgramRgba));
+    memset(&g_glesProgramSolid, 0, sizeof(g_glesProgramSolid));
+    memset(&g_glesBuffer, 0, sizeof(g_glesBuffer));
+    g_glesReady = 0;
+    g_glesProjectionValid = 0;
+
+    /* Textures keep their dimensions so GlTex_Upload/GlVbuf_Bind can revive
+     * them; only the names and the depth renderbuffer go. */
+    for (i = 0; i < GLES_TEX_MAX; i++) {
+        GlTex *tex = g_glesTextures[i];
+
+        if (tex == NULL) {
+            continue;
+        }
+        tex->id = 0;
+        tex->depth = 0;
+        memset(g_glesTexFormat, 0, sizeof(g_glesTexFormat));
+    }
+    Log_Printf("GLES: context lost; object names dropped (%d textures tracked)\n", GLES_TEX_MAX);
+}
+
+/*
+ * Rebuilds the renderer on a context that is already current.
+ *
+ * The caller has created the context and loaded the GLES entry points; this
+ * recompiles the programs, re-establishes the GL state and forgets the cached
+ * texture storage descriptions so the next upload reallocates instead of
+ * calling glTexSubImage2D on a dead name. Returns 1 when the renderer is usable
+ * again, 0 when it is not (the caller keeps the System renderer then).
+ */
+int Gles_OnContextRestore(int drawable_w, int drawable_h)
+{
+    unsigned int caps = 0;
+
+    if (g_glesReady) {
+        return 1;
+    }
+    if (!Gles_Probe(&caps)) {
+        Log_Printf("GLES: restore failed: no usable context\n");
+        return 0;
+    }
+    g_glesCaps = caps;
+    if (!gles_build_programs()) {
+        Gles_OnContextLost();
+        Log_Printf("GLES: restore failed: programs did not rebuild\n");
+        return 0;
+    }
+    memset(g_glesTexFormat, 0, sizeof(g_glesTexFormat));
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &g_glMaxTextureSize);
+    if (drawable_w > 0 && drawable_h > 0) {
+        glViewport(0, 0, drawable_w, drawable_h);
+    }
+    g_glesProjectionValid = 0;
+    g_glesReady = 1;
+    Log_Printf("GLES: context restored (%dx%d drawable, max texture %d)\n", drawable_w, drawable_h,
+               g_glMaxTextureSize);
+    return 1;
+}
+
 /* The capability bits the probe resolved, for the Android video layer. */
 unsigned int Gles_LastCaps(void)
 {
@@ -411,6 +576,45 @@ int Gles_IsReady(void)
  * but cannot compile its shaders is not "OpenGL available" (plan section 11
  * V2), and the caller keeps the software renderer in that case.
  */
+/*
+ * Compiles and links the three programs and puts the GL state the renderer
+ * assumes in place. Split out of Gl_Init so a context restore rebuilds through
+ * exactly the same path rather than a second, drifting copy.
+ */
+static int gles_build_programs(void)
+{
+    if (!gles_load_es_program(&g_glesProgramIndexed, "indexed")) {
+        Log_Printf("GLES: indexed program unavailable; GL mode unavailable\n");
+        return 0;
+    }
+    if (!gles_load_es_program(&g_glesProgramRgba, "rgba")) {
+        Log_Printf("GLES: rgba program unavailable; GL mode unavailable\n");
+        return 0;
+    }
+
+    g_glesSolidVert = strdup(gles_solid_vert_src);
+    g_glesSolidFrag = strdup(gles_solid_frag_src);
+    if (g_glesSolidVert == NULL || g_glesSolidFrag == NULL ||
+        !GlesDraw_LoadProgram(&g_glesProgramSolid, g_glesSolidVert, g_glesSolidFrag, "solid", NULL)) {
+        Log_Printf("GLES: solid program unavailable; GL mode unavailable\n");
+        free(g_glesSolidVert);
+        free(g_glesSolidFrag);
+        g_glesSolidVert = NULL;
+        g_glesSolidFrag = NULL;
+        return 0;
+    }
+    free(g_glesSolidVert);
+    free(g_glesSolidFrag);
+    g_glesSolidVert = NULL;
+    g_glesSolidFrag = NULL;
+
+    glEnable(GL_BLEND);
+    glBlendEquation(GL_FUNC_ADD);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisable(GL_DEPTH_TEST);
+    return 1;
+}
+
 int Gl_Init(int framebuffers)
 {
     unsigned int caps = 0;
@@ -423,36 +627,11 @@ int Gl_Init(int framebuffers)
         return 0;
     }
     g_glesCaps = caps;
-
-    if (!gles_load_es_program(&g_glesProgramIndexed, "indexed")) {
-        Log_Printf("GLES: indexed program unavailable; GL mode unavailable\n");
+    if (!gles_build_programs()) {
         Gl_Deinit();
         return 0;
     }
-    if (!gles_load_es_program(&g_glesProgramRgba, "rgba")) {
-        Log_Printf("GLES: rgba program unavailable; GL mode unavailable\n");
-        Gl_Deinit();
-        return 0;
-    }
-
-    g_glesSolidVert = strdup(gles_solid_vert_src);
-    g_glesSolidFrag = strdup(gles_solid_frag_src);
-    if (g_glesSolidVert == NULL || g_glesSolidFrag == NULL ||
-        !GlesDraw_LoadProgram(&g_glesProgramSolid, g_glesSolidVert, g_glesSolidFrag, "solid", NULL)) {
-        Log_Printf("GLES: solid program unavailable; GL mode unavailable\n");
-        Gl_Deinit();
-        return 0;
-    }
-    free(g_glesSolidVert);
-    free(g_glesSolidFrag);
-    g_glesSolidVert = NULL;
-    g_glesSolidFrag = NULL;
-
     glGetIntegerv(GL_MAX_TEXTURE_SIZE, &g_glMaxTextureSize);
-    glEnable(GL_BLEND);
-    glBlendEquation(GL_FUNC_ADD);
-    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-    glDisable(GL_DEPTH_TEST);
     g_glesReady = 1;
     Log_Printf("GLES: renderer ready (indexed+rgba+solid, max texture %d)\n", g_glMaxTextureSize);
     return 1;
@@ -464,11 +643,13 @@ int Gl_Init(int framebuffers)
  * Uploads the projection. GLES has no matrix stack, so the matrix is computed
  * once here (src/gl_mvp.c) and cached for the draws that follow.
  */
-static GlMvp g_glesProjection;
-static int g_glesProjectionValid;
 
 int Gl_SetupView(void)
 {
+    if (!g_glesReady) {
+        g_glesProjectionValid = 0;
+        return 0;
+    }
     GlMvp_SetupView(&g_glesProjection, g_glProjection, g_targetWidth, g_targetHeight, g_glBoundFramebuffer,
                     g_glNear, g_glFar, g_glZScale);
     g_glesProjectionValid = 1;
@@ -644,7 +825,7 @@ void Gfx_GlDrawRectBlend(int x1, int y1, int x2, int y2, unsigned int color, int
     glBlendFunc(GL_CONSTANT_ALPHA, GL_ONE_MINUS_CONSTANT_ALPHA);
     gles_solid_quad((float)x1, (float)y1, (float)(x2 + 1), (float)(y2 + 1), r, g, b, (float)alpha_src / 256.0f);
     glBlendColor(0.0f, 0.0f, 0.0f, 0.0f);
-    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
 
 void Gfx_GlDrawRectSub(int x1, int y1, int x2, int y2, unsigned int color)
@@ -747,6 +928,9 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
             static GlTex scratch[2];
 
             tex = &scratch[paletted ? 0 : 1];
+            /* Statics never pass through GlTex_Create, so register them here or
+             * a context loss would leave them with dead names forever. */
+            gles_register_tex(tex);
             if (!GlTex_Upload2D(spr->h, spr->bpp, tex, pixels, spr->w)) {
                 return;
             }
@@ -755,7 +939,10 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
 
     if (paletted) {
         static GlTex pal_scratch;
-        Palette *pal = SpriteSet_GetPaletteConverted(set, spr->pal_index);
+        Palette *pal;
+
+        gles_register_tex(&pal_scratch);
+        pal = SpriteSet_GetPaletteConverted(set, spr->pal_index);
 
         if (pal == NULL) {
             Log_Printf("GLES: sprite %d has no usable palette; draw skipped\n", sprite);
@@ -865,7 +1052,14 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
     /* Blend state, as the desktop path sets it. */
     if (dp->blend != BLEND_NONE) {
         glEnable(GL_BLEND);
-        glBlendFunc(GL_ONE, GL_CONSTANT_ALPHA);
+        /*
+         * Straight alpha: the shader outputs colour * a. Multiplying it by
+         * alpha again (GL_ONE, GL_CONSTANT_ALPHA) double-counts, which measured
+         * as a fully opaque result for a 50%-alpha sprite (255 where 128 was
+         * expected). SRC_ALPHA * the engine's alpha_src is the same equation
+         * the software renderer applies.
+         */
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_CONSTANT_ALPHA);
         glBlendColor(dp->alpha_src, dp->alpha_src, dp->alpha_src, dp->alpha_dst);
         if (dp->blend == BLEND_ADD) {
             glBlendEquation(GL_FUNC_ADD);
@@ -874,7 +1068,7 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
         }
     } else if (dp->masked != 0) {
         glEnable(GL_BLEND);
-        glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         glBlendEquation(GL_FUNC_ADD);
     } else {
         glDisable(GL_BLEND);
@@ -896,7 +1090,7 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
                   (float)fx->color * (1.0f / 256.0f), (float)tex->w, (float)tex->h, dp->alpha_src);
 
     glBlendEquation(GL_FUNC_ADD);
-    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
 
 void Sprite_DrawGL(SpriteSet *set, int sprite, const DrawParams *dp)
@@ -989,11 +1183,22 @@ void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
     }
 }
 
-/* Copies the framebuffer into a new surface (screenshot). */
+/*
+ * Copies the framebuffer into a caller-owned RGBA buffer (screenshot).
+ *
+ * The contract is GfxCaptureFn: a raw malloc'ed buffer of the target's size,
+ * top row first, which Gfx_GetScreenSurface copies out and then frees. An
+ * earlier version returned an SDL_Surface, and the caller -- reading it as the
+ * raw buffer the contract promises -- walked off the end of the SDL_Surface
+ * struct: an 8x8 probe read 256 bytes from a 96-byte allocation.
+ *
+ * The row order is flipped here because GL's origin is bottom-left; SDL, PNG
+ * and the desktop renderer's captures are all top-left.
+ */
 void *Gl_Capture(void)
 {
-    SDL_Surface *shot;
     unsigned char *rgba;
+    unsigned char *flipped;
     int w = g_targetWidth;
     int h = g_targetHeight;
     int y;
@@ -1007,18 +1212,24 @@ void *Gl_Capture(void)
     }
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
-    shot = SDL_CreateRGBSurface(0, w, h, 32, 0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
-    if (shot == NULL) {
+
+    /* Flip in place by swapping rows, so the result is one buffer as promised
+     * (the caller's free() must match a single malloc). */
+    flipped = malloc((size_t)w * 4);
+    if (flipped == NULL) {
         free(rgba);
         return NULL;
     }
-    /* GL's origin is bottom-left; the surface's is top-left. */
-    for (y = 0; y < h; y++) {
-        memcpy((unsigned char *)shot->pixels + (size_t)y * shot->pitch, rgba + (size_t)(h - 1 - y) * w * 4,
-               (size_t)w * 4);
+    for (y = 0; y < h / 2; y++) {
+        unsigned char *top = rgba + (size_t)y * w * 4;
+        unsigned char *bottom = rgba + (size_t)(h - 1 - y) * w * 4;
+
+        memcpy(flipped, top, (size_t)w * 4);
+        memcpy(top, bottom, (size_t)w * 4);
+        memcpy(bottom, flipped, (size_t)w * 4);
     }
-    free(rgba);
-    return shot;
+    free(flipped);
+    return rgba;
 }
 
 /*
@@ -1036,6 +1247,9 @@ int GlTex_AllocDepth(GlTex *tex)
     GLuint depth = 0;
 
     if (tex == NULL || tex->w <= 0 || tex->h <= 0) {
+        return 0;
+    }
+    if (!g_glesReady) {
         return 0;
     }
     if (tex->depth != 0) {
@@ -1057,6 +1271,11 @@ void Gl_AttachFramebuffer(unsigned int texture, unsigned int depth)
 {
     static GLuint fbo;
 
+    if (!g_glesReady) {
+        /* Context lost: the framebuffer name belongs to a dead context. */
+        g_glBoundFramebuffer = 0;
+        return;
+    }
     if (fbo == 0) {
         glGenFramebuffers(1, &fbo);
         if (fbo == 0) {
@@ -1116,6 +1335,25 @@ GlTex *GlVbuf_Alloc(int depth, int w, int h)
 /* Binds a render target (NULL: the window) with its viewport and projection. */
 int GlVbuf_Bind(GlTex *vbuf)
 {
+    if (!g_glesReady) {
+        g_glBoundFramebuffer = 0;
+        return 0;
+    }
+    if (vbuf != NULL && vbuf->id == 0) {
+        /*
+         * Context loss dropped this render target's GL name but kept its size.
+         * Revive it here, before the framebuffer attaches it -- attaching name
+         * 0 is what reported GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT
+         * (0x8CD7) after a restore.
+         */
+        if (vbuf->w <= 0 || vbuf->h <= 0) {
+            return 0;
+        }
+        if (!GlTex_Alloc(vbuf, vbuf->w, vbuf->h) || !GlTex_AllocDepth(vbuf)) {
+            Log_Printf("GLES: could not revive the render target (%dx%d)\n", vbuf->w, vbuf->h);
+            return 0;
+        }
+    }
     if (vbuf == NULL) {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         g_glBoundFramebuffer = 0;

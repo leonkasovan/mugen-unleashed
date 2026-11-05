@@ -33,6 +33,9 @@ static void row(int requested, int gl_screen, int gl_sprite, int want_effective,
     caps.system = 1;
     caps.gl_screen = gl_screen;
     caps.gl_sprite = gl_sprite;
+    /* The shader+FBO half always tracks gl_sprite in these rows; the dedicated
+     * case below covers a GPU sprite renderer whose programs are missing. */
+    caps.gl_present = gl_sprite;
     RenderPolicy_Resolve(requested, &caps, &d);
     if (d.effective != want_effective || d.fell_back != want_fell_back) {
         printf("FAIL: %s: effective=%d fell_back=%d (wanted %d/%d)\n", label, d.effective, d.fell_back,
@@ -71,8 +74,13 @@ int main(void)
     /* A presenter without sprite programs is enough for OpenGLScreen. */
     row(RENDER_POLICY_OPENGL_SCREEN, 1, 0, RENDER_POLICY_OPENGL_SCREEN, 0, "partial GLES: openglscreen kept");
 
-    /* Sprite programs but no presenter: neither GL mode may be selected. */
-    row(RENDER_POLICY_OPENGL, 0, 1, RENDER_POLICY_SYSTEM, 1, "no presenter: opengl falls back");
+    /*
+     * Sprite programs but no OpenGLScreen presenter: the screen mode falls back,
+     * the sprite mode does not -- it presents its own drawable. (Requiring
+     * gl_screen for OpenGL used to fall back here too; Android's withdrawal of
+     * the OpenGLScreen presenter is exactly this row.)
+     */
+    row(RENDER_POLICY_OPENGL, 0, 1, RENDER_POLICY_OPENGL, 0, "no screen presenter: opengl is kept");
     row(RENDER_POLICY_OPENGL_SCREEN, 0, 1, RENDER_POLICY_SYSTEM, 1, "no presenter: openglscreen falls back");
 
     /* Defensive: unknown mode and NULL caps. */
@@ -83,10 +91,35 @@ int main(void)
     check(d.effective == RENDER_POLICY_SYSTEM && d.fell_back == 1 && d.reason != NULL,
           "NULL caps resolve to System with a reason");
 
+    /*
+     * The OpenGL mode depends on shaders + FBO (gl_present), not on the
+     * OpenGLScreen presenter. Android withdraws gl_screen because its
+     * CPU-framebuffer presenter is missing while the sprite renderer itself
+     * works -- requiring both made every OpenGL request fall back to System.
+     */
+    {
+        RenderCaps c;
+        RenderDecision r;
+
+        c.system = 1;
+        c.gl_screen = 0;
+        c.gl_sprite = 1;
+        c.gl_present = 1;
+        RenderPolicy_Resolve(RENDER_POLICY_OPENGL, &c, &r);
+        check(r.effective == RENDER_POLICY_OPENGL && r.fell_back == 0,
+              "OpenGL without gl_screen but with gl_present is kept");
+
+        c.gl_present = 0;
+        RenderPolicy_Resolve(RENDER_POLICY_OPENGL, &c, &r);
+        check(r.effective == RENDER_POLICY_SYSTEM && r.fell_back == 1,
+              "OpenGL without gl_present falls back");
+    }
+
     /* System is never reported as a fallback, even with nothing available. */
     caps.system = 0;
     caps.gl_screen = 0;
     caps.gl_sprite = 0;
+    caps.gl_present = 0;
     RenderPolicy_Resolve(RENDER_POLICY_SYSTEM, &caps, &d);
     check(d.effective == RENDER_POLICY_SYSTEM && d.fell_back == 0, "system is never a fallback");
 

@@ -104,7 +104,13 @@ int Sprite_Init(unsigned int flags, Sprite *spr, int format, void *data, size_t 
     }
     spr->format = format;
 
-#ifndef ANDROID_PORT
+#if !defined(ANDROID_PORT) || defined(MUGEN_GLES)
+    /*
+     * M8: with the GLES backend the Android build has a real texture path, so
+     * sprites become SPRITE_FORMAT_TEXTURE once and are drawn from that texture
+     * instead of being re-uploaded on every frame -- the per-frame upload was
+     * the reason the GLES path ran below 60 fps.
+     */
     if (!(flags & SPRITE_INIT_NO_TEXTURE) && gl && format == SPRITE_FORMAT_RAW) {
         void *upload = data;
         void *scaled = NULL;
@@ -218,8 +224,11 @@ void Sprite_Free(Sprite *spr)
     if (spr->owns_pixels && spr->pixels != NULL) {
         if (spr->format == SPRITE_FORMAT_SURFACE) {
             SDL_FreeSurface(spr->pixels);
-#ifndef ANDROID_PORT
+#if !defined(ANDROID_PORT) || defined(MUGEN_GLES)
         } else if (spr->format == SPRITE_FORMAT_TEXTURE) {
+            /* M8: the Android GLES backend has real render targets, so they
+             * have to be released here too -- the gate used to skip this and
+             * leaked a texture per screen change. */
             GlTex_Free(spr->pixels);
 #endif
         } else {

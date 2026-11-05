@@ -277,16 +277,29 @@ int Pads_ControllerCount(void)
     return n;
 }
 
-/* Fills out[KEY_COUNT] with the local code of each action, or JOY_NONE when
- * the pad does not have that control. */
-void Pads_ControllerBindings(int *out)
+/*
+ * Fills out[KEY_COUNT] with the engine joy code of each action for player
+ * `slot`, or JOY_NONE when the pad does not have that control.
+ *
+ * Fix (port change): the codes are local to a pad, and the engine's joy code
+ * space is slot * PAD_BUTTONS + local. The first version always read the slot-0
+ * controller and never added the offset, so player 2's default layout was
+ * player 1's: A was 5 on both instead of 5 and 37. The offset is applied here,
+ * once, and the controller check follows the slot.
+ */
+void Pads_ControllerBindings(int slot, int *out)
 {
     int i;
+    int base;
 
+    if (slot < 0 || slot >= PAD_MAX) {
+        slot = 0;
+    }
+    base = slot * PAD_BUTTONS;
     for (i = 0; i < KEY_COUNT; i++) {
         out[i] = JOY_NONE;
     }
-    if (g_padController[0] == NULL) {
+    if (g_padController[slot] == NULL) {
         return;
     }
     for (i = 0; i < PAD_CTRL_MAP_COUNT; i++) {
@@ -296,9 +309,9 @@ void Pads_ControllerBindings(int *out)
         if (pad_ctrl_map[i].key < 0 || pad_ctrl_map[i].key >= KEY_COUNT) {
             continue;
         }
-        out[pad_ctrl_map[i].key] = pad_ctrl_map[i].code;
+        out[pad_ctrl_map[i].key] = base + pad_ctrl_map[i].code;
     }
-    Log_Printf("pads: controller layout:");
+    Log_Printf("pads: controller layout (slot %d):", slot);
     for (i = 0; i < PAD_CTRL_MAP_COUNT; i++) {
         Log_Printf(" %s=%d", pad_ctrl_map[i].name, pad_ctrl_map[i].code);
     }
@@ -369,16 +382,40 @@ void Pads_HandleControllerEvent(const SDL_Event *ev)
         if (axis != SDL_CONTROLLER_AXIS_LEFTX && axis != SDL_CONTROLLER_AXIS_LEFTY) {
             return;
         }
-        first = (axis == SDL_CONTROLLER_AXIS_LEFTX) ? PAD_CTRL_LEFT : PAD_CTRL_UP;
-        dir = (value < -PAD_AXIS_THRESHOLD) ? -1 : ((value > PAD_AXIS_THRESHOLD) ? 1 : 0);
-        if (dir <= 0 && g_padButtonState[slot * PAD_BUTTONS + first] != 0) {
-            Pads_SetButton(slot * PAD_BUTTONS + first, 0);
-        }
-        if (dir >= 0 && g_padButtonState[slot * PAD_BUTTONS + first + 1] != 0) {
-            Pads_SetButton(slot * PAD_BUTTONS + first + 1, 0);
-        }
-        if (dir != 0) {
-            Pads_SetButton(slot * PAD_BUTTONS + first + (dir > 0), 1);
+        {
+            /*
+             * first is the negative direction (left / up) and first + 1 the
+             * positive one (right / down).
+             *
+             * Fix (port change): the release tests were inverted. `dir <= 0`
+             * released the *negative* button, which is the one a negative
+             * deflection just pressed, while the previous direction stayed
+             * held. A stick swept from -20000 to +20000 therefore held Left and
+             * Right at the same time.
+             *
+             * Each edge now releases only the opposite direction, and only
+             * presses when the button is not already down, so a stick that
+             * stays on one side does not emit a release/press pair per event.
+             */
+            int neg;
+            int pos;
+
+            first = (axis == SDL_CONTROLLER_AXIS_LEFTX) ? PAD_CTRL_LEFT : PAD_CTRL_UP;
+            neg = slot * PAD_BUTTONS + first;
+            pos = neg + 1;
+            dir = (value < -PAD_AXIS_THRESHOLD) ? -1 : ((value > PAD_AXIS_THRESHOLD) ? 1 : 0);
+            if (dir <= 0 && g_padButtonState[pos] != 0) {
+                Pads_SetButton(pos, 0);
+            }
+            if (dir >= 0 && g_padButtonState[neg] != 0) {
+                Pads_SetButton(neg, 0);
+            }
+            if (dir < 0 && g_padButtonState[neg] == 0) {
+                Pads_SetButton(neg, 1);
+            }
+            if (dir > 0 && g_padButtonState[pos] == 0) {
+                Pads_SetButton(pos, 1);
+            }
         }
     }
 }
@@ -785,6 +822,18 @@ void Pads_DeviceEvent(const SDL_Event *event)
                 }
             }
             SDL_JoystickClose(g_pads[i].joystick);
+            /*
+             * The semantic handle for this slot has to go with the raw one.
+             * Leaving it open left g_padController[i] pointing at the old
+             * instance: after a reconnect the raw joystick was the new instance
+             * while the controller was still the old one, raw events stayed
+             * blocked because the slot "uses a controller", and the new
+             * semantic events never matched, so the pad stopped working.
+             */
+            if (g_padController[i] != NULL) {
+                SDL_GameControllerClose(g_padController[i]);
+                g_padController[i] = NULL;
+            }
             memset(&g_pads[i], 0, sizeof(Pad));
         }
         return;
@@ -806,6 +855,26 @@ void Pads_DeviceEvent(const SDL_Event *event)
     }
     pad = &g_pads[slot];
     pad->joystick = joystick;
+    /*
+     * Reopen the semantic handle for the newly attached device, in the same
+     * slot as its raw joystick, so the two lifecycles agree again. Without
+     * this a controller plugged in after start-up was seen only as a raw
+     * joystick (the semantic path had no handle) or not at all (the slot was
+     * still marked as controller-driven by the stale handle).
+     */
+    if (g_padController[slot] != NULL) {
+        SDL_GameControllerClose(g_padController[slot]);
+        g_padController[slot] = NULL;
+    }
+    if (SDL_IsGameController(event->jdevice.which)) {
+        g_padController[slot] = SDL_GameControllerOpen(event->jdevice.which);
+        if (g_padController[slot] == NULL) {
+            Log_Printf("Pads: controller slot %d attached but could not be opened: %s\n", slot, SDL_GetError());
+        } else {
+            Log_Printf("Pads: controller slot %d opened on reconnect (%s)\n", slot,
+                       SDL_GameControllerName(g_padController[slot]));
+        }
+    }
     pad->hat_base = SDL_JoystickNumAxes(joystick) * 2;
     pad->button_base = pad->hat_base + SDL_JoystickNumHats(joystick) * 4;
     pad->button_count = pad->button_base + SDL_JoystickNumButtons(joystick);

@@ -5,6 +5,8 @@
  * Floating point follows the x87 code of the original: intermediate results
  * stay in double; float to int conversions truncate like __ftol2.
  */
+#include <stdio.h>
+
 #include "mugen.h"
 
 /* ------------------------------------------------------------------ coordinates */
@@ -247,6 +249,34 @@ void Screen_EndFrame(void)
         Timer_WaitFrame();
     }
     Screen_Present();
+#ifdef ANDROID_PORT
+#ifdef MUGEN_GLES
+    /*
+     * Loss rehearsal (RENDERING_PLAN 12.6): if a file named "gl_loss_test"
+     * exists in the working directory, destroy the GL context once so the
+     * restore path can be exercised on a device without waiting for Android to
+     * reclaim the context for real. A file rather than an environment variable
+     * because a native Android process does not inherit the shell's exported
+     * variables, and adb can create the file. The file is renamed on use, so it
+     * fires exactly once per run.
+     */
+    if ((g_renderMode == RENDER_OPENGL || g_renderMode == RENDER_OPENGL_SCREEN) && g_game != NULL) {
+        static int checked;
+
+        if (!checked) {
+            FILE *probe = fopen("gl_loss_test", "r");
+
+            if (probe != NULL) {
+                fclose(probe);
+                checked = 1;
+                remove("gl_loss_test");
+                Log_Printf("GLES: destroying the context for the loss test (frame %d)\n", (int)g_game->frames);
+                Android_GLForceContextLoss();
+            }
+        }
+    }
+#endif
+#endif
 #ifdef ANDROID_PORT
     /*
      * Only the frame boundary presents; skipped frames stay skipped. GL modes

@@ -109,7 +109,10 @@ record SW02 OPEN "PalFX/shear/rotate/Q golden images need GPU reference captures
 record FT01 OPEN "font palette/alpha comparison needs TTF fixture runs"
 record VT01-device OPEN "V1/V2 logic gates pass on host (VT01-caps); device probe needs the console"
 record VT02-device OPEN "V3/V4 shader+blend gates pass structurally; pixel parity needs the console"
-record ES01-device OPEN "needs GLES device (M8 draw path not yet landed)"
+# The GLES draw path landed (85048b6) and renders on hardware; this runner is
+# host-only, so the device half of ES01 stays OPEN here. The evidence that does
+# exist is a recorded device run, not a pass from this script.
+record ES01-device OPEN "host runner cannot reach a GPU; device run recorded in port/android/README.md (5.3)"
 record E2E01 OPEN "menu/select/match/screenshot matrix needs scripted runs"
 
 echo "== layout evidence =="

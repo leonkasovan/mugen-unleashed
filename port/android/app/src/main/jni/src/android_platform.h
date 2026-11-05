@@ -25,6 +25,13 @@ SDL_Surface *Android_CreateDisplay(int width, int height, int depth, int keep_as
 SDL_Surface *Android_CreateDisplayGL(int width, int height, int depth, int keep_aspect);
 int Android_GLPresent(void);
 void Android_GLDrawableSize(int *w, int *h);
+/* Context loss (RENDERING_PLAN 12.6): rebuild after Android destroyed it. */
+int Android_GLRecreateContext(void);
+int Android_GLContextValid(void);
+/* Test hook: destroy the context as Android would (loss simulation). */
+int Android_GLForceContextLoss(void);
+/* Tears the GL window and context down for the System fallback. */
+void Android_DestroyGLContext(void);
 #endif
 int Android_PresentFrame(void);
 void Android_MarkDisplayDirty(SDL_Surface *surface);

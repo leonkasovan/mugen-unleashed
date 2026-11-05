@@ -9,6 +9,9 @@
 /* <SDL.h> comes from mugen.h, which pulls it in after glad.h. */
 
 #include "mugen.h"
+#ifdef MUGEN_GLES
+#include "gles_render.h"
+#endif
 #ifdef MUGEN_SDL2_API
 #include "sdl2keys.h"
 #endif
@@ -274,6 +277,34 @@ void Events_Poll(void)
         case SDL_APP_DIDENTERFOREGROUND:
             Android_SetBackground(0);
             g_keyModState = SDL_GetModState();
+#ifdef MUGEN_GLES
+            /*
+             * RENDERING_PLAN 12.6: the GL context may not have survived the
+             * time in the background. If it is gone (or the driver reported a
+             * loss), rebuild it and let the renderer recreate its objects --
+             * every name it held belongs to the old context. On failure the
+             * renderer stays "not ready", which makes the GL modes fall back
+             * to System on the next video-mode change instead of drawing into
+             * dead names.
+             */
+            if ((g_renderMode == RENDER_OPENGL || g_renderMode == RENDER_OPENGL_SCREEN) &&
+                (!Android_GLContextValid() || !Gles_IsReady())) {
+                int dw = 0;
+                int dh = 0;
+
+                Android_GLDrawableSize(&dw, &dh);
+                Gles_OnContextLost();
+                if (Android_GLRecreateContext()) {
+                    if (!Gles_OnContextRestore(dw, dh)) {
+                        Log_Printf("GLES: renderer could not be rebuilt after restore; "
+                                   "recreate the video mode to fall back to System\n");
+                    }
+                } else {
+                    Log_Printf("GLES: context could not be recreated; recreate the video mode "
+                               "to fall back to System\n");
+                }
+            }
+#endif
             if (g_onActivate != NULL) {
                 g_onActivate(1);
             }

@@ -357,6 +357,37 @@ void System_Init(void)
         } else {
             Error_Exit();
         }
+#elif defined(ANDROID_PORT) && defined(MUGEN_GLES)
+        /*
+         * M8: a GL failure at this point is a failed window/context/loader
+         * stage, not a machine that cannot render. Android still has the
+         * System path, so recover exactly as the Vita branch does instead of
+         * exiting -- the GL qualification below (Gl_Init) only ever saw modes
+         * whose context had already been created, so a device that refuses an
+         * ES 3.0 context used to quit even though System was available.
+         *
+         * The requested mode is left alone: MUGEN_STRICT_RENDERER still
+         * rejects the substitution, and the startup line reports both.
+         */
+        if (g_renderMode != RENDER_SYSTEM) {
+            Log_Printf("falling back to the system renderer. ");
+            Gl_Deinit();
+            Android_DestroyGLContext();
+            g_renderMode = RENDER_SYSTEM;
+            g_game->render_mode = RENDER_SYSTEM;
+            g_game->depth = 16;
+            g_game->stage_fit = 0;
+            g_game->system_fit = 0;
+            Gfx_SelectRenderer(RENDER_SYSTEM);
+            g_libraryError = LIBERR_NONE;
+            if (!Video_SetMode((int)g_game->game_coord[0], (int)g_game->game_coord[1], (int)g_game->game_width,
+                               (int)g_game->game_height, g_game->depth, g_game->video_flags)) {
+                Log_Printf("failed. ");
+                Error_Exit();
+            }
+        } else {
+            Error_Exit();
+        }
 #else
         Error_Exit();
 #endif

@@ -325,6 +325,8 @@ Renderer-reset events invalidate the texture and retain CPU pixels for upload.
 
 ## 5. Verification
 
+### 5.1 Host fixtures and native tests
+
 Bootstrap/orchestration fixtures:
 
 ```sh
@@ -362,6 +364,45 @@ For release qualification inspect the **whole APK dependency closure**, not
 only the directly imported libraries. A caller-supplied prebuilt must also
 match arm64-v8a/API 21 and the pinned SDL Java/native integration.
 
+### 5.2 What the host tests do not cover
+
 The root Makefile remains for Windows/Linux. Host dummy-driver tests do not
 qualify NDK compilation, the Android GPU, physical controllers, real sound
 output or suspend/resume behavior. Record those separately in [PLAN.md](PLAN.md).
+
+### 5.3 Device run: the GLES renderer
+
+Recorded from a real device, because none of the above can reach a GPU. This is
+evidence for the M8 GLES backend, not a pass from `tools/test_qualify.sh`, which
+is host-only and keeps `ES01-device` OPEN.
+
+Device: Retroid Pocket Flip2 (kona), arm64-v8a, Android 13 (API 33), Adreno.
+Build: `port/android/build.sh --gles`, `data/mugen.cfg` with
+`RenderMode = OpenGL`.
+
+| Check | Result |
+|---|---|
+| Renderer selected | `renderer: requested=opengl effective=opengl caps=0x1F` |
+| GL context | real Adreno ES context (`AdrenoGLES-0`, `OpenGL ES Shader Compiler E031.42.24.00`) |
+| Programs | `GLES: renderer ready (indexed+rgba+solid, max texture 16384)` |
+| Startup | reaches `Mode select init` and `Match loop init`, process stays alive |
+| Frame coverage | bbox of non-black pixels `x=0..1916 y=0..1076` of 1920x1080 — identical to the System renderer |
+| Colour parity | mean RGB within one unit per channel of System over three consecutive frames |
+| Frame pacing | 60 swaps per 1000 ms with 1.0 tick per swap — identical to System |
+| GL errors | none reported on the draw or present path |
+
+What this run does **not** establish: context loss and restore (12.6), nested
+render targets, shader variant selection beyond `PERSPECTIVE_EVEN`, primitive and
+font coverage, or capture. Those are tracked in
+[RENDERING_PLAN.md §12](../../RENDERING_PLAN.md).
+
+Reproduce with:
+
+```sh
+export ANDROID_NDK_HOME="$PWD/build/android/toolchains/sdk/ndk/27.1.12297006"
+bash port/android/build.sh --gles
+adb install -r build/android/mugen-android-arm64-v8a.apk
+adb logcat -c; adb shell am force-stop org.mugen_unleashed.mugen
+adb shell am start -n org.mugen_unleashed.mugen/org.libsdl.app.SDLActivity
+adb exec-out run-as org.mugen_unleashed.mugen cat files/mugen/mugen.log   # needs a debug build
+```
