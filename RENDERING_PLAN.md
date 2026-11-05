@@ -635,43 +635,99 @@ terhadap desktop — keduanya butuh device.
 M8 adalah fitur GPU lanjutan. R05 dapat ditutup lebih dahulu melalui M5; tidak
 perlu menunggu GLES untuk menghentikan silent drop true-color pada System.
 
-Status fondasi (sesi berjalan, BUKAN klaim selesai): loader GLES 3.0
-terpisah (`third_party/glad-es-3.0` via `src/glad_es.h`, tidak pernah
-dicampur dengan glad desktop), probe capability (`src/gles_probe.c`:
-parse versi ES, NPOT+FBO by version, tanpa gate `ARB_fragment_program`),
-shader dialect GLES (`data/*_es.vert/frag`: GLSL ES 1.00, palette sampler2D
-256x1, MVP uniform), gate struktural (`tools/test_gles_shader.sh`),
-dan flag opt-in `MUGEN_GLES` di CMake Android (default OFF, System tetap).
-Draw path VBO + integrasi mode + ES01 device gate: pekerjaan lanjutan
-di bawah (todo #33 lanjutan).
+Status: **Android terverifikasi di perangkat; Linux ARM64 belum dimulai.** Yang
+di bawah ini membedakan tiga hal yang sering dicampur: apa yang berjalan, apa
+yang diuji otomatis di host, dan apa yang hanya punya bukti capture perangkat.
 
-1. Buat backend programmable dengan sumber API GLES dan loader yang sesuai;
-   jangan mengompilasi glad desktop/fixed-function sebagai GLES.
-2. Pada Android, pertahankan SDL2 native, lifecycle Android dan satu owner
-   window/context. Jalur SDL_Renderer System dan direct GL tidak aktif bersamaan
-   pada satu window. Jangan memakai `MUGEN_VITA_GL` untuk menghindari compile error.
-   Audit guards `ANDROID_PORT` di `sprite.c`, `gfx.c`, `globals.c`, `config.c`
-   dan source exclusions CMake: tabel GL yang sekarang NULL dan texture upload
-   yang sengaja tidak dikompilasi harus diganti dengan dispatch provider GLES
-   yang benar. Menghapus pemaksaan System saja akan memilih jalur tidak lengkap.
-3. Pilih profil GLES/GLSL dari kemampuan perangkat yang diukur. Siapkan shader
-   dialect desktop, GLES dan Vita secara eksplisit bila source bersama tidak
-   kompatibel. Jangan menganggap string GLES 3.x menjadikan GLSL 120 valid.
-4. Reuse matematika vertex, kontrak palette 2D, fixture PalFX/FBO dan compositing
-   dari M7 bila cocok, tanpa memaksakan driver, shader translator atau workaround
-   hardware Vita pada Android/Linux.
-5. Di Linux, bedakan desktop GL compatibility dari GLES-only EGL. Pilih provider
-   yang teruji, atau fallback System dengan alasan. Tidak mengklaim GPU bekerja
-   hanya karena binary ARM64 berhasil link.
-6. Uji context loss Android: resource CPU yang diperlukan untuk recreate harus
-   tetap tersedia; object name lama dibatalkan. Renderer reset SDL_Renderer dan
-   hilangnya konteks direct GL adalah lifecycle berbeda.
-7. Integrasikan mode cfg sebelum pemuatan asset, capture, target FBO, resize,
-   orientation/output scaling dan swap tepat sekali. Pertahankan koordinat game.
+Fondasi yang selesai: loader GLES 3.0 terpisah (`third_party/glad-es-3.0` via
+`src/glad_es.h`, tidak pernah dicampur dengan glad desktop), probe capability
+(`src/gles_probe.c`), shader GLSL ES (`data/*_es.vert/frag`, palette sampler2D
+256×1, MVP uniform), draw path VBO dengan attribute binding eksplisit
+(`src/gles_draw.c`), matematika vertex di CPU (`src/gl_mvp.c`), jalur tekstur dan
+render target FBO serta present di `src/gles_render.c`, dan pemilihan mode
+sebagai tabel murni (`src/render_policy.c`). Android memegang satu owner
+window/context pada satu waktu (`port/android/app/src/main/jni/src/android_video.c`).
+
+Bukti perangkat ada di
+[port/android/README.md §5.3](port/android/README.md): Adreno, `requested=opengl
+effective=opengl caps=0x1F`, cakupan frame dan laju frame identik dengan System,
+warna dalam satu satuan per kanal. Itu bukti satu platform dan satu jalur, bukan
+kualifikasi M8.
+
+Gate host yang menjaga bagian-bagian yang bisa diuji tanpa GPU:
+
+| Gate | Menjaga |
+|---|---|
+| `ES01-struct` | dialect shader GLES, palette 2D, marker define |
+| `GL-MVP` | matematika MVP dan quad builder terhadap hasil desktop |
+| `CF01-policy` | tabel pemilihan mode, termasuk `gl_present` vs `gl_screen` |
+| `BLEND01` | faktor blend sprite terhadap persamaan `softblend.c` |
+| `PRIM01` | warna dan blend primitif terhadap `prim.c` |
+| `CLIP01` | clip rect mencapai jalur GL tepat pada backend yang punya GL |
+| `BUILD01` | modul bersama tetap dapat dikompilasi di tiap backend |
+
+Ketujuh gate itu terdaftar di `tools/test_qualify.sh` (PASS=19, FAIL=0), dan
+empat di antaranya punya mutasi permanen di `tools/test_mutate.sh` (caught=10,
+missed=0): GL-MVP, BLEND01, CLIP01 dan PRIM01.
+
+Tiga bug GLES sampai ke perangkat: clip rect tidak pernah disetel, warna
+primitif didekode sebagai RGB565, dan fill aditif dipetakan ke opaque. Ketiganya
+lolos karena tidak ada gate untuk kelasnya, bukan karena kurang hati-hati pada
+satu baris. Gate di atas adalah jawaban untuk kelas itu.
+
+1. **Backend programmable dengan sumber API GLES.** Selesai. `MUGEN_GLES`
+   memilih glad ES; glad desktop dan fixed-function tidak pernah dikompilasi
+   sebagai GLES.
+2. **Satu owner window/context di Android.** Selesai. `android_video.c`
+   membuat window/context GL *atau* SDL_Renderer, tidak keduanya; berpindah mode
+   menghancurkan yang lama lebih dahulu. Guard `ANDROID_PORT` di `sprite.c`,
+   `gfx.c` dan `config.c` sudah dibuka untuk GLES dengan dispatch tabel yang
+   benar. **Temuan:** guard `#ifndef ANDROID_PORT` di `gfx.c` membuat
+   `Gl_ApplyClipRect` tak pernah dipanggil di Android; akibatnya background
+   judul (strip `window` ber-`trans = add`) menutupi seluruh frame dan menjadi
+   putih. Diperbaiki di `89c0c50`, dijaga `CLIP01`.
+3. **Profil GLES/GLSL dari kemampuan terukur.** Sebagian. Probe memilih dari
+   versi ES dan extension yang benar-benar dilaporkan. **Terbuka:** pemilihan
+   varian shader. Backend hanya mengompilasi `PERSPECTIVE_EVEN` dan membiarkan
+   `INDEX_*`/`PALFX_DISABLE` memakai default ES; itu setara secara fungsi tetapi
+   bukan sembilan varian desktop.
+4. **Reuse matematika/fixture M7.** Selesai untuk matematika vertex dan kontrak
+   palette 2D (`src/gl_mvp.c` dipakai bersama, diuji `GL-MVP`). Tidak ada
+   workaround driver Vita yang dibawa ke Android.
+5. **Linux: desktop GL compatibility vs GLES-only EGL.** **Belum dimulai.**
+   `rg MUGEN_GLES Makefile` kosong dan `src/gles_render.c` masih di-guard
+   `ANDROID_PORT`. Tidak ada klaim GPU Linux; target ARM64 hanya berhasil link.
+6. **Context loss Android.** Selesai. `Gles_OnContextLost` membatalkan seluruh
+   object name, `Gles_OnContextRestore` membangun ulang program, dan registry
+   tekstur tumbuh dinamis sehingga tidak ada objek yang lolos. Sprite bertahan
+   lewat `GlTex_SetBacking`/`GlTex_Revive` karena `Sprite_Init` membebaskan
+   piksel CPU setelah upload. Restore yang gagal tidak meninggalkan renderer
+   mati: `Android_RequestRendererFallback` meminta `System_ReinitVideo`, jalur
+   recovery yang sama dengan start dingin. Diverifikasi di perangkat dengan
+   loss yang disengaja (`gl_loss_test`).
+7. **Integrasi cfg, capture, target FBO, resize, scaling, swap.** Sebagian
+   besar selesai: mode dibaca sebelum aset dimuat, present memakai satu swap per
+   frame dengan proyeksi ukuran video, capture mengembalikan buffer RGBA mentah
+   sesuai kontrak `GfxCaptureFn` dan membalik baris hanya untuk window
+   framebuffer. **Terbuka:** `OpenGLScreen` di Android belum punya presenter
+   upload framebuffer CPU, jadi `caps.gl_screen = 0` dan permintaan mode itu
+   jatuh ke System dengan alasan tercatat — bukan diam-diam menghitam.
+   `Gfx_GlInvertPixel` tidak didukung (GLES tanpa logic op) dan dicatat sekali.
+
+Perbedaan yang **bukan** regresi, sudah diperiksa dan sengaja dibiarkan: match
+OpenGL memakai letterbox karena `StageFit = 1` di `mugen.cfg`, sedangkan
+`config.c` memaksanya 0 untuk System. Itu perilaku renderer asli.
 
 Gate: GPU sprite aktif tanpa fallback, semua fixture true-color/indexed/PalFX
 lulus, resume merekonstruksi resource, dan System tetap menjadi recovery yang
 teruji. M8 tidak dinyatakan selesai hanya dengan satu triangle atau layar menu.
+
+Keadaan gate itu sekarang: sprite GPU aktif tanpa fallback **ya** (Android,
+perangkat nyata); resume merekonstruksi resource **ya** (perangkat); System
+sebagai recovery **ya** (startup dan resume). **Belum:** paritas piksel per
+fixture true-color/indexed/PalFX (bukti yang ada berupa capture layar dan
+rata-rata, bukan fixture per kasus), ES01-device otomatis (butuh harness readback
+GLES; saat ini dicatat sebagai OPEN di qualifier), dan seluruh butir 5 (Linux).
 
 ## 13. M9 — Matriks pengujian dan bukti penerimaan
 
