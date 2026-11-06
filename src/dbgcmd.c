@@ -26,7 +26,7 @@ void Debug_ResetLifePowerTime(void)
             StateDefs *states = p->custom_states != NULL ? p->custom_states : p->states;
             KeyedArray *list = states->list;
             int index = KeyedArray_Find(list, 5120, 0);
-            int exists = index != -1 && list->data + list->elem_size * index != NULL;
+            int exists = index != -1 && list->data != NULL;
             int prev = p->state_no;
 
             p->prev_state_no = prev;

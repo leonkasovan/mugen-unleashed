@@ -18,7 +18,7 @@ static void Rd_ChangeState(Player *p, int state)
     StateDefs *states = p->custom_states != NULL ? p->custom_states : p->states;
     KeyedArray *list = states->list;
     int index = KeyedArray_Find(list, state, 0);
-    int exists = index != -1 && list->data + list->elem_size * index != NULL;
+    int exists = index != -1 && list->data != NULL;
     int prev = p->state_no;
 
     p->prev_state_no = prev;

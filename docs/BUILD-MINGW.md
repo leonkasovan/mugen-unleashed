@@ -41,6 +41,57 @@ Targets and variables:
 
 Overridable: `CC`, `AR`, `WINDRES`, `DLLTOOL`, `PYTHON3`, `BUILD`, `DEBUG`, `V`.
 
+## Checking compiler warnings
+
+The reported w64devkit 32-bit SDL2 build contained 117 warnings:
+
+| Diagnostics | Count | Cause and correction |
+|---|---:|---|
+| `-Wcomment` | 89 | A shared header and three source comments contained slash-star wildcard text. Reword the comments; no compiler flag is disabled. |
+| `-Waggressive-loop-optimizations` | 1 | AI key 13 read past `keys`. Read and write the adjacent `read` member explicitly to retain the reference behavior. |
+| `-Waddress` | 9 | Comparing a computed element address against NULL does not validate the backing storage. Check the storage pointer, and validate select-grid coordinates before indexing. |
+| `-Wformat-overflow`, `-Wstringop-overflow`, `-Wrestrict` | 6 | File/QuickVS paths, stage labels, scene headers and the startup directory used incorrect string bounds. Check complete paths, size display buffers correctly, and copy within destination capacity. Scene headers are checked before removing brackets. |
+| `-Wmaybe-uninitialized` | 8 | GCC could not establish the loop's previous-scene initialization. Explicitly initialize the baseline; regression tests check actual field inheritance. |
+| `-Wincompatible-pointer-types` | 1 | The SDL_mixer deinit slot is `void(void)`, while the old stub returned int. Use a correctly typed no-op and remove the Makefile's error downgrade. |
+| `-Warray-bounds` | 1 | An empty counted-string key allocated four bytes for a declared eight-byte object. Both allocation paths now include the declared object and check size arithmetic. |
+| `-Wunused-function` | 1 | The direction-source writer is only called by the Android controller backend. Compile that private function only there. |
+| `-Wuse-after-free` | 1 | `Resampler_Close` freed a stateless session twice. Free it once. This intentionally fixes the unsafe original behavior. |
+
+The accompanying cross-platform check also corrected SDL1 joystick-name API
+usage, public SDL_mixer/SDL_ttf opaque types, missing declarations, timer
+pointer types, and victory-quote pointers on 64-bit hosts. Quote selection now
+wraps at index 99 rather than reading the following count field as a pointer.
+Long generated helper names are bounded. Linux selects Lua's existing
+`mkstemp` implementation to avoid its `tmpnam` linker warning.
+
+For a fresh warning check (the compiler flags are not part of the config
+stamp, so use a new build directory):
+
+```sh
+make -j8 BUILD=build/warnings-sdl2 SDL_BACKEND=2 \
+  ENGINE_WARN='-Wall -Werror -Wno-unused-parameter -Wno-unused-result -Wno-stringop-truncation'
+make -j8 BUILD=build/warnings-sdl1 SDL_BACKEND=1 \
+  ENGINE_WARN='-Wall -Werror -Wno-unused-parameter -Wno-unused-result -Wno-stringop-truncation'
+bash tools/test_build_warnings.sh
+bash tools/test_cns_abi.sh
+```
+
+`WARN01` in `tools/test_qualify.sh` runs the new warning regression suite.
+The standalone scripts accept `CC`, `CFLAGS`, `LDFLAGS`, `OUT`, and `RUNNER`;
+`SANITIZE=1` enables AddressSanitizer and UndefinedBehaviorSanitizer on a host
+that provides them. `MUGEN_TEST_TARGET=win32|win64` uses the shared target
+selection and asserts the harness pointer width.
+
+Validation for this change: all 88 source units compiled with the flags above
+for i686 MinGW GCC 13.2 (SDL1 and SDL2) and Linux x86-64 GCC 13.3 (SDL2).
+The Linux engine linked, and Linux runtime regressions passed with ASan/UBSan.
+These are cross-compilation results for Windows, not execution of w64devkit's
+Windows-hosted GCC 16.1 or of the Windows game. MSVC, Android/Vita builds and
+gameplay log comparisons remain unverified for this change. The Windows-only
+`test_zoomdiff.sh` could not run on this Linux host (`-mconsole` and the Windows
+SDL/SDL_gfx static kit are required); the scaler change only adds its missing
+standard `memcpy` declaration.
+
 ## Why a 32-bit toolchain is required
 
 `mugen.exe` is a reconstruction of a 32-bit PE (i386) binary; every struct in

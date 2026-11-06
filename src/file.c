@@ -29,6 +29,7 @@ int File_Find(const char *path, char *out, char *dir_out, const char *base_dir)
     char dir[0x200];
     char full[0x200];
     char file[0x1F0];
+    size_t path_len, file_len;
     int i;
 
     if (path[0] != '\0' && path[1] == ':') {
@@ -42,21 +43,41 @@ int File_Find(const char *path, char *out, char *dir_out, const char *base_dir)
     prefixes[1] = g_game->motif_dir;
     prefixes[2] = "./";
     prefixes[3] = "data/";
+    /* Port fix: Path_Split has no capacity arguments. Validate both pieces
+     * before calling it, then reject candidates that cannot fit whole. */
+    path_len = strlen(path);
+    /* Find the final component (both slash styles are accepted). */
+    file_len = 0;
+    while (file_len < path_len && path[path_len - file_len - 1] != '/' &&
+           path[path_len - file_len - 1] != '\\') {
+        file_len++;
+    }
+    if (path_len - file_len >= sizeof(dir) || file_len >= sizeof(file)) {
+        Error_Printf("File path too long: %s", path);
+        return 0;
+    }
     Path_Split(path, dir, file);
     if (dir[0] == '/' || dir[0] == '\\') {
         prefixes[0] = "";
     }
     for (i = 0; i < 4; i++) {
         FILE *fp;
+        int len;
         if (prefixes[i] == NULL) {
             continue;
         }
-        sprintf(full, "%s%s%s", prefixes[i], dir, file);
+        len = snprintf(full, sizeof(full), "%s%s%s", prefixes[i], dir, file);
+        if (len < 0 || (size_t)len >= sizeof(full)) {
+            continue;
+        }
         fp = fopen(full, "rb");
         if (fp != NULL) {
             fclose(fp);
             if (dir_out != NULL) {
-                sprintf(dir_out, "%s%s", prefixes[i], dir);
+                /* This prefix is bounded by the already checked full path. */
+                size_t dir_len = (size_t)len - file_len;
+                memcpy(dir_out, full, dir_len);
+                dir_out[dir_len] = '\0';
             }
             strcpy(out, full);
             return 1;

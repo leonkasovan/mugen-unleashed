@@ -251,10 +251,9 @@ Cutscene *Storyboard_Create(const char *dir, Ini *ini)
  * scene; the first one has no clear colour and always stops the BGM.
  *
  * Quirks kept: two scenes with the same group name both read the first
- * one; the scene name buffer may be cleared one byte before its start
- * (empty name) and filled one byte past its end; errors after the scene
- * list was made leak it, and a scene that fails leaks its texts, sounds
- * and background; the sound list of a scene is used without a NULL check.
+ * one; errors after the scene list was made leak it, and a scene that fails
+ * leaks its texts, sounds and background; the sound list of a scene is used
+ * without a NULL check.
  */
 Storyboard *Storyboard_Parse(const char *dir, Ini *ini)
 {
@@ -265,7 +264,9 @@ Storyboard *Storyboard_Parse(const char *dir, Ini *ini)
     } buf;
     const char *dirs[3];
     Scene cur;
-    Scene prev;
+    /* Port fix: make the inherited baseline explicit to the optimizer. The
+     * first scene still supplies the original defaults below. */
+    Scene prev = {0};
     SceneSound snd;
     Storyboard *sb;
     DynArray *lines;
@@ -386,9 +387,19 @@ Storyboard *Storyboard_Parse(const char *dir, Ini *ini)
     for (i = 0; i < count; i++) {
         line = ((const char **)lines->data)[i];
         /* The group name: the header without its brackets. */
-        buf.name[0] = '\0';
-        strncat(buf.name, line + 1, 0x100);
-        (buf.name - 1)[strlen(buf.name)] = '\0';
+        /* Port fix: remove the brackets within the destination, including
+         * for an empty group, and reject overlong names rather than overflow. */
+        {
+            size_t len = strlen(line);
+            if (len < 2 || line[len - 1] != ']' || len - 2 >= sizeof(buf.name)) {
+                strcpy(g_libraryErrorText, "Invalid or overlong scene group name");
+                free(lines->data);
+                free(lines);
+                goto fail;
+            }
+            memcpy(buf.name, line + 1, len - 2);
+            buf.name[len - 2] = '\0';
+        }
         Ini_SelectGroup(ini, buf.name);
 
         if (i > 0) {

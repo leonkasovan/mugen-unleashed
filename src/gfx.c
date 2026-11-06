@@ -525,14 +525,14 @@ void Gfx_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
          */
         if (g_videoSurface != NULL && surface != NULL &&
             (surface->w != g_videoSurface->w || surface->h != g_videoSurface->h)) {
-            int64_t t0 = 0;
+            LARGE_INTEGER t0 = {0};
 
             QueryPerformanceCounter(&t0);
             Vita_ScaleToVideo(surface, g_videoSurface);
             {
-                int64_t t1 = 0;
+                LARGE_INTEGER t1 = {0};
                 QueryPerformanceCounter(&t1);
-                Vita_PerfAddScale(t1 - t0);
+                Vita_PerfAddScale(t1.QuadPart - t0.QuadPart);
             }
         } else
 #endif
@@ -576,14 +576,14 @@ void Gfx_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
      */
     if ((g_videoFlags & VIDEO_HWBLIT) == 0 && g_videoSurface != NULL &&
         (g_videoSurface->flags & SDL_DOUBLEBUF) != 0) {
-        int64_t t0 = 0;
+        LARGE_INTEGER t0 = {0};
 
         QueryPerformanceCounter(&t0);
         SDL_Flip(g_videoSurface);
         {
-            int64_t t1 = 0;
+            LARGE_INTEGER t1 = {0};
             QueryPerformanceCounter(&t1);
-            Vita_PerfAddFlip(t1 - t0);
+            Vita_PerfAddFlip(t1.QuadPart - t0.QuadPart);
         }
     }
 #endif

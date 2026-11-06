@@ -512,7 +512,7 @@ SpriteSet *Sff1_LoadSelected(Stream *s, const Sff1Header *hdr, const int *select
                 if (sub.group == p[0] && sub.number == p[1]) {
                     KeyedArray *sprites = set->sprites;
                     int index = KeyedArray_Find(sprites, p[0], p[1]);
-                    if (index == -1 || sprites->data + index * sprites->elem_size == NULL) {
+                    if (index == -1 || sprites->data == NULL) {
                         wanted = 1;
                         break;
                     }

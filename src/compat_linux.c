@@ -167,7 +167,7 @@ DWORD timeGetTime(void)
  */
 #define COMPAT_QPC_HZ 10000000LL
 
-BOOL QueryPerformanceCounter(int64_t *count)
+BOOL QueryPerformanceCounter(LARGE_INTEGER *count)
 {
     struct timespec ts;
 
@@ -175,16 +175,16 @@ BOOL QueryPerformanceCounter(int64_t *count)
         return FALSE;
     }
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    *count = ((int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec) / 100;
+    count->QuadPart = ((int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec) / 100;
     return TRUE;
 }
 
-BOOL QueryPerformanceFrequency(int64_t *freq)
+BOOL QueryPerformanceFrequency(LARGE_INTEGER *freq)
 {
     if (freq == NULL) {
         return FALSE;
     }
-    *freq = COMPAT_QPC_HZ;
+    freq->QuadPart = COMPAT_QPC_HZ;
     return TRUE;
 }
 

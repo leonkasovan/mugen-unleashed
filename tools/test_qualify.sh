@@ -115,6 +115,7 @@ run_host SDL2A01 bash tools/test_sdl2audio.sh
 run_host REVIEW01 bash tools/test_review_regress.sh
 # Controller/parser ownership, numeric edges and malformed CNS input.
 run_host CNS01 bash tools/test_cns_abi.sh
+run_host WARN01 bash tools/test_build_warnings.sh
 run_host GL-MVP bash tools/test_gl_mvp.sh
 run_host CF01-policy bash tools/test_render_policy.sh
 if [ -n "$ENGINE" ] && [ -x "$ENGINE" ]; then

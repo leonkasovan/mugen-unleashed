@@ -372,10 +372,12 @@ int Ini_FindGroup(Ini *ini, const char *name)
     char header[256];
     int len, i;
 
-    header[0] = '[';
-    strncpy(header + 1, name, 0xFF);
-    strcat(header, "]");
-    len = (int)strlen(header);
+    /* Port fix: leave room for both brackets and the terminator. Reject an
+     * overlong name instead of selecting a different, truncated group. */
+    len = snprintf(header, sizeof(header), "[%s]", name);
+    if (len < 0 || (size_t)len >= sizeof(header)) {
+        return -1;
+    }
     for (i = 0; i < ini->group_count; i++) {
         if (Str_PrefixMatchI(lines[group_lines[i]], header, len)) {
             if (i < 0 || i >= ini->group_count) {
@@ -394,11 +396,14 @@ int Ini_SelectGroup(Ini *ini, const char *name)
     char localized[256];
     int r;
 
-    if (ini->lang != NULL && ini->lang[0] != '\0') {
-        _snprintf(localized, sizeof(localized), "%s.%s", ini->lang, name);
-        r = Ini_FindGroup(ini, localized);
-        if (r != -1) {
-            return r;
+    /* lang is an inline array, so its address is never NULL. */
+    if (ini->lang[0] != '\0') {
+        r = snprintf(localized, sizeof(localized), "%s.%s", ini->lang, name);
+        if (r >= 0 && (size_t)r < sizeof(localized)) {
+            r = Ini_FindGroup(ini, localized);
+            if (r != -1) {
+                return r;
+            }
         }
     }
     return Ini_FindGroup(ini, name);

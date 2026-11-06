@@ -265,18 +265,12 @@ endif
 # -fno-strict-aliasing: the reconstruction aliases through unions/pointers the
 # way the original machine code did; do not let GCC exploit TBAA.
 #
-# -Wno-error=incompatible-pointer-types: src/globals.c stores an `int (void)`
-# function in a `void (void)` slot of the BGM subsystem table (the original only
-# ever calls it for its side effects). MSVC accepts it as a warning, GCC 14+
-# rejects it as an error by default.
-#
 # -Wno-stringop-truncation: the reconstruction copies into fixed-size fields
 # with strncpy/strncat exactly as the original did (the original relies on the
 # zero-filled struct, not on NUL termination).
 
 ENGINE_WARN := -Wall -Wno-unused-parameter -Wno-unused-result \
-               -Wno-stringop-truncation \
-               -Wno-error=incompatible-pointer-types
+               -Wno-stringop-truncation
 
 ifeq ($(DEBUG),1)
   OPT     := -O0 -g3
@@ -549,10 +543,14 @@ $(OBJ_DIR)/src/%.o: $(SRC_DIR)/%.c $(CONFIG_STAMP)
 
 # --- Lua 5.1.4 --------------------------------------------------------------
 
+# Port fix: select Lua's existing POSIX implementation on Linux. The default
+# tmpnam implementation emits a linker warning; no readline dependency needed.
+LUA_PLATFORM_DEFS := $(if $(filter linux,$(MUGEN_FAMILY)),-DLUA_USE_MKSTEMP)
+
 $(OBJ_DIR)/lua/%.o: $(TP_DIR)/lua-5.1.4/src/%.c $(CONFIG_STAMP)
 	@echo "  CC      $<"
 	$(Q)mkdir -p $(dir $@)
-	$(Q)$(CC) $(TP_CFLAGS) -I$(TP_DIR)/lua-5.1.4/src -c $< -o $@
+	$(Q)$(CC) $(TP_CFLAGS) $(LUA_PLATFORM_DEFS) -I$(TP_DIR)/lua-5.1.4/src -c $< -o $@
 
 $(LUA_LIB): $(LUA_OBJS)
 	@echo "  AR      $@"

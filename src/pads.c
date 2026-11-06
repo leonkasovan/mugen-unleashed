@@ -85,11 +85,18 @@ int Pads_Init(void)
     for (i = 0; i < g_padCount; i++) {
         SDL_Joystick *joy = SDL_JoystickOpen(i);
         Pad *pad = &g_pads[i];
+        const char *name;
         int count;
 
         if (joy == NULL) {
             continue;
         }
+        /* Port fix: SDL1 names a device index; SDL2 names an open handle. */
+#ifdef MUGEN_SDL2_API
+        name = SDL_JoystickName(joy);
+#else
+        name = SDL_JoystickName(i);
+#endif
         pad->joystick = joy;
         pad->hat_base = SDL_JoystickNumAxes(joy) * 2;
         pad->button_base = pad->hat_base + SDL_JoystickNumHats(joy) * 4;
@@ -109,7 +116,7 @@ int Pads_Init(void)
          */
         Log_Printf("pads: %d \"%s\" axes=%d hats=%d buttons=%d -> "
                    "axis codes %d..%d, hat codes %d..%d, button codes %d..%d\n",
-                   i, SDL_JoystickName(joy) != NULL ? SDL_JoystickName(joy) : "(unnamed)",
+                   i, name != NULL ? name : "(unnamed)",
                    SDL_JoystickNumAxes(joy), SDL_JoystickNumHats(joy), SDL_JoystickNumButtons(joy),
                    1, pad->hat_base, pad->hat_base + 1, pad->hat_base + 4,
                    pad->button_base + 1, pad->button_base + SDL_JoystickNumButtons(joy));
@@ -201,6 +208,7 @@ static void Pads_ComposeDirections(int slot)
 }
 
 /* Records what one source holds for one direction and re-derives the union. */
+#ifdef ANDROID_PORT
 static void Pads_SetDirectionSource(int slot, int source, int code, int held)
 {
     int bit;
@@ -219,6 +227,7 @@ static void Pads_SetDirectionSource(int slot, int source, int code, int held)
     }
     Pads_ComposeDirections(slot);
 }
+#endif /* only the Android controller path feeds per-source directions */
 
 /*
  * Forgets every slot's direction sources.

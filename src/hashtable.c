@@ -246,11 +246,16 @@ CountedStr *CountedStr_Make(const char *s)
         return NULL;
     }
     len = strlen(s);
-    cs = malloc(len + 4);
+    /* Port fix: allocate at least the declared object, even for an empty
+     * key, and avoid wrapping the allocation size on 32-bit hosts. */
+    if (len > UINT32_MAX || len > SIZE_MAX - sizeof(*cs)) {
+        return NULL;
+    }
+    cs = malloc(sizeof(*cs) + len);
     if (cs == NULL) {
         return NULL;
     }
-    cs->len = len;
+    cs->len = (unsigned int)len;
     memcpy(cs->data, s, len);
     return cs;
 }
@@ -259,7 +264,13 @@ CountedStr *CountedStr_Make(const char *s)
 void *CountedStr_Copy(const void *key, void *ud1, void *ud2)
 {
     const CountedStr *src = key;
-    CountedStr *cs = malloc(src->len + 4);
+    size_t len = src->len;
+    CountedStr *cs;
+
+    if (len > SIZE_MAX - sizeof(*cs)) {
+        return NULL;
+    }
+    cs = malloc(sizeof(*cs) + len);
 
     if (cs != NULL) {
         cs->len = src->len;

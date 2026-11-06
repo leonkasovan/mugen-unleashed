@@ -8,7 +8,7 @@
 #if defined(MUGEN_SDL2) || defined(ANDROID_PORT) || defined(MUGEN_ANDROID_SW)
 /*
  * Guarded because this header is also reached from SDL 1.2 builds: the
- * Makefile globs src/*.c, so a translation unit that includes this header on
+ * Makefile globs C sources under src/, so a translation unit that includes this header on
  * a non-SDL2 target would need <SDL_keycode.h>, which does not exist there.
  * With the guard the whole header is empty on those targets, matching the
  * guard the .c file already carries.

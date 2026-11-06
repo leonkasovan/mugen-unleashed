@@ -1,6 +1,10 @@
 #ifndef MUGEN_BGM_H
 #define MUGEN_BGM_H
 
+/* Port fix: use SDL_mixer's public opaque type, whose private struct tag
+ * differs between library releases. The field remains one pointer. */
+#include <SDL_mixer.h>
+
 /*
  * Types of the background music modules: the plugin registry and BGM API
  * (bgm.c), the BGM thread with its command queue and mixer callback
@@ -456,11 +460,7 @@ enum {
 
 /* The instance of the sdlmix plugin (only one at a time: g_sdlmixInstance). */
 typedef struct SdlmixInstance {
-#ifdef MUGEN_SDL2
-    struct Mix_Music *music;    /* 0x00 (SDL_mixer 2 renamed the opaque tag) */
-#else
-    struct _Mix_Music *music;   /* 0x00 */
-#endif
+    Mix_Music *music;          /* 0x00 */
     int loop;                   /* 0x04 */
     int loop_start;             /* 0x08 kept, not used */
     int loop_end;               /* 0x0C */

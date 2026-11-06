@@ -192,7 +192,9 @@ void System_Init(void)
     g = g_game;
     if (args->game_dir[0] != '\0') {
         g->game_dir[0] = '\0';
-        strncat(g->game_dir, g->cwd, 0x1FF);
+        /* Port fix: respect the destination capacity; these are adjacent
+         * fields and an oversized strncat can reach the source itself. */
+        Str_Append(g->game_dir, g->cwd, sizeof(g->game_dir));
         if (_chdir(args->game_dir) != 0) {
             Error_Printf("Could not change to gamedir %s\n", args->game_dir);
             Error_Exit();

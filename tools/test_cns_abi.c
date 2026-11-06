@@ -6,6 +6,10 @@
 #include <assert.h>
 #include <limits.h>
 #include <setjmp.h>
+/* Run from the CRT directly; no SDLmain library is linked by this harness. */
+#ifdef main
+#undef main
+#endif
 #include "test_abi.h"
 #ifdef TEST_EXPECT_BITS
 _Static_assert(sizeof(void *) * 8 == TEST_EXPECT_BITS, "wrong CNS harness ABI");

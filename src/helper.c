@@ -76,7 +76,7 @@ Player *Helper_Create(Player *p, HelperParams *hp, StateRunCtx *ctx, StateCtrl *
             if (pals != NULL) {
                 slot = KeyedArray_Find(pals, rg, rn);
             }
-            if (slot != -1 && pals->data + pals->elem_size * slot != NULL) {
+            if (slot != -1 && pals->data != NULL) {
                 PalRemapEntry en;
                 en.src_group = -1;
                 en.src_index = 0;
@@ -97,7 +97,9 @@ Player *Helper_Create(Player *p, HelperParams *hp, StateRunCtx *ctx, StateCtrl *
     if (hp->name[0] != '\0') {
         strcpy(h->name, hp->name);
     } else {
-        sprintf(h->name, "%s's helper", p->name);
+        /* Port fix: leave room for the suffix even for a maximum-length name. */
+        snprintf(h->name, sizeof(h->name), "%.*s's helper",
+                 (int)sizeof(h->name) - 10, p->name);
     }
     h->id = g_game->player_id_next++;
     h->consts = p->consts;

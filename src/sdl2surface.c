@@ -14,6 +14,7 @@
 #include "sdl2surface.h"
 #include <math.h>
 #include <limits.h>
+#include <string.h> /* memcpy is not declared by every SDL2 configuration */
 
 /* --------------------------------------------------------------- zoomSurface */
 

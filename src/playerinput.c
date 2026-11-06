@@ -56,8 +56,9 @@ void Input_Clear(InputBuf *buf)
 void PlayerInput_Push(InputBuf *in, int code_)
 {
     unsigned int code = (unsigned int)code_;
+    unsigned int key = code & 0xF;
 
-    if ((code & 0xF) == 0 || in->locked) {
+    if (key == 0 || key > KEY_COUNT || in->locked) {
         return;
     }
     in->ring[in->write] = code;
@@ -71,7 +72,13 @@ void PlayerInput_Push(InputBuf *in, int code_)
             in->read = 0;
         }
     }
-    in->keys[code & 0xF] = ~(code >> 4) & 1;
+    /* Port fix: Ai_ReleaseAll's legacy key 13 writes the adjacent read
+     * member. Preserve that quirk without an out-of-bounds array write. */
+    if (key == KEY_COUNT) {
+        in->read = ~(code >> 4) & 1;
+    } else {
+        in->keys[key] = ~(code >> 4) & 1;
+    }
 }
 
 /*

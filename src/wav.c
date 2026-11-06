@@ -13,12 +13,14 @@
  *   WAV_ERR_CHANNELS but a bad channel count as WAV_ERR_FORMAT, does not
  *   count the pad byte of unknown chunks in its position, and fails with
  *   WAV_ERR_CORRUPT when "data" comes before "fmt ";
- * - Resampler_Close frees the session twice when it has no state;
  * - the inlined frame size code of WavReader_Read, Resampler_Write and
  *   Resampler_Read falls back to an uninitialised stack slot for sample
  *   formats without a known size bit (Resampler_Read's slot holds its session
  *   argument, kept here; the others use the format value like Wav_FrameSize).
  *   Only the known formats reach them.
+ *
+ * Port fix: Resampler_Close frees a stateless session once; the original's
+ * double-free is not safe on current allocators.
  */
 #include <libresample.h>
 
@@ -366,13 +368,12 @@ ResamplerSession *Resampler_Open(const AudioFormat *out, const AudioFormat *in, 
     return sess;
 }
 
-/* 0x00489020: ends a conversion. Quirk: a session without state is freed twice. */
+/* 0x00489020: ends a conversion. Fix: free a stateless session only once. */
 void Resampler_Close(ResamplerSession *sess)
 {
     ResamplerState *st;
 
     if (sess == NULL || sess->state == NULL) {
-        free(sess);
         free(sess);
         return;
     }

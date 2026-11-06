@@ -38,7 +38,7 @@ int Player_ChangeState(int state, Player *p)
     if (state != 0) {
         KeyedArray *list = Player_StateList(p)->list;
         int i = KeyedArray_Find(list, state, 0);
-        if (i == -1 || list->data + list->elem_size * i == NULL) {
+        if (i == -1 || list->data == NULL) {
             ok = 0;
         }
     }

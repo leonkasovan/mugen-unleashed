@@ -679,7 +679,8 @@ void Debug_Draw(int index)
     GameVars *g = g_game;
     Player *p = g->players[index];
     char text[0x100];
-    char extra[0x40];
+    /* Port fix: include the full player name, int32 ID and diagnostic suffix. */
+    char extra[0x60];
     float fps;
     int y, action, spr_group, spr_number;
 

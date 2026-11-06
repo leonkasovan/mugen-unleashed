@@ -66,7 +66,7 @@ MUGEN_ASSERT_SIZE(HashParams, 0x48);
 /* A string with its length and no terminator (the keys of command tables). */
 typedef struct CountedStr {
     unsigned int len;           /* 0x00 */
-    char data[4];               /* 0x04 len bytes (the allocation is len + 4 bytes) */
+    char data[4];               /* 0x04 len bytes; allocation includes trailing storage */
 } CountedStr;
 
 struct CmdTable;

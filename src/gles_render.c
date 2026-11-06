@@ -10,8 +10,8 @@
  * What is here:
  *   - the GlTex_* texture object over GLES (8-bit index, 24-bit RGB, RGBA),
  *     with the palette as a 256x1 2D texture because GLES has no 1D textures;
- *   - shader programs from res/shaders/gles/*.vert|.frag (GLSL ES 1.00),
- *     deployed next to the game data as data/gles/*.vert|.frag;
+ *   - shader programs from the .vert/.frag files in res/shaders/gles (GLSL ES 1.00),
+ *     deployed next to the game data as the .vert/.frag files in data/gles;
  *   - the sprite path: CPU modelview (src/gl_mvp.c) + VBO quad submission
  *     (src/gles_draw.c);
  *   - the dispatch entries Gfx_SelectRenderer(RENDER_OPENGL) installs:

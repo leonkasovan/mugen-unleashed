@@ -33,6 +33,12 @@
  */
 #ifdef _WIN32
 
+#ifdef MUGEN_SDL2
+/* Port fix: SDL_MAIN_HANDLED leaves the engine entry named main; SDL2's
+ * headers no longer declare it on our behalf. */
+int main(int argc, char **argv);
+#endif
+
 static char g_stdoutPath[MAX_PATH];     /* 0x00503178 */
 static char g_stderrPath[MAX_PATH];     /* 0x00503280 */
 static int g_stdioRedirected;           /* 0x00503384 */

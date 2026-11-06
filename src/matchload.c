@@ -1,7 +1,7 @@
 /*
  * Loading, starting and ending a match (original module 0x421E80-0x4259EF,
  * strings "Loading match assets..." to "Match RNG closed"): the stage
- * (stages/*.def), the players of both teams from the player cache, the
+ * (.def files in stages/), the players of both teams from the player cache, the
  * helper slots, the quick VS and demo teams, the match RNG, the start and
  * the reset of a round, the next round of a team match, the end of a match
  * (victory quote) and the shadows and reflections of the stage.
@@ -52,7 +52,7 @@ static void Ml_ChangeState(Player *p, int state)
     StateDefs *states = p->custom_states != NULL ? p->custom_states : p->states;
     KeyedArray *list = states->list;
     int index = KeyedArray_Find(list, state, 0);
-    int exists = index != -1 && list->data + list->elem_size * index != NULL;
+    int exists = index != -1 && list->data != NULL;
     int prev = p->state_no;
 
     p->prev_state_no = prev;
@@ -205,8 +205,8 @@ int Gameflow_SetupMatch(void)
  *
  * Quirks kept: a player naming the same character as an earlier player j
  * takes the palette default from char_info[j] (j is the player, not its
- * character index), and the directory and file names are used as sprintf
- * formats.
+ * character index).
+ * Port fix: paths are checked for capacity and copied as text, not formats.
  */
 void QuickVs_SetupTeams(void)
 {
@@ -259,11 +259,21 @@ void QuickVs_SetupTeams(void)
                     }
                 }
                 if (k < 5) {
-                    sprintf(path, "chars/%s", dir);
+                    int len = snprintf(path, sizeof(path), "chars/%s", dir);
+                    if (len < 0 || (size_t)len >= sizeof(path)) {
+                        Error_Fatal("Character path too long: %s", cl->player[i]);
+                        return;
+                    }
                     strcpy(dir, path);
                 }
             }
-            sprintf(path, "%s%s", dir, file);
+            {
+                int len = snprintf(path, sizeof(path), "%s%s", dir, file);
+                if (len < 0 || (size_t)len >= sizeof(path)) {
+                    Error_Fatal("Character path too long: %s", cl->player[i]);
+                    return;
+                }
+            }
             ini = Ini_Open(path);
             if (ini == NULL) {
                 Error_Fatal("Cannot find character: %s\nPlease specify a valid character def file for QuickVS.\n",
@@ -278,8 +288,8 @@ void QuickVs_SetupTeams(void)
                 }
             }
             Ini_Free(ini);
-            sprintf(g_game->char_info[ci].dir, dir);
-            sprintf(g_game->char_info[ci].def_file, file);
+            strcpy(g_game->char_info[ci].dir, dir);
+            strcpy(g_game->char_info[ci].def_file, file);
             g = g_game;
             g->char_count++;
             info_index = ci;
@@ -1367,14 +1377,35 @@ void Match_Start(void)
     }
 }
 
+/* Port fix: quotes are pointers, not 32-bit words. Keep the reference's
+ * traversal order (1..99, then 0), but wrap before accessing quote 100. */
+static const char *Ml_VictoryQuote(const CharData *c, int preferred)
+{
+    int n, i;
+
+    if ((unsigned int)preferred < CHAR_QUOTE_COUNT && c->quotes[preferred] != NULL) {
+        return c->quotes[preferred];
+    }
+    if (c->quote_count <= 0) {
+        return NULL;
+    }
+    n = Match_Random() % c->quote_count + 1;
+    for (i = 1; i <= CHAR_QUOTE_COUNT; i++) {
+        int q = i % CHAR_QUOTE_COUNT;
+        if (c->quotes[q] != NULL && --n == 0) {
+            return c->quotes[q];
+        }
+    }
+    return NULL; /* inconsistent count: never walk outside the pointer array */
+}
+
 /*
  * 0x00424A20: ends a match: the victory quote of the winning member (its
  * chosen quote, else a random one of the character's) is kept for the
  * victory screen, the players are freed and the match RNG closed.
  *
- * Quirk kept: the random walk over the quotes starts at quote 1 and its
- * first step does not wrap, so from quote 99 it reads "quote 100", which is
- * CharData.quote_count (taken as a string pointer by strncpy).
+ * Port fix: use pointer-width quote entries and keep the random walk inside
+ * the quote array; the original could read quote_count as a string pointer.
  */
 void Match_Unload(void)
 {
@@ -1391,20 +1422,10 @@ void Match_Unload(void)
             CharData *c;
 
             if (ci != -1 && (c = CharCache_Get(ci)) != NULL && c->quote_count > 0) {
-                const int *quotes = (const int *)c->quotes;
-                int q = ts->member_data[m][0].victory_quote;
-                if ((unsigned int)q > 99 || quotes[q] == 0 || q == -1) {
-                    int n = Match_Random() % c->quote_count + 1;
-                    q = 0;
-                    do {
-                        q++;
-                        while (quotes[q] == 0) {
-                            q = (q + 1) % 100;
-                        }
-                        n--;
-                    } while (n > 0);
+                const char *quote = Ml_VictoryQuote(c, ts->member_data[m][0].victory_quote);
+                if (quote != NULL) {
+                    strncpy(g->victory_quote, quote, 0x3FF);
                 }
-                strncpy(g->victory_quote, (const char *)quotes[q], 0x3FF);
             }
         }
     }

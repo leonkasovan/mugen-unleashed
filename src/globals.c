@@ -3,28 +3,14 @@
 
 #include "mugen.h"
 
-#ifdef ANDROID_PORT
-/* clang rejects the int/void return mismatch MSVC allows; the slot is only ever
- * called through BgmPluginDeinitFn, so the cast is safe and local. */
-static void Android_SdlmixDeinit(void) {}
-#define SDLMIX_DEINIT_SLOT Android_SdlmixDeinit
-#else
-#define SDLMIX_DEINIT_SLOT Stub_ReturnZero
-#endif
+/* Port fix: the deinit slot is void(void) on every ABI. A no-op has the
+ * original stub's side effects without calling through an incompatible type. */
+static void Sdlmix_DeinitStub(void) {}
+#define SDLMIX_DEINIT_SLOT Sdlmix_DeinitStub
 
 BgmSubsystem g_bgmSdlmixSubsystem = { Bgm_BuiltinVersion, Sdlmix_Extensions, Sdlmix_Init, SDLMIX_DEINIT_SLOT, Sdlmix_Create, Sdlmix_Destroy, Sdlmix_IsPlaying, Sdlmix_Start, Sdlmix_Stop, Sdlmix_Rewind, Sdlmix_Seek, Sdlmix_Open, Sdlmix_Close, Sdlmix_GetVolume, Sdlmix_SetVolume, Sdlmix_GetLoopFlag, Sdlmix_SetLoopFlag, Sdlmix_GetLoopPoints, Sdlmix_SetLoopPoints, Sdlmix_SetEndCallback, Sdlmix_StrError, Sdlmix_Read, NULL, Sdlmix_Poll, Sdlmix_IsPaused, Sdlmix_Pause, Sdlmix_Resume, Sdlmix_SetMute, Sdlmix_GetMute, NULL }; /* 0x004f17a0 */
-/*
- * Android port: Mpg123_Deinit is BgmPluginDeinitFn (void(void)), but the mpg123
- * entry is initialised through a cast to keep this one table exactly as the
- * original .data had it. clang rejects the implicit mismatch that MSVC accepts,
- * so the cast is explicit here. The cast is safe: the slot is only ever called
- * through BgmPluginDeinitFn.
- */
-#ifdef ANDROID_PORT
-#define MPG123_DEINIT_SLOT (BgmPluginDeinitFn)(void (*)(void))Mpg123_Deinit
-#else
+/* Mpg123_Deinit already has the exact deinit callback type. */
 #define MPG123_DEINIT_SLOT Mpg123_Deinit
-#endif
 
 BgmSubsystem g_bgmMpg123Subsystem = { Bgm_BuiltinVersion, Mpg123_Extensions, Mpg123_Init, MPG123_DEINIT_SLOT, Mpg123_Create, Mpg123_Destroy, Mpg123_IsPlaying, Mpg123_Start, Mpg123_Stop, Mpg123_Rewind, Mpg123_Seek, Mpg123_Open, Mpg123_Close, Mpg123_GetVolume, Mpg123_SetVolume, Mpg123_GetLoopFlag, Mpg123_SetLoopFlag, Mpg123_GetLoopPoints, Mpg123_SetLoopPoints, Mpg123_SetEndCallback, Mpg123_StrError, Mpg123_Read, Mpg123_GetFormatOf, NULL, NULL, NULL, NULL, NULL, NULL, NULL }; /* 0x004f1818 */
 const ResamplerVtbl g_resamplerVtbl = { Resampler_Open, Resampler_Create, Resampler_Close, Resampler_InputNeeded, Resampler_State, Resampler_Write, Resampler_Read, Resampler_InFormat, Resampler_OutFormat, Resampler_Reset, Resampler_InBlock, Resampler_OutBlock }; /* 0x004f1890 */

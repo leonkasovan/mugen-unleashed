@@ -2168,7 +2168,9 @@ static int Ai_KeyHeld(const InputBuf *in, int i)
      * only holds in the 32-bit layout. Index the member (same values on the
      * 32-bit build; correct ones on 64-bit, where the hardcoded offset would
      * read into the ring). */
-    return in->keys[i];
+    /* Port fix: key 13 aliases read in the reference, but indexing one past
+     * keys is undefined C even when the next member has the expected offset. */
+    return i == KEY_COUNT ? in->read : in->keys[i];
 }
 
 /* 0x00433D40: lets go of every key (and of "key" 13, see Ai_KeyHeld). */

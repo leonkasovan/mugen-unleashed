@@ -340,7 +340,9 @@ int Mpg123_Init(const BgmPluginConfig *config, const BgmHostCallbacks *host, Bgm
     }
     s = BgmSettings_Get(settings, "readbuffersize");
     if (s != NULL) {
-        size = (int)config;
+        /* Port fix: make the original low-32-bit address fallback explicit
+         * on wider-pointer hosts too; valid settings still overwrite it. */
+        size = (int)(uintptr_t)config;
         sscanf(s, "%d", &size);
         if (size > 0) {
             g_mpg123ReadBufferSize = (unsigned int)size;

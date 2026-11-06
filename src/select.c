@@ -1003,7 +1003,9 @@ int Charsel_Update(ScreenLoop *screen, CharselState *st)
                 }
                 cell = NULL;
                 col = cur->col;
-                if (col != -1 && cur->row != -1 && &g_selectCells[cur->row * g_selectColumns + col] != NULL) {
+                /* Port fix: validate storage and coordinates before indexing. */
+                if (g_selectCells != NULL && col >= 0 && col < g_selectColumns &&
+                    cur->row >= 0 && cur->row < g_selectRows) {
                     int row = cur->row;
                     GameVars *g2 = g_game;
                     if (g2->char_count > 0) {
@@ -1276,7 +1278,8 @@ int Charsel_Draw(ScreenLoop *screen, CharselState *st)
     int active_slot[2] = { -1, -1 };
     int counts[2] = { 0, 0 };
     CharselBoxRef lists[2][8];
-    char text[0x60];
+    /* Port fix: room for the complete stage label, int32 number and name. */
+    char text[0x80];
     int list = 0;   /* uninitialised in the original; only used when a box has state 0 */
     int t, s, r, c, x, y;
 
@@ -1505,7 +1508,8 @@ int Charsel_Draw(ScreenLoop *screen, CharselState *st)
         if (st->stage == -1) {
             sprintf(text, "Stage: Random");
         } else {
-            sprintf(text, "Stage %i: %s", st->stage + 1, g->select_screen[st->stage].name);
+            /* Port fix: even a valid stage name can exceed the display buffer. */
+            snprintf(text, sizeof(text), "Stage %i: %s", st->stage + 1, g->select_screen[st->stage].name);
         }
         if (st->stage_done == 0) {
             FontSpec_DrawText(&info->stage_active_font[screen->ticks / 2 & 1], text, info->stage_pos[0],

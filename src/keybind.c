@@ -150,7 +150,7 @@ const char *Keybind_Find(KeybindList *list, unsigned int kb_mods, int kb_key, in
     *(int *)&kb.unicode = kb_unicode;
     kb.valid = kb_valid;
     for (i = 0; i < n; i++) {
-        if (&data[i] != NULL && Keybind_Match(&data[i].kb, &kb)) {
+        if (data != NULL && Keybind_Match(&data[i].kb, &kb)) {
             return data[i].cmd;
         }
     }

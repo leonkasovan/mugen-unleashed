@@ -617,7 +617,7 @@ int Gl_Init(int framebuffers)
         /*
          * ARB_fragment_program is required only on the desktop path, where it
          * stood in for "this driver can use the shaders at all". The engine
-         * never actually uses the extension: data/*.frag are plain GLSL, and
+         * never actually uses the extension: the .frag files in data/ are plain GLSL, and
          * the Vita's VitaGL is an OpenGL ES 2.0 implementation that does not
          * advertise ARB_fragment_program. Requiring it there rejected every
          * context that could in fact run the renderer.

@@ -185,8 +185,9 @@ BOOL    FreeLibrary(HMODULE module);
  * (SDL_config_vita.h sets HAVE_NANOSLEEP), so the same code serves both.
  */
 DWORD   timeGetTime(void);
-BOOL    QueryPerformanceCounter(int64_t *count);
-BOOL    QueryPerformanceFrequency(int64_t *freq);
+/* Port fix: match the Win32 API's union pointer, not just its first member. */
+BOOL    QueryPerformanceCounter(LARGE_INTEGER *count);
+BOOL    QueryPerformanceFrequency(LARGE_INTEGER *freq);
 UINT    timeBeginPeriod(UINT ms);
 UINT    timeEndPeriod(UINT ms);
 
