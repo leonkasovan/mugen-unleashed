@@ -23,11 +23,9 @@
  *   the end of the array; the storage and the bits are the same.
  * - int 0 ** 0 yields an uninitialized value (0 here) and the INT_MAX warning.
  * - Expr_Halve reallocates the type array with 4 bytes per token.
- * - Expr_Parse: after a failed sub-parse of "(" (e.g. "x = ()") the original reads an
- *   uninitialized end pointer (usually crashing); here it points to the start of the
- *   expression. Popping operators used to write to the output without a room
- *   check, running past EXPR_MAX_TOKENS into the sub-parse buffers (PORTABILITY
- *   FIX: every output write is now room-checked).
+ * - PORTABILITY FIX: failed/empty groups are rejected and pending sub-parse
+ *   tokens are released. The original reused stale interval counts or an
+ *   uninitialized end pointer. Every output write is also room-checked.
  * - pow() goes through MSVCR90's _CIpow via mugen.exe's import thunk, as in the original.
  */
 #include "mugen.h"
@@ -251,7 +249,7 @@ static int Expr_ParseBody(const char *s, ExprValue *out_tokens, char *out_types,
     int last = PARSE_LAST_NONE;
     int top = -1;
     int top_prec = 0;
-    int count1, count2 = 0, count;
+    int count1 = 0, count2 = 0, count;
     int op, prec, interval_op, depth, i;
     char c;
 
@@ -438,6 +436,7 @@ static int Expr_ParseBody(const char *s, ExprValue *out_tokens, char *out_types,
                     memcpy(&tokens[n], sub_tokens, count1 * sizeof(ExprValue));
                     memcpy(&types[n], sub_types, count1);
                     n += count1;
+                    count1 = 0; /* ownership moved into tokens */
                     last = PARSE_LAST_GROUP;
                     cur = paren_end + 1;
                     goto next;
@@ -461,11 +460,11 @@ static int Expr_ParseBody(const char *s, ExprValue *out_tokens, char *out_types,
                     }
                 }
             }
-            /*
-             * Reached with count1 == 0 too ("()"): then count2 is left over from
-             * an earlier interval of this expression (0 if none) and its tokens
-             * are copied again.
-             */
+            /* Portability fix: an empty/failed group owns no tokens and must
+             * not reuse a previous interval's count or trigger pointers. */
+            if (count1 == 0) {
+                goto fail;
+            }
             if (last == PARSE_LAST_UNUSED || last == PARSE_LAST_GROUP || top == -1 ||
                 (ops[top] != EXPR_OP_EQ && ops[top] != EXPR_OP_NE)) {
                 goto fail;
@@ -481,7 +480,7 @@ static int Expr_ParseBody(const char *s, ExprValue *out_tokens, char *out_types,
         } else if (isalnum(c) || c == '_') {
             count = Trigger_Parse(cur, owner, &tokens[n], &types[n], max - n, &trig_end);
             if (count == 0) {
-                _snprintf(g_libraryErrorText, 0x100, "Died parsing %s", s);
+                snprintf(g_libraryErrorText, sizeof(g_libraryErrorText), "Died parsing %s", s);
                 goto fail;
             }
             n += count;
@@ -527,6 +526,7 @@ static int Expr_ParseBody(const char *s, ExprValue *out_tokens, char *out_types,
         memcpy(&tokens[n], sub_tokens, count * sizeof(ExprValue));
         memcpy(&types[n], sub_types, count);
         n += count;
+        count1 = count2 = 0; /* ownership moved into tokens */
         cur = interval_end + 1;
         if (n >= max) {
             goto fail;
@@ -642,8 +642,14 @@ static int Expr_ParseBody(const char *s, ExprValue *out_tokens, char *out_types,
     }
 
 malformed:
-    _snprintf(g_libraryErrorText, 0x100, "Malformed expression encountered: %s", s);
+    snprintf(g_libraryErrorText, sizeof(g_libraryErrorText), "Malformed expression encountered: %s", s);
 fail:
+    /* Successful sub-parses not yet copied into the output still belong here. */
+    for (i = 0; i < count1 + count2; i++) {
+        if (sub_types[i] == EXPR_TRIGGER) {
+            Trigger_Free(sub_tokens[i].trig);
+        }
+    }
     for (i = 0; i < n; i++) {
         if (types[i] == EXPR_TRIGGER) {
             Trigger_Free(tokens[i].trig);
@@ -669,8 +675,13 @@ int Expr_Parse(const char *s, ExprValue *out_tokens, char *out_types, CharData *
     int n;
 
     if (expr_parse_depth >= EXPR_MAX_DEPTH) {
-        _snprintf(g_libraryErrorText, 0x100, "Expression too deeply nested");
+        snprintf(g_libraryErrorText, sizeof(g_libraryErrorText), "Expression too deeply nested");
         return 0;
+    }
+    /* The internal buffers hold EXPR_MAX_TOKENS, irrespective of a caller's
+     * larger output capacity. Preserve the public -1 result for NULL input. */
+    if (max > EXPR_MAX_TOKENS) {
+        max = EXPR_MAX_TOKENS;
     }
     expr_parse_depth++;
     n = Expr_ParseBody(s, out_tokens, out_types, owner, max, end, want);
@@ -686,7 +697,7 @@ int Expr_Compile(const char *s, Expr *e, CharData *owner, const char **end, int 
 {
     ExprValue tokens[EXPR_MAX_TOKENS];
     char types[EXPR_MAX_TOKENS];
-    int n;
+    int n, i;
 
     if (s == NULL) {
         return 1;
@@ -702,14 +713,27 @@ int Expr_Compile(const char *s, Expr *e, CharData *owner, const char **end, int 
         owner->expr_count++;
         return 1;
     }
-    e->u.tokens = Mem_Calloc(n, sizeof(ExprValue));
-    e->t.types = Mem_Calloc(n, 1);
-    if (e->u.tokens == NULL || e->t.types == NULL) {
-        return 0;
+    /* Portability fix: publish both allocations together. A partial failure
+     * must not leak one array or leave a half-built expression behind. */
+    {
+        ExprValue *code = Mem_Calloc(n, sizeof(ExprValue));
+        char *kinds = Mem_Calloc(n, 1);
+        if (code == NULL || kinds == NULL) {
+            free(code);
+            free(kinds);
+            for (i = 0; i < n; i++) {
+                if (types[i] == EXPR_TRIGGER) {
+                    Trigger_Free(tokens[i].trig);
+                }
+            }
+            return 0;
+        }
+        memcpy(code, tokens, n * sizeof(ExprValue));
+        memcpy(kinds, types, n);
+        e->u.tokens = code;
+        e->t.types = kinds;
+        e->count = n;
     }
-    e->count = n;
-    memcpy(e->u.tokens, tokens, n * sizeof(ExprValue));
-    memcpy(e->t.types, types, n);
     owner->expr_count++;
     return 1;
 }
@@ -789,27 +813,33 @@ void Expr_SetFloat(Expr *e, float value)
     e->t.type = EXPR_FLOAT;
 }
 
-/* 0x00402630: frees dst, then copies src; trigger tokens are shared (see Expr_Clone). */
+/* 0x00402630: copies src into dst; trigger tokens are shared (see Expr_Clone). */
 int Expr_Copy(Expr *dst, const Expr *src)
 {
-    Expr_Free(dst);
-    if (src->count == EXPR_CONST || src->count == 0) {
-        dst->u = src->u;
-        dst->t = src->t;
-        dst->count = src->count;
+    Expr tmp;
+
+    /* Portability fix: self-copy and allocation failure must not free src or
+     * lose dst. Trigger ownership is shallow here; Expr_Clone deep-copies it. */
+    if (dst == src) {
         return 1;
     }
-    dst->u.tokens = Mem_Calloc(src->count, sizeof(ExprValue));
-    if (dst->u.tokens == NULL) {
-        return 0;
+    memset(&tmp, 0, sizeof(tmp));
+    if (src->count == EXPR_CONST || src->count == 0) {
+        tmp = *src;
+    } else {
+        tmp.u.tokens = Mem_Calloc(src->count, sizeof(ExprValue));
+        tmp.t.types = Mem_Calloc(src->count, 1);
+        if (tmp.u.tokens == NULL || tmp.t.types == NULL) {
+            free(tmp.u.tokens);
+            free(tmp.t.types);
+            return 0;
+        }
+        tmp.count = src->count;
+        memcpy(tmp.u.tokens, src->u.tokens, src->count * sizeof(ExprValue));
+        memcpy(tmp.t.types, src->t.types, src->count);
     }
-    dst->t.types = Mem_Calloc(src->count, 1);
-    if (dst->t.types == NULL) {
-        return 0;
-    }
-    dst->count = src->count;
-    memcpy(dst->u.tokens, src->u.tokens, src->count * sizeof(ExprValue));
-    memcpy(dst->t.types, src->t.types, src->count);
+    Expr_Free(dst);
+    *dst = tmp;
     return 1;
 }
 
@@ -819,7 +849,17 @@ int Expr_Clone(Expr *dst, const Expr *src)
     Trigger *trig;
     int i;
 
-    Expr_Copy(dst, src);
+    if (dst == src) {
+        return 1;
+    }
+    if (!Expr_Copy(dst, src)) {
+        /* Existing clone callers treat allocation failure as fatal; do not
+         * report a successful clone after a partial allocation. */
+        g_outOfMemory = 1;
+        snprintf(g_libraryErrorText, sizeof(g_libraryErrorText), "Out of memory cloning expression");
+        Error_Exit();
+        return 0;
+    }
     if (dst->count != EXPR_CONST && dst->count != 0) {
         for (i = 0; i < dst->count; i++) {
             if (dst->t.types[i] == EXPR_TRIGGER) {

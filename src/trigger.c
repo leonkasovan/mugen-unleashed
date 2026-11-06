@@ -495,6 +495,8 @@ static int read_word(const char *s, int pos, char *out, int cap, int with_dot, i
  * (at most max) and sets *end after the call. Returns the token count, 0 on
  * errors (some reported with Error_Printf).
  */
+static void Trigger_FreeOwned(Trigger *t);
+
 int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types, int max, const char **end)
 {
     char name[0x100];
@@ -511,10 +513,17 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
     int pos, len, id, n, i, c;
 
     memset(&t, 0, sizeof(t));
+    memset(arg_types, 0, sizeof(arg_types));
+    if (s == NULL || max < 1) {
+        return 0;
+    }
+    if (max > EXPR_MAX_TOKENS) {
+        max = EXPR_MAX_TOKENS;
+    }
     pos = read_word(s, 0, name, (int)sizeof(name), 0, &len);
     if (pos < 0) {
         Error_Printf("Trigger name too long\n");
-        return 0;
+        goto fail;
     }
     while (is_blank(s[pos])) {
         pos++;
@@ -555,14 +564,14 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
         if (t.redirect != TRIGGER_REDIRECT_NONE) {
             if (s[pos] == '(') {
                 if (!Expr_Compile(s + pos + 1, &t.redirect_arg, owner, &e, EXPR_WANT_INT)) {
-                    return 0;
+                    goto fail;
                 }
                 if (*e != ')') {
-                    return 0;
+                    goto fail;
                 }
                 pos = (int)(e - s) + 1;
             } else if (t.redirect == TRIGGER_REDIRECT_PLAYERID) {
-                return 0;
+                goto fail;
             }
         }
     }
@@ -573,7 +582,7 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
             s++;
         }
         if (*s != ',') {
-            return 0;
+            goto fail;
         }
         do {
             s++;
@@ -581,7 +590,7 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
         pos = read_word(s, 0, name, (int)sizeof(name), 0, &len);
         if (pos < 0) {
             Error_Printf("Trigger name too long\n");
-            return 0;
+            goto fail;
         }
     }
 
@@ -599,7 +608,7 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
     }
     if (id == -1) {
         Error_Printf("Invalid trigger: %s\n", name);
-        return 0;
+        goto fail;
     }
     t.id = id;
     need = 0;
@@ -630,7 +639,7 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
     }
     if (owner->mugenversion < need) {
         Error_Printf("Trigger not valid for mugenversion of character: %s\n", name);
-        return 0;
+        goto fail;
     }
     while (is_blank(s[pos])) {
         pos++;
@@ -651,15 +660,13 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
     if (t.id >= TRIGGER_SIN && t.id <= TRIGGER_CONST720P) {
     one_arg:
         if (s[pos] != '(') {
-            return 0;
+            goto fail;
         }
-        if (Cns_ParseArgs(s + pos + 1, "n:)", owner, &e, arg_tokens, arg_types, &count, max) != 1) {
-            return 0;
+        n = Cns_ParseArgs(s + pos + 1, "n:)", owner, &e, arg_tokens, arg_types, &count, max);
+        ntok += count; /* owns successful arguments even when the list is rejected */
+        if (n != 1 || *e != ')') {
+            goto fail;
         }
-        if (*e != ')') {
-            return 0;
-        }
-        ntok = count;
         pos = (int)(e - s) + 1;
     }
     if (t.id == TRIGGER_LOG) {
@@ -667,16 +674,13 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
             pos++;
         }
         if (s[pos] != '(') {
-            return 0;
+            goto fail;
         }
-        if (Cns_ParseArgs(s + pos + 1, "nn:)", owner, &e, arg_tokens + ntok, arg_types + ntok, &count, max - ntok) !=
-            2) {
-            return 0;
+        n = Cns_ParseArgs(s + pos + 1, "nn:)", owner, &e, arg_tokens + ntok, arg_types + ntok, &count, max - ntok);
+        ntok += count; /* owns successful arguments even when the list is rejected */
+        if (n != 2 || *e != ')') {
+            goto fail;
         }
-        if (*e != ')') {
-            return 0;
-        }
-        ntok += count;
         pos = (int)(e - s) + 1;
     }
     if (t.id == TRIGGER_IFELSE) {
@@ -684,16 +688,13 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
             pos++;
         }
         if (s[pos] != '(') {
-            return 0;
+            goto fail;
         }
-        if (Cns_ParseArgs(s + pos + 1, "nnn:)", owner, &e, arg_tokens + ntok, arg_types + ntok, &count, max - ntok) !=
-            3) {
-            return 0;
+        n = Cns_ParseArgs(s + pos + 1, "nnn:)", owner, &e, arg_tokens + ntok, arg_types + ntok, &count, max - ntok);
+        ntok += count; /* owns successful arguments even when the list is rejected */
+        if (n != 3 || *e != ')') {
+            goto fail;
         }
-        if (*e != ')') {
-            return 0;
-        }
-        ntok += count;
         pos = (int)(e - s) + 1;
     }
     if (t.id == TRIGGER_COND) {
@@ -701,18 +702,18 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
             pos++;
         }
         if (s[pos] != '(') {
-            return 0;
+            goto fail;
         }
         n = Cns_ParseExprList(s + pos + 1, owner, &e, &exprs);
         if (n != 3 || *e != ')') {
             if (n <= 0) {
-                return 0;
+                goto fail;
             }
             for (i = 0; i < n; i++) {
                 Expr_Free(&exprs[i]);
             }
             free(exprs);
-            return 0;
+            goto fail;
         }
         t.data_count = n;
         t.data = exprs;
@@ -735,14 +736,14 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
             t.arg = TRIGGER_WIN_ANY;
         } else {
             Error_Printf(t.id == TRIGGER_WIN ? "Invalid win trigger: %s\n" : "Invalid lose trigger: %s\n", name);
-            return 0;
+            goto fail;
         }
     }
     if (t.id == TRIGGER_GETHITVAR) {
         count = 0;
         if (s[pos] != '(') {
             Error_Printf("Need to specify gethitvar(varname): %s\n", name);
-            return 0;
+            goto fail;
         }
         do {
             pos++;
@@ -750,19 +751,19 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
         pos = read_word(s, pos, word, (int)sizeof(word), 1, &len);
         if (pos < 0) {
             Error_Printf("Trigger word too long in: %s\n", name);
-            return 0;
+            goto fail;
         }
         while (is_blank(s[pos])) {
             pos++;
         }
         if (s[pos] != ')') {
             Error_Printf("Missing closing parenthesis: %s\n", name);
-            return 0;
+            goto fail;
         }
         _strlwr(word);
         if (!GetHitVar_Lookup(word, owner->mugenversion < g_game->compat_version[1], &t.value, &count)) {
             Error_Printf("Invalid varname %s in: %s\n", word, name);
-            return 0;
+            goto fail;
         }
         if (count != 0) {
             t.is_float = 1;
@@ -772,7 +773,7 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
     if (t.id == TRIGGER_CONST) {
         if (s[pos] != '(') {
             Error_Printf("Need to specify const(varname): %s\n", name);
-            return 0;
+            goto fail;
         }
         do {
             pos++;
@@ -780,7 +781,7 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
         pos = read_word(s, pos, word, (int)sizeof(word), 1, &len);
         if (pos < 0) {
             Error_Printf("Trigger word too long in: %s\n", name);
-            return 0;
+            goto fail;
         }
         while (is_blank(s[pos])) {
             pos++;
@@ -788,7 +789,7 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
         /* Any character is taken for the closing parenthesis (original bug). */
         if (s[pos] == '\0') {
             Error_Printf("Missing closing parenthesis: %s\n", name);
-            return 0;
+            goto fail;
         }
         _strlwr(word);
         for (i = 0; i < TRIGGER_CONST_COUNT; i++) {
@@ -800,14 +801,14 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
         }
         if (i == TRIGGER_CONST_COUNT) {
             Error_Printf("Invalid cnstname %s in: %s\n", word, name);
-            return 0;
+            goto fail;
         }
         pos++;
     }
     if (t.id == TRIGGER_STAGEVAR) {
         if (s[pos] != '(') {
             Error_Printf("Need to specify stagevar(varname): %s\n", name);
-            return 0;
+            goto fail;
         }
         do {
             pos++;
@@ -815,14 +816,14 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
         pos = read_word(s, pos, word, (int)sizeof(word), 1, &len);
         if (pos < 0) {
             Error_Printf("Trigger word too long in: %s\n", name);
-            return 0;
+            goto fail;
         }
         while (is_blank(s[pos])) {
             pos++;
         }
         if (s[pos] == '\0') {
             Error_Printf("Missing closing parenthesis: %s\n", name);
-            return 0;
+            goto fail;
         }
         _strlwr(word);
         if (strcmp(word, "info.name") == 0) {
@@ -833,7 +834,7 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
             t.arg = TRIGGER_STAGEVAR_AUTHOR;
         } else {
             Error_Printf("Invalid varname %s in: %s\n", word, name);
-            return 0;
+            goto fail;
         }
         pos++;
     }
@@ -887,11 +888,11 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
                 t.value = 1;
             } else if (c == 'z') {
                 if (owner->mugenversion >= g_game->compat_version[1]) {
-                    return 0;
+                    goto fail;
                 }
                 t.value = 2;
             } else {
-                return 0;
+                goto fail;
             }
             pos++;
             break;
@@ -908,7 +909,7 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
                 pos++;
             }
             if (s[pos] < '0' || s[pos] > '9') {
-                return 0;
+                goto fail;
             }
             t.arg = Expr_Atoi32(s + pos);
             if (t.id == TRIGGER_ANIMELEM) {
@@ -916,13 +917,13 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
             }
             if (t.arg < 0) {
                 if (t.id != TRIGGER_ANIMELEM) {
-                    return 0;
+                    goto fail;
                 }
                 Error_Printf("Anim must be > 0\n");
-                return 0;
+                goto fail;
             }
             if (t.id == TRIGGER_TIMEMOD && t.arg <= 0) {
-                return 0;
+                goto fail;
             }
             while (Char_IsDigit(s[pos]) || Char_IsSpace(s[pos])) {
                 pos++;
@@ -945,7 +946,7 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
                 pos++;
             }
             if (!Char_IsDigit(s[pos])) {
-                return 0;
+                goto fail;
             }
             t.arg2 = Expr_Atoi32(s + pos);
             while (Char_IsDigit(s[pos]) || Char_IsSpace(s[pos])) {
@@ -991,14 +992,14 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
             pos++;
         }
         if (s[pos] != '"') {
-            return 0;
+            goto fail;
         }
         if (!Cmd_FindLabel(s + pos + 1, &t.value, owner, end)) {
             Error_Printf("Undefined command label: \"%s\".\nIf not misspelling in CNS, check CMD\n", name);
-            return 0;
+            goto fail;
         }
         if (**end != '"') {
-            return 0;
+            goto fail;
         }
         *end = *end + 1;
         goto finish;
@@ -1024,18 +1025,18 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
         }
         if (s[pos] != '"') {
             _snprintf(g_libraryErrorText, 0x100, "String trigger needs to be in the form trig = \"string value\".");
-            return 0;
+            goto fail;
         }
         start = pos + 1;
         for (stop = start; s[stop] != '\0' && s[stop] != '"'; stop++) {
         }
         if (s[stop] != '"') {
-            return 0;
+            goto fail;
         }
         n = stop - start;
         t.data = Mem_Calloc(1, n + 1);
         if (t.data == NULL) {
-            return 0;
+            goto fail;
         }
         strncpy((char *)t.data, s + start, n);
         ((char *)t.data)[n] = '\0';
@@ -1077,7 +1078,7 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
             t.value = STATETYPE_STAND;
             break;
         default:
-            return 0;
+            goto fail;
         }
         *end = s + pos + 1;
         goto finish;
@@ -1104,7 +1105,7 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
         } else if (c == 'i') {
             t.value = MOVETYPE_IDLE;
         } else {
-            return 0;
+            goto fail;
         }
         *end = s + pos + 1;
         goto finish;
@@ -1135,7 +1136,7 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
             }
         }
         if (stop - pos >= (int)sizeof(word)) {
-            return 0;
+            goto fail;
         }
         strncpy(word, s + pos, stop - pos);
         word[stop - pos] = '\0';
@@ -1148,7 +1149,7 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
             t.value = 3;
         } else {
             Error_Printf("Invalid TeamMode %s in %s\n", s + pos, name);
-            return 0;
+            goto fail;
         }
         *end = s + stop;
         goto finish;
@@ -1169,7 +1170,7 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
         }
         t.value = HitDefAttr_Parse(s + pos, end);
         if (t.value == -1) {
-            return 0;
+            goto fail;
         }
         goto finish;
     case TRIGGER_ANIMELEM:
@@ -1185,7 +1186,7 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
         break;
     case TRIGGER_TIMEMOD:
         if (!Trigger_ParseCompare(s + pos, &t, end)) {
-            return 0;
+            goto fail;
         }
         break;
     }
@@ -1193,18 +1194,30 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
 finish:
     n = ntok + 1;
     if (n > max) {
-        return 0;
+        goto fail;
     }
-    memcpy(tokens, arg_tokens, ntok * sizeof(ExprValue));
-    memcpy(types, arg_types, ntok);
     trig = calloc(1, sizeof(Trigger));
     if (trig == NULL) {
         g_outOfMemory = 1;
+        goto fail;
     }
+    memcpy(tokens, arg_tokens, ntok * sizeof(ExprValue));
+    memcpy(types, arg_types, ntok);
     *trig = t;
     tokens[ntok].trig = trig;
     types[ntok] = EXPR_TRIGGER;
     return n;
+
+fail:
+    /* Portability fix: malformed input owns redirection/payload and any
+     * successfully parsed arguments until the result has been published. */
+    for (i = 0; i < ntok; i++) {
+        if (arg_types[i] == EXPR_TRIGGER) {
+            Trigger_Free(arg_tokens[i].trig);
+        }
+    }
+    Trigger_FreeOwned(&t);
+    return 0;
 }
 
 /* ------------------------------------------------------------ copy / free */
@@ -1289,7 +1302,9 @@ int Trigger_Copy(const Trigger *src, Trigger *dst)
     tmp.arg2 = src->arg2;
     tmp.fvalue = src->fvalue;
     tmp.fvalue2 = src->fvalue2;
-    Expr_Clone(&tmp.redirect_arg, &src->redirect_arg);
+    if (!Expr_Clone(&tmp.redirect_arg, &src->redirect_arg)) {
+        goto oom;
+    }
     kind = Trigger_DataKind(src);
     if (kind == TRIGGER_DATA_STRING) {
         s = (const char *)src->data;
@@ -1305,7 +1320,9 @@ int Trigger_Copy(const Trigger *src, Trigger *dst)
             goto oom;
         }
         for (i = 0; i < src->data_count; i++) {
-            Expr_Clone((Expr *)tmp.data + i, (const Expr *)src->data + i);
+            if (!Expr_Clone((Expr *)tmp.data + i, (const Expr *)src->data + i)) {
+                goto oom;
+            }
         }
     } else if (kind == TRIGGER_DATA_UNKNOWN) {
         goto unrecognized;
@@ -1470,6 +1487,30 @@ static int float_bits(float f)
 
     v.f = f;
     return v.i;
+}
+
+/* Integer edge semantics shared by the math trigger cases. */
+static int trigger_abs_int(int value)
+{
+    /* Portability fix: abs(INT_MIN) wraps on the reference x86. */
+    return value < 0 ? (int)(0u - (unsigned int)value) : value;
+}
+
+static int trigger_rounded_int(Player *p, int id, float value)
+{
+    float f = (float)(id == TRIGGER_FLOOR ? floor((double)value) : ceil((double)value));
+    if (f < -2147483648.0f) {
+        Player_Warn(p, id == TRIGGER_FLOOR ? "Floor() result clamped to INT_MIN"
+                                          : "Ceil() result clamped to INT_MIN");
+        return (int)0x80000000u;
+    }
+    if (2147483648.0f < f) {
+        Player_Warn(p, id == TRIGGER_FLOOR ? "Floor() result clamped to INT_MAX"
+                                          : "Ceil() result clamped to INT_MAX");
+        return 0x7FFFFFFF;
+    }
+    /* Exactly 2^31 and NaN retain the x86 indefinite value, without C UB. */
+    return Ftol((double)f);
 }
 
 /*
@@ -1741,7 +1782,7 @@ void Trigger_Eval(Player *p, const Trigger *t)
         break;
     case TRIGGER_FRONTEDGEDIST:
     case TRIGGER_BACKEDGEDIST:
-        ival = (int)Player_ToLocalCoord(p, Player_EdgeDist(target, t->arg, t->id == TRIGGER_FRONTEDGEDIST));
+        ival = Ftol(Player_ToLocalCoord(p, Player_EdgeDist(target, t->arg, t->id == TRIGGER_FRONTEDGEDIST)));
         break;
     case TRIGGER_LIFE:
         ival = target->life;
@@ -2159,7 +2200,7 @@ void Trigger_Eval(Player *p, const Trigger *t)
             }
             fval = gf;
         } else if (scaled != 0) {
-            ival = (int)Player_ToLocalCoord(p, (double)gi);
+            ival = Ftol(Player_ToLocalCoord(p, (double)gi));
         } else {
             ival = gi;
         }
@@ -2406,7 +2447,7 @@ void Trigger_Eval(Player *p, const Trigger *t)
             return;
         }
         if (type1 == EXPR_INT) {
-            ExprStack_Push(v1.i < 0 ? -v1.i : v1.i, EXPR_INT);
+            ExprStack_Push(trigger_abs_int(v1.i), EXPR_INT);
             return;
         }
         if (type1 == EXPR_FLOAT) {
@@ -2433,18 +2474,7 @@ void Trigger_Eval(Player *p, const Trigger *t)
             sprintf(g_libraryErrorText, "Panic: aborting");
             Error_Exit();
         }
-        f = (float)(t->id == TRIGGER_FLOOR ? floor((double)v1.f) : ceil((double)v1.f));
-        if (f < -2147483648.0f) {
-            ival = (int)0x80000000;
-            Player_Warn(target, t->id == TRIGGER_FLOOR ? "Floor() result clamped to INT_MIN"
-                                                       : "Ceil() result clamped to INT_MIN");
-        } else if (2147483648.0f < f) {
-            ival = 0x7FFFFFFF;
-            Player_Warn(target, t->id == TRIGGER_FLOOR ? "Floor() result clamped to INT_MAX"
-                                                       : "Ceil() result clamped to INT_MAX");
-        } else {
-            ival = (int)f;
-        }
+        ival = trigger_rounded_int(target, t->id, v1.f);
         break;
     case TRIGGER_ANIMELEMTIME:
         if (Trigger_PopInt(target, &arg) == 3) {

@@ -14,22 +14,22 @@
  * - StateCtrl_Free and the per-type free helpers.
  *
  * Quirks kept from the original:
- * - The type name is copied to a 256-byte buffer without a length check.
+ * - PORTABILITY FIX: overlong type names are rejected before the 256-byte copy.
  * - Some failures leak what was allocated (PalFX, Explod blocks; a
  *   ReversalDef block without a valid reversal.attr).
  * - AfterImage palbright reads its first two values into the same Expr
  *   (palbright[1]); palbright[0] keeps its default.
- * - A VarRandom range with one value moves the Expr to the upper bound by a
- *   plain copy and resets the lower bound (freeing the tokens the copy still
- *   points to when the value is not a constant).
+ * - PORTABILITY FIX: a one-value VarRandom range transfers ownership to the
+ *   upper bound before resetting the lower bound; its tokens must stay alive.
  * - VarSet/VarAdd with neither value nor v/fv is accepted and sets nothing.
  * - A missing VarRangeSet value is fatal (Error_Exit).
  * - SuperPause compiles its time twice (Pause parameters, then its own).
  * - Running: the parsed Tag type (550) is fatal ("PlayerSCtrlApplyElem not
  *   recognised"); HitFallSet stores the x velocity as the y velocity too;
  *   EnvColor time -2 becomes -1 (forever) without a warning; the clipboard
- *   controllers print the text pieces as formats and pass the result to the
- *   clipboard as a format again; RemapPal with source -1 clears the remaps
+ *   controllers now treat literal text and the completed buffer as data
+ *   (PORTABILITY FIX: escaped percent signs used to become varargs formats);
+ *   RemapPal with source -1 clears the remaps
  *   and still adds the entry -1,0 -> dest; SndPan pans without checking the
  *   stereo setting; PlaySnd evaluates volume without using it; BindToTarget
  *   evaluates its postype twice; TargetDrop removes targets while iterating;
@@ -37,6 +37,7 @@
  *   name every parameter "zoom.<name>".
  */
 #include "mugen.h"
+#include <limits.h>
 
 /* ------------------------------------------------------------ sound helpers */
 
@@ -377,6 +378,11 @@ int StateCtrl_ParseParams(Ini *ini, StateCtrl *sc, CharData *owner)
 
     s = Ini_GetValue(ini, "type");
     if (s == NULL) {
+        return 0;
+    }
+    /* Portability fix: the cfg value is not bounded by this local array. */
+    if (strlen(s) >= sizeof(name)) {
+        Error_Printf("State controller type is too long\n");
         return 0;
     }
     strcpy(name, s);
@@ -939,8 +945,11 @@ int StateCtrl_ParseParams(Ini *ini, StateCtrl *sc, CharData *owner)
                 return 0;
             }
             if (n == 1) {
-                /* plain copy: the tokens of a non-constant value are freed below (original bug) */
+                /* Portability fix: move, then clear the moved-from Expr without
+                 * freeing the token arrays now owned by the upper bound. */
+                Expr_Free(&sc->arg[2]);
                 sc->arg[2] = sc->arg[0];
+                memset(&sc->arg[0], 0, sizeof(sc->arg[0]));
                 Expr_SetInt(&sc->arg[0], 0);
             }
         }
@@ -1364,7 +1373,8 @@ int StateCtrl_Run(Player *p, StateCtrl *sc, StateRunCtx *ctx)
     return r;
 }
 
-/* VarSet / VarAdd (and the sys variants): var(arg[1]) of kind arg[2] set to / increased by arg[0]. */
+/* VarSet / VarAdd (and the sys variants). Portability fix: integer additions
+ * wrap modulo 2^32 like the reference machine, without C signed overflow. */
 static int run_var(Player *p, StateCtrl *sc, int add)
 {
     int kind = Expr_EvalInt(p, &sc->arg[2], 0);
@@ -1383,7 +1393,8 @@ static int run_var(Player *p, StateCtrl *sc, int add)
     switch (kind) {
     case SCTRL_VAR:
         if (add) {
-            p->var[idx] += Expr_EvalInt(p, &sc->arg[0], 1);
+            p->var[idx] = (int)((unsigned int)p->var[idx] +
+                                (unsigned int)Expr_EvalInt(p, &sc->arg[0], 1));
         } else {
             p->var[idx] = Expr_EvalInt(p, &sc->arg[0], 1);
         }
@@ -1397,7 +1408,8 @@ static int run_var(Player *p, StateCtrl *sc, int add)
         break;
     case SCTRL_SYSVAR:
         if (add) {
-            p->sysvar[idx] += Expr_EvalInt(p, &sc->arg[0], 1);
+            p->sysvar[idx] = (int)((unsigned int)p->sysvar[idx] +
+                                   (unsigned int)Expr_EvalInt(p, &sc->arg[0], 1));
         } else {
             p->sysvar[idx] = Expr_EvalInt(p, &sc->arg[0], 1);
         }
@@ -1411,6 +1423,14 @@ static int run_var(Player *p, StateCtrl *sc, int add)
         break;
     }
     return 0;
+}
+
+/* Inclusive bounds already ordered by the caller. Portability fix: full
+ * int32 ranges overflowed hi-lo+1 to zero and trapped at the remainder. */
+static int var_random_value(int lo, int hi, int random)
+{
+    int64_t span = (int64_t)hi - (int64_t)lo + 1;
+    return (int)((int64_t)lo + (int64_t)random % span);
 }
 
 /* ParentVarSet / ParentVarAdd: as VarSet / VarAdd on the parent (no sysvars). */
@@ -1438,7 +1458,8 @@ static int run_parent_var(Player *p, StateCtrl *sc, Player *parent, int add)
             parent->fvar[idx] = Expr_EvalFloat(p, &sc->arg[0]);
         }
     } else if (add) {
-        parent->var[idx] += Expr_EvalInt(p, &sc->arg[0], 1);
+        parent->var[idx] = (int)((unsigned int)parent->var[idx] +
+                                 (unsigned int)Expr_EvalInt(p, &sc->arg[0], 1));
     } else {
         parent->var[idx] = Expr_EvalInt(p, &sc->arg[0], 1);
     }
@@ -1514,76 +1535,71 @@ static void make_dust(int x, int y)
     e->scale = *Coord_Make(&c, s, s);
 }
 
-/*
- * DisplayToClipboard / AppendToClipboard: the text with each parameter
- * printed by its format specifier into a 4 KB buffer, which then goes to the
- * player's clipboard (Player.warnings) as a format string itself. A "%d" or
- * "%i" given a float prints it with "%g"; a "bottom" value prints as
- * "(bottom)". The text pieces between the specifiers are printed as formats
- * too, without arguments.
- */
+/* Portability fix: literal segments (including decoded "%%") and the final
+ * clipboard string are data. Only validated parameter specifiers are formats. */
 static void run_clipboard(Player *p, StateCtrl *sc)
 {
     CnsText *t = sc->params;
     char buf[0x1000];
-    unsigned int len = 0;
+    size_t len = 0;
     int start = 0;
-    int i, n;
+    int i;
 
-    for (i = 0; i < t->count; i++) {
-        char *mark = &t->text[t->pos[i]];
-        char saved = *mark;
-        int ival;
+    buf[0] = '\0';
+    for (i = 0; i <= t->count; i++) {
+        size_t bytes = i < t->count ? (size_t)(t->pos[i] - start) : strlen(t->text + start);
+        size_t literal = strlen(t->text + start);
+        size_t room = sizeof(buf) - 1 - len;
+        int n, ival, type;
         float fval;
-        int type;
+        char *mark, saved;
 
-        *mark = '\0';
-        n = _snprintf(buf + len, 0x1000 - len, t->text + start);
-        *mark = saved;
+        /* Unknown escapes decode to NUL in the original parser. Keep the
+         * literal segment's C-string behavior while formatting it safely. */
+        if (bytes > literal) {
+            bytes = literal;
+        }
+        if (bytes > room) {
+            bytes = room;
+        }
+        memcpy(buf + len, t->text + start, bytes);
+        len += bytes;
+        buf[len] = '\0';
+        if (i == t->count || len == sizeof(buf) - 1) {
+            break;
+        }
         start = t->pos[i];
-        if (n < 0) {
-            goto done;
-        }
-        len += n;
-        if (len >= 0xFFF) {
-            goto done;
-        }
         type = Expr_Eval(p, &sc->arg[i], &ival, &fval);
-        mark = &t->text[t->pos[i] + t->len[i]];
+        mark = &t->text[start + t->len[i]];
         saved = *mark;
         *mark = '\0';
         if (type == 3) {
-            n = _snprintf(buf + len, 0x1000 - len, "(bottom)");
+            n = snprintf(buf + len, sizeof(buf) - len, "(bottom)");
         } else if (type == 2) {
-            if (t->types[i] == 1) {
-                n = _snprintf(buf + len, 0x1000 - len, "%g", (double)fval);
-            } else {
-                n = _snprintf(buf + len, 0x1000 - len, t->text + start, (double)fval);
-            }
+            n = snprintf(buf + len, sizeof(buf) - len,
+                         t->types[i] == 1 ? "%g" : t->text + start, (double)fval);
         } else if (t->types[i] == 2) {
-            n = _snprintf(buf + len, 0x1000 - len, t->text + start, (double)ival);
+            n = snprintf(buf + len, sizeof(buf) - len, t->text + start, (double)ival);
         } else {
-            n = _snprintf(buf + len, 0x1000 - len, t->text + start, ival);
+            n = snprintf(buf + len, sizeof(buf) - len, t->text + start, ival);
         }
         *mark = saved;
         start += t->len[i];
         if (n < 0) {
-            goto done;
+            buf[len] = '\0';
+            break;
         }
-        len += n;
-        if (len >= 0xFFF) {
-            goto done;
+        if ((size_t)n >= sizeof(buf) - len) {
+            len = sizeof(buf) - 1;
+            break;
         }
+        len += (size_t)n;
     }
-    if (len < 0xFFF) {
-        _snprintf(buf + len, 0x1000 - len, t->text + start);
-    }
-done:
-    buf[0xFFF] = '\0';
+    buf[sizeof(buf) - 1] = '\0';
     if (sc->type == SCTRL_APPENDTOCLIPBOARD) {
-        TextRing_Printf(p->warnings, buf);
+        TextRing_Printf(p->warnings, "%s", buf);
     } else {
-        TextRing_SetPrintf(p->warnings, buf);
+        TextRing_SetPrintf(p->warnings, "%s", buf);
     }
 }
 
@@ -2084,7 +2100,7 @@ int StateCtrl_Apply(Player *p, StateCtrl *sc, StateRunCtx *ctx)
             lo = hi;
             hi = swap;
         }
-        p->var[idx] = Match_Random() % (hi - lo + 1) + lo;
+        p->var[idx] = var_random_value(lo, hi, Match_Random());
         return 0;
     }
     case SCTRL_VARRANGESET: {

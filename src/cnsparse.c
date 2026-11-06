@@ -255,7 +255,7 @@ int Cns_ParseArgs(const char *s, const char *fmt, CharData *owner, const char **
 {
     const char *cur = s;
     const char *e;
-    int nargs, i, n;
+    int nargs, i, n, k;
     int ntok = 0;
 
     if (s == NULL) {
@@ -276,12 +276,13 @@ int Cns_ParseArgs(const char *s, const char *fmt, CharData *owner, const char **
                 e++;
             }
         } else if (*e != '\0') {
-            /* the tokens are dropped (trigger tokens leak) */
-            if (i != nargs - 1) {
-                ntok -= n;
-                break;
-            }
-            if (!format_accepts(fmt, nargs, *e)) {
+            if (i != nargs - 1 || !format_accepts(fmt, nargs, *e)) {
+                /* Rejected tokens do not pass ownership to the caller. */
+                for (k = ntok - n; k < ntok; k++) {
+                    if (types[k] == EXPR_TRIGGER) {
+                        Trigger_Free(tokens[k].trig);
+                    }
+                }
                 ntok -= n;
                 break;
             }
@@ -913,8 +914,7 @@ int CnsText_ParseFormat(const char *s, int *len)
  * 0x0045AF40: the quoted text of DisplayToClipboard/AppendToClipboard with up
  * to six int/float specifiers and the escapes \" \\ \n \t (others become a
  * NUL character). Returns a new CnsText, or NULL with an error message.
- * A '\' at the very end makes both passes read past the terminator, as in
- * the original.
+ * Portability fix: reject a trailing escape before it steps past NUL.
  */
 CnsText *CnsText_Parse(const char *s)
 {
@@ -926,7 +926,7 @@ CnsText *CnsText_Parse(const char *s)
     int n, len, i, o, r, l;
     int flen = 0;
 
-    if (s[0] != '"') {
+    if (s == NULL || s[0] != '"') {
         Error_Printf("Message text not quote-delimited.\n");
         return NULL;
     }
@@ -961,6 +961,10 @@ CnsText *CnsText_Parse(const char *s)
                     len++;
                 }
             } else if (c == '\\') {
+                if (s[i + 1] == '\0') {
+                    Error_Printf("Unterminated escape in clipboard text\n");
+                    return NULL;
+                }
                 i += 2;
                 len++;
             } else {

@@ -76,6 +76,14 @@ int StateDef_Parse(const char *header, StateDef *sd, Ini *ini, CharData *owner)
     int saved_group = ini->group;
     int number, count, i, k, n;
 
+    /* Validate before header+10 or source allocation. Short/invalid public
+     * inputs used to read past the header; error paths keep sd empty. */
+    memset(sd, 0, sizeof(*sd));
+    if (header == NULL || strlen(header) < 11 || strlen(header) >= sizeof(name) ||
+        !Str_StartsWithI(header, "[statedef ") || header[strlen(header) - 1] != ']') {
+        Error_Printf("Invalid statedef header\n");
+        return 0;
+    }
     /*
      * PORTABILITY FIX: atoi() wrapped a state number that does not fit (the
      * result depends on the width of long), which silently selected another
@@ -85,13 +93,19 @@ int StateDef_Parse(const char *header, StateDef *sd, Ini *ini, CharData *owner)
         char *num_end;
         long long number64 = strtoll(header + 10, &num_end, 10);
 
-        if (number64 < -2147483648LL || number64 > 2147483647LL) {
+        if (num_end == header + 10 || number64 < -2147483648LL || number64 > 2147483647LL) {
             Error_Printf("Statedef number out of range: %s\n", header);
+            return 0;
+        }
+        while (Char_IsSpace(*num_end)) {
+            num_end++;
+        }
+        if (*num_end != ']' || num_end[1] != '\0') {
+            Error_Printf("Invalid statedef number: %s\n", header);
             return 0;
         }
         number = (int)number64;
     }
-    memset(sd, 0, sizeof(StateDef));
     if (g_game->keep_sources != 0) {
         StateCtrlSource *src = calloc(1, sizeof(StateCtrlSource));
         if (src == NULL) {
@@ -103,15 +117,7 @@ int StateDef_Parse(const char *header, StateDef *sd, Ini *ini, CharData *owner)
         }
         sd->source->line = Ini_SourceLine(ini->cursor, ini);
     }
-    /*
-     * The group name without the brackets. PORTABILITY FIX: strncpy() did not
-     * terminate a header of 64 characters or more, and the strlen() right after
-     * it then read past the local buffer.
-     */
-    if (strlen(header) < 2 || strlen(header) >= sizeof(name)) {
-        Error_Printf("Statedef header too long or too short: %s\n", header);
-        return 0;
-    }
+    /* The validated group name without the brackets. */
     strcpy(name, header + 1);
     name[strlen(name) - 1] = '\0';
     if (Ini_SelectGroup(ini, name) == -1) {
@@ -272,7 +278,7 @@ int StateDef_Parse(const char *header, StateDef *sd, Ini *ini, CharData *owner)
         /* "[State n, number]": the controller number after the comma, else -1 */
         for (k = 7; h[k] != ',' && h[k] != '\0'; k++) {
         }
-        n = h[k] != '\0' ? atoi(h + k + 1) : -1;
+        n = h[k] != '\0' ? Expr_Atoi32(h + k + 1) : -1;
         if (!StateCtrl_Parse(ini, sd, n, owner)) {
             Error_Printf("Error parsing %s\n", h);
             return 0;
@@ -295,7 +301,7 @@ static int load_statedefs(Ini *ini, KeyedArray *list, int count, CharData *owner
         while (!Str_StartsWithI(h + 1, "statedef ")) {
             h = Ini_NextGroup(ini);
         }
-        number = atoi(h + 10);
+        number = Expr_Atoi32(h + 10);
         if (!StateDef_Parse(h, &sd, ini, owner)) {
             Error_Printf("Error in %s\n", h);
             return 0;

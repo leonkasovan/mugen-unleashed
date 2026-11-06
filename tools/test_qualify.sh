@@ -113,6 +113,8 @@ run_host VT03-icon bash tools/test_vita_icon.sh
 run_host SDL2A01 bash tools/test_sdl2audio.sh
 # CNS limits, hotplug queue and renderer font/rotation lifetime.
 run_host REVIEW01 bash tools/test_review_regress.sh
+# Controller/parser ownership, numeric edges and malformed CNS input.
+run_host CNS01 bash tools/test_cns_abi.sh
 run_host GL-MVP bash tools/test_gl_mvp.sh
 run_host CF01-policy bash tools/test_render_policy.sh
 if [ -n "$ENGINE" ] && [ -x "$ENGINE" ]; then
