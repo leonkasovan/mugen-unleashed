@@ -2,7 +2,7 @@
  * GLES capability probe (M8, RENDERING_PLAN.md section 12).
  *
  * Answers the only question the mode selector may ask before choosing the
- * GLES renderer: is this context a usable OpenGL ES 2.0+ context with the
+ * GLES renderer: is this context a usable OpenGL ES 3.0+ context with the
  * features the engine's GLES backend needs? Everything the desktop GL probe
  * gates on that GLES guarantees by version (NPOT textures, FBO) is accepted
  * by version string, not by extension name -- plan section 12.3: do not
@@ -22,39 +22,10 @@
  * GLSL 120 valid; the dialect is selected from these numbers, and only the
  * ES shaders (res/shaders/gles, deployed as data/gles) are ever offered to
  * this context. */
+/* Port fix: this backend uses ES3 formats (R8/RED), not generic ES2. */
 static int Gles_ParseVersion(const char *s, int *major, int *minor)
 {
-    const char *p = s;
-
-    if (p == NULL) {
-        return 0;
-    }
-    while (*p != '\0' && (*p < '0' || *p > '9') && *p != '.') {
-        /* skip the "OpenGL ES " prefix and any vendor words */
-        if (*p == 'E' && p[1] == 'S') {
-            p += 2;
-            break;
-        }
-        p++;
-    }
-    while (*p == ' ') {
-        p++;
-    }
-    if (*p < '0' || *p > '9') {
-        return 0;
-    }
-    *major = *p - '0';
-    p++;
-    if (*p == '.') {
-        p++;
-        if (*p >= '0' && *p <= '9') {
-            *minor = *p - '0';
-            return 1;
-        }
-        return 0;
-    }
-    *minor = 0;
-    return 1;
+    return s != NULL && sscanf(s, "OpenGL ES %d.%d", major, minor) == 2;
 }
 
 int Gles_Probe(unsigned int *caps)
@@ -75,11 +46,11 @@ int Gles_Probe(unsigned int *caps)
         MatchLog_Printf(3, "GLES: unrecognised version string: %s\n", ver);
         return 0;
     }
-    if (major < 2) {
-        MatchLog_Printf(3, "GLES: version %d.%d below ES 2.0.\n", major, minor);
+    if (major < 3) {
+        MatchLog_Printf(3, "GLES: version %d.%d below ES 3.0.\n", major, minor);
         return 0;
     }
-    /* ES 2.0+ guarantees NPOT textures and framebuffer objects by version;
+    /* ES 3.0+ guarantees NPOT textures and framebuffer objects by version;
      * no extension-name check (plan 12.3). */
     if (caps != NULL) {
         *caps = GLES_CAP_NPOT | GLES_CAP_FBO | GLES_CAP_GLSL_ES_100;

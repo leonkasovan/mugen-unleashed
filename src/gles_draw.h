@@ -41,6 +41,7 @@ extern "C" {
 typedef struct GlesProgram {
     unsigned int program;
     int u_mvp;
+    int u_color; /* solid program; refreshed after every link */
     int texunit0;
     int texunit1;
     int mask;

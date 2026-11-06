@@ -130,13 +130,17 @@ int Video_PreInit(void)
 int Video_Deinit(void)
 {
 #ifdef ANDROID_PORT
+#ifdef MUGEN_GLES
+    /* Port fix: release GL resources while the context is still current. */
+    Gl_Deinit();
+#endif
     Android_VideoQuit();
     g_videoSurface = NULL;
     g_screenSurface = NULL;
 #endif
     if (g_renderMode == RENDER_OPENGL || g_renderMode == RENDER_OPENGL_SCREEN) {
 #ifndef ANDROID_PORT
-        /* Android port: no GL renderer is compiled in. */
+        /* Android releases its optional GLES backend before Android_VideoQuit above. */
         Gl_Deinit();
 #endif
     }

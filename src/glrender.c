@@ -35,6 +35,19 @@
 
 #include "mugen.h"
 #include "shader_src.h"
+#include "gl_size.h"
+
+static void Glr_ForgetFormat(const GlTex *tex);
+static int *Glr_FormatSlot(const GlTex *tex);
+static void Glr_FreeProgram(GlProgram *prog);
+static unsigned int g_attachedTexture, g_attachedDepth;
+
+/* Port fix: reject unsafe payloads and impossible storage before touching GL. */
+static int Glr_TextureSize(int w, int h)
+{
+    return GlImage_Size(w, h, 4, NULL, NULL) &&
+           (g_glMaxTextureSize <= 0 || (w <= g_glMaxTextureSize && h <= g_glMaxTextureSize));
+}
 
 #ifdef MUGEN_VITA_GL
 /* port/psvita/src/vita_gl_shim.h is included by mugen.h; nothing extra here. */
@@ -132,6 +145,8 @@ int GlTex_Free(GlTex *tex)
 /* 0x00479D20: clears tex and generates its texture name; 0 on a GL error. */
 int GlTex_Init(GlTex *tex)
 {
+    if (tex == NULL) return 0;
+    Glr_ForgetFormat(tex);
     Glr_ClearErrors();
     tex->id = 0;
     tex->w = 0;
@@ -141,7 +156,7 @@ int GlTex_Init(GlTex *tex)
     tex->refs = 0;
     tex->size = 0;
     glGenTextures(1, &tex->id);
-    return Glr_LastError() == GL_NO_ERROR;
+    return Glr_LastError() == GL_NO_ERROR && tex->id != 0;
 }
 
 /*
@@ -150,6 +165,7 @@ int GlTex_Init(GlTex *tex)
  */
 int GlTex_Delete(GlTex *tex)
 {
+    if (tex == NULL) return 0;
     if (tex->refs > 0) {
         return 0;
     }
@@ -158,6 +174,9 @@ int GlTex_Delete(GlTex *tex)
     }
     tex->depth = 0;
     if (tex->id != 0) {
+        if (g_attachedTexture == tex->id) {
+            g_attachedTexture = g_attachedDepth = 0;
+        }
         glDeleteTextures(1, &tex->id);
         if (g_glTexMemory < tex->size) {
             g_glTexMemory = 0;
@@ -166,6 +185,9 @@ int GlTex_Delete(GlTex *tex)
         }
     }
     tex->id = 0;
+    tex->w = tex->h = 0;
+    tex->size = 0;
+    Glr_ForgetFormat(tex);
     return 1;
 }
 
@@ -174,15 +196,19 @@ int GlTex_Alloc(GlTex *tex, int w, int h)
 {
     GLenum err;
 
+    if (tex == NULL || tex->id == 0 || !Glr_TextureSize(w, h)) return 0;
     Glr_ClearErrors();
     glBindTexture(GL_TEXTURE_2D, tex->id);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
     err = Glr_LastError();
     if (err == GL_NO_ERROR) {
         Glr_AddMemory(tex, Gl_TexBytes((unsigned int)(w * h), GL_RGBA));
+        *Glr_FormatSlot(tex) = GL_RGBA;
+        tex->h = h;
+        tex->w = w;
+    } else {
+        Glr_ForgetFormat(tex); /* Failed allocation cannot qualify a SubImage retry. */
     }
-    tex->h = h;
-    tex->w = w;
     return err == GL_NO_ERROR;
 }
 
@@ -192,6 +218,7 @@ int GlTex_Alloc(GlTex *tex, int w, int h)
  */
 int GlTex_Upload2D(int h, int bpp, GlTex *tex, const void *pixels, int w)
 {
+    if (tex == NULL || tex->id == 0 || !Glr_TextureSize(w, h)) return 0;
     if (bpp <= 8) {
         glPixelStorei(GL_PACK_ALIGNMENT, 1);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -261,9 +288,11 @@ int GlTex_UploadRGBA(int h, int w, GlTex *tex, const void *pixels)
 {
     const unsigned char *upload = pixels;
     int ok;
+    size_t bytes;
 
+    if (tex == NULL || !Glr_TextureSize(w, h) || !GlImage_Size(w, h, 4, NULL, &bytes)) return 0;
     if (pixels != NULL) {
-        upload = Gl_PremultiplyScratch(w * h * 4, pixels);
+        upload = Gl_PremultiplyScratch((int)bytes, pixels);
         if (upload == NULL) {
             return 0;
         }
@@ -283,6 +312,17 @@ int GlTex_UploadRGBA(int h, int w, GlTex *tex, const void *pixels)
 #define GLR_FORMAT_SLOTS 4
 static const GlTex *g_texFormatTex[GLR_FORMAT_SLOTS];
 static int g_texFormat[GLR_FORMAT_SLOTS];
+
+static void Glr_ForgetFormat(const GlTex *tex)
+{
+    int i;
+    for (i = 0; i < GLR_FORMAT_SLOTS; i++) {
+        if (g_texFormatTex[i] == tex) {
+            g_texFormatTex[i] = NULL;
+            g_texFormat[i] = 0;
+        }
+    }
+}
 
 static int *Glr_FormatSlot(const GlTex *tex)
 {
@@ -320,10 +360,14 @@ static int *Glr_FormatSlot(const GlTex *tex)
  */
 int GlTex_Upload(GlTex *tex, int h, int internal_format, int w, int format, const void *pixels)
 {
-    int *stored = Glr_FormatSlot(tex);
-    int reuse = tex->w == w && tex->h == h && *stored == internal_format;
+    int *stored;
+    int reuse;
     GLenum err;
 
+    if (tex == NULL || tex->id == 0 || !Glr_TextureSize(w, h)) return 0;
+    stored = Glr_FormatSlot(tex);
+    /* NULL specifies allocation without client data, never a sub-image read. */
+    reuse = pixels != NULL && tex->w == w && tex->h == h && *stored == internal_format;
     Glr_ClearErrors();
     glBindTexture(GL_TEXTURE_2D, tex->id);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -334,14 +378,17 @@ int GlTex_Upload(GlTex *tex, int h, int internal_format, int w, int format, cons
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, format, GL_UNSIGNED_BYTE, pixels);
     } else {
         glTexImage2D(GL_TEXTURE_2D, 0, internal_format, w, h, 0, format, GL_UNSIGNED_BYTE, pixels);
-        *stored = internal_format;
     }
     err = Glr_LastError();
     if (err == GL_NO_ERROR) {
+        *stored = internal_format;
         Glr_AddMemory(tex, Gl_TexBytes((unsigned int)(w * h), internal_format));
+        tex->w = w;
+        tex->h = h;
+    } else {
+        /* A failed allocation cannot qualify the next upload for reuse. */
+        *stored = 0;
     }
-    tex->w = w;
-    tex->h = h;
     return err == GL_NO_ERROR;
 }
 
@@ -350,6 +397,7 @@ int GlTex_Upload1D(GlTex *tex, int width, const void *pixels)
 {
     GLenum err;
 
+    if (tex == NULL || tex->id == 0 || !Glr_TextureSize(width, 1)) return 0;
     glPixelStorei(GL_PACK_ALIGNMENT, 4);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
     Glr_ClearErrors();
@@ -361,26 +409,33 @@ int GlTex_Upload1D(GlTex *tex, int width, const void *pixels)
     err = Glr_LastError();
     if (err == GL_NO_ERROR) {
         Glr_AddMemory(tex, Gl_TexBytes((unsigned int)width, GL_RGBA));
+        tex->w = width;
+        tex->h = 0;
     }
-    tex->w = width;
-    tex->h = 0;
     return err == GL_NO_ERROR;
 }
 
 /* 0x0047A1F0: gives a texture a depth renderbuffer of its size (render targets). */
 int GlTex_AllocDepth(GlTex *tex)
 {
+    unsigned int depth = 0;
+    GLenum err;
+    if (tex == NULL || tex->id == 0 || !Glr_TextureSize(tex->w, tex->h)) return 0;
+    if (tex->depth != 0) return 1;
     Glr_ClearErrors();
-    if (tex->id == 0) {
-        return 0;
-    }
-    if (tex->depth == 0) {
-        g_glewGenRenderbuffersEXT(1, &tex->depth);
-        g_glewBindRenderbufferEXT(GLR_RENDERBUFFER, tex->depth);
+    g_glewGenRenderbuffersEXT(1, &depth);
+    if (depth != 0) {
+        g_glewBindRenderbufferEXT(GLR_RENDERBUFFER, depth);
         g_glewRenderbufferStorageEXT(GLR_RENDERBUFFER, GL_DEPTH_COMPONENT, tex->w, tex->h);
         g_glewBindRenderbufferEXT(GLR_RENDERBUFFER, 0);
     }
-    return Glr_LastError() == GL_NO_ERROR;
+    err = Glr_LastError();
+    if (depth == 0 || err != GL_NO_ERROR) {
+        if (depth != 0) g_glewDeleteRenderbuffersEXT(1, &depth);
+        return 0;
+    }
+    tex->depth = depth;
+    return 1;
 }
 
 /* ---- OpenGLScreen ---- */
@@ -521,13 +576,13 @@ unsigned int Gl_TexBytes(unsigned int pixels, int format)
 /* 0x0047A640: a malloc'ed copy of bytes / 4 RGBA pixels with the colours multiplied by alpha. */
 unsigned char *Gl_Premultiply(int bytes, const unsigned char *src)
 {
-    unsigned char *out = malloc(bytes);
+    unsigned char *out;
     unsigned char *dst;
     int n;
 
-    if (out == NULL) {
-        return NULL;
-    }
+    if (bytes <= 0 || bytes % 4 != 0 || src == NULL) return NULL;
+    out = malloc((size_t)bytes);
+    if (out == NULL) return NULL;
     dst = out;
     for (n = bytes / 4; n > 0; n--) {
         unsigned int a = src[3];
@@ -638,19 +693,19 @@ int Gl_Init(int framebuffers)
     g_glSysTex[0] = GlTex_Create();
     if (g_glSysTex[0] == NULL) {
         MatchLog_Printf(3, "GL: Could not create system texture.\n");
-        return 0;
+        goto fail;
     }
     g_glSysTex[1] = GlTex_Create();
     if (g_glSysTex[1] == NULL) {
         MatchLog_Printf(3, "GL: Could not create system texture.\n");
-        return 0;
+        goto fail;
     }
     glViewport(0, 0, w, h);
     if (framebuffers == 1) {
         Gl_DetectOffsets();
         if (!Gl_LoadShaders()) {
             MatchLog_Printf(3, "GL: Could not load shaders.\n");
-            return 0;
+            goto fail;
         }
     }
     g_glProjection = 0;
@@ -662,6 +717,10 @@ int Gl_Init(int framebuffers)
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     g_glInitialized = 1;
     return 1;
+fail:
+    /* Port fix: release partial initialization too. */
+    Gl_Deinit();
+    return 0;
 }
 
 /* Deletes and frees a system texture (unless it is referenced). */
@@ -675,12 +734,21 @@ static void Glr_FreeSysTex(GlTex *tex)
 /* 0x0047A930: stops the renderer and logs the draw statistics. */
 int Gl_Deinit(void)
 {
-    if (g_glInitialized) {
-        Gl_FreeShaders();
-        Glr_FreeSysTex(g_glSysTex[1]);
-        Glr_FreeSysTex(g_glSysTex[0]);
-        g_glInitialized = 0;
+    /* Port fix: readiness does not describe partial ownership. */
+    Gl_FreeShaders();
+    Glr_FreeSysTex(g_glSysTex[1]);
+    Glr_FreeSysTex(g_glSysTex[0]);
+    g_glSysTex[0] = g_glSysTex[1] = NULL;
+    if (g_glFramebuffer != 0) {
+        g_glewBindFramebufferEXT(GLR_FRAMEBUFFER, 0);
+        g_glewDeleteFramebuffersEXT(1, &g_glFramebuffer);
     }
+    g_glFramebuffer = 0;
+    g_glBoundFramebuffer = 0;
+    g_attachedTexture = g_attachedDepth = 0;
+    memset(g_texFormatTex, 0, sizeof(g_texFormatTex));
+    memset(g_texFormat, 0, sizeof(g_texFormat));
+    g_glInitialized = 0;
     Glr_FreePremultiply();
     MatchLog_Printf(7,
                     "GL draw statistics:\nSprite Texture: %llu\nSprite Stream : %llu\nPal Texture   : %llu\nPal "
@@ -1184,46 +1252,32 @@ void *Gl_Capture(void)
  */
 unsigned char *Gl_ReadPixels(int w, int h)
 {
-    int row = w * 4;
-    int size = w * h * 4;
-    int y0;
+    size_t row, size, i;
+    int y0, n;
     unsigned char *buf, *tmp;
-
+    if (!GlImage_Size(w, h, 4, &row, &size) || w > g_targetWidth || h > g_targetHeight) return NULL;
     Glr_ClearErrors();
     y0 = g_targetHeight - h;
     buf = malloc(size);
-    if (buf == NULL) {
-        return NULL;
-    }
+    if (buf == NULL) return NULL;
     tmp = malloc(row);
-    if (tmp == NULL) {
-        free(buf);
-        return NULL;
-    }
-    if (g_glBoundFramebuffer == 0) {
-        glReadBuffer(GL_BACK);
-    }
+    if (tmp == NULL) { free(buf); return NULL; }
+    if (g_glBoundFramebuffer == 0) glReadBuffer(GL_BACK);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glReadPixels(0, y0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, buf);
-    Glr_ClearErrors();
+    /* Port fix: never publish unwritten pixels after a readback failure. */
+    if (Glr_LastError() != GL_NO_ERROR) {
+        free(tmp); free(buf); return NULL;
+    }
     if (g_glBoundFramebuffer == 0) {
         unsigned char *top = buf;
-        unsigned char *bottom = buf + (h - 1) * row;
-        int n;
+        unsigned char *bottom = buf + (size_t)(h - 1) * row;
         for (n = h / 2; n > 0; n--) {
-            memcpy(tmp, bottom, row);
-            memcpy(bottom, top, row);
-            memcpy(top, tmp, row);
-            top += row;
-            bottom -= row;
+            memcpy(tmp, bottom, row); memcpy(bottom, top, row); memcpy(top, tmp, row);
+            top += row; bottom -= row;
         }
     }
-    {
-        int i;
-        for (i = 3; i < size; i += 4) {
-            buf[i] = 0xFF;
-        }
-    }
+    for (i = 3; i < size; i += 4) buf[i] = 0xFF;
     free(tmp);
     return buf;
 }
@@ -1264,12 +1318,12 @@ int GlVbuf_Bind(GlTex *vbuf)
     int w, h;
 
     if (vbuf == NULL) {
-        g_glewBindFramebufferEXT(GLR_FRAMEBUFFER, 0);
+        if (!Gl_AttachFramebuffer(0, 0)) return 0;
         h = g_videoHeight;
         w = g_videoWidth;
         g_glBoundFramebuffer = 0;
     } else {
-        Gl_AttachFramebuffer(vbuf->id, vbuf->depth);
+        if (!Gl_AttachFramebuffer(vbuf->id, vbuf->depth)) return 0;
         h = vbuf->h;
         w = vbuf->w;
     }
@@ -1340,27 +1394,37 @@ void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
  * framebuffer object and binds it; texture 0 binds the window. Logs an
  * incomplete framebuffer.
  */
-void Gl_AttachFramebuffer(unsigned int texture, unsigned int depth)
+int Gl_AttachFramebuffer(unsigned int texture, unsigned int depth)
 {
+    GLint previous = 0;
+    int previous_bound = g_glBoundFramebuffer;
     GLenum status;
-
-    if (g_glFramebuffer == 0) {
-        g_glewGenFramebuffersEXT(1, &g_glFramebuffer);
-    }
-    if (texture != 0) {
-        unsigned int fb = g_glFramebuffer;
-        g_glewBindFramebufferEXT(GLR_FRAMEBUFFER, fb);
-        g_glBoundFramebuffer = (int)fb;
-        g_glewFramebufferTexture2DEXT(GLR_FRAMEBUFFER, GLR_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
-        g_glewFramebufferRenderbufferEXT(GLR_FRAMEBUFFER, GLR_DEPTH_ATTACHMENT, GLR_RENDERBUFFER, depth);
-    } else {
+    Glr_ClearErrors();
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING_EXT, &previous);
+    if (texture == 0) {
         g_glewBindFramebufferEXT(GLR_FRAMEBUFFER, 0);
-        g_glBoundFramebuffer = 0;
+        if (Glr_LastError() == GL_NO_ERROR) { g_glBoundFramebuffer = 0; return 1; }
+        g_glewBindFramebufferEXT(GLR_FRAMEBUFFER, (unsigned int)previous);
+        return 0;
     }
+    if (g_glFramebuffer == 0) g_glewGenFramebuffersEXT(1, &g_glFramebuffer);
+    if (g_glFramebuffer == 0) return 0;
+    g_glewBindFramebufferEXT(GLR_FRAMEBUFFER, g_glFramebuffer);
+    g_glewFramebufferTexture2DEXT(GLR_FRAMEBUFFER, GLR_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+    g_glewFramebufferRenderbufferEXT(GLR_FRAMEBUFFER, GLR_DEPTH_ATTACHMENT, GLR_RENDERBUFFER, depth);
     status = g_glewCheckFramebufferStatusEXT(GLR_FRAMEBUFFER);
-    if (status != GLR_FRAMEBUFFER_COMPLETE) {
-        MatchLog_Printf(7, "Framebuffer status %i\n", status);
+    if (Glr_LastError() != GL_NO_ERROR || status != GLR_FRAMEBUFFER_COMPLETE) {
+        MatchLog_Printf(3, "Framebuffer status %i\n", status);
+        /* Port fix: undo attachments too when reusing the currently bound FBO. */
+        g_glewFramebufferTexture2DEXT(GLR_FRAMEBUFFER, GLR_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_attachedTexture, 0);
+        g_glewFramebufferRenderbufferEXT(GLR_FRAMEBUFFER, GLR_DEPTH_ATTACHMENT, GLR_RENDERBUFFER, g_attachedDepth);
+        g_glewBindFramebufferEXT(GLR_FRAMEBUFFER, (unsigned int)previous);
+        g_glBoundFramebuffer = previous_bound;
+        return 0;
     }
+    g_attachedTexture = texture; g_attachedDepth = depth;
+    g_glBoundFramebuffer = (int)g_glFramebuffer;
+    return 1;
 }
 
 /* ---- shaders ---- */
@@ -1400,129 +1464,120 @@ static unsigned int Glr_CompileShader(unsigned int type, char *src)
 {
     const char *p = src;
     unsigned int shader = g_glewCreateShader(type);
-
-    g_glewShaderSource(shader, 1, &p, NULL);
-    g_glewCompileShader(shader);
+    GLint compiled = 0;
+    if (shader != 0) {
+        g_glewShaderSource(shader, 1, &p, NULL);
+        g_glewCompileShader(shader);
+        g_glewGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+        Gl_LogInfo(shader);
+    }
     free(src);
+    if (!compiled) {
+        if (shader != 0) g_glewDeleteShader(shader);
+        return 0;
+    }
     return shader;
 }
 
-/*
- * 0x0047C580: loads program prog from data/<name>.vert and .frag, with
- * "#define <d>" for each of the NULL-terminated defines and PREMUL. Returns
- * 0 when a file cannot be read.
- */
+/* 0x0047C580: port fix: transactional read/compile/link, including cleanup. */
 int Gl_LoadShader(const char **defines, GlProgram *prog, const char *name)
 {
-    char defs[GLR_DEFINES_SIZE + 0x110];
-    char path[MAX_PATH];
+    char defs[GLR_DEFINES_SIZE], path[MAX_PATH];
     size_t n = 0;
+    int wrote;
+    GLint linked = 0;
     FILE *f;
     char *text, *src;
-
+    GlProgram built = {0};
+    if (defines == NULL || prog == NULL || name == NULL) return 0;
+    defs[0] = '\0';
     for (; *defines != NULL; defines++) {
-        _snprintf(defs + n, GLR_DEFINES_SIZE - n, "#define %s\n", *defines);
-        n += strlen(defs + n);
+        wrote = snprintf(defs + n, sizeof(defs) - n, "#define %s\n", *defines);
+        if (wrote < 0 || (size_t)wrote >= sizeof(defs) - n) return 0;
+        n += (size_t)wrote;
     }
-    _snprintf(defs + n, GLR_DEFINES_SIZE - n, "#define PREMUL\n");
-
+    wrote = snprintf(defs + n, sizeof(defs) - n, "#define PREMUL\n");
+    if (wrote < 0 || (size_t)wrote >= sizeof(defs) - n) return 0;
     Glr_ShaderPath(path, name, ".vert");
     f = fopen(path, "rb");
-    if (f == NULL) {
-        return 0;
-    }
-    {
-        long pos = ftell(f);
-        long size;
-        fseek(f, 0, SEEK_END);
-        size = ftell(f);
-        fseek(f, pos, SEEK_SET);
-        text = calloc(1, size + 1);
-        if (text == NULL) {
-            fclose(f);
-            return 0;
-        }
-        fread(text, size, 1, f);
-        fclose(f);
-        text[size] = '\0';
-    }
-    src = Gl_InsertDefines(text, defs);
-    free(text);
-    if (src == NULL) {
-        return 0;
-    }
-    prog->vert = Glr_CompileShader(GLR_VERTEX_SHADER, src);
-    Gl_LogInfo(prog->vert);
-
+    if (f == NULL) goto fail;
+    text = Gl_ReadFile(f);
+    if (text == NULL) goto fail;
+    src = Gl_InsertDefines(text, defs); free(text);
+    if (src == NULL) goto fail;
+    built.vert = Glr_CompileShader(GLR_VERTEX_SHADER, src);
+    if (built.vert == 0) goto fail;
     Glr_ShaderPath(path, name, ".frag");
     f = fopen(path, "rb");
-    if (f == NULL) {
-        return 0;
-    }
+    if (f == NULL) goto fail;
     text = Gl_ReadFile(f);
-    if (text == NULL) {
-        return 0;
-    }
-    src = Gl_InsertDefines(text, defs);
-    free(text);
-    if (src == NULL) {
-        return 0;
-    }
-    prog->frag = Glr_CompileShader(GLR_FRAGMENT_SHADER, src);
-    Gl_LogInfo(prog->frag);
-
-    prog->program = g_glewCreateProgram();
-    g_glewAttachShader(prog->program, prog->vert);
-    g_glewAttachShader(prog->program, prog->frag);
-    g_glewLinkProgram(prog->program);
-    Gl_LogInfo(prog->program);
-    prog->texunit0 = g_glewGetUniformLocation(prog->program, "texunit0");
-    prog->texunit1 = g_glewGetUniformLocation(prog->program, "texunit1");
-    prog->mask = g_glewGetUniformLocation(prog->program, "mask");
-    prog->add = g_glewGetUniformLocation(prog->program, "add");
-    prog->mul = g_glewGetUniformLocation(prog->program, "mul");
-    prog->invertall = g_glewGetUniformLocation(prog->program, "invertall");
-    prog->colorbal = g_glewGetUniformLocation(prog->program, "colorbal");
-    prog->texsize = g_glewGetUniformLocation(prog->program, "texsize");
-    prog->src_alphamul = g_glewGetUniformLocation(prog->program, "src_alphamul");
+    if (text == NULL) goto fail;
+    src = Gl_InsertDefines(text, defs); free(text);
+    if (src == NULL) goto fail;
+    built.frag = Glr_CompileShader(GLR_FRAGMENT_SHADER, src);
+    if (built.frag == 0) goto fail;
+    built.program = g_glewCreateProgram();
+    if (built.program == 0) goto fail;
+    g_glewAttachShader(built.program, built.vert);
+    g_glewAttachShader(built.program, built.frag);
+    g_glewLinkProgram(built.program);
+    g_glewGetProgramiv(built.program, GL_LINK_STATUS, &linked);
+    Gl_LogInfo(built.program);
+    if (!linked) goto fail;
+#define GLR_UNIFORM(field) built.field = g_glewGetUniformLocation(built.program, #field)
+    GLR_UNIFORM(texunit0); GLR_UNIFORM(texunit1); GLR_UNIFORM(mask);
+    GLR_UNIFORM(add); GLR_UNIFORM(mul); GLR_UNIFORM(invertall);
+    GLR_UNIFORM(colorbal); GLR_UNIFORM(texsize); GLR_UNIFORM(src_alphamul);
+#undef GLR_UNIFORM
+    Glr_FreeProgram(prog);
+    *prog = built;
     return 1;
+fail:
+    Glr_FreeProgram(&built);
+    return 0;
 }
 
 /*
  * 0x0047C990: loads the 9 variants of the "indexed" and "rgba" programs,
- * with the palette lookup mode of g_glIndexMode. Failures are only logged.
+ * with the palette lookup mode of g_glIndexMode. Port fix: fail atomically
+ * if any variant cannot compile or link.
  */
 int Gl_LoadShaders(void)
 {
-    const char *mode;
+    const char *mode = g_glIndexMode == 0 ? "INDEX_STANDARD" : (g_glIndexMode == 1 ? "INDEX_GEFORCE7" : "INDEX_SAFE");
+    GlProgram indexed[GL_PROGRAM_COUNT] = {{0}}, rgba[GL_PROGRAM_COUNT] = {{0}};
     int i;
-
-    if (g_glIndexMode == 0) {
-        mode = "INDEX_STANDARD";
-    } else if (g_glIndexMode == 1) {
-        mode = "INDEX_GEFORCE7";
-    } else {
-        mode = "INDEX_SAFE";
-    }
     for (i = 0; i < GL_PROGRAM_COUNT; i++) {
         const char **defines = g_glShaderDefines[i];
         defines[0] = mode;
-        if (!Gl_LoadShader(defines, &g_glProgramsIndexed[i], "indexed")) {
-            MatchLog_Printf(3, "Unabled to load indexed shader\n");
-        }
-        if (!Gl_LoadShader(defines, &g_glProgramsRgba[i], "rgba")) {
-            MatchLog_Printf(3, "Unabled to load RGBA shader\n");
+        if (!Gl_LoadShader(defines, &indexed[i], "indexed") || !Gl_LoadShader(defines, &rgba[i], "rgba")) {
+            MatchLog_Printf(3, "Unable to load GL shader variant %i\n", i);
+            goto fail;
         }
     }
+    Gl_FreeShaders();
+    memcpy(g_glProgramsIndexed, indexed, sizeof(indexed));
+    memcpy(g_glProgramsRgba, rgba, sizeof(rgba));
     return 1;
+fail:
+    for (i = 0; i < GL_PROGRAM_COUNT; i++) {
+        Glr_FreeProgram(&indexed[i]); Glr_FreeProgram(&rgba[i]);
+    }
+    return 0;
 }
 
 /* Deletes the GL objects of a program and clears it. */
 static void Glr_FreeProgram(GlProgram *prog)
 {
-    g_glewDeleteProgram(prog->program);
-    g_glewDeleteShader(prog->frag);
-    g_glewDeleteShader(prog->vert);
+    if (prog->program != 0) {
+        if (g_glCurrentProgram == prog->program) {
+            g_glewUseProgram(0);
+            g_glCurrentProgram = 0;
+        }
+        g_glewDeleteProgram(prog->program);
+    }
+    if (prog->frag != 0) g_glewDeleteShader(prog->frag);
+    if (prog->vert != 0) g_glewDeleteShader(prog->vert);
     memset(prog, 0, sizeof(*prog));
 }
 
@@ -1530,6 +1585,8 @@ static void Glr_FreeProgram(GlProgram *prog)
 int Gl_FreeShaders(void)
 {
     int i;
+    if (g_glCurrentProgram != 0) g_glewUseProgram(0);
+    g_glCurrentProgram = 0;
 
     for (i = 0; i < GL_PROGRAM_COUNT; i++) {
         Glr_FreeProgram(&g_glProgramsIndexed[i]);
@@ -1551,12 +1608,14 @@ int Gl_LogInfo(unsigned int obj)
     int len = 0;
     char *log;
 
+    if (obj == 0) return 0;
     if (g_glewIsShader(obj)) {
         g_glewGetShaderiv(obj, GLR_INFO_LOG_LENGTH, &size);
     } else {
         g_glewGetProgramiv(obj, GLR_INFO_LOG_LENGTH, &size);
     }
-    log = malloc(size);
+    if (size <= 1) return 1;
+    log = malloc((size_t)size);
     if (log == NULL) {
         return 0;
     }
@@ -1575,20 +1634,5 @@ int Gl_LogInfo(unsigned int obj)
 /* 0x0047CBA0: the rest of f as a malloc'ed string; closes f. */
 char *Gl_ReadFile(FILE *f)
 {
-    long pos = ftell(f);
-    long size;
-    char *text;
-
-    fseek(f, 0, SEEK_END);
-    size = ftell(f);
-    fseek(f, pos, SEEK_SET);
-    text = calloc(1, size + 1);
-    if (text == NULL) {
-        fclose(f);
-        return NULL;
-    }
-    fread(text, size, 1, f);
-    fclose(f);
-    text[size] = '\0';
-    return text;
+    return ShaderSrc_ReadFile(f);
 }

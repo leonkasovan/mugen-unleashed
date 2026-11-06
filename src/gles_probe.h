@@ -9,7 +9,7 @@
 #define GLES_CAP_GLSL_ES_100  0x04
 
 /* Probes the current context. Returns 1 and fills *caps when the context is a
- * usable ES 2.0+ with NPOT and FBO; 0 otherwise. */
+ * usable ES 3.0+ with NPOT and FBO; 0 otherwise. */
 int Gles_Probe(unsigned int *caps);
 #endif
 

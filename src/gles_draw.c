@@ -55,6 +55,7 @@ int GlesDraw_LoadProgram(GlesProgram *out, const char *vert_src, const char *fra
     }
     memset(out, 0, sizeof(*out));
     out->u_mvp = -1;
+    out->u_color = -1;
     out->texunit0 = -1;
     out->texunit1 = -1;
     out->mask = -1;
@@ -119,6 +120,7 @@ int GlesDraw_LoadProgram(GlesProgram *out, const char *vert_src, const char *fra
 
     out->program = p;
     out->u_mvp = glGetUniformLocation(p, "u_mvp");
+    out->u_color = glGetUniformLocation(p, "u_color");
     out->texunit0 = glGetUniformLocation(p, "texunit0");
     out->texunit1 = glGetUniformLocation(p, "texunit1");
     out->mask = glGetUniformLocation(p, "mask");
@@ -141,9 +143,10 @@ int GlesDraw_LoadProgram(GlesProgram *out, const char *vert_src, const char *fra
 
 void GlesDraw_FreeProgram(GlesProgram *prog)
 {
-    if (prog != NULL && prog->program != 0) {
-        glDeleteProgram(prog->program);
-        prog->program = 0;
+    if (prog != NULL) {
+        if (prog->program != 0) glDeleteProgram(prog->program);
+        memset(prog, 0, sizeof(*prog));
+        prog->u_mvp = prog->u_color = -1;
     }
 }
 

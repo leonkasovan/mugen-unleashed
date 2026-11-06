@@ -139,6 +139,7 @@ extern int g_exprStackTop; /* 0x00500f40 */
 #define g_glewBindFramebufferEXT         glBindFramebuffer                            /* 0x0050204c GlBindFramebufferFn */
 #define g_glewBindRenderbufferEXT        glBindRenderbuffer                           /* 0x00502050 GlBindFramebufferFn */
 #define g_glewCheckFramebufferStatusEXT  glCheckFramebufferStatus                     /* 0x00502054 GlCheckFramebufferStatusFn */
+#define g_glewDeleteFramebuffersEXT      glDeleteFramebuffers
 #define g_glewDeleteRenderbuffersEXT     glDeleteRenderbuffers                        /* 0x0050205c GlGenDeleteFn */
 #define g_glewFramebufferRenderbufferEXT glFramebufferRenderbuffer                    /* 0x00502060 GlFramebufferRenderbufferFn */
 #define g_glewFramebufferTexture2DEXT    glFramebufferTexture2D                       /* 0x00502068 GlFramebufferTexture2DFn */
@@ -149,6 +150,7 @@ extern int g_exprStackTop; /* 0x00500f40 */
 #define g_glewBindFramebufferEXT         glBindFramebufferEXT                         /* 0x0050204c GlBindFramebufferFn */
 #define g_glewBindRenderbufferEXT        glBindRenderbufferEXT                        /* 0x00502050 GlBindFramebufferFn */
 #define g_glewCheckFramebufferStatusEXT  glCheckFramebufferStatusEXT                  /* 0x00502054 GlCheckFramebufferStatusFn */
+#define g_glewDeleteFramebuffersEXT      glDeleteFramebuffersEXT
 #define g_glewDeleteRenderbuffersEXT     glDeleteRenderbuffersEXT                     /* 0x0050205c GlGenDeleteFn */
 #define g_glewFramebufferRenderbufferEXT glFramebufferRenderbufferEXT                 /* 0x00502060 GlFramebufferRenderbufferFn */
 #define g_glewFramebufferTexture2DEXT    glFramebufferTexture2DEXT                    /* 0x00502068 GlFramebufferTexture2DFn */
@@ -1693,7 +1695,7 @@ int __cdecl GlTex_Revive(GlTex *tex);
 /* 0x0047c100 */ GlTex *__cdecl GlVbuf_Alloc(int depth, int w, int h);
 /* 0x0047c1a0 */ int __cdecl GlVbuf_Bind(GlTex *vbuf);
 /* 0x0047c1f0 */ void __cdecl Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h);
-/* 0x0047c3b0 */ void __cdecl Gl_AttachFramebuffer(unsigned int texture, unsigned int depth);
+/* 0x0047c3b0 */ int __cdecl Gl_AttachFramebuffer(unsigned int texture, unsigned int depth);
 /* 0x0047c460 */ char *__cdecl Gl_InsertDefines(const char *src, const char *defines);
 /* 0x0047c580 */ int __cdecl Gl_LoadShader(const char **defines, GlProgram *prog, const char *name);
 /* 0x0047c990 */ int __cdecl Gl_LoadShaders(void);

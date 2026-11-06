@@ -19,6 +19,7 @@
  */
 
 #include "mugen.h"
+#include "gl_size.h"
 
 /* SDL_gfx, as in src/font.c: the header is not in the SDK. */
 #ifndef ANDROID_PORT
@@ -160,13 +161,17 @@ SpriteSet *Screen_Create(int depth, int width, int height)
 
 /*
  * 0x0046BA90: renders to sprite `index` of target, or to the screen when
- * target is NULL, and resets the clip rectangle. Returns 0 (possibly with
- * the target globals already changed) when the sprite cannot be a target.
+ * target is NULL, and resets the clip rectangle. Port fix: returns 0 with the previous
+ * target intact when the sprite cannot be bound as a target.
  */
 int Gfx_SetRenderTarget(SpriteSet *target, int index)
 {
     int changed = !(target == g_renderTarget && index == g_renderTargetSprite);
     Sprite *spr;
+    SpriteSet *old_target = g_renderTarget;
+    int old_sprite = g_renderTargetSprite;
+    int old_w = g_targetWidth, old_h = g_targetHeight, old_pixels = g_targetPixels;
+    int old_bpp = g_targetBpp, old_bytes = g_targetBytesPerPixel, old_skip = g_clipRowSkip;
 
     if (target == NULL) {
         g_targetWidth = g_videoWidth;
@@ -180,16 +185,7 @@ int Gfx_SetRenderTarget(SpriteSet *target, int index)
 #if !defined(ANDROID_PORT) || defined(MUGEN_GLES)
         /* M8: GL mode exists on Android too (see Screen_Create). */
         if (g_renderMode == RENDER_OPENGL && changed) {
-#ifdef MUGEN_GLES
-            /* GLES has no *EXT framebuffer entry points; GlVbuf_Bind(NULL)
-             * binds the window and re-establishes the viewport/projection. */
-            GlVbuf_Bind(NULL);
-#else
-            g_glewBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
-            g_glBoundFramebuffer = 0;
-            glViewport(0, 0, g_videoWidth, g_videoHeight);
-            Gl_SetupView();
-#endif
+            if (!GlVbuf_Bind(NULL)) goto rollback;
         }
 #endif
         Gfx_SetClipRect(0, 0, g_targetWidth, g_targetHeight);
@@ -197,6 +193,9 @@ int Gfx_SetRenderTarget(SpriteSet *target, int index)
     }
     spr = Gfx_SpriteAt(target, index);
     if (spr == NULL || spr->format < 0 || (spr->format > SPRITE_FORMAT_SURFACE && spr->format != SPRITE_FORMAT_TEXTURE)) {
+        return 0;
+    }
+    if (spr->format == SPRITE_FORMAT_TEXTURE && !GlImage_Size(spr->w, spr->h, 4, NULL, NULL)) {
         return 0;
     }
     g_renderTarget = target;
@@ -215,10 +214,16 @@ int Gfx_SetRenderTarget(SpriteSet *target, int index)
 #else
     if (spr->format == SPRITE_FORMAT_TEXTURE && (spr->pixels == NULL || !GlVbuf_Bind(spr->pixels))) {
 #endif
-        return 0;
+        goto rollback;
     }
     Gfx_SetClipRect(0, 0, g_targetWidth, g_targetHeight);
     return 1;
+rollback:
+    /* Port fix: an FBO failure leaves the previous target and its projection live. */
+    g_renderTarget = old_target; g_renderTargetSprite = old_sprite;
+    g_targetWidth = old_w; g_targetHeight = old_h; g_targetPixels = old_pixels;
+    g_targetBpp = old_bpp; g_targetBytesPerPixel = old_bytes; g_clipRowSkip = old_skip;
+    return 0;
 }
 
 /* 0x0046BC10: the SDL surface of a sprite, or NULL if it is not one. */

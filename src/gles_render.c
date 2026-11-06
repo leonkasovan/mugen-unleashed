@@ -38,6 +38,8 @@
 #include "gles_render.h"
 #include "gl_mvp.h"
 #include "gles_draw.h"
+#include "gl_size.h"
+#include "shader_src.h"
 
 /* 1 once the programs are linked on a live context. Declared early because the
  * texture and view entry points test it before the renderer proper. */
@@ -61,6 +63,21 @@ static int g_glesProjectionValid;
  * renderer does the same with its own single g_glFramebuffer.
  */
 static GLuint g_glesFbo;
+static GLuint g_glesAttachedTexture, g_glesAttachedDepth;
+
+static void gles_clear_errors(void) { while (glGetError() != GL_NO_ERROR) {} }
+static int gles_ok(void)
+{
+    int ok = 1;
+    while (glGetError() != GL_NO_ERROR) ok = 0;
+    return ok;
+}
+static int gles_texture_size(int w, int h)
+{
+    return GlImage_Size(w, h, 4, NULL, NULL) &&
+           (g_glMaxTextureSize <= 0 || (w <= g_glMaxTextureSize && h <= g_glMaxTextureSize));
+}
+static void gles_tex_account(GlTex *tex, int w, int h, int bytes_per_pixel);
 
 /* Defined below; the context-restore path calls it, so it is declared first. */
 static int gles_build_programs(void);
@@ -314,16 +331,17 @@ GlTex *GlTex_Create(void)
 int GlTex_Free(GlTex *tex)
 {
     if (tex == NULL) {
-        return 0;
+        return 1;
     }
     /*
-     * Release the CPU side unconditionally. It used to run only when tex->id was
+     * Check ownership even when the GL name is zero. This used to run only when tex->id was
      * non-zero, which skipped GlTex_Delete entirely after a context loss (loss
      * clears every id), so the backing bytes and their table entry survived the
      * free. The GL name and the object are different lifetimes: Delete already
      * handles id == 0 and reference counting, so it is always safe to call.
      */
-    GlTex_Delete(tex);
+    /* Port fix: a retained texture still owns its object and backing. */
+    if (!GlTex_Delete(tex)) return 0;
     gles_unregister_tex(tex);
     free(tex);
     return 1;
@@ -336,20 +354,20 @@ int GlTex_Delete(GlTex *tex)
     if (tex == NULL) {
         return 0;
     }
-    if (tex->refs > 1) {
-        tex->refs--;
+    if (tex->refs > 0) {
         return 0;
     }
     id = (GLuint)tex->id;
     if (id != 0) {
         glDeleteTextures(1, &id);
+        if (g_glesAttachedTexture == id) g_glesAttachedTexture = g_glesAttachedDepth = 0;
     }
     /*
      * The depth renderbuffer a render target owns was never freed, so every
      * screen/match switch leaked one. glIsRenderbuffer() stayed true after
      * Sprite_Free() because of this, not because of the texture.
      */
-    if (tex->depth != 0 && g_glesReady) {
+    if (tex->depth != 0) {
         GLuint depth = (GLuint)tex->depth;
 
         glDeleteRenderbuffers(1, &depth);
@@ -358,18 +376,12 @@ int GlTex_Delete(GlTex *tex)
         tex->depth = 0;
     }
     /* The desktop Delete clamps at zero instead of going negative; kept. */
-    if (g_glesTexMemory >= tex->size) {
-        g_glesTexMemory -= tex->size;
-    } else {
-        g_glesTexMemory = 0;
-    }
+    g_glesTexMemory = g_glesTexMemory >= tex->size ? g_glesTexMemory - tex->size : 0;
     {
-        GlesTexFormat *slot = gles_tex_format_slot((unsigned int)id);
-
-        slot->id = 0;
-        slot->w = 0;
-        slot->h = 0;
-        slot->internal_format = 0;
+        int i;
+        for (i = 0; i < GLES_TEX_FORMAT_SLOTS; i++) {
+            if (g_glesTexFormat[i].id == id) memset(&g_glesTexFormat[i], 0, sizeof(g_glesTexFormat[i]));
+        }
     }
     gles_backing_release(tex);
     tex->id = 0;
@@ -383,31 +395,8 @@ int GlTex_Delete(GlTex *tex)
 /* Allocates the GL name and the storage for w x h RGBA (w x 1 for palettes). */
 int GlTex_Alloc(GlTex *tex, int w, int h)
 {
-    GLuint id = 0;
-
-    if (tex == NULL || w <= 0 || h <= 0) {
-        return 0;
-    }
-    if (!g_glesReady) {
-        return 0;
-    }
-    if (tex->id == 0) {
-        glGenTextures(1, &id);
-        if (id == 0) {
-            Log_Printf("GLES: glGenTextures failed\n");
-            return 0;
-        }
-        tex->id = (unsigned int)id;
-    }
-    glBindTexture(GL_TEXTURE_2D, (GLuint)tex->id);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-    tex->w = w;
-    tex->h = h;
-    return 1;
+    /* Port fix: allocation and upload share the same checked transaction. */
+    return GlTex_Upload(tex, h, GL_RGBA, w, GL_RGBA, NULL);
 }
 
 /* Books the bytes a full upload of tex occupies. */
@@ -415,7 +404,7 @@ static void gles_tex_account(GlTex *tex, int w, int h, int bytes_per_pixel)
 {
     unsigned long bytes = (unsigned long)w * (unsigned long)h * (unsigned long)bytes_per_pixel;
 
-    g_glesTexMemory -= tex->size;
+    g_glesTexMemory = g_glesTexMemory >= tex->size ? g_glesTexMemory - tex->size : 0;
     tex->size = (unsigned int)bytes;
     g_glesTexMemory += bytes;
     if (g_glesTexMemory > g_glesTexMemoryPeak) {
@@ -426,51 +415,39 @@ static void gles_tex_account(GlTex *tex, int w, int h, int bytes_per_pixel)
 int GlTex_Upload(GlTex *tex, int h, int internal_format, int w, int format, const void *pixels)
 {
     GLuint id;
-
-    if (tex == NULL || w <= 0 || h <= 0) {
+    int fresh, bpp;
+    GlesTexFormat *slot;
+    if (tex == NULL || !g_glesReady || !gles_texture_size(w, h)) return 0;
+    bpp = format == GL_RED ? 1 : (format == GL_RGB ? 3 : 4);
+    id = (GLuint)tex->id;
+    fresh = id == 0;
+    gles_clear_errors();
+    if (fresh) glGenTextures(1, &id);
+    if (id == 0 || !gles_ok()) {
+        if (fresh && id != 0) glDeleteTextures(1, &id);
         return 0;
     }
-    if (!g_glesReady) {
-        /* No context (lost, or never created): every GL call would be a no-op
-         * or an error, so refuse instead of pretending. */
-        return 0;
-    }
-    /*
-     * Allocate the GL name on first use. The desktop renderer always calls
-     * GlTex_Init/GlTex_Alloc first, but the GLES path uploads into long-lived
-     * scratch textures (one for paletted sprites, one for true colour) that
-     * start empty -- refusing an id of 0 here made every sprite upload fail and
-     * the draw return early, which is why nothing was ever rendered.
-     */
-    if (tex->id == 0) {
-        id = 0;
-        glGenTextures(1, &id);
-        if (id == 0) {
-            return 0;
-        }
-        tex->id = (unsigned int)id;
-    }
-    glBindTexture(GL_TEXTURE_2D, (GLuint)tex->id);
+    glBindTexture(GL_TEXTURE_2D, id);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    {
-        GlesTexFormat *slot = gles_tex_format_slot(tex->id);
-
-        if (slot->w == w && slot->h == h && slot->internal_format == internal_format) {
-            /* Same storage: only the texels change. */
-            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, format, GL_UNSIGNED_BYTE, pixels);
-        } else {
-            glTexImage2D(GL_TEXTURE_2D, 0, internal_format, w, h, 0, format, GL_UNSIGNED_BYTE, pixels);
-            slot->w = w;
-            slot->h = h;
-            slot->internal_format = internal_format;
-        }
+    slot = gles_tex_format_slot(id);
+    if (pixels != NULL && slot->w == w && slot->h == h && slot->internal_format == internal_format) {
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, format, GL_UNSIGNED_BYTE, pixels);
+    } else {
+        glTexImage2D(GL_TEXTURE_2D, 0, internal_format, w, h, 0, format, GL_UNSIGNED_BYTE, pixels);
     }
-    tex->w = w;
-    tex->h = h;
+    if (!gles_ok()) {
+        memset(slot, 0, sizeof(*slot));
+        if (fresh) glDeleteTextures(1, &id);
+        return 0;
+    }
+    /* Publish only after the driver accepted storage and data. */
+    slot->id = id; slot->w = w; slot->h = h; slot->internal_format = internal_format;
+    tex->id = id; tex->w = w; tex->h = h;
+    gles_tex_account(tex, w, h, bpp);
     return 1;
 }
 
@@ -487,15 +464,12 @@ int GlTex_Upload2D(int h, int bpp, GlTex *tex, const void *pixels, int w)
         return 0;
     }
     if (bpp <= 8) {
-        gles_tex_account(tex, w, h, 1);
         return GlTex_Upload(tex, h, GL_R8, w, GL_RED, pixels);
     }
     if (bpp == 24) {
-        gles_tex_account(tex, w, h, 3);
         return GlTex_Upload(tex, h, GL_RGB, w, GL_RGB, pixels);
     }
     if (bpp == 32) {
-        gles_tex_account(tex, w, h, 4);
         return GlTex_Upload(tex, h, GL_RGBA, w, GL_RGBA, pixels);
     }
     Log_Printf("GLES: sprite of %d bpp has no texture format\n", bpp);
@@ -521,7 +495,6 @@ int GlTex_UploadRGBA(int h, int w, GlTex *tex, const void *pixels)
     if (tex == NULL) {
         return 0;
     }
-    gles_tex_account(tex, w, h, 4);
     return GlTex_Upload(tex, h, GL_RGBA, w, GL_RGBA, pixels);
 }
 
@@ -533,8 +506,6 @@ static GlesProgram g_glesProgramRgba;
 static GlesProgram g_glesProgramSolid;
 static GlesBuffer g_glesBuffer;
 static unsigned int g_glesCaps;
-static char *g_glesSolidVert;
-static char *g_glesSolidFrag;
 
 /* A solid-colour program for the primitive path (rects, lines, pixels). */
 static const char *gles_solid_vert_src =
@@ -553,35 +524,14 @@ static char *gles_read_shader(const char *name)
 {
     char path[512];
     FILE *f;
-    long size;
-    char *text;
-
-    snprintf(path, sizeof(path), "data/gles/%s", name);
+    int n = snprintf(path, sizeof(path), "data/gles/%s", name);
+    if (n < 0 || (size_t)n >= sizeof(path)) return NULL;
     f = fopen(path, "rb");
     if (f == NULL) {
         Log_Printf("GLES: cannot open %s\n", path);
         return NULL;
     }
-    fseek(f, 0, SEEK_END);
-    size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (size <= 0) {
-        fclose(f);
-        return NULL;
-    }
-    text = calloc(1, (size_t)size + 1);
-    if (text == NULL) {
-        fclose(f);
-        return NULL;
-    }
-    if (fread(text, 1, (size_t)size, f) != (size_t)size) {
-        free(text);
-        fclose(f);
-        return NULL;
-    }
-    fclose(f);
-    text[size] = '\0';
-    return text;
+    return ShaderSrc_ReadFile(f);
 }
 
 /*
@@ -661,20 +611,26 @@ static int gles_load_es_program(GlesProgram *prog, const char *name)
 }
 
 /* Deletes the sprite textures and the programs. */
-int Gl_Deinit(void)
+static void gles_free_programs(void)
 {
-    if (!g_glesReady) {
-        return 0;
-    }
     GlesDraw_FreeProgram(&g_glesProgramIndexed);
     GlesDraw_FreeProgram(&g_glesProgramRgba);
     GlesDraw_FreeProgram(&g_glesProgramSolid);
     GlesDraw_FreeBuffer(&g_glesBuffer);
-    free(g_glesSolidVert);
-    free(g_glesSolidFrag);
-    g_glesSolidVert = NULL;
-    g_glesSolidFrag = NULL;
-    g_glesReady = 0;
+}
+
+int Gl_Deinit(void)
+{
+    int i;
+    /* Port fix: a live-context cleanup includes partially initialized state. */
+    gles_free_programs();
+    for (i = 0; i < g_glesTextureCount; i++) {
+        GlTex *tex = g_glesTextures[i];
+        if (tex->id != 0) glDeleteTextures(1, &tex->id);
+        if (tex->depth != 0) glDeleteRenderbuffers(1, &tex->depth);
+    }
+    if (g_glesFbo != 0) glDeleteFramebuffers(1, &g_glesFbo);
+    Gles_OnContextLost();
     return 1;
 }
 
@@ -692,9 +648,6 @@ void Gles_OnContextLost(void)
 {
     int i;
 
-    if (!g_glesReady && g_glesProgramIndexed.program == 0) {
-        return;
-    }
     /*
      * Programs and the vertex buffer are simply forgotten. Calling
      * glDeleteProgram/glDeleteBuffers here would use names that belong to a
@@ -707,6 +660,9 @@ void Gles_OnContextLost(void)
     /* The framebuffer name is dead with the context; a zero here makes the
      * next attach generate a fresh one instead of binding the stale name. */
     g_glesFbo = 0;
+    g_glesAttachedTexture = g_glesAttachedDepth = 0;
+    g_glBoundFramebuffer = 0;
+    g_glesTexMemory = 0;
     g_glesReady = 0;
     g_glesProjectionValid = 0;
 
@@ -720,6 +676,7 @@ void Gles_OnContextLost(void)
         }
         tex->id = 0;
         tex->depth = 0;
+        tex->size = 0;
     }
     memset(g_glesTexFormat, 0, sizeof(g_glesTexFormat));
     Log_Printf("GLES: context lost; object names dropped (%d textures tracked)\n", g_glesTextureCount);
@@ -763,7 +720,8 @@ int Gles_OnContextRestore(int drawable_w, int drawable_h)
     }
     g_glesCaps = caps;
     if (!gles_build_programs()) {
-        Gles_OnContextLost();
+        /* The replacement context is live; delete partial programs on it. */
+        gles_free_programs();
         Log_Printf("GLES: restore failed: programs did not rebuild\n");
         return 0;
     }
@@ -803,31 +761,14 @@ int Gles_IsReady(void)
  */
 static int gles_build_programs(void)
 {
-    if (!gles_load_es_program(&g_glesProgramIndexed, "indexed")) {
-        Log_Printf("GLES: indexed program unavailable; GL mode unavailable\n");
+    if (!gles_load_es_program(&g_glesProgramIndexed, "indexed") ||
+        !gles_load_es_program(&g_glesProgramRgba, "rgba") ||
+        !GlesDraw_LoadProgram(&g_glesProgramSolid, gles_solid_vert_src, gles_solid_frag_src, "solid", NULL) ||
+        g_glesProgramSolid.u_color < 0) {
+        Log_Printf("GLES: program set unavailable; GL mode unavailable\n");
+        gles_free_programs();
         return 0;
     }
-    if (!gles_load_es_program(&g_glesProgramRgba, "rgba")) {
-        Log_Printf("GLES: rgba program unavailable; GL mode unavailable\n");
-        return 0;
-    }
-
-    g_glesSolidVert = strdup(gles_solid_vert_src);
-    g_glesSolidFrag = strdup(gles_solid_frag_src);
-    if (g_glesSolidVert == NULL || g_glesSolidFrag == NULL ||
-        !GlesDraw_LoadProgram(&g_glesProgramSolid, g_glesSolidVert, g_glesSolidFrag, "solid", NULL)) {
-        Log_Printf("GLES: solid program unavailable; GL mode unavailable\n");
-        free(g_glesSolidVert);
-        free(g_glesSolidFrag);
-        g_glesSolidVert = NULL;
-        g_glesSolidFrag = NULL;
-        return 0;
-    }
-    free(g_glesSolidVert);
-    free(g_glesSolidFrag);
-    g_glesSolidVert = NULL;
-    g_glesSolidFrag = NULL;
-
     glEnable(GL_BLEND);
     glBlendEquation(GL_FUNC_ADD);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -849,7 +790,7 @@ int Gl_Init(int framebuffers)
      * buffer state first -- refusing early made an in-match GL -> System switch
      * impossible: the caller saw "unavailable" while nothing had been tried.
      */
-    Gles_OnContextLost();
+    Gl_Deinit();
     if (!Gles_Probe(&caps)) {
         Log_Printf("GLES: capability probe failed; GL mode unavailable\n");
         return 0;
@@ -892,9 +833,21 @@ void Gl_ResetModelview(void)
 
 void Gl_ApplyClipRect(void)
 {
+    if (g_clipX1 == 0 && g_clipY1 == 0 && g_clipX2 == g_targetWidth && g_clipY2 == g_targetHeight) {
+        glDisable(GL_SCISSOR_TEST);
+        return;
+    }
     glEnable(GL_SCISSOR_TEST);
-    if (g_glBoundFramebuffer == 0) {
-        glScissor(g_clipX1, g_targetHeight - g_clipY2, g_clipX2 - g_clipX1, g_clipY2 - g_clipY1);
+    if (g_glBoundFramebuffer == 0 && g_targetWidth > 0 && g_targetHeight > 0) {
+        GLint view[4];
+        int x1, x2, y1, y2;
+        glGetIntegerv(GL_VIEWPORT, view);
+        /* Port fix: overlays use logical video coordinates on a HiDPI drawable. */
+        x1 = Ftol(floor((double)g_clipX1 * view[2] / g_targetWidth));
+        x2 = Ftol(ceil((double)g_clipX2 * view[2] / g_targetWidth));
+        y1 = Ftol(floor((double)(g_targetHeight - g_clipY2) * view[3] / g_targetHeight));
+        y2 = Ftol(ceil((double)(g_targetHeight - g_clipY1) * view[3] / g_targetHeight));
+        glScissor(view[0] + x1, view[1] + y1, x2 - x1, y2 - y1);
     } else {
         glScissor(g_clipX1, g_clipY1, g_clipX2 - g_clipX1, g_clipY2 - g_clipY1);
     }
@@ -924,18 +877,8 @@ static void gles_solid_quad(float x0, float y0, float x1, float y1, float r, flo
     if (g_glesProgramSolid.u_mvp >= 0) {
         glUniformMatrix4fv(g_glesProgramSolid.u_mvp, 1, GL_FALSE, g_glesProjection.m);
     }
-    /* The solid shader's colour uniform is not part of GlesProgram (which
-     * serves the sprite shaders); look it up once and cache it. */
-    {
-        static int u_color = -2;
-
-        if (u_color == -2) {
-            u_color = glGetUniformLocation(g_glesProgramSolid.program, "u_color");
-        }
-        if (u_color >= 0) {
-            glUniform4f(u_color, r, g, b, a);
-        }
-    }
+    /* Port fix: uniform locations are owned by this linked program. */
+    if (g_glesProgramSolid.u_color >= 0) glUniform4f(g_glesProgramSolid.u_color, r, g, b, a);
     GlesDraw_Quad(&g_glesBuffer, &g_glesProgramSolid, g_glesProjection.m, pos, tc, 0, 0, 0.0f, 0.0f, 0.0f, 1.0f,
                   1.0f, 1.0f, 0, 1.0f, 1.0f, 1.0f, 1.0f);
 }
@@ -1072,7 +1015,8 @@ void Gfx_GlInvertPixel(int x, int y)
     (void)y;
 }
 
-/* A line as quads: GLES has no GL_LINES. Axis-aligned edges (collision boxes)
+/* Lines use quads to preserve pixel coverage, although GLES supports GL_LINES.
+ * Axis-aligned edges (collision boxes)
  * stay exact; diagonals step pixel by pixel, as the software renderer does. */
 static void gles_prim_line(float x1, float y1, float x2, float y2, unsigned int color, GlesPrimKind kind)
 {
@@ -1323,7 +1267,7 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
             tex = &scratch[paletted ? 0 : 1];
             /* Statics never pass through GlTex_Create, so register them here or
              * a context loss would leave them with dead names forever. */
-            gles_register_tex(tex);
+            if (!gles_register_tex(tex)) return;
             if (!GlTex_Upload2D(spr->h, spr->bpp, tex, pixels, spr->w)) {
                 return;
             }
@@ -1334,7 +1278,7 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
         static GlTex pal_scratch;
         Palette *pal;
 
-        gles_register_tex(&pal_scratch);
+        if (!gles_register_tex(&pal_scratch)) return;
         pal = SpriteSet_GetPaletteConverted(set, spr->pal_index);
 
         if (pal == NULL) {
@@ -1351,13 +1295,13 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
                 return;
             }
             if (n == 0x100) {
-                GlTex_UploadRGBA(1, 0x100, pal_tex, colors);
+                if (!GlTex_UploadRGBA(1, 0x100, pal_tex, colors)) return;
             } else {
                 memset(padded, 0, sizeof(padded));
                 if (n > 0 && colors != NULL) {
                     memcpy(padded, colors, (size_t)n * 4);
                 }
-                GlTex_UploadRGBA(1, 0x100, pal_tex, padded);
+                if (!GlTex_UploadRGBA(1, 0x100, pal_tex, padded)) return;
             }
         }
     }
@@ -1499,79 +1443,63 @@ void Sprite_DrawGL(SpriteSet *set, int sprite, const DrawParams *dp)
  */
 void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
 {
-    Sprite *spr;
-    GlTex *tex;
+    SpriteSet *saved_target = g_renderTarget;
+    int saved_sprite = g_renderTargetSprite, saved_projection = g_glProjection;
+    int cx1 = g_clipX1, cy1 = g_clipY1, cx2 = g_clipX2, cy2 = g_clipY2;
+    int win_w = 0, win_h = 0;
+    GLint saved_fbo = 0;
+    int saved_bound = g_glBoundFramebuffer;
+    Sprite *spr = NULL;
+    GlTex *tex = NULL;
     GlMvp proj;
     float pos[8];
-    float tc[16] = { 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f,
-                     0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 0.0f, 1.0f };
-    int win_w = 0;
-    int win_h = 0;
-
-    glDisable(GL_SCISSOR_TEST);
-    spr = (Sprite *)(set->sprites->data + set->sprites->elem_size * sprite);
-    if (spr == NULL || spr->format != SPRITE_FORMAT_TEXTURE) {
-        return;
+    float tc[16] = {0,0,0,1, 1,0,0,1, 0,1,0,1, 1,1,0,1};
+    if (!g_glesReady) return;
+    if (set != NULL) {
+        if (set->sprites == NULL || set->sprites->data == NULL || sprite < 0 || sprite >= set->sprites->capacity) return;
+        spr = (Sprite *)(set->sprites->data + set->sprites->elem_size * sprite);
+        if (spr->format != SPRITE_FORMAT_TEXTURE || spr->pixels == NULL) return;
+        tex = spr->pixels;
+        if (tex->id == 0) return;
+        if (w == 0.0f && h == 0.0f) { w = (float)spr->w; h = (float)spr->h; }
     }
-    tex = (GlTex *)spr->pixels;
-    if (tex == NULL || tex->id == 0) {
-        return;
-    }
-    if (w == 0.0f && h == 0.0f) {
-        w = (float)spr->w;
-        h = (float)spr->h;
-    }
-
-    /* The window's own pixel size: the drawable, not the game resolution. */
     Android_GLDrawableSize(&win_w, &win_h);
-    if (win_w <= 0 || win_h <= 0) {
-        return;
-    }
-    /*
-     * Save the binding and put it back afterwards.
-     *
-     * Gfx_SetRenderTarget only rebinds when the target *changes*, so leaving
-     * the window bound here meant the next frame drew into the window instead
-     * of the screen texture -- and then this function cleared the window and
-     * blitted the (empty) texture over it. Every frame wiped the previous one,
-     * which is exactly the black screen with a small flicker that showed up.
-     */
-    {
-        GLint saved_fbo = 0;
-
-        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        g_glBoundFramebuffer = 0;
-        glViewport(0, 0, win_w, win_h);
+    if (win_w <= 0 || win_h <= 0) return;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
+    g_glProjection = 0; /* Overlays and the screen quad use video coordinates. */
+    if (!Gfx_SetRenderTarget(NULL, 0)) { g_glProjection = saved_projection; return; }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    Gl_SetupView();
+    g_glBoundFramebuffer = 0;
+    glViewport(0, 0, win_w, win_h);
     glDisable(GL_BLEND);
     glDisable(GL_SCISSOR_TEST);
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-
-    /*
-     * The projection covers the VIDEO size, not the render target's.
-     *
-     * The desktop Gl_Present calls Gfx_SetRenderTarget(NULL, 0) first, which
-     * rewrites g_targetWidth/Height to g_videoWidth/Height before Gl_SetupView
-     * reads them. Reading the target size directly meant that a stage-fitted
-     * match -- where the screen buffer takes the stage's aspect and is smaller
-     * than the video -- projected a small region and the picture appeared
-     * shrunken at the top-left of the window.
-     */
-    GlMvp_SetupView(&proj, 0, g_videoWidth, g_videoHeight, 0, g_glNear, g_glFar, 1.0);
-    pos[0] = x;         pos[1] = y;
-    pos[2] = x + w;     pos[3] = y;
-    pos[4] = x;         pos[5] = y + h;
-    pos[6] = x + w;     pos[7] = y + h;
-
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, (GLuint)tex->id);
-    GlesDraw_Quad(&g_glesBuffer, &g_glesProgramRgba, proj.m, pos, tc, 0, 0, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 0,
-                  1.0f, (float)tex->w, (float)tex->h, 1.0f);
-        glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
-        g_glBoundFramebuffer = saved_fbo != 0 ? 1 : 0;
-        Gl_SetupView();
+    if (tex != NULL) {
+        glClearColor(0, 0, 0, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+        GlMvp_SetupView(&proj, 0, g_videoWidth, g_videoHeight, 0, g_glNear, g_glFar, 1.0);
+        pos[0]=x; pos[1]=y; pos[2]=x+w; pos[3]=y;
+        pos[4]=x; pos[5]=y+h; pos[6]=x+w; pos[7]=y+h;
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, tex->id);
+        GlesDraw_Quad(&g_glesBuffer, &g_glesProgramRgba, proj.m, pos, tc, 0, 0, 0,0,0, 1,1,1, 0,1,
+                      (float)tex->w, (float)tex->h, 1);
     }
+    /* Port fix: pause/training/debug/console overlays share the desktop hook. */
+    if (g_gfxPrePresent != NULL) g_gfxPrePresent(NULL, 0);
+    g_glProjection = saved_projection;
+    if (!Gfx_SetRenderTarget(saved_target, saved_sprite)) {
+        /* Do not force a rejected FBO back into use after the overlay. */
+        Log_Printf("GLES: could not restore the render target after present\n");
+        g_glProjection = 0;
+        Gfx_SetRenderTarget(NULL, 0);
+        Gl_SetupView();
+        return;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
+    g_glBoundFramebuffer = saved_bound;
+    Gl_SetupView();
+    Gfx_SetClipRect(cx1, cy1, cx2, cy2);
 }
 
 /*
@@ -1593,16 +1521,19 @@ void *Gl_Capture(void)
     int w = g_targetWidth;
     int h = g_targetHeight;
     int y;
+    size_t row, bytes;
 
-    if (!g_glesReady || w <= 0 || h <= 0) {
+    if (!g_glesReady || !GlImage_Size(w, h, 4, &row, &bytes)) {
         return NULL;
     }
-    rgba = malloc((size_t)w * (size_t)h * 4);
+    rgba = malloc(bytes);
     if (rgba == NULL) {
         return NULL;
     }
+    gles_clear_errors();
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    if (!gles_ok()) { free(rgba); return NULL; }
 
     /*
      * Row order depends on which framebuffer was read, because the engine
@@ -1621,7 +1552,7 @@ void *Gl_Capture(void)
      * the caller's free() expects.
      */
     if (g_glBoundFramebuffer == 0) {
-        flipped = malloc((size_t)w * 4);
+        flipped = malloc(row);
         if (flipped == NULL) {
             free(rgba);
             return NULL;
@@ -1653,7 +1584,7 @@ int GlTex_AllocDepth(GlTex *tex)
 {
     GLuint depth = 0;
 
-    if (tex == NULL || tex->w <= 0 || tex->h <= 0) {
+    if (tex == NULL || !gles_texture_size(tex->w, tex->h)) {
         return 0;
     }
     if (!g_glesReady) {
@@ -1662,6 +1593,7 @@ int GlTex_AllocDepth(GlTex *tex)
     if (tex->depth != 0) {
         return 1;
     }
+    gles_clear_errors();
     glGenRenderbuffers(1, &depth);
     if (depth == 0) {
         Log_Printf("GLES: glGenRenderbuffers failed\n");
@@ -1670,47 +1602,42 @@ int GlTex_AllocDepth(GlTex *tex)
     glBindRenderbuffer(GL_RENDERBUFFER, depth);
     glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, tex->w, tex->h);
     glBindRenderbuffer(GL_RENDERBUFFER, 0);
+    if (!gles_ok()) { glDeleteRenderbuffers(1, &depth); return 0; }
     tex->depth = (unsigned int)depth;
     return 1;
 }
 
-void Gl_AttachFramebuffer(unsigned int texture, unsigned int depth)
+int Gl_AttachFramebuffer(unsigned int texture, unsigned int depth)
 {
-    if (!g_glesReady) {
-        /* Context lost: the framebuffer name belongs to a dead context. */
-        g_glBoundFramebuffer = 0;
-        return;
+    GLint previous = 0;
+    int previous_bound = g_glBoundFramebuffer;
+    GLenum status;
+    if (!g_glesReady) return 0;
+    gles_clear_errors();
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previous);
+    if (texture == 0) {
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        if (gles_ok()) { g_glBoundFramebuffer = 0; return 1; }
+        glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)previous);
+        return 0;
     }
-    if (g_glesFbo == 0) {
-        glGenFramebuffers(1, &g_glesFbo);
-        if (g_glesFbo == 0) {
-            Log_Printf("GLES: glGenFramebuffers failed\n");
-            return;
-        }
-    }
+    if (g_glesFbo == 0) glGenFramebuffers(1, &g_glesFbo);
+    if (g_glesFbo == 0) return 0;
     glBindFramebuffer(GL_FRAMEBUFFER, g_glesFbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, (GLuint)texture, 0);
-    if (depth != 0) {
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, (GLuint)depth);
-    } else {
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth);
+    status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (!gles_ok() || status != GL_FRAMEBUFFER_COMPLETE) {
+        Log_Printf("GLES: render target incomplete (0x%X)\n", (unsigned int)status);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_glesAttachedTexture, 0);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, g_glesAttachedDepth);
+        glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)previous);
+        g_glBoundFramebuffer = previous_bound;
+        return 0;
     }
-    {
-        GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-
-        if (status != GL_FRAMEBUFFER_COMPLETE) {
-            static int logged;
-
-            if (!logged) {
-                logged = 1;
-                Log_Printf("GLES: render target incomplete (0x%X); drawing to the window\n", (unsigned)status);
-            }
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
-            g_glBoundFramebuffer = 0;
-            return;
-        }
-    }
+    g_glesAttachedTexture = texture; g_glesAttachedDepth = depth;
     g_glBoundFramebuffer = 1;
+    return 1;
 }
 
 /* Allocates a render-target texture (w x h RGBA plus a depth renderbuffer). */
@@ -1740,10 +1667,7 @@ GlTex *GlVbuf_Alloc(int depth, int w, int h)
 /* Binds a render target (NULL: the window) with its viewport and projection. */
 int GlVbuf_Bind(GlTex *vbuf)
 {
-    if (!g_glesReady) {
-        g_glBoundFramebuffer = 0;
-        return 0;
-    }
+    if (!g_glesReady) return 0;
     if (vbuf != NULL && vbuf->id == 0) {
         /*
          * Context loss dropped this render target's GL name but kept its size.
@@ -1760,12 +1684,11 @@ int GlVbuf_Bind(GlTex *vbuf)
         }
     }
     if (vbuf == NULL) {
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        g_glBoundFramebuffer = 0;
+        if (!Gl_AttachFramebuffer(0, 0)) return 0;
         glViewport(0, 0, g_targetWidth, g_targetHeight);
         return Gl_SetupView();
     }
-    Gl_AttachFramebuffer(vbuf->id, vbuf->depth);
+    if (!Gl_AttachFramebuffer(vbuf->id, vbuf->depth)) return 0;
     glViewport(0, 0, vbuf->w, vbuf->h);
     return Gl_SetupView();
 }

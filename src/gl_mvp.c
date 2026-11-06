@@ -23,7 +23,7 @@ static void mat_identity(double *m)
     m[15] = 1.0;
 }
 
-/* out = a * b (a then b applied to a column vector). */
+/* out = a * b (b then a applied to a column vector). */
 static void mat_mul(double *out, const double *a, const double *b)
 {
     double r[16];

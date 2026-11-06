@@ -26,6 +26,7 @@
  */
 
 #include "mugen.h"
+#include "gl_size.h"
 
 #define GLD_TEXTURE0        0x84C0
 #define GLD_TEXTURE1        0x84C1
@@ -202,78 +203,78 @@ static void GlDetect_DrawParams(DrawParams *dp, float x, float y, unsigned int f
     dp->y = y;
 }
 
-/*
- * 0x0048E330: draws a w x h black and white checkerboard (a 32-bit sprite)
- * at (x, y) flipped by flip; the screen must then hold only black and white.
- * Quirks kept: the pixels leak when the set cannot be created; the white of
- * the render target is computed and not used.
- */
+/* Port fix: calibration owns its pixels on every path, including allocation
+ * failure. Do not use SpriteSet_FromPixels' legacy failure-path leaks here. */
+static SpriteSet *GlDetect_MakeSprite(void *pixels, size_t bytes, int w, int h,
+                                     int bpp, Palette *pal)
+{
+    SpriteSet *set = calloc(1, sizeof(*set));
+    Sprite spr;
+    if (set == NULL) { free(pixels); return NULL; }
+    if (!Sprite_Init(SPRITE_INIT_OWN, &spr, SPRITE_FORMAT_RAW, pixels, bytes, w, h, bpp, 0, 0)) {
+        SpriteSet_Free(set);
+        return NULL; /* Sprite_Init consumed pixels, including on failure. */
+    }
+    if (pal != NULL) {
+        if (!SpriteSet_AddPalette(set, pal, 0, 0)) goto fail;
+        memset(pal, 0, sizeof(*pal)); /* Ownership moved into the set. */
+        if (!SpriteSet_LinkPalette(set, &spr, 0, 0)) goto fail;
+    }
+    if (!SpriteSet_AddSprite(set, &spr, 0, 0)) goto fail;
+    return set;
+fail:
+    Sprite_Free(&spr);
+    SpriteSet_Free(set);
+    return NULL;
+}
+
+/* 0x0048E330: draw a checkerboard, not just an arbitrary binary image.
+ * Port fix: checked sizes, complete ownership cleanup and reject blank output.
+ * The original black/white edge tolerance is retained; this is not a geometry
+ * equivalence test. Both checker colours must actually have been rendered. */
 int GlDetect_TestSprite(int w, int h, int x, int y, int flip)
 {
     size_t size;
-    unsigned int *pixels;
-    unsigned int *screen;
+    unsigned int *pixels, *screen;
     SpriteSet *set;
-    Sprite spr;
     DrawParams dp;
-    int row, col;
+    int row, col, black = 0, white = 0, ok = 1;
 
-    if (g_renderMode != RENDER_MODE_GL && g_renderMode != RENDER_MODE_GL_ALT) {
-        GlDetect_White();
-    }
+    if (!GlImage_Size(w, h, 4, NULL, &size)) return 0;
     GlDetect_Clear();
-    size = w * h * 4;
     pixels = malloc(size);
-    if (pixels == NULL) {
-        return 0;
-    }
+    if (pixels == NULL) return 0;
     for (row = 0; row < h; row++) {
         for (col = 0; col < w; col++) {
             pixels[row * w + col] = (x + y + row + col) % 2 != 0 ? 0xFF000000u : 0xFFFFFFFFu;
         }
     }
-    set = calloc(1, sizeof(SpriteSet));
-    if (set == NULL) {
-        g_outOfMemory = 1;
-        return 0;
-    }
-    set->sprites = KeyedArray_Create(1, sizeof(Sprite));
-    if (set->sprites == NULL) {
-        return 0;
-    }
-    set->palettes = KeyedArray_Create(1, sizeof(Palette));
-    if (set->palettes == NULL) {
-        return 0;
-    }
-    if (!Sprite_Init(SPRITE_INIT_OWN, &spr, SPRITE_FORMAT_RAW, pixels, size, w, h, 32, 0, 0)) {
-        SpriteSet_Free(set);
-        return 0;
-    }
-    SpriteSet_AddSprite(set, &spr, 0, 0);
+    set = GlDetect_MakeSprite(pixels, size, w, h, 32, NULL);
+    if (set == NULL) return 0;
     GlDetect_DrawParams(&dp, (float)x, (float)y, flip);
     if (g_renderMode == RENDER_MODE_GL) {
+        /* Calibration runs before the sprite shaders are loaded. Its fixed
+         * function fallback must sample the texture, not draw a solid quad. */
+        g_glewActiveTexture(GLD_TEXTURE0);
+        glEnable(GL_TEXTURE_2D);
         Sprite_DrawGL(set, 0, &dp);
+        glDisable(GL_TEXTURE_2D);
     } else {
         Sprite_DrawSoft(set, 0, &dp);
     }
     screen = (unsigned int *)Gl_ReadPixels(g_targetWidth, g_targetHeight);
-    if (screen == NULL) {
-        SpriteSet_Free(set);
-        return 0;
-    }
+    if (screen == NULL) { SpriteSet_Free(set); return 0; }
     for (row = 0; row < g_targetHeight; row++) {
         for (col = 0; col < g_targetWidth; col++) {
             unsigned int p = screen[row * g_targetWidth + col];
-            if (p != 0xFFFFFFFFu && p != 0xFF000000u) {
-                free(screen);
-                SpriteSet_Free(set);
-                return 0;
-            }
+            if (p == 0xFFFFFFFFu) white = 1;
+            else if (p == 0xFF000000u) black = 1;
+            else ok = 0;
         }
     }
     free(screen);
     SpriteSet_Free(set);
-    return 1;
+    return ok && black && white;
 }
 
 /* 0x0048E600: the full screen, quarter and flipped quarter sprite tests; returns the number that failed (logged). */
@@ -402,36 +403,46 @@ void GlDetect_DrawSprite(SpriteSet *set, const DrawParams *dp, unsigned int prog
  * 0x0048E7C0: draws a 16x16 sprite of each index (255 to 0) with a grey
  * palette through the program of frag_src and checks its centre pixel.
  * Returns 1 when every index gives its grey (mismatches are logged), 0
- * otherwise or when GL reports an error after linking (the shaders and
- * program then leak).
+ * otherwise, including compilation, allocation or readback failure.
+ * Port fix: partial shader/program handles are released on every failure.
  */
 int GlDetect_TestIndexShader(const char *frag_src)
 {
     unsigned char colors[256 * 4];
     Palette pal;
-    unsigned int vs, fs, prog;
+    unsigned int vs = 0, fs = 0, prog = 0;
+    GLint status = 0;
     int last, err, errors = 0;
     int i, v;
 
     while (glGetError() != GL_NO_ERROR) {
     }
     vs = g_glewCreateShader(GLD_VERTEX_SHADER);
+    if (vs == 0) goto fail;
     g_glewShaderSource(vs, 1, (const char **)&g_glDetectVertexShader, NULL);
     g_glewCompileShader(vs);
+    g_glewGetShaderiv(vs, GL_COMPILE_STATUS, &status);
+    if (!status) goto fail;
     fs = g_glewCreateShader(GLD_FRAGMENT_SHADER);
+    if (fs == 0) goto fail;
     g_glewShaderSource(fs, 1, &frag_src, NULL);
     g_glewCompileShader(fs);
+    g_glewGetShaderiv(fs, GL_COMPILE_STATUS, &status);
+    if (!status) goto fail;
     prog = g_glewCreateProgram();
+    if (prog == 0) goto fail;
     g_glewAttachShader(prog, vs);
     g_glewAttachShader(prog, fs);
     g_glewLinkProgram(prog);
+    g_glewGetProgramiv(prog, GL_LINK_STATUS, &status);
+    if (!status) goto fail;
     err = GL_NO_ERROR;
     do {
         last = err;
         err = glGetError();
     } while (err != GL_NO_ERROR);
     if (last != GL_NO_ERROR) {
-        return 0;
+        goto fail;
     }
     for (i = 0; i < 256; i++) {
         colors[i * 4 + 2] = (unsigned char)i;
@@ -445,21 +456,22 @@ int GlDetect_TestIndexShader(const char *frag_src)
         SpriteSet *set;
         DrawParams dp;
 
-        Pal_Init(&pal, 256, colors, PAL_COPY);
+        if (!Pal_Init(&pal, 256, colors, PAL_COPY)) goto fail;
         GlDetect_Clear();
         pixels = malloc(0x100);
-        if (pixels == NULL) {
-            return 0;
-        }
+        if (pixels == NULL) { Pal_Free(&pal); goto fail; }
         memset(pixels, v, 0x100);
-        set = SpriteSet_FromPixels(8, pixels, 16, 16, &pal, SPRITE_INIT_OWN);
-        if (set == NULL) {
-            return 0;
-        }
+        set = GlDetect_MakeSprite(pixels, 0x100, 16, 16, 8, &pal);
+        Pal_Free(&pal);
+        if (set == NULL) goto fail;
         GlDetect_DrawParams(&dp, 0.0f, 0.0f, 0);
         GlDetect_DrawSprite(set, &dp, prog);
         screen = (unsigned int *)Gl_ReadPixels(16, 16);
-        if (screen != NULL) {
+        if (screen == NULL) {
+            SpriteSet_Free(set);
+            goto fail; /* A failed readback is not a successful comparison. */
+        }
+        {
             unsigned int got = screen[0x88];
             unsigned int grey;
             free(screen);
@@ -485,6 +497,15 @@ int GlDetect_TestIndexShader(const char *frag_src)
         MatchLog_Printf(7, "Index correction test failed\n");
     }
     return errors == 0;
+fail:
+    /* Port fix: compiler/link/readback failures release every partial handle. */
+    if (g_glCurrentProgram == prog && prog != 0) {
+        g_glewUseProgram(0); g_glCurrentProgram = 0;
+    }
+    if (prog != 0) g_glewDeleteProgram(prog);
+    if (fs != 0) g_glewDeleteShader(fs);
+    if (vs != 0) g_glewDeleteShader(vs);
+    return 0;
 }
 
 /* 0x0048EB00: picks the palette lookup of the indexed sprite shaders (g_glIndexMode). */

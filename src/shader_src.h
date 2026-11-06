@@ -17,8 +17,39 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
+#include <stdint.h>
 
 #define SHADER_DEFINES_MARK "////*EB_DEFINES*////"
+
+/* Port fix: read the remaining bytes, checking every I/O operation. Takes
+ * ownership of f on every path, including non-seekable and short-read input. */
+static __inline char *ShaderSrc_ReadFile(FILE *f)
+{
+    long start, end;
+    size_t bytes;
+    char *text = NULL;
+
+    if (f == NULL) return NULL;
+    start = ftell(f);
+    if (start < 0 || fseek(f, 0, SEEK_END) != 0) goto done;
+    end = ftell(f);
+    if (end < start || (uintmax_t)(end - start) > SIZE_MAX - 1 ||
+        fseek(f, start, SEEK_SET) != 0) goto done;
+    bytes = (size_t)(end - start);
+    text = malloc(bytes + 1);
+    if (text != NULL) {
+        if (fread(text, 1, bytes, f) != bytes) {
+            free(text);
+            text = NULL;
+        } else {
+            text[bytes] = '\0';
+        }
+    }
+done:
+    fclose(f);
+    return text;
+}
 
 /*
  * malloc'ed copy of src with the marker replaced by defines. A source with
