@@ -2020,7 +2020,10 @@ Player *Player_Create(CharData *c)
             Error_Printf("Can't create projectile array.\n");
             return NULL;
         }
-        memset(&p->states, 0, 0x420);
+        /* PORTABILITY FIX: the original clears 0x420 bytes, states through custom_anim.
+           The span is derived so a 64-bit build clears the grown block as well;
+           on the 32-bit reference it is still 0x420. */
+        memset(&p->states, 0, offsetof(Player, nohit_time) - offsetof(Player, states));
         p->states = c->states;
         if (!Ai_InitPlayer(p)) {
             Error_Printf("Can't create state controller.\n");
@@ -2037,7 +2040,8 @@ Player *Player_Create(CharData *c)
             Error_Printf("Can't create projectile array.\n");
             return NULL;
         }
-        memset(&p->states, 0, 0x420);
+        /* PORTABILITY FIX: see above; 0x420 on the 32-bit reference. */
+        memset(&p->states, 0, offsetof(Player, nohit_time) - offsetof(Player, states));
         p->states = NULL;
     }
     p->targets = KeyedArray_Create(8, 0x1C);
@@ -2538,7 +2542,11 @@ void Player_Reset(Player *p)
     }
     {
         int *keep = p->hit_ids;
-        memset(&p->nohit_time, 0, 0x158);
+        /* PORTABILITY FIX: the original clears 0x158 bytes, nohit_time through
+           hit_free_time. Derived from the struct so a 64-bit build clears the
+           grown block too (it spans gethit_attacker, gethit_isbound and hit_ids);
+           on the 32-bit reference it is still 0x158. */
+        memset(&p->nohit_time, 0, offsetof(Player, hit_pending) - offsetof(Player, nohit_time));
         p->hit_ids = keep;
     }
     p->nothitby_attr = 0xFFF;

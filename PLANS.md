@@ -520,7 +520,7 @@ structs move. The saving grace is **how** the code reads them:
 
 | Check | Result |
 |---|---|
-| Raw byte-offset reads (`(char *)p + 0x…`) | **1** — `src/sprite.c:32`, a texture field, not one of our structs |
+| Raw byte-offset reads (`(char *)p + 0x…`) | **0** |
 | Access is by named member everywhere | yes |
 | `memcpy`/`memset` with `sizeof(Type)` (scales automatically) | 116 |
 | `int`↔pointer casts that would truncate | **0** |
@@ -529,7 +529,7 @@ Because no struct of ours is read by absolute offset, a 64-bit relayout is
 **functionally safe**: the structs get bigger, offsets shift, and the code —
 which only ever uses member names — does not care. The former hardcoded sites
 (`camera.c` `bg->legacy`/`e->y`, `char.c` `proj->afterimage`, `ai.c`
-`in->keys`) use member access now; only the `sprite.c` texture read remains.
+`in->keys`, `sprite.c` `tex->size`) use member access now; none remains.
 The offsets exist for fidelity diff-testing against the original, not for
 correctness.
 
@@ -700,7 +700,7 @@ Three things the static Windows build already settled for the Linux port:
 | 5 | SDL stack | SDL2 is the only backend on Linux (`SDL_BACKEND=1` is win32-only); `sdlmain.c` has a non-`WinMain` path; `mugen.rc`/manifest skipped (not a PE) | **done** — `src/sdl2compat.c` over SDL2, packages listed in `docs/BUILD-LINUX.md` |
 | 6 | **Platform detection in the Makefile** | `UNAME_S`/`$(CC) -dumpmachine` selection block, per-target variable blocks (`TARGET`, float flags, `-mwindows`, `RC_OBJ`, `STATIC_PKGS`, `ENGINE_DEFS`, `SDL_BACKEND`), `check-toolchain` reporting the detected target, `MUGEN_TARGET=` override for cross-compiles. Linux installs into the same `install/` tree as `mugen-linux-<arch>` (never a `.exe`). **Unsupported triple = hard error** naming what was found | **done** |
 | 7 | **`MUGEN_LAYOUT_32BIT` assertion guard** | Wrap the 207 `MUGEN_ASSERT_SIZE` + 670 `MUGEN_ASSERT_OFFSET` in `#if MUGEN_LAYOUT_32BIT`, derived from `UINTPTR_MAX == 0xFFFFFFFFu` (`src/mugen.h`). Active on the reference build, no-ops on 64-bit; no struct changes | **done** |
-| 8 | 64-bit correctness pass | **`__int64`** (38 uses) and **`__cdecl`** (1629 uses) are shimmed in `src/compat_linux.h`; the struct reads that used hardcoded offsets (`camera.c`, `char.c`, `ai.c`) are member accesses now, leaving only `src/sprite.c:32`, a texture field that is not one of our structs; `make MUGEN_TARGET=win64` builds it against the 64-bit kit and no log comparison has been run | **builds; win32-vs-win64 `mugen.log` diff outstanding** |
+| 8 | 64-bit correctness pass | **`__int64`** (38 uses) and **`__cdecl`** (1629 uses) are shimmed in `src/compat_linux.h`; the struct reads that used hardcoded offsets (`camera.c`, `char.c`, `ai.c`, `sprite.c`) are member accesses now; `make MUGEN_TARGET=win64` builds it against the 64-bit kit and no log comparison has been run | **builds; win32-vs-win64 `mugen.log` diff outstanding** |
 | 9 | arm64 build | native compile on AArch64; expect `FLT_EVAL_METHOD == 0` and accept float drift. Audit the numeric lines of `mugen.log` by hand rather than by exact diff | **pending** — never built; `linux-arm64` is selectable in the `Makefile` |
 
 Steps 1–5 built the first Linux target and 6–7 added the `Makefile`'s platform

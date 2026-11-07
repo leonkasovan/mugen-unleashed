@@ -105,19 +105,22 @@ Those assertions describe the original binary, so `MUGEN_LAYOUT_32BIT`
 (`src/mugen.h`) compiles them out when pointers are not 4 bytes.
 
 **Disabling the assertions is not evidence that a 64-bit build is correct.**
-They only stop *checking*; they do not make offset-dependent code safe. One
-place still reads through a hardcoded byte offset, which is exactly the pattern
-the assertions exist to catch. Measured against the real headers:
+They only stop *checking*; they do not make offset-dependent code safe. After the
+last audit no source reads a struct of ours through a hardcoded byte offset, but
+the pattern can reappear: before claiming a 64-bit target works, grep for
+`(const char *)… + 0x` / `(char *)… + 0x` and confirm none does.
 
-| Site | Field | 32-bit | 64-bit |
-|---|---|---|---|
-| `sprite.c` `tex + 0x18` | texture byte count | 0x18 | not a struct of ours |
-
-The four struct reads that used to be hardcoded offsets are member accesses now:
+The five struct reads that used to be hardcoded offsets are member accesses now:
 `camera.c` `Bg.legacy` (0x64, 0x7c on 64-bit) and `BgElem.y` (0x88),
-`char.c` `Projectile.afterimage` (0x504, 0x548 on 64-bit) and `ai.c`
-`InputBuf.keys` (0x78). Their comments keep the original offset and say why it
-must not come back; `tools/test_abi_layout.sh` prints both layouts.
+`char.c` `Projectile.afterimage` (0x504, 0x548 on 64-bit), `ai.c`
+`InputBuf.keys` (0x78) and `sprite.c` `GlTex.size` (0x18). Their comments keep
+the original offset and say why it must not come back; `tools/test_abi_layout.sh`
+prints both layouts.
+
+The other 64-bit trap is a `memset`/`memcpy` with a byte count that spans
+pointer-bearing fields. `char.c` clears the `states` block and the `nohit_time`
+block with `offsetof(Player, <end>) - offsetof(Player, <start>)`, which is the
+original's 0x420 / 0x158 on 32-bit and the grown span on 64-bit.
 
 So the 64-bit targets are **portable in progress, not audited**: the layout
 assertions are compiled out there and only the win32 build is log-diffed. Before
