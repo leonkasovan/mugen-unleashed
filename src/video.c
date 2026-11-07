@@ -31,7 +31,19 @@
 #include "mugen.h"
 
 #ifndef ANDROID_PORT
-#ifndef MUGEN_VITA_GL
+#if defined(MUGEN_GLES)
+/*
+ * GLES backend (Android M8, Linux ARM64): there is no GLU and no
+ * <GL/glu.h> in a GLES sysroot, and no fixed-function matrix stack for
+ * gluOrtho2D to write into. The header is also what src/glad_es.h's
+ * __gl_h_ trick exists to tolerate (see the comment there). Nothing in a GLES
+ * build includes this file: Video_ResetGLScreenProjection is compiled only for
+ * desktop GL, and the GLES renderer owns its own projection (gles_render.c).
+ * Before this guard the only reason a Linux ARM64 build worked was that the
+ * desktop distribution's /usr/include/GL/glu.h happened to be on the host
+ * include path -- cross-compiling made that visible.
+ */
+#elif !defined(MUGEN_VITA_GL)
 #include <GL/glu.h>
 #else
 /*
