@@ -6,6 +6,8 @@
  * through PalFX) and measuring functions.
  */
 #include <SDL_ttf.h>
+/* offsetof, for the frame offsets (FNT_FRAME_X / FNT_FRAME_W below). */
+#include <stddef.h>
 
 #include "mugen.h"
 #ifdef ANDROID_PORT
@@ -546,8 +548,29 @@ MUGEN_ASSERT_OFFSET(FntFrame, map, 0x028);
 MUGEN_ASSERT_OFFSET(FntFrame, src_pal, 0x430);
 MUGEN_ASSERT_SIZE(FntFrame, 0x854);
 
-#define FNT_FRAME_X     0x02C   /* offset of map.x */
-#define FNT_FRAME_W     0x22C   /* offset of map.w */
+/*
+ * Offset of map.x and map.w inside the frame.
+ *
+ * PORTABILITY FIX: these used to be the literal 0x02C / 0x22C, which are their
+ * offsets in the ORIGINAL 32-bit build (FntMap sits at 0x028 there). This
+ * struct also contains pointers and a `long`, so on a 64-bit build FntMap moves
+ * to 0x38 and the two literals point 16 bytes -- four ints -- before the real
+ * arrays.
+ *
+ * The symptom was text drawn from the wrong glyph: "[Map]" columns were written
+ * into map.x[c - 4], so Font_SplitGlyphs cut character c from the column of
+ * c + 4 and the main menu's "ARCADE" rendered as "EVGEHI". Every 64-bit target
+ * (linux-arm64, linux-x64, win64) had it, with the Software and the OpenGL
+ * renderer alike, because the frame is shared; the 32-bit MSVC build was
+ * unaffected, which is why it only ever showed up off win32.
+ *
+ * Deriving them from the real layout gives 0x02C / 0x22C on 32-bit -- exactly
+ * what the original had -- and the true offsets everywhere else, so the
+ * out-of-range indexing quirk above still lands in the neighbouring frame
+ * slots on both.
+ */
+#define FNT_FRAME_X ((int)(offsetof(FntFrame, map) + offsetof(FntMap, x)))
+#define FNT_FRAME_W ((int)(offsetof(FntFrame, map) + offsetof(FntMap, w)))
 
 /*
  * Element index of the frame array at offset base, with the original's 32-bit
