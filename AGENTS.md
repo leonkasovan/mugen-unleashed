@@ -55,7 +55,7 @@ res/shaders/    project-owned shader dialects: gles/ (staged as data/gles by the
                 Android build) and vita/ (substituted into the VPK); the desktop
                 shaders are the game installation's own data/*.{vert,frag}
 tools/          msvc_env.bat, extract_icon.py, iconpack.py, compare_logs.py, test_*.sh
-port/           android/ and psvita/ — the mobile ports
+port/           android/, psvita/ and arm64/ — the platform ports
 docs/           ANALYSIS.md, BUILD-MSVC.md, BUILD-MINGW.md, BUILD-LINUX.md, LUA.md
 install/        a real M.U.G.E.N 1.1b1 installation (untracked, for testing)
 build/          all build output (git-ignored) — layout below
@@ -72,6 +72,7 @@ Each entry point owns its own subtree and never writes into another's.
 
 | `build/mingw64/` | `make MUGEN_TARGET=win64` (Windows, experimental) | the same shape, `mugen-mingw-win64.exe` |
 | `build/<linux-target>/` | root `Makefile` (Linux) | same shape, `mugen-linux-<arch>` |
+| `build/<linux-target>-<cross-prefix>-<sdl>/` | root `Makefile` with `CROSS_COMPILE=`/`XSYSROOT=` (via `port/arm64/build.sh`) | same shape, `mugen-linux-<arch>-<prefix>`; `build/tmp/arm64-sysroot/` holds the dependency tree it links against, `build/tmp/arm64-downloads/` the cached toolchain zip |
 | `build/mingw-debug/` | `make DEBUG=1 BUILD=build/mingw-debug` | an explicit `BUILD=` override |
 | `build/x86-release/`, `build/x86-debug/` | root `CMakeLists.txt` via `CMakePresets.json` | MSVC `mugen-msvc-win32-sdl1.exe` + `.pdb` |
 | `build/psvita*/` | `port/psvita/CMakeLists.txt` (you choose the dir) | `mugen`, `mugen-psvita.self`, `mugen-psvita.vpk`, `vita-mugen.cfg` |
@@ -173,6 +174,70 @@ points as `src/gles_render.c`), links no `-lGL -lGLU`, and `make install` copies
 targets keep desktop GL — they are the reference builds. `make MUGEN_GLES=0`
 (or `=1`) overrides the default. See `PROBLEMS.md` (P1) and
 `docs/BUILD-LINUX.md`.
+
+### Cross-compiling a Linux target
+
+`CROSS_COMPILE=<prefix>` renames the toolchain and `XSYSROOT=<dir>` names the
+dependency tree (SDL2, SDL2_mixer, SDL2_ttf, zlib, libpng, FreeType as shared
+objects, plus headers and `.pc` files laid out as
+`<dir>/usr/{include,lib,lib/pkgconfig}`). The output takes the prefix into its
+name and directory, so a cross build never shares objects with a host build of
+the same triple.
+
+For arm64 the wiring lives in **`port/arm64/`** (like `port/android`), not in the
+top-level `tools/`. The Makefile stays generic: it only knows `CROSS_COMPILE=` and
+`XSYSROOT=`, so another target can reuse them.
+
+```sh
+port/arm64/build.sh --setup   # once: the toolchain, ~330 MB
+port/arm64/build.sh           # dependency tree + build
+DEVICE_PASS=ark port/arm64/build.sh --upload   # ... and copy to the device
+```
+
+`--upload` sends the binary to `ark@192.168.7.2:~/mugen/mugen-linux-arm64`,
+keeping the old one as `.prev`. It uses **tar over ssh, not scp/sftp**: that
+device's sshd has a dangling `sftp` subsystem path
+(`/usr/local/crosware/.../dropbear/.../sftp-server`), so scp and sftp both fail
+there while plain ssh works. The upload is md5-verified and only then renamed
+into place. See `port/arm64/README.md`.
+
+**The toolchain is chosen by the device's glibc**, and this is the one thing
+that silently produces a binary that will not start. `ARM64_TOOLCHAIN=9.2` is
+the default because it targets glibc 2.30 (binary needs `GLIBC_2.29`), which is
+what an ArkOS/RG351MP has — verified on hardware there, GLES renderer included.
+`ARM64_TOOLCHAIN=15.3` targets glibc 2.42 and produces a binary wanting
+`GLIBC_2.38`, which that device's loader rejects outright. Always ask the device
+first: `ssh ark@<device> 'ldd --version | head -1'`.
+
+`--setup` downloads Arm's Mingw-w64 toolchain into `TOOLCHAIN_DIR`
+(`C:/arm-gnu-toolchain` by default) and verifies it against the checksum Arm
+publishes. The 9.2 release is a `.tar.xz` from `developer.arm.com/-/media/Files/
+downloads/gnu-a/9.2-2019.12/binrel/` with a top-level version directory and an
+**MD5** (in a file named `.sha256asc`); 15.3 is a `.zip` from GitLab with
+SHA-256 and no version directory. The GitLab URL needs `%2F` in the project
+path — a literal `/` returns 404.
+
+`port/arm64/tools/make_sysroot.sh` then copies SDL2/SDL2_mixer/SDL2_ttf/zlib/
+libpng/FreeType out of an arm64 Ubuntu root into `build/tmp/arm64-sysroot/`
+(set `ARM64_ROOT_FS` to choose the root). It only reads from the root; the
+toolchain directory is written to by `--setup` alone, and nowhere else.
+
+**Pad binding.** Every SDL2 target binds controllers through SDL's
+game-controller semantics (`MUGEN_GAMEPAD_POLICY`, `src/mugen.h`), configured by
+`[P<n> Gamepad]` in `mugen.cfg`; a missing group falls back to the built-in
+1..11 layout and is written into the file. The raw `[P<n> Joystick]` indices are
+the original model and only line up with a pad whose axis/hat/button topology
+matches the PC pad they were written for — on a handheld the d-pad arrives as
+buttons, so those indices land on the wrong controls. The SDL 1.2 backend keeps
+the original raw lifecycle, so the reference build is unchanged.
+
+Three things neither script can fix, all in `docs/BUILD-LINUX.md` (which also
+has a troubleshooting table for the errors a first attempt produces):
+
+- the toolchain's glibc must be no newer than the device's (see above);
+- a `--sysroot` merge into the toolchain does not link against a distribution
+  SDL2, because its X11/ALSA/Pulse/Wayland closure is not reachable there;
+- the libraries are **shared**, so the target needs its distro's SDL2 packages.
 
 ### GNU Make + MinGW (Windows, fully static)
 

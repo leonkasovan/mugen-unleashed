@@ -202,3 +202,278 @@ Two things need care — the rootfs's `lib*.so` symlinks are absolute and must b
 re-pointed for the host-side linker, and `PKG_CONFIG_SYSROOT_DIR` is what makes
 `-I`/`-L` from the `.pc` files point inside the rootfs. The exact commands are in
 `PROBLEMS.md` ("Reproducing").
+
+### Cross-building arm64 from Windows with the Arm GNU Toolchain
+
+This is the build that needs no arm64 machine and no chroot: a Windows host, the
+free Arm GNU Toolchain, and an arm64 Ubuntu root filesystem to take the
+dependency libraries from. It lives in **`port/arm64/`**, like the Android and
+Vita ports; its `README.md` has the flag reference.
+
+```sh
+port/arm64/build.sh --setup     # once: download the toolchain (~330 MB)
+port/arm64/build.sh             # build
+```
+
+→ `build/linux-arm64-aarch64-none-linux-gnu-sdl2/mugen-linux-arm64-aarch64-none-linux-gnu`
+
+To build and copy it to the device in one step:
+
+```sh
+DEVICE_PASS=ark port/arm64/build.sh --upload     # -> ark@192.168.7.2:~/mugen/
+```
+
+That is all. The rest of this section explains what those commands do and what
+can go wrong, for when they do.
+
+Verified with **Arm GNU Toolchain 9.2-2019.12** (gcc 9.2.1, glibc 2.30) on
+Windows and an Ubuntu 20.04 arm64 root, and checked against an RG351MP running
+ArkOS; see "the glibc floor" below.
+
+#### The toolchain
+
+`--setup` downloads Arm's official Mingw-w64 host build for the requested
+`ARM64_TOOLCHAIN` and verifies it against the checksum Arm publishes. The two
+sources differ in shape:
+
+| | 9.2 (default) | 15.3 |
+|---|---|---|
+| host | `developer.arm.com/-/media/Files/downloads/gnu-a/9.2-2019.12/binrel/` | `gitlab.arm.com/.../packages/generic/gnu-toolchain/15.3.rel2/` |
+| archive | `.tar.xz`, top-level `gcc-arm-<ver>-.../` | `.zip`, no top-level directory |
+| checksum | **MD5** (in a file named `.sha256asc`) | SHA-256 |
+
+The GitLab URL needs `%2F` in the project path: the same URL with a literal `/`
+returns **404**, which is easy to mistake for the file having moved.
+
+Either way it is installed into `TOOLCHAIN_DIR` (default
+`C:/arm-gnu-toolchain`), which ends up as
+
+```
+C:\arm-gnu-toolchain\bin\aarch64-none-linux-gnu-gcc.exe
+C:\arm-gnu-toolchain\aarch64-none-linux-gnu\libc\      <- its glibc sysroot
+```
+
+The script flattens the 9.2 archive's version directory, so both versions leave
+`bin/` at the top. A `.mugen-toolchain-<version>` marker records that the install
+finished, so a re-run neither re-extracts nor re-downloads (the archive is cached
+in `build/tmp/arm64-downloads/`). Installing a *different* version replaces the
+tree rather than overlaying it — mixing two glibc sysroots is not something to
+discover at link time.
+
+It is a **Mingw-w64 host binary**, not a Cygwin or MSYS one: no DLLs to install,
+and no `--sysroot` for its own libc — it was configured `--with-sysroot` and
+finds `aarch64-none-linux-gnu/libc` relative to itself. It also accepts MSYS-style
+absolute source paths (`/c/Projects/...`), so the Makefile's own paths work
+unmodified. This toolchain is not `w64devkit` or `x86devkit`: it targets
+Linux/ARM and builds this project's `linux-arm64` target only.
+
+```sh
+port/arm64/build.sh --check-tools   # is everything in place?
+```
+
+#### Uploading to the device
+
+`--upload` copies the finished binary to `DEVICE` (default
+`ark@192.168.7.2`) into `DEVICE_DIR` (default `mugen`, i.e. `~/mugen`),
+overwriting `mugen-linux-arm64` there and keeping the old one as
+`mugen-linux-arm64.prev`. Only the binary is sent; game data is not touched.
+
+Two things about this device are worth knowing, because the obvious approach
+does not work:
+
+- **`scp` and `sftp` are broken on it.** Its sshd points the `sftp` subsystem at
+  `/usr/local/crosware/.../dropbear/current/libexec/sftp-server`, a leftover
+  from a removed package, so both fail with
+  `bash: /usr/local/crosware/...: No such file or directory` while plain `ssh`
+  is fine. `build.sh` therefore streams `tar` over the ssh exec channel.
+- **Its clock is behind this machine's**, so a tar made here makes GNU tar warn
+  `time stamp ... is ... s in the future` for every member. Harmless, and
+  silenced with `--warning=no-timestamp`.
+
+The transfer is unpacked as `.mugen-linux-arm64.new` and only renamed into place
+after its md5 matches the local file, so a dropped connection cannot leave a
+truncated binary where a working one was.
+
+#### The dependency tree
+
+The toolchain is a bare `--target=aarch64-none-linux-gnu` cross toolchain: it
+ships a complete glibc and **no SDL**. `port/arm64/tools/make_sysroot.sh` copies
+the missing libraries out of an existing arm64 Ubuntu root into
+`build/tmp/arm64-sysroot/`. `build.sh` runs it when the tree is absent;
+`--sysroot` forces it.
+
+Any aarch64 Ubuntu/Debian root filesystem (`usr/lib/aarch64-linux-gnu/`,
+`usr/include/{SDL2,...}`) works: a WSL distro's root, a Docker
+`--platform linux/arm64` export, or a handheld's `/`. It is only read from. Set
+`ARM64_ROOT_FS` when it lives somewhere unusual; otherwise the script probes the
+default and prints what it picked:
+
+```
+root: //wsl.localhost/Ubuntu-22.04/home/deck/ubuntu_root_arm64
+      (found through the WSL share; pass --root to use another)
+```
+
+Running from **MSYS** is the more fragile case, and the script compensates: the
+root's headers include links such as `usr/include/png.h -> libpng16/png.h` and
+`…/SDL2/SDL_platform.h`, which the Windows side cannot read through the share at
+all (`Input/output error`, even for `[ -e ]`). Those are resolved inside the
+already-copied tree instead, and the SONAME names are **copied** rather than
+symlinked, because a link the Windows-side `ld` cannot follow reads as
+`cannot find -l:libSDL2-2.0.so.0`.
+
+`port/arm64/tools/make_sysroot.sh` copies from the root, it does not build: SDL2,
+SDL2_mixer, SDL2_ttf, zlib, libpng and FreeType as **shared** objects, plus the
+headers and hand-written `.pc` files the Makefile asks for. It is worth reading
+before using it, because three of its choices are not obvious:
+
+| What | Why |
+|---|---|
+| Written `.pc` files, not the root's | The distribution's `sdl2.pc` lists X11, Wayland, ALSA and Pulse as its dependency set. This engine only calls into SDL itself. |
+| `-l:libSDL2-2.0.so.0` rather than `-lSDL2` | The tree carries the static archives too, and `ld` prefers a `.a` over a `.so` when both are present — the static links then fail on the Wayland/FLAC symbols nothing provides. |
+| `usr/lib/rpath/` | ld resolves the *transitive* `NEEDED` libraries of `libSDL2-2.0.so.0` (libasound, libpulse, libX11, libFLAC, ...) while linking. They are `-rpath-link` only: nothing is linked in and nothing ships. |
+
+Everything the script copies stays inside the repository. The toolchain directory
+is only ever read — the sysroot it brings travels with it.
+
+#### What the Makefile does differently for a cross build
+
+| Variable | Effect |
+|---|---|
+| `CROSS_COMPILE` | Prefixes `CC`/`AR`/`STRIP`, so the host `gcc` cannot leak in. |
+| `XSYSROOT` | The dependency tree. pkg-config's search path is *replaced* with it (`PKG_CONFIG_LIBDIR`) — the host's `.pc` files have the same names. |
+| `PKG_CONFIG_SYSTEM_*` | Also replaced: pkgconf qualifies system `-I`/`-L` against the host (`/mingw64/include`), so a target `.pc` otherwise resolves to the host's paths. |
+| `-nostdinc` | The target's headers are the only headers; `-idirafter` puts the toolchain's own back. |
+| `--sysroot` | Only when the compiler was not configured with one. Arm's `aarch64-none-linux-gnu` carries its glibc sysroot; a bare cross gcc on Linux does not. |
+| `--static` | Asked of pkg-config, so SDL2's own `-lm -ldl -lpthread` are carried along. The libraries in the tree are still shared objects. |
+
+#### The glibc floor
+
+A binary cannot require a newer glibc than the target has. The failure is
+immediate and unambiguous:
+
+```
+./mugen: /lib/aarch64-linux-gnu/libc.so.6: version `GLIBC_2.38' not found
+```
+
+Which glibc a build needs is decided by the **toolchain**, not by this project,
+so `port/arm64/build.sh` pins one per target. The rule, measured rather than
+assumed:
+
+| Toolchain | glibc it targets | Binary wants | Runs on |
+|---|---|---|---|
+| `ARM64_TOOLCHAIN=9.2` (gcc 9.2.1, 2019.12) | 2.30 | up to `GLIBC_2.29` | ArkOS/RG351MP — **verified on hardware** |
+| `ARM64_TOOLCHAIN=15.3` (gcc 15.3.1) | 2.42 | up to `GLIBC_2.38` | a 2024+ distribution only |
+
+So: **ask the device first**, then pick.
+
+```sh
+ssh ark@<device> 'ldd --version | head -1'      # e.g. "GLIBC 2.30-0ubuntu2.2"
+port/arm64/build.sh                             # 9.2 -> needs 2.29, fine
+```
+
+On an RG351MP (ArkOS, Ubuntu 19.10 userspace, kernel 4.4.189, Mali-G31) the 9.2
+build initialises to `renderer: requested=opengl effective=opengl` on `GLES 3.2`
+and plays a full match with no errors, while the 15.3 build is rejected by the
+loader with the message above. That is the whole reason 9.2 is the default.
+
+Check any binary before copying it across:
+
+```sh
+readelf -V <binary> | grep -o 'GLIBC_2\.[0-9]*' | sort -uV | tail -1
+```
+
+If the target is older than 2.30 there is no Arm release old enough — build
+natively on it, or in an arm64 chroot, with its own gcc.
+
+Older releases are **not** on GitLab (whose package registry starts at 11.2).
+They live on `developer.arm.com/downloads`, under
+`/-/media/Files/downloads/gnu-a/<version>/binrel/`, which redirects to
+`armkeil.blob.core.windows.net`. Two traps there: the archives are `.tar.xz`
+with a top-level `gcc-arm-<version>-...` directory (so they need flattening,
+unlike the newer `.zip`), and they publish **MD5** — a 32-hex value in a file
+still named `.sha256asc`.
+
+#### Verifying a cross build without an arm64 machine
+
+```sh
+# WSL, with qemu-user installed
+cd /mnt/c/Projects/<repo>/install
+LD_LIBRARY_PATH=$PWD/../build/tmp/runroot \
+SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
+  qemu-aarch64 -L $PWD/../build/tmp/runroot ./mugen-linux-arm64-... -nosound -p1 kfm -p2 kfm
+```
+
+Set `RenderMode = System` in `install/data/mugen.cfg` first: the dummy video
+driver has no OpenGL, so the default `OpenGL` render stops at
+`SDL_CreateWindow failed: OpenGL support is either not configured...`. The System
+renderer needs nothing from the graphics stack and is enough to prove that the
+ARM code paths, the file formats, Lua, the audio resampler and libpng all work.
+Restore the config and remove the copied binary afterwards — `install/` is the
+pristine game tree.
+
+### "Just put SDL2 in the toolchain's sysroot"
+
+The obvious alternative to `XSYSROOT` is to copy the libraries into the
+toolchain's own glibc sysroot
+(`C:/arm-gnu-toolchain/aarch64-none-linux-gnu/libc/usr/`) and build with no
+extra flags. **This works for compiling and does not work for linking.**
+Measured on Arm GNU Toolchain 15.3.Rel2 with SDL2 2.0.10 from Ubuntu 20.04 arm64:
+
+| Step | Result |
+|---|---|
+| headers → `<sysroot>/usr/include/SDL2/` | `#include <SDL.h>` still fails: the sysroot only puts `include/` on the path, so `-I<sysroot>/usr/include/SDL2` is needed anyway |
+| `libSDL2-2.0.so.0` → `<sysroot>/usr/lib64/` | compiles and links a `-lSDL2`-only program |
+| the same link for this engine | **fails**: hundreds of undefined `X*`, `pa_*`, `snd_*`, `wl_*`, `xkb_*` references |
+
+Why it fails: the distribution's `libSDL2-2.0.so.0` was built against X11, ALSA,
+PulseAudio and Wayland, and those are its `DT_NEEDED` entries. Linking a shared
+library against them is normally fine — but only if they are reachable through
+`-rpath-link`. When they are, their own dependencies are not, and the linker
+wants the whole closure. In the `XSYSROOT` tree that closure lives in
+`usr/lib/rpath/` and is passed explicitly; a toolchain sysroot merge would have
+to reproduce the same thing, at which point the merge buys nothing over
+`XSYSROOT` and has moved files into the toolchain directory that this repository
+does not own.
+
+The options that do work, in order of preference:
+
+1. **`XSYSROOT` (this page).** No writes outside the repository, and the tree is
+   reproducible from `port/arm64/tools/make_sysroot.sh`.
+2. **Build a static SDL stack into the toolchain.** Configure SDL2 with
+   `-DSDL_SHARED=OFF -DSDL_X11=OFF -DSDL_WAYLAND=OFF -DSDL_ALSA=OFF
+   -DSDL_PULSEAUDIO=OFF -DSDL_OPENGLES=ON`, install into
+   `<sysroot>/usr/`, then link statically. That is the build the *Windows*
+   targets use, and it closes the dependency question entirely — but it means
+   cross-building SDL2, SDL2_mixer (with ogg/vorbis/FLAC/mpg123/opus) and
+   SDL2_ttf (with FreeType) from source, and it links SDL2 into the binary.
+   This is what to do if the whole thing has to be one self-contained file.
+3. **A compiler from a root whose glibc matches the target** (see below), with
+   the libraries next to it — this is just option 1 with a different compiler.
+
+### Cross-build troubleshooting
+
+Every entry below was hit while bringing this up; they are in the order they
+appear in a first attempt.
+
+| Symptom | Cause and fix |
+|---|---|
+| `run this from Windows … not from inside WSL` | `port/arm64/build.sh` drives the **Mingw-w64** toolchain, which WSL cannot execute. Inside WSL build natively: `make MUGEN_TARGET=linux-arm64`. |
+| `download failed its vendor SHA-256` | The zip was truncated or altered in transit; nothing was extracted. Re-run `--setup` (the bad file is deleted first). |
+| `the archive did not produce …/gcc` | A half-extracted toolchain. Remove `TOOLCHAIN_DIR` and re-run `--setup`. |
+| `fatal error: math.h: No such file or directory` | `-nostdinc` is on, and the toolchain's own include directories were not detected. The Makefile asks `$(CC) -E -v` for them and re-adds each with `-idirafter`; if you build by hand, do the same. Re-run `make check-toolchain` — it prints the resolved tree and sysroot flags. |
+| `fatal error: SDL2/_real_SDL_config.h` | Debian/Ubuntu splits SDL2's configuration: `include/SDL2/SDL_config.h` is an indirection to `include/<triple>/SDL2/_real_SDL_config.h`. `make_sysroot.sh` merges the two; a manual copy must too. |
+| `… SDL2/SDL_platform.h: Invalid argument` | The distribution ships some SDL2 headers as **symlinks into themselves**. Copy them with `cp -L` (dereference); `cp -a` produces links that dangle. |
+| `cp: cannot stat …/SDL_platform.h: Input/output error` | The root's headers contain links (`png.h -> libpng16/png.h`, `…/SDL2/SDL_platform.h`) that the Windows side cannot read through `//wsl.localhost` at all — `[ -e ]` and `[ -L ]` both fail on them, so a test before the copy skips the header silently. `make_sysroot.sh` copies optimistically and falls back to the already-copied target; a hand-written copy must do the same, or run the script inside WSL. |
+| `fatal error: png.h: No such file or directory` | As above, one step further on: `png.h`/`pngconf.h`/`pnglibconf.h` are links into `libpng16/`. They must be resolved inside the copy, not read from the share. |
+| `cannot find -l:libSDL2-2.0.so.0` | The SONAME link is missing or is a WSL symlink on a DrvFs mount, which the Windows-side `ld` cannot resolve. `make_sysroot.sh` copies instead of linking for exactly this reason. |
+| Undefined `X*` / `pa_*` / `snd_*` / `wl_*` | `ld` reached the **static** `libSDL2.a` (it prefers `.a` over `.so` when both are in one directory), or `-rpath-link` to `usr/lib/rpath/` is missing. |
+| `undefined reference to __libc_dlopen_mode@GLIBC_PRIVATE` | The arm64 root's `libc.so.6`/`libpthread.so.0`/`libdl.so.2` got into the link line and shadow the toolchain's own. They must never be copied into `usr/lib/rpath/`; `make_sysroot.sh` filters them by SONAME. A tree built by an older version of the script can still hold them — `--sysroot` rebuilds it. |
+| `CROSS_COMPILE=… needs XSYSROOT=<dir>` | Building by hand without a dependency tree. The Makefile refuses on purpose: without one, pkg-config answers from the **host**, the compile picks up host headers and the link mixes architectures. Run `port/arm64/build.sh`, or point `XSYSROOT` at `build/tmp/arm64-sysroot`. |
+| `version GLIBC_2.38 not found` on the target | The glibc floor — the toolchain is newer than the device. `ARM64_TOOLCHAIN=9.2` for glibc-2.30 devices; see the table above. |
+
+To see what a cross build actually resolved, rather than guess:
+
+```sh
+make check-toolchain CROSS_COMPILE=aarch64-none-linux-gnu- XSYSROOT=build/tmp/arm64-sysroot MUGEN_TARGET=linux-arm64
+make -n CROSS_COMPILE=… XSYSROOT=build/tmp/arm64-sysroot MUGEN_TARGET=linux-arm64 | grep -o '\-l:[^ ]*'
+```

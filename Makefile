@@ -43,6 +43,11 @@
 #   make BUILD=build/mingw-debug DEBUG=1  unoptimised build with debug info
 #   make MUGEN_GLES=0                     force the desktop-GL renderer on a
 #                                         Linux GLES target (see below)
+#   make CROSS_COMPILE=aarch64-none-linux-gnu- XSYSROOT=build/tmp/arm64-sysroot
+#                                         cross-compile the Linux target with a
+#                                         foreign toolchain + dependency tree;
+#                                         port/arm64/build.sh wraps this
+#                                         (docs/BUILD-LINUX.md, "Cross-compiling")
 #
 # See docs/BUILD-MINGW.md for what the dependencies are and where they come from.
 
@@ -59,6 +64,104 @@ AR       ?= ar
 WINDRES  ?= windres
 STRIP    ?= strip
 PKG_CONFIG ?= pkg-config
+
+# ------------------------------------------------------------- cross-compiling
+#
+# CROSS_COMPILE=<prefix> runs the Linux build with a foreign toolchain
+# (aarch64-none-linux-gnu-, arm-linux-gnueabihf-, ...) and XSYSROOT=<dir> names
+# the dependency tree that toolchain links against -- the SDL2/SDL2_mixer/
+# SDL2_ttf/zlib/libpng headers, shared objects and .pc files, laid out as
+# <XSYSROOT>/usr/{include,lib/pkgconfig,lib}. The toolchain directory itself is
+# never written to.
+#
+# This block is deliberately generic: it knows nothing about a particular
+# toolchain or host. Each platform port owns its own wiring, and for arm64 that
+# is port/arm64/ -- it downloads the toolchain and builds the dependency tree,
+# then calls this Makefile with the two variables below.
+#
+#     port/arm64/build.sh              (Windows host, Arm GNU Toolchain)
+#
+# Equivalently, by hand:
+#
+#     make CROSS_COMPILE=aarch64-none-linux-gnu- \
+#          XSYSROOT=build/tmp/arm64-sysroot MUGEN_TARGET=linux-arm64
+#
+# Full recipe, and what a first attempt gets wrong and why:
+# docs/BUILD-LINUX.md, "Cross-building arm64 from Windows".
+#
+# Everything the cross build changes, and why:
+#
+#   CC/AR/STRIP   the prefix is applied to whatever was chosen, so the default
+#                 host `gcc` cannot leak in.
+#   BUILD name    build/linux-arm64-<prefix> otherwise, so a cross tree can
+#                 never share objects with the host one (same triple, different
+#                 ABI features).
+#   -isystem      XSYSROOT/usr/include first and -- on a real cross build -- with
+#                 -nostdinc, so the host's /usr/include (x86_64 SDL2, glibc) is
+#                 not visible at all. Only correct because the tree carries
+#                 every include the compile needs.
+#   --sysroot     the toolchain's glibc sysroot when the compiler does not carry
+#                 one of its own.
+#   PKG_CONFIG    the host pkg-config, with its search path *replaced* by
+#                 $(XSYSROOT) (PKG_CONFIG_LIBDIR), so the host's .pc files cannot
+#                 be picked up -- they carry the same package names.
+#   --static      asked of pkg-config, so each package's own link line (SDL2's
+#                 -lm -ldl -lpthread, libpng's -lz) is carried along.
+#
+# `make check-toolchain` reports the resolved cross configuration.
+ifneq ($(strip $(CROSS_COMPILE)),)
+  CC      := $(CROSS_COMPILE)gcc
+  AR      := $(CROSS_COMPILE)ar
+  STRIP   := $(CROSS_COMPILE)strip
+  MUGEN_CROSS := 1
+  # A cross toolchain with no dependency tree cannot build this engine, and the
+  # failure without this check is silent rather than loud: pkg-config answers
+  # from the *host* (an x86_64 SDL2 with the same .pc names), the compile then
+  # picks up host headers and the link mixes architectures. Refuse instead.
+  ifeq ($(strip $(XSYSROOT)),)
+    $(error CROSS_COMPILE=$(CROSS_COMPILE) needs XSYSROOT=<dir>, the tree holding the target's \
+            SDL2/zlib/libpng headers, libraries and .pc files; \
+            use the platform port (port/arm64/build.sh) -- see docs/BUILD-LINUX.md)
+  endif
+  ifneq ($(strip $(XSYSROOT)),)
+    MUGEN_CROSS_SYSROOT := $(abspath $(XSYSROOT))
+    MUGEN_CROSS_INC     := $(MUGEN_CROSS_SYSROOT)/usr/include
+    MUGEN_CROSS_LIB     := $(MUGEN_CROSS_SYSROOT)/usr/lib
+    MUGEN_CROSS_STATIC  := --static
+    # Whether the compiler already carries its own glibc sysroot. Arm's
+    # aarch64-none-linux-gnu does (built --with-sysroot); a bare cross gcc on a
+    # Linux host does not and needs --sysroot=$(XSYSROOT). Asked here, at the
+    # top, because CROSS_CPPFLAGS below is decided from it.
+    MUGEN_CROSS_COMPILER_SYSROOT := $(shell XSYSROOT=x $(CC) -print-sysroot 2>/dev/null)
+    ifeq ($(strip $(MUGEN_CROSS_COMPILER_SYSROOT)),)
+      MUGEN_CROSS_SYSROOT_FLAGS := --sysroot=$(MUGEN_CROSS_SYSROOT)
+    endif
+    # -nostdinc below drops *every* implicit include directory, the toolchain's
+    # own C library headers among them (math.h, stdio.h, ...), so the compiler
+    # is asked which ones it had and they are put back with -idirafter: after
+    # $(XSYSROOT)/usr/include, so a dependency's header always wins over any
+    # copy of the same name shipped beside the libc headers.
+    MUGEN_CROSS_CC_INCLUDE := $(shell $(CC) $(MUGEN_CROSS_SYSROOT_FLAGS) -E -v -x c /dev/null 2>&1 | \
+        sed -n '/^#include <...> search starts here:/,/^End of search list/p' | \
+        sed -e '1d' -e '$$d' -e 's/^ \{1,\}//' -e 's/^/-idirafter /' | tr '\n' ' ')
+    # The host compiler serves pkg-config; only the .pc files must come from
+    # the target tree. Both variables are replaced, not extended.
+    #
+    # PKG_CONFIG_SYSTEM_* matter as much as PKG_CONFIG_LIBDIR: pkgconf qualifies
+    # system include/library paths for the *host* (/mingw64/include), so a
+    # target .pc with -I${includedir} came back as the host's path and the build
+    # compiled against the host's SDL2 headers. Pointing both variables at the
+    # target tree is what makes ${includedir} resolve to the target.
+    MUGEN_HOST_PKG_CONFIG ?= $(firstword $(foreach p,pkg-config pkgconf,$(if $(shell command -v $(p) 2>/dev/null && echo $(p)),$(p))))
+    ifeq ($(filter default file environment undefined,$(origin PKG_CONFIG)),$(origin PKG_CONFIG))
+      PKG_CONFIG := env PKG_CONFIG_LIBDIR='$(MUGEN_CROSS_LIB)/pkgconfig' \
+                          PKG_CONFIG_SYSTEM_INCLUDE_PATH='$(MUGEN_CROSS_INC)' \
+                          PKG_CONFIG_SYSTEM_LIBRARY_PATH='$(MUGEN_CROSS_LIB)' \
+                          PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1 PKG_CONFIG_ALLOW_SYSTEM_LIBS=1 \
+                          $(MUGEN_HOST_PKG_CONFIG)
+    endif
+  endif
+endif
 # Python is only needed for the optional icon (tools/extract_icon.py).
 # Existing is not enough: on Windows 'python3' is usually the Microsoft Store
 # alias, which "exists" and prints an advert instead of running, so every
@@ -159,8 +262,13 @@ else ifeq ($(MUGEN_TARGET),win64)
 else
   MUGEN_FAMILY := linux
   MUGEN_PTRBITS := $(if $(findstring 64,$(MUGEN_TARGET)),64,32)
-  BUILD    ?= build/$(MUGEN_TARGET)-$(SDL_BACKEND_TAG)
-  TARGET   := $(BUILD)/mugen-$(MUGEN_TARGET)
+  # A cross build names its own directory: same triple, different toolchain and
+  # dependency tree, so its objects must not be reused from the host build.
+  ifneq ($(strip $(CROSS_COMPILE)),)
+    MUGEN_CROSS_TAG := -$(patsubst %-,%,$(CROSS_COMPILE))
+  endif
+  BUILD    ?= build/$(MUGEN_TARGET)$(MUGEN_CROSS_TAG)-$(SDL_BACKEND_TAG)
+  TARGET   := $(BUILD)/mugen-$(MUGEN_TARGET)$(MUGEN_CROSS_TAG)
 endif
 
 # SDL 1.2 is only wired up for the win32 target; everywhere else it is SDL2
@@ -364,7 +472,15 @@ else
   # No --static on Linux: the distro's shared SDL is the normal thing to link
   # against, and SDL_mixer.so already carries its own codec dependencies.
   STATIC_PKGS := sdl SDL_gfx SDL_mixer SDL_ttf zlib libpng
-  PKG_LIBS    := $(shell $(PKG_CONFIG) --libs $(STATIC_PKGS) 2>/dev/null) -lGL -lGLU -ldl -lm
+  # Cross-compiling (CROSS_COMPILE=... XSYSROOT=...): the sd2 branch below
+  # replaces STATIC_PKGS/PKG_LIBS anyway, and MUGEN_CROSS_STATIC decides
+  # --static. Here the only difference is that -lGL/-lGLU (which a GLES cross
+  # target has none of) are added below only when MUGEN_CROSS is unset.
+  ifneq ($(strip $(MUGEN_CROSS_SYSROOT)),)
+    PKG_LIBS  := $(shell $(PKG_CONFIG) --libs --static $(STATIC_PKGS) 2>/dev/null)
+  else
+    PKG_LIBS  := $(shell $(PKG_CONFIG) --libs $(STATIC_PKGS) 2>/dev/null) -lGL -lGLU -ldl -lm
+  endif
   PKG_CFLAGS  := $(shell $(PKG_CONFIG) --cflags $(STATIC_PKGS) 2>/dev/null)
   # SDL 1.2 headers live in /usr/include/SDL for the distro package.
   SDL_CFLAGS  := $(shell $(PKG_CONFIG) --cflags sdl 2>/dev/null)
@@ -378,6 +494,27 @@ else
   # _GNU_SOURCE: strcasecmp/alloca and the POSIX extensions used here.
   PLAT_LDFLAGS  := -Wl,--gc-sections
   ENGINE_DEFS += -D_GNU_SOURCE
+  # Cross build: the target's headers are the only headers. -nostdinc keeps the
+  # host's /usr/include out of the picture (x86_64 SDL2, glibc's headers), so a
+  # missing dependency is a compile error here instead of a host header being
+  # silently mixed in; the toolchain's own include directories are then
+  # re-added through the compiler itself. --sysroot is only passed when the
+  # compiler was not configured with one (Arm's aarch64-none-linux-gnu carries
+  # its glibc sysroot already; a bare cross gcc on a Linux host does not).
+  ifneq ($(strip $(MUGEN_CROSS_SYSROOT)),)
+    CROSS_CPPFLAGS := -nostdinc -isystem $(MUGEN_CROSS_INC) -isystem $(MUGEN_CROSS_INC)/SDL2 $(MUGEN_CROSS_SYSROOT_FLAGS) $(MUGEN_CROSS_CC_INCLUDE)
+    # -rpath-link: the target's shared SDL2/SDL2_mixer are linked, not their
+    # static archives, so those .so files pull in their own NEEDED libraries
+    # (libasound, libpulse, libX11, libFLAC, ...). Those are only resolved by
+    # the loader at run time, but ld still wants to see them when it is asked
+    # for a real (non -shared) link, and --sysroot does not cover a dependency
+    # tree that lives outside the compiler's own sysroot.
+    MUGEN_CROSS_RPATH_LINK := $(MUGEN_CROSS_LIB)/rpath
+    CROSS_LDFLAGS  := -L$(MUGEN_CROSS_LIB) $(MUGEN_CROSS_SYSROOT_FLAGS)
+    ifneq ($(wildcard $(MUGEN_CROSS_RPATH_LINK)),)
+      CROSS_LDFLAGS += -Wl,-rpath-link,$(MUGEN_CROSS_RPATH_LINK)
+    endif
+  endif
 endif
 
 # --- SDL backend selection --------------------------------------------------
@@ -405,10 +542,16 @@ ifeq ($(SDL_BACKEND),2)
     # GLES targets link no desktop GL: the Mali/EGL stack has no GLX, and
     # -lGL here is what made the failure look like a missing driver instead of
     # a wrong backend (PROBLEMS.md P1). EGL comes in through SDL2 itself.
+    #
+    # A cross build asks pkg-config for the static close (--static), because
+    # the dependency tree holds archives: there is no target sysroot at run
+    # time to resolve shared objects from, and SDL2's own link line
+    # (-pthread -lm) has to be carried along. A GLES cross target still has no
+    # -lGL: the tree ships no desktop GL at all.
     ifeq ($(MUGEN_GLES),1)
-      PKG_LIBS := $(shell $(PKG_CONFIG) --libs $(STATIC_PKGS) 2>/dev/null) -ldl -lm
+      PKG_LIBS := $(shell $(PKG_CONFIG) --libs $(MUGEN_CROSS_STATIC) $(STATIC_PKGS) 2>/dev/null) -ldl -lm
     else
-      PKG_LIBS := $(shell $(PKG_CONFIG) --libs $(STATIC_PKGS) 2>/dev/null) -lGL -lGLU -ldl -lm
+      PKG_LIBS := $(shell $(PKG_CONFIG) --libs $(MUGEN_CROSS_STATIC) $(STATIC_PKGS) 2>/dev/null) -lGL -lGLU -ldl -lm
     endif
   endif
   PKG_CFLAGS := $(filter-out -Dmain=SDL_main,$(shell $(PKG_CONFIG) --cflags $(STATIC_PKGS) 2>/dev/null))
@@ -452,7 +595,11 @@ ifneq ($(SANITIZE),)
   SYS_LIBS += -fsanitize=$(SANITIZE)
 endif
 
-CPPFLAGS += -I$(SRC_DIR) \
+# A cross build puts the target's include tree first and -- with -nostdinc --
+# leaves only that plus the toolchain's own headers reachable. -isystem keeps
+# the dependency headers out of the -Wall/-W3 warnings: they are not ours.
+CPPFLAGS += $(CROSS_CPPFLAGS) \
+            -I$(SRC_DIR) \
             -I$(TP_DIR)/libresample/include \
             $(PLAT_CPPFLAGS) \
             -I$(TP_DIR)/lua-5.1.4/src \
@@ -578,7 +725,7 @@ $(TARGET): $(ENGINE_OBJS) $(RC_OBJ) $(TP_LIBS)
 	@echo "  LD      $@"
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(CC) $(ARCHFLAGS) -o $@ $(ENGINE_OBJS) $(RC_OBJ) \
-	    $(PLAT_LDFLAGS) \
+	    $(PLAT_LDFLAGS) $(CROSS_LDFLAGS) \
 	    -L$(LIB_DIR) -llua -lresample \
 	    $(GLAD_OBJ) $(MINIZIP_OBJ) \
 	    $(PKG_LIBS) $(SYS_LIBS) \
@@ -764,6 +911,17 @@ check-toolchain: check-pkgconfig $(if $(filter win32,$(MUGEN_FAMILY)),check-libs
 	done; \
 	echo "toolchain ok: $$($(CC) --version | head -1) / $$triple"; \
 	echo "python: $(if $(strip $(PYTHON3)),$$($(PYTHON3) --version),not found (only needed for MUGEN_GAME_DIR))"
+ifneq ($(strip $(MUGEN_CROSS)),)
+	@echo "cross: $(CROSS_COMPILE)"; \
+	echo "  dependency tree: $(MUGEN_CROSS_SYSROOT)"; \
+	if [ -n '$(MUGEN_CROSS_COMPILER_SYSROOT)' ]; then \
+	  echo "  sysroot flag:    none -- the compiler carries its own ($(MUGEN_CROSS_COMPILER_SYSROOT))"; \
+	else \
+	  echo "  sysroot flag:    $(MUGEN_CROSS_SYSROOT_FLAGS) (the compiler has no sysroot of its own)"; \
+	fi; \
+	echo "  packages:        $(STATIC_PKGS) $(MUGEN_CROSS_STATIC)"; \
+	echo "  output:          $(TARGET)"
+endif
 
 # pkg-config's stderr is suppressed when $(STATIC_PKGS) is expanded, so a
 # missing .pc file leaves PKG_LIBS/PKG_CFLAGS empty and the build only fails
