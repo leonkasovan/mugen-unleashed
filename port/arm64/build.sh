@@ -204,14 +204,17 @@ fetch() {                      # fetch <url> <dest>
     mv -f "$2.part" "$2"
 }
 
-hash_of() {                    # hash_of <file> <sha256|md5> -> hex digest
+hash_of() {                    # hash_of <sha256|md5> <file> -> hex digest
     local alg="$1" file="$2"
     if command -v "${alg}sum" >/dev/null 2>&1; then
         "${alg}sum" "$file" | awk '{print $1}'
-    elif command -v shasum >/dev/null 2>&1; then
-        shasum -a "$([ "$alg" = md5 ] && echo 1 || echo 256)" "$file" | awk '{print $1}'
+    elif [ "$alg" = sha256 ] && command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file" | awk '{print $1}'
+    elif command -v openssl >/dev/null 2>&1; then
+        # shasum -a 1 is SHA-1, not MD5. Preserve the requested algorithm.
+        openssl dgst "-$alg" "$file" | awk '{print $NF}'
     else
-        fail "no ${alg}sum or shasum to verify the download with"
+        fail "no verifier for $alg (install ${alg}sum or openssl)"
     fi
 }
 
@@ -228,18 +231,9 @@ install_toolchain() {
     fi
     [ "$OFFLINE" = 1 ] && { [ -x "$CC_BIN" ] || fail "--offline: toolchain $TOOLCHAIN_VER not installed in $TOOLCHAIN_DIR"; return 0; }
 
-    # A different toolchain may already occupy the directory; the archives do
-    # not merge (different glibc trees, and 9.2 wraps everything in a version
-    # directory), so it is replaced rather than overlaid.
-    if [ -f "$CC_BIN" ]; then
-        info "replacing the toolchain already in $TOOLCHAIN_DIR"
-        rm -rf "${TOOLCHAIN_DIR:?}/bin" "${TOOLCHAIN_DIR:?}/lib" "${TOOLCHAIN_DIR:?}/libexec" \
-               "${TOOLCHAIN_DIR:?}/share" "${TOOLCHAIN_DIR:?}/include" "${TOOLCHAIN_DIR:?}/var" \
-               "${TOOLCHAIN_DIR:?}/aarch64-none-linux-gnu" "${TOOLCHAIN_DIR:?}/manifest.txt"
-        rm -f "$TOOLCHAIN_DIR"/.mugen-toolchain-*
-    fi
-
-    mkdir -p "$DOWNLOADS" "$TOOLCHAIN_DIR"
+    # Port fix: do not alter an installed tree until the replacement has
+    # passed checksum, extraction and compiler-layout validation.
+    mkdir -p "$DOWNLOADS"
     archive="$DOWNLOADS/$TOOLCHAIN_FILE"
 
     if [ -f "$archive" ] && [ "$(hash_of "$TOOLCHAIN_HASH_KIND" "$archive")" = "$TOOLCHAIN_HASH" ]; then
@@ -281,13 +275,31 @@ install_toolchain() {
         [ -n "$top" ] && [ -d "$top/bin" ] || { rm -rf "$stage"; fail "unexpected archive layout (no bin/ found)"; }
         set -- "$top"; stage="$1"
     fi
-    info "installing into $TOOLCHAIN_DIR"
-    mkdir -p "$TOOLCHAIN_DIR"
-    cp -a "$stage/." "$TOOLCHAIN_DIR/" || { rm -rf "$stage"; fail "copy into $TOOLCHAIN_DIR failed"; }
-    rm -rf "$stage"
+    [ -x "$stage/bin/${CROSS}gcc" ] ||
+        fail "the archive did not produce bin/${CROSS}gcc; installed toolchain was kept"
+    # Prepare beside the destination so the final renames stay on one volume.
+    # Never erase an unmanaged installation or an interrupted transaction.
+    dest="${TOOLCHAIN_DIR}.mugen-new"
+    local backup="${TOOLCHAIN_DIR}.mugen-old"
+    [ ! -e "$dest" ] && [ ! -e "$backup" ] ||
+        fail "unfinished toolchain transaction at $dest or $backup; installed tree was kept"
+    if [ -d "$TOOLCHAIN_DIR" ] && [ -n "$(find "$TOOLCHAIN_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+        compgen -G "$TOOLCHAIN_DIR/.mugen-toolchain-*" >/dev/null ||
+            fail "refusing to replace unmanaged toolchain $TOOLCHAIN_DIR; choose another TOOLCHAIN_DIR"
+    fi
+    mkdir -p "$dest"
+    cp -a "$stage/." "$dest/" || { rm -rf "$dest"; fail "copy failed; installed toolchain was kept"; }
+    printf '%s\n' "$TOOLCHAIN_VER" > "$dest/.mugen-toolchain-${TOOLCHAIN_VER}"
+    if [ -e "$TOOLCHAIN_DIR" ]; then
+        mv "$TOOLCHAIN_DIR" "$backup" || { rm -rf "$dest"; fail "cannot back up installed toolchain"; }
+    fi
+    if ! mv "$dest" "$TOOLCHAIN_DIR"; then
+        [ ! -e "$backup" ] || mv "$backup" "$TOOLCHAIN_DIR"
+        fail "cannot install replacement; previous toolchain restored"
+    fi
+    rm -rf "$backup" "$stage"
+    info "installed into $TOOLCHAIN_DIR"
 
-    [ -x "$CC_BIN" ] || fail "the archive did not produce $CC_BIN"
-    printf '%s\n' "$TOOLCHAIN_VER" > "$TOOLCHAIN_DIR/.mugen-toolchain-${TOOLCHAIN_VER}"
 }
 
 # --------------------------------------------------------------- checks
@@ -446,8 +458,13 @@ upload() {
     # --warning=no-timestamp: the archive carries the build machine's clock,
     # which is ahead of the device's, and GNU tar otherwise floods the output
     # with "time stamp ... is ... s in the future" for every member.
-    tar cf - --warning=no-timestamp -C "$(dirname "$target")" "$(basename "$target")" |
-        remote "cd '$DEVICE_DIR' && tar xf - --warning=no-timestamp && mv -f '$(basename "$target")' '$tmpname'" ||
+    # Port fix: extraction must not overwrite DEVICE_BIN before verification,
+    # even when its name equals the local build's basename.
+    case "$DEVICE_BIN" in *[!A-Za-z0-9._-]*|""|.|..) fail "DEVICE_BIN must be a simple filename" ;; esac
+    case "$(basename "$target")" in *[!A-Za-z0-9._-]*) fail "unexpected build filename" ;; esac
+    tar cf - --warning=no-timestamp --transform="s|.*|$tmpname|" \
+        -C "$(dirname "$target")" "$(basename "$target")" |
+        remote "cd '$DEVICE_DIR' && tar xf - --warning=no-timestamp" ||
         fail "transfer failed"
 
     # Absolute paths everywhere: the device's ssh runs a non-interactive shell

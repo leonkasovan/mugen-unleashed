@@ -355,6 +355,11 @@ CONFIG_STAMP := $(OBJ_DIR)/.config
 # $(MUGEN_TARGET) already distinguishes win32/win64/linux-<arch>, so it covers
 # the pointer width and architecture that ARCHFLAGS would add.
 CONFIG_ID    := backend=$(SDL_BACKEND) target=$(MUGEN_TARGET) gles=$(MUGEN_GLES)
+ifneq ($(strip $(MUGEN_CROSS)),)
+# Port fix: the prefix is identical for Arm 9.2 and 15.3. Record the resolved
+# compiler and version so selecting another kit cannot reuse the old binary.
+CONFIG_ID += cc=$(shell command -v $(CC)) version=$(shell $(CC) -dumpfullversion -dumpversion) sysroot=$(MUGEN_CROSS_SYSROOT)
+endif
 ICON_DIR  := $(BUILD)/icon
 # TARGET is set per platform in the detection block above.
 
@@ -895,7 +900,7 @@ endif
 # summarises both logs with tools/measure_perf.sh. The output shape and what the
 # numbers mean are in docs/PERFORMANCE.md.
 #
-#   make perf                      the default scenario, 5 s per renderer
+#   make perf                      the default scenario, 20 s per renderer
 #   make perf PERF_SECONDS=40      longer, steadier samples
 #   make perf PERF_ARGS="-p1 kfm -p2 kfm"   a specific match
 #
@@ -906,19 +911,8 @@ PERF_ARGS    ?= -p1 kfm -p2 kfm
 PERF_DIR     ?= build/perf
 
 perf: install
-	@mkdir -p $(PERF_DIR)
-	@for mode in OpenGL System; do \
-	  echo "  PERF  $$mode"; \
-	  sed -e "s/^RenderMode *=.*/RenderMode = $$mode/" \
-	      $(INSTALL_DIR)/data/mugen.cfg > $(PERF_DIR)/mugen.cfg.$$mode; \
-	  cp -f $(INSTALL_DIR)/data/mugen.cfg $(PERF_DIR)/mugen.cfg.orig 2>/dev/null || true; \
-	  cp -f $(PERF_DIR)/mugen.cfg.$$mode $(INSTALL_DIR)/data/mugen.cfg; \
-	  rm -f $(INSTALL_DIR)/mugen.log; \
-	  ( cd $(INSTALL_DIR) && timeout $(PERF_SECONDS) ./$(INSTALL_NAME) -nosound $(PERF_ARGS) >/dev/null 2>&1 ); \
-	  mv -f $(INSTALL_DIR)/mugen.log $(PERF_DIR)/$$mode.log 2>/dev/null || true; \
-	  cp -f $(PERF_DIR)/mugen.cfg.orig $(INSTALL_DIR)/data/mugen.cfg 2>/dev/null || true; \
-	done
-	@sh tools/measure_perf.sh $(PERF_DIR)/OpenGL.log $(PERF_DIR)/System.log 2>/dev/null | head -3
+	@PERF_SECONDS='$(PERF_SECONDS)' PERF_DIR='$(PERF_DIR)' \
+	  sh tools/run_perf.sh '$(INSTALL_DIR)' '$(INSTALL_NAME)' $(PERF_ARGS)
 
 .PHONY: perf
 

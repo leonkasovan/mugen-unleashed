@@ -24,9 +24,12 @@ if [ "${SANITIZE:-0}" = 1 ]; then SAN="-fsanitize=address,undefined -fno-omit-fr
 # globals.c has legacy decoder function-pointer casts outside this test.
 $CC $FLAGS -Wno-cast-function-type -c src/globals.c -o "$OUT/globals.o"
 $CC $FLAGS -c third_party/glad-2.1/glad.c -o "$OUT/glad.o"
-for backend in desktop gles; do
+for backend in desktop gles linux-gles; do
     DEFS=""
-    [ "$backend" != gles ] || DEFS="-DTEST_GLES=1"
+    case "$backend" in
+        gles) DEFS="-DTEST_GLES=1" ;;
+        linux-gles) DEFS="-DTEST_GLES=1 -DTEST_LINUX_GLES=1" ;;
+    esac
     $CC $FLAGS $SAN $DEFS tools/test_gl_errors.c src/gl_mvp.c "$OUT/globals.o" "$OUT/glad.o" \
         -Wl,--gc-sections ${LDFLAGS:-} -lm -o "$OUT/test_$backend"
     cp res/shaders/gles/* "$OUT/data/gles/"
@@ -36,3 +39,8 @@ for backend in desktop gles; do
     done
     (cd "$OUT"; ${RUNNER:-} "./test_$backend")
 done
+
+# A refused context must fail before the backend calls any GL entry point.
+$CC $FLAGS $SAN tools/test_video_startup.c "$OUT/globals.o" \
+    -Wl,--gc-sections ${LDFLAGS:-} -lm -o "$OUT/test_video_startup"
+${RUNNER:-} "$OUT/test_video_startup"

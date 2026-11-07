@@ -490,6 +490,13 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
         Sdl2_DestroyVideo();
     }
     if (g_sdl2Video.window == NULL) {
+        /* Port fix: SDL_CreateWindow can lazily initialize video, but GL
+         * attributes cannot. A failed SDL_Init of an optional subsystem may
+         * have rolled video back; initialize it before selecting the dialect. */
+        if ((SDL_WasInit(SDL_INIT_VIDEO) & SDL_INIT_VIDEO) == 0 && SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) {
+            Log_Printf("video: SDL video init failed: %s\n", SDL_GetError());
+            return NULL;
+        }
 #ifdef MUGEN_GLES
         /*
          * Ask for an OpenGL ES 3 context before the window exists.
@@ -573,6 +580,10 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
              */
             if (!gladLoadGLES2Loader((GLADloadproc)SDL_GL_GetProcAddress)) {
                 Log_Printf("video: GLES entry points unavailable (%s)\n", SDL_GetError());
+                /* Port fix: a retry must reload functions, not reuse an
+                 * unqualified context and skip the loader above. */
+                SDL_GL_DeleteContext(g_sdl2Video.gl);
+                g_sdl2Video.gl = NULL;
                 return NULL;
             }
             Log_Printf("\nvideo: %s, GLES %d.%d", (const char *)glGetString(GL_RENDERER), GLVersion.major,
@@ -923,6 +934,11 @@ int Sdl2_GL_SetAttribute(SDL_GLattr attr, int value)
             g_sdl2Video.vsync_applied = 1;
         }
         return 0;
+    }
+    /* SDL1 callers configure GL before opening a window. SDL2 requires the
+     * video subsystem even for these requests; preserve them on a cold start. */
+    if ((SDL_WasInit(SDL_INIT_VIDEO) & SDL_INIT_VIDEO) == 0 && SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) {
+        return -1;
     }
     return SDL_GL_SetAttribute(attr, value);
 }

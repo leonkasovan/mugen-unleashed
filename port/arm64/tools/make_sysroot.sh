@@ -260,7 +260,7 @@ say "$n files"
 
 # --- pkg-config ------------------------------------------------------------
 echo "pkg-config"
-P="$(cd "$DEST" && pwd)"
+P="$(cd "$DEST" && pwd)/usr"
 for f in sdl2 SDL2_mixer SDL2_ttf zlib libpng freetype2; do rm -f "$DEST_PC/$f.pc"; done
 
 cat > "$DEST_PC/sdl2.pc" <<EOF

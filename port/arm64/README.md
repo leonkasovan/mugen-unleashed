@@ -213,3 +213,22 @@ The `Makefile` itself knows nothing about Arm or Windows: `CROSS_COMPILE=` and
 `XSYSROOT=` are generic, so another platform port can reuse them with a
 different prefix and tree. What the cross build changes in the Makefile, and
 why, is in `docs/BUILD-LINUX.md` ("What the Makefile does differently").
+
+### Recovery and replacement safeguards
+
+`--setup` verifies and unpacks a replacement before changing an installed
+compiler. It prepares a sibling `.mugen-new` directory, moves a managed old tree
+to `.mugen-old`, and restores that tree if the final install rename fails.
+An unmarked, nonempty toolchain directory is left alone: select a new
+`TOOLCHAIN_DIR` instead. Existing `.mugen-new`/`.mugen-old` directories indicate
+an interrupted transaction and are not silently deleted.
+
+The build stamp records the resolved compiler path, version and dependency-root
+path. Switching between the versioned 9.2 and 15.3 kits therefore rebuilds the
+objects and executable even though their cross prefixes are identical.
+
+Upload archives carry the temporary remote filename from the outset. A checksum
+failure leaves the existing executable intact even when `DEVICE_BIN` equals the
+local build filename. No executable is renamed into its final location until
+verification succeeds. This safeguard does not upload GLES shader assets; the
+separate shader installation requirement above still applies.

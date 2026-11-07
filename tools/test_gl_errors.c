@@ -12,7 +12,9 @@
 /* The host uses the vendored desktop GL declarations for common GL calls.
  * Core FBO calls in GLES have the same signatures as GL2.1's EXT entry points.
  * Engine types were included above, before selecting the Android source. */
+#ifndef TEST_LINUX_GLES
 #define ANDROID_PORT 1
+#endif
 #define MUGEN_GLES 1
 #define GL_R8 0x8229
 #define GL_FRAMEBUFFER GL_FRAMEBUFFER_EXT
@@ -32,6 +34,7 @@
 #define glBindRenderbuffer glBindRenderbufferEXT
 #define glRenderbufferStorage glRenderbufferStorageEXT
 void Android_GLDrawableSize(int *w, int *h);
+void Sdl2_GLDrawableSize(int *w, int *h);
 void Android_MarkDisplayDirty(SDL_Surface *s);
 static void overlay(SpriteSet *set,int index);
 #include "../src/gles_render.c"
@@ -57,7 +60,7 @@ static int deleted_textures, deleted_depth, deleted_fbos, deleted_shaders, delet
 static int shader_ok = 1, link_ok = 1, fail_compile_at, compile_calls, color_location = 3;
 static int last_color_location, read_mode;
 #ifdef TEST_GLES
-static int overlays;
+static int overlays, swaps;
 #endif
 static GLint viewport[4] = {0,0,640,480}, scissor[4];
 static const char *version = "OpenGL ES 3.0 mock";
@@ -173,6 +176,7 @@ static void install(void)
     g_glMaxTextureSize = 16384;
     g_videoWidth = g_targetWidth = 640; g_videoHeight = g_targetHeight = 480;
     g_videoDepth = g_targetBpp = 32; g_renderMode = RENDER_MODE_GL;
+    g_videoFlags = VIDEO_HWBLIT; g_videoSdlFlags = SDL_DOUBLEBUF;
 #ifdef TEST_GLES
     g_glesReady = 1;
 #endif
@@ -227,6 +231,11 @@ static void test_targets_capture(void)
     g_gfxPrePresent=overlay;
     Gfx_SetClipRect(1,0,3,2);
     Gl_Present(&set_a,0,0,0,4,2);
+#ifdef TEST_LINUX_GLES
+    assert(swaps == 1);
+#else
+    assert(swaps == 0); /* Screen_EndFrame owns the Android swap. */
+#endif
     assert(overlays == 1 && g_renderTarget == &set_a && g_targetWidth == 4);
     assert(binding != 0 && color_attachment == 81 && viewport[2] == 4);
     assert(g_clipX1 == 1 && g_clipX2 == 3);
@@ -241,6 +250,8 @@ static void test_targets_capture(void)
 
 #ifdef TEST_GLES
 void Android_GLDrawableSize(int *w,int *h) { *w=1280;*h=960; }
+void Sdl2_GLDrawableSize(int *w,int *h) { *w=1280;*h=960; }
+void SDL_GL_SwapBuffers(void) { assert(binding == 0);swaps++; }
 static void overlay(SpriteSet *set,int index)
 {
     overlays++;

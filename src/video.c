@@ -196,7 +196,8 @@ static int Video_BytesPerPixel(int depth)
  * 0x00462990: sets the video mode; flags are VIDEO_*. Only the OpenGL
  * renderer uses width x height: the others open a window of the game size.
  * The System renderer retries without hardware surfaces; with OpenGL a
- * failed SDL_SetVideoMode is not noticed here. Returns 0 on failure
+ * failed SDL_SetVideoMode is not noticed on the reference desktop path.
+ * Port fix: GLES rejects it before calling unloaded GL entry points. Returns 0 on failure
  * (LIBERR_VIDEO_MODE when no mode could be set).
  */
 int Video_SetMode(int game_width, int game_height, int width, int height, int depth, unsigned int flags)
@@ -338,6 +339,14 @@ android_surface_ready:
     }
     surface = SDL_SetVideoMode(sdl_width, sdl_height, depth, sdl_flags);
     g_videoSurface = surface;
+#ifdef MUGEN_GLES
+    /* Port fix: no display means no current context or loaded GL entry points.
+     * Return to System_Init's software fallback before Gl_Init can call them. */
+    if (surface == NULL) {
+        g_libraryError = LIBERR_VIDEO_MODE;
+        return 0;
+    }
+#endif
 #ifdef MUGEN_VITA_GL
     /*
      * PS Vita port (port/psvita): a failed SDL_SetVideoMode is fatal here.
