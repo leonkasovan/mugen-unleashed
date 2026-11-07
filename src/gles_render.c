@@ -1507,7 +1507,20 @@ void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
         if (w == 0.0f && h == 0.0f) { w = (float)spr->w; h = (float)spr->h; }
     }
     Gles_DrawableSize(&win_w, &win_h);
-    if (win_w <= 0 || win_h <= 0) return;
+    if (win_w <= 0 || win_h <= 0) {
+        /*
+         * Silent black screen guard: without a drawable there is nowhere to
+         * present, and returning quietly made that indistinguishable from a
+         * renderer that draws nothing. Once per run, not per frame.
+         */
+        static int warned;
+
+        if (!warned) {
+            warned = 1;
+            Log_Printf("\nGLES: drawable size is %dx%d; the frame cannot be presented\n", win_w, win_h);
+        }
+        return;
+    }
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
     g_glProjection = 0; /* Overlays and the screen quad use video coordinates. */
     if (!Gfx_SetRenderTarget(NULL, 0)) { g_glProjection = saved_projection; return; }
@@ -1530,6 +1543,46 @@ void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
     }
     /* Port fix: pause/training/debug/console overlays share the desktop hook. */
     if (g_gfxPrePresent != NULL) g_gfxPrePresent(NULL, 0);
+#ifndef ANDROID_PORT
+    /*
+     * Present the frame that was just drawn.
+     *
+     * Android swaps at the frame boundary (Android_GLPresent, called from
+     * Screen_EndFrame) and has done since M8, so the presenter never swapped
+     * itself. Nothing else does it on the SDL2 desktop: g_gfxPresent for
+     * RENDER_OPENGL *is* this function, and Sdl2_PresentFrame only flushes the
+     * System renderer's software surface -- it returns early for a GL window,
+     * because Sdl2_MarkDisplayDirty deliberately ignores one. So the frame went
+     * into the window's back buffer and was never shown: mugen.log ran to mode
+     * select, the frame counter advanced, and the panel stayed black.
+     *
+     * The desktop GL renderer swaps at the same place in its own present
+     * (src/glrender.c Gl_Present); this is that tail. Screenshots did not catch
+     * it because Gl_Capture reads the render *target* (the screen-buffer FBO),
+     * which was always correct -- the missing step was between that texture and
+     * the panel.
+     *
+     * Swapped here, before the target is restored: the frame is complete at
+     * this point, and the restore below must still run. A skipped frame never
+     * reaches the presenter at all, so it presents nothing, as on Android.
+     */
+    if ((g_videoFlags & VIDEO_HWBLIT) && (g_videoSdlFlags & SDL_DOUBLEBUF)) {
+        SDL_GL_SwapBuffers();
+    } else {
+        /*
+         * Unreachable today: config.c forces VIDEO_HWBLIT for RENDER_OPENGL and
+         * Video_SetMode turns that into SDL_DOUBLEBUF. Reported rather than
+         * assumed, because the failure it would produce -- a framed, healthy
+         * log and a black panel -- is indistinguishable from the bug above.
+         */
+        static int warned;
+
+        if (!warned) {
+            warned = 1;
+            Log_Printf("\nGLES: GL mode is not double buffered; the frame cannot be presented\n");
+        }
+    }
+#endif
     g_glProjection = saved_projection;
     if (!Gfx_SetRenderTarget(saved_target, saved_sprite)) {
         /* Do not force a rejected FBO back into use after the overlay. */

@@ -20,6 +20,7 @@ Environment as measured on the device:
 |----|---------|--------|
 | P1 | Linux ARM64 asked for desktop OpenGL; the hardware only has OpenGL ES | **Fixed** — `MUGEN_GLES` is now the arm64 default |
 | P2 | The start-up error path segfaulted instead of reporting the error | **Fixed** (`src/system.c`) |
+| P3 | The GLES renderer drew every frame into the window's back buffer and never swapped it, so the panel stayed black | **Fixed** (`src/gles_render.c`) |
 
 ---
 
@@ -122,7 +123,7 @@ silent fallback.
 | Startup → mode select | runs, `Entering mode select` / `Mode select init` |
 | Quick VS (`-p1 kfm -p2 kfm`) | match loads and runs, 1423 frames in 25 s |
 | Frame rate vs System, same scenario | 1423 vs 1440 frames — GLES is not slower |
-| Pixel output | screenshot of each renderer on the same match, decoded and compared: **99.6 % of pixels non-black** on GLES, mean absolute difference **3.5/255**, max 49. Low-magnitude differences are expected: System is RGB565 and the two runs are separate playthroughs, so they are close rather than bit-identical |
+| Pixel output | screenshot of each renderer on the same match, decoded and compared: **99.6 % of pixels non-black** on GLES, mean absolute difference **3.5/255**, max 49. Low-magnitude differences are expected: System is RGB565 and the two runs are separate playthroughs, so they are close rather than bit-identical. **This row proved the renderer, not the screen** — `Gl_Capture` reads the render *target* (the screen-buffer FBO), so a missing present was invisible to it. See P3 |
 | Fallback when the ES shaders are missing | logs `GLES: cannot open data/gles/indexed.vert … failed. falling back to the system renderer.` and runs on System (exit 124 = still alive) |
 | Strict renderer on that same scenario | exits 1: `strict renderer: requested mode 2 unavailable (effective 0)` |
 | Shutdown | `Successful program termination.`, GL resources released |
@@ -217,6 +218,114 @@ does not crash.
 
 ---
 
+## P3 — The GLES renderer never presented the frame (black screen)
+
+Found on the device after P1 was fixed: `mugen.cfg` `RenderMode = OpenGL`, the
+log completely healthy, the game running — and nothing on the panel.
+
+### Symptom
+
+```
+Initializing graphics...gameCoord 640x480...render mode 2_6...trying 640x480x32 mode 0x0...
+video: Mali-G31, GLES 3.2
+video: vsync 0 requested, driver reports 1
+GLES: renderer ready (indexed+rgba+solid, max texture 8192)
+success...renderer: requested=opengl effective=opengl caps=0x1F
+...
+Entering mode select.
+Mode select init
+End of mode select loop
+Frames      : 1209
+Successful program termination.
+```
+
+No error, no fallback, 1209 frames drawn, a clean shutdown — and a black screen
+throughout. Every status line that exists said the renderer was fine.
+
+### Root cause
+
+`Gl_Present` (`src/gles_render.c`) draws the screen-buffer texture into the
+window's default framebuffer — and stops there. **Nothing swapped.**
+
+That is correct on Android, where M8 put the swap outside the renderer:
+`Android_GLPresent()` is called from `Screen_EndFrame` (`src/frame.c`, inside
+`#ifdef ANDROID_PORT`). The SDL2 desktop has no such hook, and the two things
+that could have covered for it do not:
+
+- `g_gfxPresent` for `RENDER_OPENGL` **is** `Gl_Present`, so the desktop's
+  swap in `src/glrender.c Gl_Present` is not in this path;
+- `Sdl2_PresentFrame()`, called at the frame boundary by `Screen_Present`, only
+  flushes the *System* renderer's software surface. It returns immediately for a
+  GL window, because `Sdl2_MarkDisplayDirty` deliberately ignores one.
+
+So every frame was drawn into the back buffer and then never shown. The
+`#ifdef ANDROID_PORT` around the swap in `Screen_EndFrame` is the line that the
+Linux port needed to duplicate and did not.
+
+This is a port bug introduced by making a renderer reusable on a platform whose
+frame-boundary hook it did not have — the same class as P1, one layer further
+out.
+
+### Fix
+
+`src/gles_render.c` `Gl_Present`, after the quad and the `g_gfxPrePresent`
+overlays, on every target except Android:
+
+```c
+if ((g_videoFlags & VIDEO_HWBLIT) && (g_videoSdlFlags & SDL_DOUBLEBUF)) {
+    SDL_GL_SwapBuffers();
+} else { /* once-per-run log: a GL mode without double buffering cannot present */ }
+```
+
+This is the same tail the desktop GL renderer has in its own present, so both
+plugins present from the same place. Android keeps its frame-boundary swap and
+is untouched (`#ifndef ANDROID_PORT`).
+
+Two silent-black guards were added while tracking this down, because a healthy
+log plus a black panel has no other tell:
+
+| Guard | Behaviour |
+|---|---|
+| `Gl_Present`, drawable size | a one-time `GLES: drawable size is WxH; the frame cannot be presented` instead of returning quietly |
+| `Gl_Present`, double buffering | a one-time `GLES: GL mode is not double buffered; the frame cannot be presented` instead of drawing and never swapping |
+
+### How it was found
+
+Instrumented builds, run on the device (the instrumentation was removed
+afterwards; the numbers below are from those runs):
+
+| Question | Method | Result |
+|---|---|---|
+| Is the frame being drawn at all? | `glReadPixels` of the screen-buffer FBO | 3832/4096 non-black — the renderer was fine |
+| Which step returns early? | step markers through `Gl_Present` | all four steps reached, so nothing returned early and the swap was simply missing |
+| Is the image in the **window** framebuffer? | `glReadPixels(GL_FRAMEBUFFER 0)` before the swap, 32x32 centre | non-black, `max_sum=400` |
+| Is the geometry or the texture at fault? | same quad, drawn with the solid program in red | red appeared — geometry, projection and depth state are correct |
+| What does the panel actually receive? | dumped the whole 640x480 window framebuffer to a PPM before the swap and decoded it | 50 % of pixels non-black, letterboxed mode-select screen, correct orientation and colours |
+
+The last row is the frame the swap hands to the display: it is a real image with
+the right content, so the only missing link was the swap call itself.
+
+### Verification
+
+| | Before | After |
+|---|---|---|
+| Panel | black | image (confirmed on the device) |
+| `mugen.log` | identical either way — no diagnostic existed | unchanged, plus the two new guards if either condition fails |
+| Frame rate | 1209 frames / 20 s | 797 frames / 15 s (same rate, different run length) |
+| System renderer | unaffected | unaffected |
+
+### Why the P1 work did not catch it
+
+Worth stating plainly, because it is the interesting part: P1 was "verified" with
+screenshots, and those screenshots were taken through `Gl_Capture`, which copies
+the **render target** — the screen-buffer FBO. That path was always correct. The
+presenter's output, the window framebuffer, was never looked at, so a missing
+`SwapBuffers` could not show up in any check that was run. A green pixel
+comparison proved the renderer and said nothing about the screen.
+
+The dump of the window framebuffer above is what that verification should have
+done in the first place, and it is what caught this.
+
 ## Reproducing
 
 Build (arm64 with the chroot's rootfs as sysroot — the chroot itself is not
@@ -263,6 +372,8 @@ Verified on the device:
 
 - the ARM64 binary runs, loads assets, reads the gamepad and shuts down cleanly
   with both the System and the GLES renderer;
+- the GLES renderer presents: the window framebuffer holds a correct,
+  letterboxed frame and that frame reaches the panel (P3);
 - SDL2 on this image creates an **OpenGL ES 3.2** context on Mali-G31, and
   `gladLoadGLES2Loader(SDL_GL_GetProcAddress)` loads the entry points where
   `gladLoadGL()` reported `GLVersion 0.0`;
