@@ -702,7 +702,7 @@ endif
 
 # --------------------------------------------------------------------- rules
 
-.PHONY: all clean distclean check-toolchain check-libs check-pkgconfig help install
+.PHONY: all clean distclean check-toolchain check-libs check-pkgconfig help install perf
 .DELETE_ON_ERROR:
 
 # check-pkgconfig runs first so a missing .pc file is reported as such instead
@@ -889,6 +889,38 @@ endif
 ifeq ($(MUGEN_FAMILY),win32)
 	@echo "        (no Elecbyte.MUGEN.libs needed)"
 endif
+
+# --- performance runs -------------------------------------------------------
+# Runs the installed binary over a fixed scenario once per renderer and
+# summarises both logs with tools/measure_perf.sh. The output shape and what the
+# numbers mean are in docs/PERFORMANCE.md.
+#
+#   make perf                      the default scenario, 5 s per renderer
+#   make perf PERF_SECONDS=40      longer, steadier samples
+#   make perf PERF_ARGS="-p1 kfm -p2 kfm"   a specific match
+#
+# Needs [Debug] ShowFPS = 1 in mugen.cfg for the per-second lines; without it
+# only the exit and per-match statistics exist and the tool says so.
+PERF_SECONDS ?= 20
+PERF_ARGS    ?= -p1 kfm -p2 kfm
+PERF_DIR     ?= build/perf
+
+perf: install
+	@mkdir -p $(PERF_DIR)
+	@for mode in OpenGL System; do \
+	  echo "  PERF  $$mode"; \
+	  sed -e "s/^RenderMode *=.*/RenderMode = $$mode/" \
+	      $(INSTALL_DIR)/data/mugen.cfg > $(PERF_DIR)/mugen.cfg.$$mode; \
+	  cp -f $(INSTALL_DIR)/data/mugen.cfg $(PERF_DIR)/mugen.cfg.orig 2>/dev/null || true; \
+	  cp -f $(PERF_DIR)/mugen.cfg.$$mode $(INSTALL_DIR)/data/mugen.cfg; \
+	  rm -f $(INSTALL_DIR)/mugen.log; \
+	  ( cd $(INSTALL_DIR) && timeout $(PERF_SECONDS) ./$(INSTALL_NAME) -nosound $(PERF_ARGS) >/dev/null 2>&1 ); \
+	  mv -f $(INSTALL_DIR)/mugen.log $(PERF_DIR)/$$mode.log 2>/dev/null || true; \
+	  cp -f $(PERF_DIR)/mugen.cfg.orig $(INSTALL_DIR)/data/mugen.cfg 2>/dev/null || true; \
+	done
+	@sh tools/measure_perf.sh $(PERF_DIR)/OpenGL.log $(PERF_DIR)/System.log 2>/dev/null | head -3
+
+.PHONY: perf
 
 # --- toolchain and dependency checks ----------------------------------------
 # The two platforms need different things, and these targets say which is

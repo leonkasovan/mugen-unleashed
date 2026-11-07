@@ -1117,7 +1117,65 @@ void Game_DrawFps(void)
 }
 
 /*
- * 0x0040DEC0: drawn over the screen buffer before it is shown during a fight
+ * Port addition: renderer measurement (docs/PERFORMANCE.md).
+ *
+ * With [Debug] ShowFPS = 1 the frame rate is drawn in the corner, but it is
+ * erased again before the next present -- every frame the renderer starts by
+ * clearing the target it draws into -- so a phone camera or a screenshot never
+ * catches it. It was also the only number available, and behind the vsync cap
+ * every renderer reads the same 60.0.
+ *
+ * So once a second the same measurement is written to mugen.log, stamped with
+ * the renderer that produced it:
+ *
+ *     perf: renderer=opengl fps=59.9 frames=60
+ *
+ * Lines of that shape are the input to tools/measure_perf.sh. `frames` is the
+ * count since the previous line, so a reader can tell a real 60 from a sample
+ * that covered a stall. It costs one sprintf and one log write per second,
+ * none per frame.
+ */
+static const char *Game_PerfRendererName(int mode)
+{
+    switch (mode) {
+    case RENDER_SYSTEM:
+        return "system";
+    case RENDER_OPENGL_SCREEN:
+        return "openglscreen";
+    case RENDER_OPENGL:
+        return "opengl";
+    default:
+        return "unknown";
+    }
+}
+
+static void Game_PerfLog(void)
+{
+    static __int64 last_ticks = -1;
+    static int last_frames = -1;
+    __int64 now = Timer_GetTicks();
+    int frames = g_game->frames;
+
+    if (last_ticks < 0) {
+        last_ticks = now;
+        last_frames = frames;
+        return;
+    }
+    /* One line per second of engine time, not per frame: this runs once per
+     * drawn frame, and a per-frame write would tax the very thing it measures.
+     * Timer_GetTicks is the engine clock System_Deinit reports in "ticks:". */
+    if (now - last_ticks < g_timerTicksPerSecond) {
+        return;
+    }
+    if (frames > last_frames) {
+        Log_Printf("perf: renderer=%s fps=%.1f frames=%d\n",
+                   Game_PerfRendererName(g_renderMode), (double)Timer_GetFps(), frames - last_frames);
+    }
+    last_ticks = now;
+    last_frames = frames;
+}
+
+/* 0x0040DEC0: drawn over the screen buffer before it is shown during a fight
  * (g_gfxPrePresent): the "PAUSED" box or the training menu while paused by
  * the focus, the debug display (or the frame rate) and the console.
  */
@@ -1147,6 +1205,7 @@ void Game_PrePresent(SpriteSet *set, int sprite)
     }
     if (g->show_fps != 0) {
         Game_DrawFps();
+        Game_PerfLog();
     }
     Console_Draw();
 }
