@@ -350,23 +350,24 @@ int Config_Load(void)
     Ini_GetInt(ini, "stagefit", &g_game->stage_fit);
     Ini_GetInt(ini, "systemfit", &g_game->system_fit);
     g = g_game;
-#ifdef ANDROID_PORT
+#if defined(ANDROID_PORT) || defined(MUGEN_GLES)
     /*
-     * Renderer availability on Android (RENDERING_PLAN.md 12.2 and 12.7).
+     * Renderer availability on the GLES backends (RENDERING_PLAN.md 12.2 and
+     * 12.7; Linux ARM64 per PROBLEMS.md P1).
      *
      * The decision goes through RenderPolicy_Resolve so there is one table
      * instead of an ad-hoc #ifdef. The capabilities are what this target
-     * actually compiles: the Android build excludes glrender.c/gldetect.c, so
-     * there are no GL sprite tables and no GL presenter.
+     * actually compiles: glrender.c/gldetect.c are excluded from every GLES
+     * build, so the GL sprite tables and the OpenGLScreen presenter come from
+     * src/gles_render.c or not at all.
      *
-     * With MUGEN_GLES the GLES backend units (probe, CPU MVP, program/VBO
-     * submission) are compiled, but the mode still cannot be selected: no
-     * context is created and the presenter is not wired, so the sprite
-     * tables remain unpopulated. Selecting it here would be exactly the
-     * "removing the System force alone picks an incomplete path" failure the
-     * plan warns about. The capabilities below are the honest answer until
-     * that wiring lands, and flipping them is the single change that enables
-     * the mode.
+     * Selecting a mode here is a claim about the build only; whether the driver
+     * can honour it is decided after the context exists (Gl_Init probes, links
+     * the ES programs and requires a complete framebuffer), and system.c falls
+     * back to System with a logged reason when any of that fails. Reporting 0
+     * here would hide a working GLES path; claiming it without validating it is
+     * the "removing the System force alone picks an incomplete path" failure
+     * section 12.2 warns about.
      */
     {
         RenderCaps caps;
@@ -375,20 +376,13 @@ int Config_Load(void)
         caps.system = 1;
 #ifdef MUGEN_GLES
         /*
-         * M8: the GLES backend is compiled in, so the GL modes are candidates.
-         * Whether one can actually run is decided after the context exists --
-         * Gl_Init probes, compiles the ES shaders and checks FBO completeness,
-         * and system.c falls back to System with a logged reason when any of
-         * that fails. Reporting 0 here would hide a working GLES path; claiming
-         * it without validating it is the failure mode section 12.2 warns of.
-         */
-        /*
          * gl_screen stays 0: OpenGLScreen blits the CPU framebuffer into a
          * placeholder surface and the frame boundary then swaps the GL window
          * without ever uploading that surface, so the mode would present a
-         * black window. It is advertised again once an Android presenter
-         * uploads the framebuffer to a GLES texture. gl_sprite is the mode that
-         * actually works (the screen buffer is a real render target).
+         * black window. No GLES target has a CPU-framebuffer upload presenter
+         * yet (src/gfx.c Gfx_PresentGlScreen is desktop-only), so it is not
+         * advertised anywhere. gl_sprite is the mode that actually works --
+         * the screen buffer is a real render target.
          */
         caps.gl_screen = 0;
         caps.gl_sprite = 1;
@@ -397,8 +391,8 @@ int Config_Load(void)
          * OpenGL mode needs. It is still only a claim about the build -- Gl_Init
          * validates it against the real driver and system.c falls back if it
          * fails. gl_screen above stays 0 because the CPU-framebuffer upload
-         * presenter does not exist on Android; those are different questions,
-         * and conflating them made every OpenGL request fall back to System.
+         * presenter does not exist; those are different questions, and
+         * conflating them made every OpenGL request fall back to System.
          */
         caps.gl_present = 1;
 #else
@@ -408,7 +402,7 @@ int Config_Load(void)
 #endif
         RenderPolicy_Resolve(g->render_mode, &caps, &decision);
         if (decision.fell_back) {
-            Log_Printf("Android: RenderMode %d unavailable (%s); using System.\n", g->render_mode,
+            Log_Printf("RenderMode %d unavailable (%s); using System.\n", g->render_mode,
                        (decision.reason != NULL) ? decision.reason : "unspecified");
             g->render_mode = decision.effective;
         }

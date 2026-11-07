@@ -41,6 +41,8 @@
 #                                         tools/extract_icon.py)
 #   make MUGEN_ICONS=res/icons/1.ico      a different icon, or several to merge
 #   make BUILD=build/mingw-debug DEBUG=1  unoptimised build with debug info
+#   make MUGEN_GLES=0                     force the desktop-GL renderer on a
+#                                         Linux GLES target (see below)
 #
 # See docs/BUILD-MINGW.md for what the dependencies are and where they come from.
 
@@ -169,6 +171,37 @@ $(error SDL_BACKEND=1 is only supported for MUGEN_TARGET=win32, not "$(MUGEN_TAR
 endif
 endif
 
+# --------------------------------------------------------------- GLES backend
+#
+# linux-arm64 defaults to the GLES 3.0 backend (MUGEN_GLES) instead of desktop
+# OpenGL. The handhelds that target exists for (Mali-G31 class under ArkOS)
+# expose OpenGL ES only: their libGL.so.1 is the GLX/glvnd stub, so gladLoadGL()
+# resolves nothing against the EGL context SDL creates and Gl_Init rejects the
+# context before the first frame. See PROBLEMS.md (P1) for the measurement.
+#
+# The reference builds keep desktop GL: win32/win64 need it for the log
+# comparison against the original binary, and linux-x64 is the host reference.
+# Override either way with MUGEN_GLES=1 or MUGEN_GLES=0.
+
+ifeq ($(origin MUGEN_GLES),undefined)
+  ifeq ($(MUGEN_TARGET),linux-arm64)
+    MUGEN_GLES := 1
+  else
+    MUGEN_GLES := 0
+  endif
+endif
+
+ifneq ($(filter-out 0 1,$(MUGEN_GLES)),)
+  $(error MUGEN_GLES must be 0 or 1, not "$(MUGEN_GLES)")
+endif
+
+ifeq ($(MUGEN_GLES),1)
+  ifneq ($(MUGEN_FAMILY),linux)
+    $(error MUGEN_GLES=1 is only supported for Linux targets, not $(MUGEN_TARGET); \
+            the Windows builds use the desktop renderer)
+  endif
+endif
+
 # What check-toolchain expects `$(CC) -dumpmachine` to start with. Detection
 # above already rejects a mismatched pair, but an explicit MUGEN_TARGET skips
 # detection, and a wrong CC then silently builds for the wrong machine -- the
@@ -213,7 +246,7 @@ LIB_DIR   := $(BUILD)/lib
 CONFIG_STAMP := $(OBJ_DIR)/.config
 # $(MUGEN_TARGET) already distinguishes win32/win64/linux-<arch>, so it covers
 # the pointer width and architecture that ARCHFLAGS would add.
-CONFIG_ID    := backend=$(SDL_BACKEND) target=$(MUGEN_TARGET)
+CONFIG_ID    := backend=$(SDL_BACKEND) target=$(MUGEN_TARGET) gles=$(MUGEN_GLES)
 ICON_DIR  := $(BUILD)/icon
 # TARGET is set per platform in the detection block above.
 
@@ -369,7 +402,14 @@ ifeq ($(SDL_BACKEND),2)
     PKG_LIBS    := $(filter-out -mwindows -lSDL2main,$(shell $(PKG_CONFIG) --libs --static $(STATIC_PKGS) 2>/dev/null))
   else
     STATIC_PKGS := sdl2 SDL2_mixer SDL2_ttf zlib libpng
-    PKG_LIBS    := $(shell $(PKG_CONFIG) --libs $(STATIC_PKGS) 2>/dev/null) -lGL -lGLU -ldl -lm
+    # GLES targets link no desktop GL: the Mali/EGL stack has no GLX, and
+    # -lGL here is what made the failure look like a missing driver instead of
+    # a wrong backend (PROBLEMS.md P1). EGL comes in through SDL2 itself.
+    ifeq ($(MUGEN_GLES),1)
+      PKG_LIBS := $(shell $(PKG_CONFIG) --libs $(STATIC_PKGS) 2>/dev/null) -ldl -lm
+    else
+      PKG_LIBS := $(shell $(PKG_CONFIG) --libs $(STATIC_PKGS) 2>/dev/null) -lGL -lGLU -ldl -lm
+    endif
   endif
   PKG_CFLAGS := $(filter-out -Dmain=SDL_main,$(shell $(PKG_CONFIG) --cflags $(STATIC_PKGS) 2>/dev/null))
   SDL_CFLAGS := $(shell $(PKG_CONFIG) --cflags sdl2 2>/dev/null)
@@ -377,6 +417,32 @@ ifeq ($(SDL_BACKEND),2)
   # engine keeps its own entry points (src/sdlmain.c on Windows, src/main.c on
   # Linux) exactly as the SDL 1.2 build does.
   ENGINE_DEFS += -DMUGEN_SDL2 -DSDL_MAIN_HANDLED
+endif
+
+# --- GLES backend selection -------------------------------------------------
+#
+# MUGEN_GLES replaces the desktop renderer with the GLES 3.0 one:
+#
+#   - third_party/glad-es-3.0 (generated --api="gles2=3.0") becomes the GL
+#     declaration source and the loader, instead of glad-2.1. The two share an
+#     include guard upstream, so the include path must name exactly one of them;
+#     putting glad-es first is what makes `#include <glad.h>` resolve there.
+#   - src/glrender.c and src/gldetect.c leave the build. They are the desktop
+#     renderer: fixed-function pipeline, GLSL 1.20 from the game's data/, and
+#     the sub-pixel offset probe. src/gles_render.c defines the same Gl_ and
+#     Gfx_Gl entry points against GLES, so compiling both would be a
+#     duplicate-symbol link error -- and the desktop ones could not run anyway.
+ifeq ($(MUGEN_GLES),1)
+  ENGINE_DEFS += -DMUGEN_GLES
+  GLAD_DIR := $(TP_DIR)/glad-es-3.0
+  GLAD_SRC := $(GLAD_DIR)/glad.c
+  ENGINE_EXCLUDE_SRCS := $(SRC_DIR)/glrender.c $(SRC_DIR)/gldetect.c
+  GLES_SHADER_SRCS := $(wildcard res/shaders/gles/*.vert res/shaders/gles/*.frag)
+else
+  GLAD_DIR := $(TP_DIR)/glad-2.1
+  GLAD_SRC := $(GLAD_DIR)/glad.c
+  ENGINE_EXCLUDE_SRCS :=
+  GLES_SHADER_SRCS :=
 endif
 
 # SANITIZE=address (or undefined,thread) instruments the engine and links the
@@ -390,7 +456,7 @@ CPPFLAGS += -I$(SRC_DIR) \
             -I$(TP_DIR)/libresample/include \
             $(PLAT_CPPFLAGS) \
             -I$(TP_DIR)/lua-5.1.4/src \
-            -I$(TP_DIR)/glad-2.1 \
+            -I$(GLAD_DIR) \
             -I$(TP_DIR)/minizip-0.15 \
             $(PKG_CFLAGS) $(SDL_CFLAGS)
 
@@ -443,7 +509,10 @@ endif
 # src/sdlmixercompat.c is not an original module: it supplies Mix_QuerySpecEx,
 # which only Elecbyte's SDL_mixer build exported. Linked statically here, not in
 # the CMake build, which uses the game's real SDL_mixer.dll.
-ENGINE_SRCS := $(wildcard $(SRC_DIR)/*.c)
+#
+# ENGINE_EXCLUDE_SRCS removes the desktop renderer under MUGEN_GLES (see the
+# GLES backend block above); it is empty for every other build.
+ENGINE_SRCS := $(filter-out $(ENGINE_EXCLUDE_SRCS),$(wildcard $(SRC_DIR)/*.c))
 ENGINE_OBJS := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/src/%.o,$(ENGINE_SRCS))
 
 # Third-party libraries, built from source exactly as CMakeLists.txt and
@@ -571,15 +640,18 @@ $(LRS_LIB): $(LRS_OBJS)
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(AR) rcs $@ $^
 
-# --- glad 2.1 ---------------------------------------------------------------
-# Generated for this engine: GL 2.1 compatibility profile plus
+# --- glad (2.1 desktop / es-3.0 GLES) --------------------------------------
+# glad-2.1 is generated for this engine: GL 2.1 compatibility profile plus
 # ARB_fragment_program, ARB_texture_non_power_of_two, EXT_blend_logic_op and
-# EXT_framebuffer_object. One self-contained .c, no import library.
+# EXT_framebuffer_object. glad-es-3.0 is the same generator with
+# --api="gles2=3.0". Both are one self-contained .c with no import library;
+# MUGEN_GLES picks which one, and the two never appear in one binary (they
+# share an include guard).
 
-$(GLAD_OBJ): $(TP_DIR)/glad-2.1/glad.c $(CONFIG_STAMP)
+$(GLAD_OBJ): $(GLAD_SRC) $(CONFIG_STAMP)
 	@echo "  CC      $<"
 	$(Q)mkdir -p $(dir $@)
-	$(Q)$(CC) $(TP_CFLAGS) -I$(TP_DIR)/glad-2.1 -c $< -o $@
+	$(Q)$(CC) $(TP_CFLAGS) -I$(GLAD_DIR) -c $< -o $@
 
 # --- minizip (unzip 0.15) ---------------------------------------------------
 
@@ -657,6 +729,15 @@ install: $(STRIPPED)
 	@echo "  INSTALL $(INSTALL_DIR)/$(INSTALL_NAME)"
 	$(Q)mkdir -p $(INSTALL_DIR)
 	$(Q)cp $(STRIPPED) $(INSTALL_DIR)/$(INSTALL_NAME)
+ifeq ($(MUGEN_GLES),1)
+# The GLES renderer loads GLSL ES sources from data/gles/*, next to the game's
+# own data/ (src/gles_render.c gles_read_shader). They are ours, not game
+# content, so they ship with the binary rather than coming from the
+# installation -- the same reason port/android/build.sh stages them into the APK.
+	@echo "  SHADERS $(INSTALL_DIR)/data/gles"
+	$(Q)mkdir -p $(INSTALL_DIR)/data/gles
+	$(Q)cp -f $(GLES_SHADER_SRCS) $(INSTALL_DIR)/data/gles/
+endif
 	@echo "  done: run it from $(INSTALL_DIR)"
 ifeq ($(MUGEN_FAMILY),win32)
 	@echo "        (no Elecbyte.MUGEN.libs needed)"

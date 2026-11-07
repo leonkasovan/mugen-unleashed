@@ -426,11 +426,22 @@ android_surface_ready:
 #endif
 #ifdef ANDROID_PORT
     /*
-     * Android port: glrender.c and gldetect.c are excluded from the build, so
-     * Gl_Init does not exist. The software (System) renderer is the only one,
-     * which config.c also forces -- see the RenderMode handling there.
+     * Android port: when the GLES backend is not compiled in, glrender.c and
+     * gldetect.c are excluded from the build, so Gl_Init does not exist. The
+     * software (System) renderer is then the only one, which config.c also
+     * forces -- see the RenderMode handling there. With MUGEN_GLES, Gl_Init
+     * comes from src/gles_render.c and the plain (non-Android) branch below
+     * does the right thing; Android creates its context in android_video.c
+     * instead, which is why it stays out of this call.
      */
 #else
+    /*
+     * Both renderers reach here with a current context: the desktop one from
+     * gladLoadGL(), the GLES one from gladLoadGLES2Loader() inside
+     * Sdl2_SetVideoMode. Returning 0 makes System_Init take its fallback (or
+     * report LIBERR_VIDEO_MODE), so a context the renderer cannot use is a
+     * clean failure rather than a crash in the first draw.
+     */
     if (g_renderMode == RENDER_OPENGL_SCREEN) {
         if (!Gl_Init(0)) {
             return 0;
@@ -450,7 +461,7 @@ android_surface_ready:
  * game size (the screen buffer keeps its own); OpenGLScreen resets the
  * projection and clears the window to red (sic: glClearColor(1, 0, 0, 0)).
  */
-#ifndef ANDROID_PORT
+#if !defined(ANDROID_PORT) && !defined(MUGEN_GLES)
 /*
  * M2 helper (RENDERING_PLAN.md section 6.1): explicit OpenGLScreen
  * projection reset. Selects projection, loads identity, sets the ortho for
@@ -495,7 +506,7 @@ static void Video_ResetGLScreenProjection(int width, int height)
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
 }
-#endif /* !ANDROID_PORT */
+#endif /* !ANDROID_PORT && !MUGEN_GLES */
 
 void Video_OnResize(int width, int height)
 {
@@ -505,12 +516,14 @@ void Video_OnResize(int width, int height)
     (void)width;
     (void)height;
 #else
+#ifndef MUGEN_GLES
     /* Last OpenGLScreen size the presenter set up (static, not a struct
      * field: plan section 1.2 forbids new fields on reconstructed structs
      * for backend state). Lets RESIZED + SIZE_CHANGED for one user resize
      * skip the expensive re-setup while still syncing drawable/DPI. */
     static int glscreen_w;
     static int glscreen_h;
+#endif
     MatchLog_Printf(9, "Video resize event %ix%i\n", width, height);
     if (width <= 0 || height <= 0) {
         /* Minimized (section 6.5): defer drawing; restore performs one valid
@@ -541,6 +554,7 @@ void Video_OnResize(int width, int height)
         g_videoGamePixels = width * height;
         break;
     }
+#ifndef MUGEN_GLES
     case RENDER_OPENGL_SCREEN: {
         SDL_Surface *surface = SDL_SetVideoMode(width, height, g_videoDepth, g_videoSdlFlags);
 
@@ -562,6 +576,7 @@ void Video_OnResize(int width, int height)
         g_glScreenResized = 1;
         break;
     }
+#endif /* !MUGEN_GLES */
     case RENDER_OPENGL:
         g_videoWidth = width;
         g_videoHeight = height;

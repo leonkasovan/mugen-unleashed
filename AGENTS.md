@@ -163,6 +163,17 @@ make install          # → install/mugen-linux-x64 (not a .exe)
 same validation method works. Windows stays the reference build; the Linux
 target is additive and must not disturb it.
 
+**`linux-arm64` defaults to `MUGEN_GLES=1`**, the GLES 3.0 backend, instead of
+desktop OpenGL: the handhelds that target exists for expose OpenGL ES only, and
+their `libGL.so.1` is the GLX stub, so `gladLoadGL()` resolves nothing against
+the EGL context SDL2 creates. That build compiles `third_party/glad-es-3.0`,
+excludes `src/glrender.c`/`src/gldetect.c` (they define the same `Gl_*` entry
+points as `src/gles_render.c`), links no `-lGL -lGLU`, and `make install` copies
+`res/shaders/gles/*` to `install/data/gles/`. `linux-x64` and the Windows
+targets keep desktop GL — they are the reference builds. `make MUGEN_GLES=0`
+(or `=1`) overrides the default. See `PROBLEMS.md` (P1) and
+`docs/BUILD-LINUX.md`.
+
 ### GNU Make + MinGW (Windows, fully static)
 
 ```sh

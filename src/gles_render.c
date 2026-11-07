@@ -1,11 +1,18 @@
 /*
- * GLES 3.0 renderer for Android (RENDERING_PLAN.md section 12).
+ * GLES 3.0 renderer for Android and Linux ARM64 (RENDERING_PLAN.md section 12,
+ * PROBLEMS.md P1).
  *
  * The desktop renderer (src/glrender.c) is written against GL 2.1 with the
  * compatibility profile: immediate mode (glBegin/glVertex), a fixed-function
  * matrix stack, and 1D palette textures. None of those exist in GLES, so this
  * is a separate backend rather than a recompile of that file -- exactly what
- * section 12.1 asks for.
+ * section 12.1 asks for. The two are never built together: MUGEN_GLES excludes
+ * glrender.c and gldetect.c, and those files define the same Gl_ and Gfx_Gl
+ * entry points this one does.
+ *
+ * Linux ARM64 uses this backend by default because the handhelds it targets
+ * (Mali-G31 under ArkOS) expose OpenGL ES only -- their libGL is the GLX stub
+ * and the desktop loader resolves nothing against an EGL context.
  *
  * What is here:
  *   - the GlTex_* texture object over GLES (8-bit index, 24-bit RGB, RGBA),
@@ -26,7 +33,7 @@
  */
 #include "mugen.h"
 
-#if defined(ANDROID_PORT) && defined(MUGEN_GLES)
+#ifdef MUGEN_GLES
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -528,7 +535,9 @@ static char *gles_read_shader(const char *name)
     if (n < 0 || (size_t)n >= sizeof(path)) return NULL;
     f = fopen(path, "rb");
     if (f == NULL) {
-        Log_Printf("GLES: cannot open %s\n", path);
+        /* No trailing newline on purpose: the next GLES line starts with one,
+         * so two failures in a row do not leave a blank line between them. */
+        Log_Printf("\nGLES: cannot open %s", path);
         return NULL;
     }
     return ShaderSrc_ReadFile(f);
@@ -562,7 +571,7 @@ static void gles_build_defines(char *out, size_t cap)
 
         if (wrote < 0 || (size_t)wrote >= cap - n) {
             out[n] = '\0';
-            Log_Printf("GLES: variant define list does not fit (%s)\n", g_glesShaderDefines[i]);
+            Log_Printf("\nGLES: variant define list does not fit (%s)", g_glesShaderDefines[i]);
             return;
         }
         n += (size_t)wrote;
@@ -647,6 +656,15 @@ int Gl_Deinit(void)
 void Gles_OnContextLost(void)
 {
     int i;
+    /*
+     * What was actually held, captured before the reset below. Gl_Init calls
+     * this on entry to drop a previous session's names, and on a cold start
+     * there is nothing to drop -- logging "context lost" then would report an
+     * event that did not happen, and it lands on the end of the "video: vsync"
+     * line, which does not end with a newline.
+     */
+    int was_ready = g_glesReady;
+    int tracked = g_glesTextureCount;
 
     /*
      * Programs and the vertex buffer are simply forgotten. Calling
@@ -679,7 +697,9 @@ void Gles_OnContextLost(void)
         tex->size = 0;
     }
     memset(g_glesTexFormat, 0, sizeof(g_glesTexFormat));
-    Log_Printf("GLES: context lost; object names dropped (%d textures tracked)\n", g_glesTextureCount);
+    if (was_ready || tracked > 0) {
+        Log_Printf("GLES: context lost; object names dropped (%d textures tracked)\n", tracked);
+    }
 }
 
 /*
@@ -765,7 +785,7 @@ static int gles_build_programs(void)
         !gles_load_es_program(&g_glesProgramRgba, "rgba") ||
         !GlesDraw_LoadProgram(&g_glesProgramSolid, gles_solid_vert_src, gles_solid_frag_src, "solid", NULL) ||
         g_glesProgramSolid.u_color < 0) {
-        Log_Printf("GLES: program set unavailable; GL mode unavailable\n");
+        Log_Printf("\nGLES: program set unavailable; GL mode unavailable\n");
         gles_free_programs();
         return 0;
     }
@@ -792,7 +812,7 @@ int Gl_Init(int framebuffers)
      */
     Gl_Deinit();
     if (!Gles_Probe(&caps)) {
-        Log_Printf("GLES: capability probe failed; GL mode unavailable\n");
+        Log_Printf("\nGLES: capability probe failed; GL mode unavailable\n");
         return 0;
     }
     g_glesCaps = caps;
@@ -802,7 +822,13 @@ int Gl_Init(int framebuffers)
     }
     glGetIntegerv(GL_MAX_TEXTURE_SIZE, &g_glMaxTextureSize);
     g_glesReady = 1;
-    Log_Printf("GLES: renderer ready (indexed+rgba+solid, max texture %d)\n", g_glMaxTextureSize);
+    /*
+     * Leading newline, like the "video:" lines above it: "video: vsync ..."
+     * and the device/version line are printed without a trailing one, so a
+     * message that starts here would otherwise be spliced onto the end of
+     * whichever of them came last (mugen.log is read line by line).
+     */
+    Log_Printf("\nGLES: renderer ready (indexed+rgba+solid, max texture %d)\n", g_glMaxTextureSize);
     return 1;
 }
 
@@ -1436,6 +1462,23 @@ void Sprite_DrawGL(SpriteSet *set, int sprite, const DrawParams *dp)
 /* ----------------------------------------------------------- present */
 
 /*
+ * Size of the drawable the context renders into, in pixels.
+ *
+ * Android owns its window through ANativeWindow, so it asks that. Everywhere
+ * else the window belongs to src/sdl2compat.c, which wraps SDL_GL_GetDrawableSize.
+ * It is not the window size on a scaled or high-DPI display, and the presenter
+ * below must clear and viewport the drawable or the picture lands in a corner.
+ */
+static void Gles_DrawableSize(int *w, int *h)
+{
+#ifdef ANDROID_PORT
+    Android_GLDrawableSize(w, h);
+#else
+    Sdl2_GLDrawableSize(w, h);
+#endif
+}
+
+/*
  * Presents: binds the window framebuffer and draws the screen buffer texture
  * across it. The desktop renderer does the same through Gl_DrawQuadRgba; here
  * the quad is submitted directly, with a projection that maps the texture onto
@@ -1463,7 +1506,7 @@ void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
         if (tex->id == 0) return;
         if (w == 0.0f && h == 0.0f) { w = (float)spr->w; h = (float)spr->h; }
     }
-    Android_GLDrawableSize(&win_w, &win_h);
+    Gles_DrawableSize(&win_w, &win_h);
     if (win_w <= 0 || win_h <= 0) return;
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
     g_glProjection = 0; /* Overlays and the screen quad use video coordinates. */
@@ -1693,4 +1736,4 @@ int GlVbuf_Bind(GlTex *vbuf)
     return Gl_SetupView();
 }
 
-#endif /* ANDROID_PORT && MUGEN_GLES */
+#endif /* MUGEN_GLES */

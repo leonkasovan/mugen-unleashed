@@ -101,7 +101,7 @@ adalah perubahan perilaku terpisah.
 | Win32 MSVC atau MinGW SDL1 | Software SDL1; DirectX hanya flag/hint legacy | Desktop compatibility GL | Desktop compatibility GL + GLSL/FBO |
 | Win32 MinGW SDL2 | CPU ke SDL_Renderer/streaming texture | Desktop GL | Desktop GL + GLSL/FBO |
 | Win64 MinGW SDL2 | Sama, tetapi audit ABI belum selesai | Desktop GL; audit ABI tetap berlaku | Desktop GL; audit ABI tetap berlaku |
-| Linux x64/ARM64 SDL2 | CPU ke SDL_Renderer; tidak ada driver DirectX | Memerlukan desktop GL | Memerlukan desktop compatibility GL; belum ada backend GLES |
+| Linux x64/ARM64 SDL2 | CPU ke SDL_Renderer; tidak ada driver DirectX | `linux-x64`: desktop GL; `linux-arm64`: GLES 3.0 (`MUGEN_GLES=1`, default) | `linux-x64`: desktop compatibility GL; `linux-arm64`: GLES (glad-es-3.0) |
 | Android ARM64 native SDL2 | System; SDL_Renderer menyajikan framebuffer CPU | Dipaksa ke System | Dipaksa ke System |
 | Vita ARM32 SDL1 | Software, scaler Vita dan SDL_Flip | Belum operasional; fallback dicoba | Belum operasional; fallback dicoba |
 
@@ -118,7 +118,7 @@ Matriks ini mendeskripsikan sumber, bukan sertifikasi visual perangkat.
 | R05 | Jalur software melewati sprite true-color dan surface dengan transform tertentu | Sprite 24/32-bit non-SDL_Surface langsung return; surface transform/blend tidak masuk blit sederhana | M5 |
 | R06 | DirectX dan fallback tidak menyatakan backend efektif dengan jelas | Environment driver ditulis sesudah SDL video init; Android mengubah mode GL menjadi System | M6 |
 | R07 | OpenGL Vita belum mempunyai jalur lengkap | Konteks/swap belum terhubung, gate NPOT berbeda nama, ARB_fragment_program tidak tersedia, immediate mode tidak memakai program sprite | M7 |
-| R08 | GLES Android/Linux belum tersedia | Shader/fixed-function desktop bukan API GLES; Android mengecualikan glrender/gldetect | M8, fitur terpisah |
+| R08 | GLES Android/Linux belum tersedia | Shader/fixed-function desktop bukan API GLES; Android mengecualikan glrender/gldetect | M8, fitur terpisah (Android dan `linux-arm64` selesai; `linux-x64` tetap desktop GL) |
 
 Probe review menggunakan fungsi yang diekstrak dengan instrumentasi dan beberapa
 uji SDL2 runtime asli pada driver dummy. Probe tersebut tidak menggantikan
@@ -635,7 +635,8 @@ terhadap desktop — keduanya butuh device.
 M8 adalah fitur GPU lanjutan. R05 dapat ditutup lebih dahulu melalui M5; tidak
 perlu menunggu GLES untuk menghentikan silent drop true-color pada System.
 
-Status: **Android terverifikasi di perangkat; Linux ARM64 belum dimulai.** Yang
+Status: **Android terverifikasi di perangkat; Linux ARM64 terverifikasi di
+perangkat (System dan GLES), paritas piksel per fixture masih terbuka.** Yang
 di bawah ini membedakan tiga hal yang sering dicampur: apa yang berjalan, apa
 yang diuji otomatis di host, dan apa yang hanya punya bukti capture perangkat.
 
@@ -701,9 +702,26 @@ satu baris. Gate di atas adalah jawaban untuk kelas itu.
 4. **Reuse matematika/fixture M7.** Selesai untuk matematika vertex dan kontrak
    palette 2D (`src/gl_mvp.c` dipakai bersama, diuji `GL-MVP`). Tidak ada
    workaround driver Vita yang dibawa ke Android.
-5. **Linux: desktop GL compatibility vs GLES-only EGL.** **Belum dimulai.**
-   `rg MUGEN_GLES Makefile` kosong dan `src/gles_render.c` masih di-guard
-   `ANDROID_PORT`. Tidak ada klaim GPU Linux; target ARM64 hanya berhasil link.
+5. **Linux: desktop GL compatibility vs GLES-only EGL.** Selesai untuk
+   `linux-arm64`. `MUGEN_GLES` ada di Makefile dan bernilai 1 secara default di
+   target itu: build memakai `third_party/glad-es-3.0`, mengeluarkan
+   `glrender.c`/`gldetect.c`, tidak menautkan `-lGL -lGLU`, dan `make install`
+   menyalin `res/shaders/gles/*` ke `data/gles/`. Di sisi kode, `gles_render.c`
+   di-guard `MUGEN_GLES`, konteks ES 3.0 diminta dan entry point dimuat lewat
+   `gladLoadGLES2Loader(SDL_GL_GetProcAddress)` di `sdl2compat.c`, kebijakan mode
+   di `config.c` berlaku untuk GLES non-Android, dan `system.c` memakai jalur
+   fallback yang sama dengan Android/Vita.
+
+   Terverifikasi di perangkat (RG351MP, Mali-G31, ArkOS):
+   `requested=opengl effective=opengl caps=0x1F` dengan `MUGEN_STRICT_RENDERER=1`,
+   match berjalan dengan laju frame yang sama dengan System, dan tangkapan layar
+   keduanya menunjukkan gambar nyata (99.6% piksel non-hitam, beda rata-rata
+   3.5/255). Kegagalan shader jatuh ke System dengan alasan tercatat. Rincian dan
+   batasannya: `PROBLEMS.md` P1.
+
+   **Belum:** paritas piksel per fixture (butuh harness readback, sama seperti
+   butir ES01-device di atas), dan `linux-x64` tetap desktop GL — target itu
+   host reference, bukan perangkat GLES-only.
 6. **Context loss Android.** Selesai. `Gles_OnContextLost` membatalkan seluruh
    object name, `Gles_OnContextRestore` membangun ulang program, dan registry
    tekstur tumbuh dinamis sehingga tidak ada objek yang lolos. Sprite bertahan

@@ -117,6 +117,19 @@ int Sdl2_ToggleFullScreen(SDL_Surface *screen);
 int Sdl2_GL_SetAttribute(SDL_GLattr attr, int value);
 void Sdl2_GL_SwapBuffers(void);
 
+/*
+ * Size of the drawable the GL context renders into, in pixels.
+ *
+ * Not the same as the window size on a high-DPI or scaled display, and the GLES
+ * presenter (src/gles_render.c Gl_Present) must clear and viewport the drawable,
+ * not the logical quad, or the picture lands in a corner. Android answers the
+ * same question with its own ANativeWindow call; this is the SDL2 desktop
+ * equivalent, kept here because src/ owns no window.
+ *
+ * Writes 0/0 when there is no window.
+ */
+void Sdl2_GLDrawableSize(int *w, int *h);
+
 /* The window's native handle (HWND on Windows), or NULL when there is no
  * window yet. Replaces SDL 1.2's SDL_GetWMInfo for the three call sites that
  * only ever read info.window. */

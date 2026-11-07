@@ -85,11 +85,15 @@ static int pal_clamp(int v)
 /* 0x004618C0: fills pal with count colours; returns 0 on failure. */
 int Pal_Init(Palette *pal, int count, void *colors, int flags)
 {
-    unsigned char padded[0x400];
     int gl = 0;
     int take;
+/* Only the desktop texture path below uses these: GLES keeps the palette on the
+ * CPU (see the guard further down), so they would be unused there. */
+#if !defined(ANDROID_PORT) && !defined(MUGEN_GLES)
+    unsigned char padded[0x400];
     int ok;
     void *tex;
+#endif
 
     if (g_renderMode == RENDER_MODE_GL || g_renderMode == RENDER_MODE_GL_ALT) {
         gl = 1;
@@ -101,7 +105,14 @@ int Pal_Init(Palette *pal, int count, void *colors, int flags)
     if (colors == NULL || count == 0) {
         return 1;
     }
-#ifndef ANDROID_PORT
+/*
+ * The palette-as-texture path is desktop only. GLES has no 1D textures, and its
+ * backend uploads the palette into a 256x1 sampler2D from the CPU colours each
+ * time it draws (src/gles_render.c Gl_DrawSprite), so the palette stays CPU-side
+ * here -- exactly as it does on Android, where this same guard selects the
+ * branch below.
+ */
+#if !defined(ANDROID_PORT) && !defined(MUGEN_GLES)
     if (!(flags & PAL_NO_TEXTURE) && gl) {
         pal->is_texture = 1;
         tex = GlTex_Create();
@@ -159,7 +170,7 @@ void Pal_Free(Palette *pal)
 {
     pal_cache_drop(pal);
     if (pal->owns) {
-#ifndef ANDROID_PORT
+#if !defined(ANDROID_PORT) && !defined(MUGEN_GLES)
         if (pal->is_texture == 1 && pal->data != NULL) {
             /* A texture that is still in use is not released (nor freed). */
             if (GlTex_Delete(pal->data)) {

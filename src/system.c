@@ -396,6 +396,38 @@ void System_Init(void)
         } else {
             Error_Exit();
         }
+#elif defined(MUGEN_GLES)
+        /*
+         * Linux ARM64 GLES port (PROBLEMS.md P1): the desktop renderer used to
+         * make a refused GL mode fatal here. The GLES backend can be refused by
+         * the driver for reasons that say nothing about the machine -- an ES 2
+         * context where ES 3 is required, no complete framebuffer, a shader the
+         * driver will not link -- and System is a renderer that works. So this
+         * takes the same recovery the Vita and Android branches take, with the
+         * reason logged and MUGEN_STRICT_RENDERER still able to reject it.
+         *
+         * No explicit context teardown: SDL2 owns the window and context, and
+         * Sdl2_SetVideoMode destroys the GL one when a non-GL mode replaces it
+         * (it tears the pair down when is_gl changes).
+         */
+        if (g_renderMode != RENDER_SYSTEM) {
+            Log_Printf("falling back to the system renderer. ");
+            Gl_Deinit();
+            g_renderMode = RENDER_SYSTEM;
+            g_game->render_mode = RENDER_SYSTEM;
+            g_game->depth = 16;
+            g_game->stage_fit = 0;
+            g_game->system_fit = 0;
+            Gfx_SelectRenderer(RENDER_SYSTEM);
+            g_libraryError = LIBERR_NONE;
+            if (!Video_SetMode((int)g_game->game_coord[0], (int)g_game->game_coord[1], (int)g_game->game_width,
+                               (int)g_game->game_height, g_game->depth, g_game->video_flags)) {
+                Log_Printf("failed. ");
+                Error_Exit();
+            }
+        } else {
+            Error_Exit();
+        }
 #else
         Error_Exit();
 #endif
@@ -1705,6 +1737,10 @@ int System_LoadFonts(void)
  * 0x0041DEE0: unloads the match and frees the game variables (g_game becomes
  * NULL). Font_Free, AnimSet_Free, SpriteQueue_Free and TextRing_Free were
  * inlined in the original; they free the same blocks in the same order.
+ *
+ * Port fix: tolerates a game that was never fully initialised, because
+ * Error_Exit reaches it from a failed start-up -- see the guard on
+ * Match_FreeAssets below.
  */
 void GameVars_Free(void)
 {
@@ -1715,7 +1751,26 @@ void GameVars_Free(void)
         return;
     }
     Log_Printf("Unloading match assets\n");
-    Match_FreeAssets();
+    /*
+     * Fix (port change): skip the palette-group teardown when GameVars_Init
+     * never ran. Error_Exit calls this function when start-up failed -- a
+     * rejected video mode, a font that would not load -- and every one of
+     * those failures happens before GameVars_Init allocates g_game->palgroups
+     * (it runs after video and font setup, System_Init). Match_FreeAssets
+     * dereferences that pointer unguarded, so the process died with SIGSEGV
+     * while it was reporting the error and the user never saw the dialog. The
+     * Vita port hit the same fault and skipped GameVars_Free entirely (see
+     * src/error.c, MUGEN_VITA_GL); guarding this one call keeps the rest of
+     * the teardown, which is what releases the video surface, the fonts and
+     * the game struct of the half-built game.
+     *
+     * The palgroups free further down already tests for NULL, so the original
+     * author knew the pointer can be absent here: only this earlier use of it
+     * was missed.
+     */
+    if (g_game->palgroups != NULL) {
+        Match_FreeAssets();
+    }
     Players_ReleaseSlots();
     Players_Free();
     Stage_Unload(&g_game->stage);

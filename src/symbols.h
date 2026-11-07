@@ -164,7 +164,23 @@ extern int g_exprStackTop; /* 0x00500f40 */
  * glGetString exactly as GLEW did. glad.h is not included there, so name them
  * directly instead of through it.
  */
-#if defined(ANDROID_PORT)
+#if defined(MUGEN_GLES)
+/*
+ * GLES backend (Android M8, Linux ARM64): glad-es-3.0 has no GLAD_GL_VERSION_2_0
+ * and no ARB_ or EXT_ capability variables, because those describe desktop
+ * extensions. The desktop capability flags therefore have no meaning here -- the
+ * real qualification is src/gles_probe.c against the live context -- and the only
+ * consumer left in the build would be src/prim.c's desktop GL section, which
+ * MUGEN_GLES excludes.
+ * Defining them as constant 0 keeps the header honest: anything that still
+ * reaches them is unreachable code, not a silent "supported".
+ */
+#define g_glewVersion20                  0
+#define g_glewArbFragmentProgram         0
+#define g_glewArbTextureNpot             0
+#define g_glewExtBlendLogicOp            0
+#define g_glewExtFramebufferObject       0
+#elif defined(ANDROID_PORT)
 /*
  * Android port: no GL on this target. The System renderer is the only draw
  * path (glrender.c/gldetect.c are excluded from the build), so the GL

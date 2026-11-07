@@ -40,16 +40,24 @@
  * glad becomes the single source of GL declarations, fixed-function pipeline
  * included (it is generated with the compatibility profile).
  */
-#ifdef ANDROID_PORT
-/* Android uses native SDL2 rendering; desktop GL is not compiled.
- * MUGEN_GLES (M8) selects the GLES 3.0 backend instead: glad-es-3.0
- * becomes the GL declaration source (never the desktop glad), and
- * glrender.c compiles against the GLES API (no fixed-function, no
- * sampler1D, GLSL ES shaders). Default OFF: System stays the renderer
- * until the GLES path is qualified per RENDERING_PLAN.md section 12. */
 #ifdef MUGEN_GLES
+/*
+ * GLES 3.0 backend: Android (M8, RENDERING_PLAN.md section 12) and Linux ARM64
+ * (PROBLEMS.md P1). glad-es-3.0 becomes the GL declaration source -- never the
+ * desktop glad -- and the build compiles src/gles_render.c instead of
+ * src/glrender.c. No fixed-function pipeline, no sampler1D, GLSL ES shaders.
+ *
+ * Checked before ANDROID_PORT so the two platforms share one rule: the GLES
+ * dialect is selected by MUGEN_GLES alone, and a file is either desktop-GL or
+ * GLES, never both. The two loaders share an include guard upstream, so
+ * including both in one translation unit is a build error by design.
+ */
 #include <glad_es.h>
-#endif
+#elif defined(ANDROID_PORT)
+/* Android uses native SDL2 rendering; desktop GL is not compiled.
+ * MUGEN_GLES (M8) selects the GLES 3.0 backend instead; without it Android has
+ * no GL declarations at all. Default OFF: System stays the renderer until the
+ * GLES path is qualified per RENDERING_PLAN.md section 12. */
 #elif defined(MUGEN_VITA_GL)
 /*
  * PS Vita port (port/psvita): glad is not part of that build. It is generated

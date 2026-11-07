@@ -490,6 +490,21 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
         Sdl2_DestroyVideo();
     }
     if (g_sdl2Video.window == NULL) {
+#ifdef MUGEN_GLES
+        /*
+         * Ask for an OpenGL ES 3 context before the window exists.
+         *
+         * SDL2 picks the EGL path on KMSDRM/Wayland and the GLX path on X11;
+         * the engine cannot choose, but it can say which GL dialect it will
+         * load entry points for. Without the profile mask the driver's default
+         * is platform-dependent, and the GLES renderer requires ES 3.0
+         * (src/gles_probe.c rejects anything older, because the texture
+         * formats it uses -- R8/RED -- are ES3-only).
+         */
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+#endif
         g_sdl2Video.window = SDL_CreateWindow("M.U.G.E.N", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                               want_w, want_h, Sdl2_WindowFlags(flags));
         if (g_sdl2Video.window == NULL) {
@@ -541,6 +556,28 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
                 Log_Printf("video: SDL_GL_CreateContext failed: %s\n", SDL_GetError());
                 return NULL;
             }
+#ifdef MUGEN_GLES
+            /*
+             * Load the GLES entry points through SDL's own loader.
+             *
+             * This is the part that makes the GLES backend work on a handheld
+             * at all: glad's desktop loader (gladLoadGL) dlopens libGL.so.1 and
+             * resolves through glXGetProcAddressARB, which finds nothing for an
+             * EGL context -- on the RG351MP it reports GLVersion 0.0 and every
+             * entry point stays NULL (PROBLEMS.md P1). SDL_GL_GetProcAddress
+             * asks the driver that actually created this context.
+             *
+             * A failure here is not fatal to the process: the window and the
+             * context exist but no GL call is possible, so the mode is refused
+             * and system.c falls back to the System renderer with a reason.
+             */
+            if (!gladLoadGLES2Loader((GLADloadproc)SDL_GL_GetProcAddress)) {
+                Log_Printf("video: GLES entry points unavailable (%s)\n", SDL_GetError());
+                return NULL;
+            }
+            Log_Printf("\nvideo: %s, GLES %d.%d", (const char *)glGetString(GL_RENDERER), GLVersion.major,
+                       GLVersion.minor);
+#endif
         }
         /* SDL_GL_SWAP_CONTROL arrives before the context exists, so it is
          * recorded by Sdl2_GL_SetAttribute and applied here. */
@@ -894,6 +931,22 @@ void Sdl2_GL_SwapBuffers(void)
 {
     if (g_sdl2Video.window != NULL) {
         SDL_GL_SwapWindow(g_sdl2Video.window);
+    }
+}
+
+void Sdl2_GLDrawableSize(int *w, int *h)
+{
+    int dw = 0;
+    int dh = 0;
+
+    if (g_sdl2Video.window != NULL) {
+        SDL_GL_GetDrawableSize(g_sdl2Video.window, &dw, &dh);
+    }
+    if (w != NULL) {
+        *w = dw;
+    }
+    if (h != NULL) {
+        *h = dh;
     }
 }
 

@@ -911,8 +911,17 @@ void Gfx_SoftFillRectSub(int x1, int y1, int x2, int y2, unsigned int color)
     Prim_RectOp(PRIM_OP_SUB, x1, y1, x2, y2, color);
 }
 
-#ifndef ANDROID_PORT
+#if !defined(ANDROID_PORT) && !defined(MUGEN_GLES)
 /* ---- OpenGL renderer ---- */
+
+/*
+ * Desktop GL only. The GLES backend (MUGEN_GLES: Android M8, Linux ARM64) has
+ * its own primitive path in src/gles_render.c, because this section is written
+ * against the fixed-function pipeline -- glBegin/glVertex2f/glColor4f and
+ * glLogicOp -- which GLES does not have. Compiling both would also define
+ * Gfx_GlPutPixel, Gfx_GlInvertPixel, Gfx_GlDrawLine and the Gfx_Gl*Rect
+ * functions twice. Same reason the Android port excluded this section.
+ */
 
 /* PRIM_GL_CONSTANT_COLOR / _ALPHA are gone: see Prim_GlColor. */
 #define PRIM_GL_FUNC_ADD                0x8006
@@ -1189,4 +1198,4 @@ void Gfx_GlFillRectSub(int x1, int y1, int x2, int y2, unsigned int color)
     glDisable(GL_BLEND);
 }
 
-#endif /* !ANDROID_PORT */
+#endif /* !ANDROID_PORT && !MUGEN_GLES */

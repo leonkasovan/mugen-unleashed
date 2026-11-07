@@ -269,7 +269,7 @@ SDL_Surface *Gfx_GetScreenSurface(void)
     return NULL;
 }
 
-#ifndef ANDROID_PORT
+#if !defined(ANDROID_PORT) && !defined(MUGEN_GLES)
 /* Smallest power of two >= n, computed as the original does (0 for n <= 1). */
 static int Gfx_NextPow2(int n)
 {
@@ -283,7 +283,13 @@ static int Gfx_NextPow2(int n)
     return x == 0 ? 0 : (int)(x + 1);
 }
 
-/* OpenGLScreen: uploads the RGB565 screen buffer to g_glScreenTex and draws it to the window. */
+/* OpenGLScreen: uploads the RGB565 screen buffer to g_glScreenTex and draws it to the window.
+ *
+ * Desktop only: it hands the upload to GlScreen_Upload/GlScreen_Draw, which live
+ * in src/glrender.c and are excluded under MUGEN_GLES. The GLES backend does not
+ * provide OpenGLScreen at all (caps.gl_screen = 0, src/config.c) because it has
+ * no CPU-framebuffer upload presenter -- the same reason Android reports 0.
+ */
 static void Gfx_PresentGlScreen(const SDL_Surface *surface)
 {
     unsigned int *rgba = malloc(surface->h * surface->w * 4);
@@ -322,7 +328,12 @@ static void Gfx_PresentGlScreen(const SDL_Surface *surface)
     free(rgba);
 }
 
-#endif
+/* Closes the desktop-only OpenGLScreen presenter (see Gfx_PresentGlScreen):
+ * GlScreen_Upload/GlScreen_Draw live in src/glrender.c, which MUGEN_GLES
+ * excludes, and caps.gl_screen is 0 on that backend, so the mode can never be
+ * selected there. Guarding the block keeps the build honest instead of linking
+ * a presenter nothing can reach. */
+#endif /* !ANDROID_PORT && !MUGEN_GLES */
 /*
  * 0x0046BCF0: g_gfxPresent of the System and OpenGLScreen renderers: shows
  * the screen buffer (sprite `sprite` of set) at (x, y), then flips the video
@@ -481,7 +492,17 @@ void Gfx_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
         surface = spr->pixels;
     }
     if (g_renderMode == RENDER_OPENGL_SCREEN) {
+#ifdef MUGEN_GLES
+        /*
+         * Unreachable: OpenGLScreen is not advertised for this backend
+         * (caps.gl_screen = 0), so RenderPolicy_Resolve and the config parser
+         * never leave g_renderMode here. Stated rather than assumed -- if that
+         * ever changes, this is the line that must grow a presenter.
+         */
+        MatchLog_Printf(1, "OpenGLScreen is not available on the GLES backend\n");
+#else
         Gfx_PresentGlScreen(surface);
+#endif
     } else if (g_renderMode == RENDER_SYSTEM) {
         SDL_Rect dst;
 #ifdef ANDROID_PORT
@@ -611,10 +632,20 @@ void Gfx_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
         }
 #ifndef ANDROID_PORT
         if (g_renderMode == RENDER_OPENGL) {
+#ifdef MUGEN_GLES
+            /*
+             * GLES has no glClearDepth (the ES spelling is glClearDepthf, and
+             * the ES backend's presenter already clears the window itself --
+             * src/gles_render.c Gl_Present). Clearing here as well would be a
+             * second clear of the same buffer for nothing, so the desktop
+             * block is simply not taken on this backend.
+             */
+#else
             glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
             glClearDepth(1.0);
             glDisable(GL_SCISSOR_TEST);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+#endif
         }
 #endif
     }

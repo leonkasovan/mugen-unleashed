@@ -61,7 +61,7 @@ Verified versions on a stock 22.04:
 | `libpng-dev` | 1.6.37 | SFF v2 / PNG |
 | `zlib1g-dev` | 1.2.11 | inflate/deflate |
 | `libmpg123-dev` | 1.29.3 | BGM plugin |
-| `libgl1-mesa-dev`, `libglu1-mesa-dev` | 23.2.1 / 9.0.2 | `<GL/gl.h>`, `gluOrtho2D` |
+| `libgl1-mesa-dev`, `libglu1-mesa-dev` | 23.2.1 / 9.0.2 | `<GL/gl.h>`, `gluOrtho2D` — **not needed for `linux-arm64`, which defaults to the GLES backend** |
 
 Lua 5.1.4, glad 2.1, minizip 0.15 and libresample are built from
 `third_party/`, so no distro Lua is needed (and 5.1 is often unavailable).
@@ -156,8 +156,49 @@ length and why only the common prefix is compared.
 
 ## arm64
 
-Not built yet. Structurally the `Makefile` selects it and the code compiles the
-same way, but **AArch64 has no x87**, so `-mfpmath=387` is dropped and
-`FLT_EVAL_METHOD` is 0. Float results are expected to drift from the reference
-by an ULP, so `mugen.log` will not match exactly and the numeric lines have to
-be audited by hand. That is a property of the architecture, not of this port.
+The `Makefile` selects `linux-arm64` from the compiler's triple, and it builds,
+runs and installs. Note the two things that are **not** the same as x64:
+
+**No x87.** AArch64 has no x87, so `-mfpmath=387` is dropped and
+`FLT_EVAL_METHOD` is 0. Float results drift from the reference by an ULP, so
+`mugen.log` will not match the Windows build exactly and the numeric lines have
+to be audited by hand. That is a property of the architecture, not of this port.
+
+**OpenGL ES, not desktop GL.** `linux-arm64` defaults to `MUGEN_GLES=1`: the
+handhelds this target exists for (Mali-G31 class under ArkOS) expose OpenGL ES
+only, and their `libGL.so.1` is the GLX/glvnd stub, so the desktop loader
+resolves nothing against the EGL context SDL creates. See `PROBLEMS.md` (P1) for
+the measurement and `RENDERING_PLAN.md` §12 for the backend.
+
+```sh
+make MUGEN_TARGET=linux-arm64                 # MUGEN_GLES=1 (GLES 3.0 backend)
+make MUGEN_TARGET=linux-arm64 MUGEN_GLES=0    # desktop GL, as on x64
+```
+
+With `MUGEN_GLES=1` the build:
+
+- compiles `third_party/glad-es-3.0` instead of `glad-2.1` and defines
+  `-DMUGEN_GLES`;
+- **excludes** `src/glrender.c` and `src/gldetect.c`; `src/gles_render.c`
+  provides the same `Gl_*`/`Gfx_Gl*` entry points against GLES;
+- does not link `-lGL -lGLU` — EGL comes in through SDL2;
+- `make install` copies `res/shaders/gles/*` into `install/data/gles/`, which is
+  where `src/gles_render.c` loads its GLSL ES programs from.
+
+Dependencies are the same minus the desktop GL ones: `libgl1-mesa-dev` and
+`libglu1-mesa-dev` are not needed (`libGLU` is only used by the desktop
+`OpenGLScreen` projection reset, which is compiled out). SDL2, SDL2_mixer,
+SDL2_ttf, zlib and libpng are needed as before.
+
+If the driver cannot provide an ES 3.0 context, or a shader fails to compile, the
+engine falls back to the System renderer and says why in `mugen.log`; set
+`MUGEN_STRICT_RENDERER=1` to make that fallback fatal instead.
+
+### Cross-building arm64 from x86-64
+
+An arm64 rootfs plus `qemu-aarch64` (via binfmt) builds without a chroot: point
+`CC` at the rootfs compiler with `--sysroot`, and give pkg-config the sysroot too.
+Two things need care — the rootfs's `lib*.so` symlinks are absolute and must be
+re-pointed for the host-side linker, and `PKG_CONFIG_SYSROOT_DIR` is what makes
+`-I`/`-L` from the `.pc` files point inside the rootfs. The exact commands are in
+`PROBLEMS.md` ("Reproducing").
