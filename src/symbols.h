@@ -1574,18 +1574,16 @@ void __cdecl Pads_DeviceEvent(const SDL_Event *event);
 /* 0x00474b10 */ int __cdecl Pads_CodePending(void);
 /* Port addition: diagnostic dump of the configured joystick bindings. */
 void __cdecl Pads_LogBindings(void);
-#ifdef ANDROID_PORT
-/* Android controller path (SDL game-controller semantics). */
+#ifdef MUGEN_GAMEPAD_POLICY
+/* Controller path: SDL game-controller semantics, on every SDL2 target. */
 void __cdecl Pads_HandleControllerEvent(const SDL_Event *ev);
 int __cdecl Pads_SlotUsesController(int slot);
 void __cdecl Pads_ControllerBindings(int slot, int *out);
 void __cdecl Pads_AttachController(int slot, int device_index);
-#ifdef ANDROID_PORT
 /* Re-applies a player's joystick binding policy and republishes g_keyMap. */
 void __cdecl Config_RepublishJoystick(int player);
 /* Commits a key-menu mapping to its raw or semantic configuration. */
 int __cdecl Config_SetJoystickKeys(int player, int gamepad, const int *keys);
-#endif
 /* Direction-source bookkeeping, shared by the event, deinit and hotplug paths. */
 void __cdecl Pads_ClearDirectionSources(int slot);
 void __cdecl Pads_ResetDirectionSources(void);

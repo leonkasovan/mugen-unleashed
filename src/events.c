@@ -549,12 +549,13 @@ void Events_Poll(void)
             }
             break;
 #endif
-#ifdef ANDROID_PORT
+#ifdef MUGEN_GAMEPAD_POLICY
         /*
-         * Port addition: Android pads are driven through SDL's game-controller
-         * API (see Pads_HandleControllerEvent). The raw joystick events are
-         * still delivered for the same device, but Pads_HandleEvent ignores the
-         * slots a controller backs, so the two paths never double-press.
+         * Port addition: pads are driven through SDL's game-controller API (see
+         * Pads_HandleControllerEvent) on every SDL2 target. The raw joystick
+         * events are still delivered for the same device, but Pads_HandleEvent
+         * ignores the slots a controller backs, so the two paths never
+         * double-press.
          */
         case SDL_CONTROLLERBUTTONDOWN:
         case SDL_CONTROLLERBUTTONUP:

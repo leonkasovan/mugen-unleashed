@@ -1505,7 +1505,7 @@ int KeyConfig_Run(int joystick, int ticks)
     int item = 0;
     int entry = 0;          /* next entry to assign */
     int p, i;
-#ifdef ANDROID_PORT
+#ifdef MUGEN_GAMEPAD_POLICY
     int gamepad[2];
     SDL_JoystickID pad_id[2];
 #endif
@@ -1524,7 +1524,7 @@ int KeyConfig_Run(int joystick, int ticks)
         keys[1] = g_game->joy_keys[1];
     }
     for (p = 0; p < 2; p++) {
-#ifdef ANDROID_PORT
+#ifdef MUGEN_GAMEPAD_POLICY
         gamepad[p] = joystick && Pads_SlotUsesController(p);
         pad_id[p] = g_pads[p].joystick != NULL ? SDL_JoystickInstanceID(g_pads[p].joystick) : -1;
 #endif
@@ -1570,7 +1570,7 @@ int KeyConfig_Run(int joystick, int ticks)
 
         /* input: a key, a joystick button */
         Events_Poll();
-#ifdef ANDROID_PORT
+#ifdef MUGEN_GAMEPAD_POLICY
         /* A reconnect can change both the slot's code space and its bindings.
          * Cancel the pending edits before they can overwrite the new device. */
         if (joystick) {
@@ -1713,7 +1713,7 @@ int KeyConfig_Run(int joystick, int ticks)
                 cur[state - 1][entry] = key == SDLK_SPACE ? none : key;
                 assigned = 1;
             } else if (joystick == 1 && pad != 0 && !(pad & 0x100)) {
-#ifdef ANDROID_PORT
+#ifdef MUGEN_GAMEPAD_POLICY
                 int local = pad - (state - 1) * PAD_BUTTONS;
 
                 /* P1 cannot assign P2's event, and Select remains a menu key. */
@@ -1872,7 +1872,7 @@ int KeyConfig_Run(int joystick, int ticks)
         for (i = 0; i < KEYCONFIG_ENTRIES; i++) {
             keys[p][keyconfig_slots[i]] = cur[p][i];
         }
-#ifdef ANDROID_PORT
+#ifdef MUGEN_GAMEPAD_POLICY
         if (joystick && !Config_SetJoystickKeys(p, gamepad[p], keys[p])) {
             Error_Fatal("Invalid gamepad configuration\n");
         }
@@ -1889,7 +1889,7 @@ int KeyConfig_Run(int joystick, int ticks)
     }
     Log_Printf("Setting up input\n");
     Input_Remap();
-#ifdef ANDROID_PORT
+#ifdef MUGEN_GAMEPAD_POLICY
 restore_input:
 #endif
     g_keyboardKeepRepeat = saved_key_flag;

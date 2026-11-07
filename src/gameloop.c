@@ -112,7 +112,7 @@ int Game_ReadInput(ScreenLoop *screen)
     if (g->console_open != 0) {
         return 1;
     }
-#ifdef ANDROID_PORT
+#ifdef MUGEN_GAMEPAD_POLICY
     /*
      * Port addition: the pad's Select/Back button opens the in-match menu.
      *

@@ -42,14 +42,15 @@ typedef void (__cdecl *KeyEventFn)(unsigned int unicode, int sym, int pressed);
 
 /* Joysticks opened by Pads_Init. */
 #define PAD_MAX             4
-#ifdef ANDROID_PORT
+#ifdef MUGEN_GAMEPAD_POLICY
 /*
  * Port addition: the pad's Select/Back button, in the compact game-controller
- * layout Pads_HandleControllerEvent produces. Game_ReadInput turns a press of
- * this code into the engine's pause key, which is what opens the in-match
- * menu: a pad has no keyboard, and the pause path only ever looked at
- * screen->key. Kept here because both pads.c (which emits it) and gameloop.c
- * (which interprets it) need the same number.
+ * layout Pads_HandleControllerEvent produces. Defined for every SDL2 target,
+ * not just Android, because that is where the semantic layout now applies.
+ * Game_ReadInput turns a press of this code into the engine's pause key, which
+ * is what opens the in-match menu: a pad has no keyboard, and the pause path
+ * only ever looked at screen->key. Kept here because both pads.c (which emits
+ * it) and gameloop.c (which interprets it) need the same number.
  */
 #define PAD_SELECT_CODE     12
 #define PAD_GAMEPAD_LAST    11      /* last semantic code assignable to a player action */

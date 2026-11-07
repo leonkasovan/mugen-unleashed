@@ -12,7 +12,7 @@
 
 #include "mugen.h"
 
-#ifdef ANDROID_PORT
+#ifdef MUGEN_GAMEPAD_POLICY
 /* Binding policy for one player plus publication to the input map (config.c),
  * applied when a pad attaches or detaches. */
 void Config_RepublishJoystick(int player);
@@ -21,7 +21,7 @@ void Config_RepublishJoystick(int player);
 /* Axis values beyond this press the axis' button. */
 #define PAD_AXIS_THRESHOLD 16000
 
-#ifdef ANDROID_PORT
+#ifdef MUGEN_GAMEPAD_POLICY
 /* Defined below (the game-controller path); Pads_Init and Input_DeinitPads
  * call them, so the declarations come first. */
 static int Pads_OpenControllers(void);
@@ -130,7 +130,7 @@ int Pads_Init(void)
     }
     /* One byte more than the INPUT_PAD_COUNT buttons. */
     memset(g_padButtonState, 0, INPUT_PAD_COUNT + 1);
-#ifdef ANDROID_PORT
+#ifdef MUGEN_GAMEPAD_POLICY
     if (Pads_OpenControllers() > 0) {
         /* Controller events, not raw joystick events, drive these pads. */
         SDL_GameControllerEventState(SDL_ENABLE);
@@ -149,7 +149,7 @@ int Pads_Init(void)
  *
  * These are numbers rather than Android state, and the direction bookkeeping
  * below needs them on every backend (Pads_DeviceEvent is compiled for desktop
- * SDL2 as well), so they are defined outside the ANDROID_PORT block.
+ * SDL2 as well), so they are defined outside the MUGEN_GAMEPAD_POLICY block.
  */
 #define PAD_CTRL_UP     1
 #define PAD_CTRL_DOWN   2
@@ -208,7 +208,7 @@ static void Pads_ComposeDirections(int slot)
 }
 
 /* Records what one source holds for one direction and re-derives the union. */
-#ifdef ANDROID_PORT
+#ifdef MUGEN_GAMEPAD_POLICY
 static void Pads_SetDirectionSource(int slot, int source, int code, int held)
 {
     int bit;
@@ -227,7 +227,7 @@ static void Pads_SetDirectionSource(int slot, int source, int code, int held)
     }
     Pads_ComposeDirections(slot);
 }
-#endif /* only the Android controller path feeds per-source directions */
+#endif /* only the controller path feeds per-source directions */
 
 /*
  * Forgets every slot's direction sources.
@@ -259,20 +259,20 @@ void Pads_ClearDirectionSources(int slot)
     Pads_ComposeDirections(slot);
 }
 
-#ifdef ANDROID_PORT
+#ifdef MUGEN_GAMEPAD_POLICY
 /*
- * Port fix: the Android controller path uses SDL's game-controller semantics.
+ * Port fix: the controller path uses SDL's game-controller semantics.
  *
  * The engine's raw model turns a device's axis/hat/button *indices* into input
  * codes (code = axes*2 + hats*4 + 1 + index). That only lines up with a given
  * mugen.cfg when the pad has the topology those numbers were written for, and
- * a real Android pad does not: the tested Xbox Wireless Controller reports
+ * a real pad does not: the tested Xbox Wireless Controller reports
  * 8 axes and 0 hats, so its face buttons start at code 17 while mugen.cfg's
  * A/B/X/Y (13..16) are axis codes on it, and its d-pad arrives as buttons at
  * code 32+ -- past the 32 codes one pad slot holds, so those were dropped
  * outright. The pad opened, and nothing on it worked.
  *
- * So on Android the semantic controls are bound directly. SDL_GameController
+ * So the semantic controls are bound directly. SDL_GameController
  * maps a device through its own database, so A/B/X/Y, the d-pad, the shoulders
  * and Start mean the same thing on every pad. The engine's 12 code slots per
  * pad are more than enough for those eleven controls.
@@ -290,7 +290,7 @@ void Pads_ClearDirectionSources(int slot)
  * third punch and third kick on the top row, and a modern gamepad's only
  * remaining buttons are RB/LB. Logged at start-up so the choice is visible.
  */
-/* (The PAD_CTRL_* codes are defined above the ANDROID_PORT block: the direction
+/* (The PAD_CTRL_* codes are defined above the MUGEN_GAMEPAD_POLICY block: the direction
  * bookkeeping needs them on every backend.) */
 
 /* Sidecar, not a field on Pad: the reconstructed struct has a fixed layout
@@ -555,20 +555,20 @@ void Pads_HandleControllerEvent(const SDL_Event *ev)
         }
     }
 }
-#endif /* ANDROID_PORT */
+#endif /* MUGEN_GAMEPAD_POLICY */
 
 /* 0x004746D0: closes the joysticks and removes the joystick handler. */
 void Input_DeinitPads(void)
 {
     int i;
 
-#ifndef ANDROID_PORT
+#ifndef MUGEN_SDL2_API
     if (g_padsActive == 0) {
         return;
     }
 #endif
     g_padHandler = NULL;
-#ifdef ANDROID_PORT
+#ifdef MUGEN_GAMEPAD_POLICY
     Pads_CloseControllers();
 #endif
     memset(g_padButtonState, 0, INPUT_PAD_COUNT + 1);
@@ -722,7 +722,7 @@ void Pads_HandleEvent(const SDL_Event *ev)
         }
         return;
     }
-#ifdef ANDROID_PORT
+#ifdef MUGEN_GAMEPAD_POLICY
     /*
      * The same device delivers both raw joystick events and controller events.
      * When a slot is backed by a game controller the semantic path owns it:
@@ -964,7 +964,7 @@ void Pads_DeviceEvent(const SDL_Event *event)
                 }
             }
             SDL_JoystickClose(g_pads[i].joystick);
-#ifdef ANDROID_PORT
+#ifdef MUGEN_GAMEPAD_POLICY
             /*
              * The semantic handle for this slot has to go with the raw one.
              * Leaving it open left g_padController[i] pointing at the old
@@ -973,8 +973,8 @@ void Pads_DeviceEvent(const SDL_Event *event)
              * blocked because the slot "uses a controller", and the new
              * semantic events never matched, so the pad stopped working.
              *
-             * Android only: the semantic handle array exists only when the
-             * Android input path is compiled (see the sidecar declaration).
+             * Only when the controller path is compiled in: the semantic
+             * handle array is part of it (see the sidecar declaration).
              * The desktop backend keeps its raw-joystick-only lifecycle here.
              */
             if (g_padController[i] != NULL) {
@@ -984,11 +984,12 @@ void Pads_DeviceEvent(const SDL_Event *event)
 #endif
             Pads_ClearDirectionSources(i);
             memset(&g_pads[i], 0, sizeof(Pad));
-#ifdef ANDROID_PORT
+#ifdef MUGEN_GAMEPAD_POLICY
             /* The slot has no controller any more: put the raw [P<n> Joystick]
              * bindings back and publish them, so the player is not left bound
-             * to semantic codes no device will send. The semantic path exists
-             * only on Android; the desktop keeps its raw-joystick lifecycle. */
+             * to semantic codes no device will send. This runs on every SDL2
+             * target (MUGEN_GAMEPAD_POLICY); only the SDL 1.2 reference build
+             * keeps the original raw-joystick lifecycle. */
             Config_RepublishJoystick(i);
 #endif
         }
@@ -1011,7 +1012,7 @@ void Pads_DeviceEvent(const SDL_Event *event)
     }
     pad = &g_pads[slot];
     pad->joystick = joystick;
-#ifdef ANDROID_PORT
+#ifdef MUGEN_GAMEPAD_POLICY
     Pads_AttachController(slot, event->jdevice.which);
 #endif
     Pads_ClearDirectionSources(slot);

@@ -11,7 +11,7 @@
 /* Defined near Options_Load; Config_Load runs first. */
 static void Config_ApplyVitaJoystick(void);
 #endif
-#ifdef ANDROID_PORT
+#ifdef MUGEN_GAMEPAD_POLICY
 /* The [P<n> Gamepad] groups, loaded with the rest of the options and applied
  * after the pads open (their topology is only known then). */
 static int g_cfgGamepadKeys[2][KEY_COUNT];
@@ -35,7 +35,7 @@ static const struct {
 /* The configured [P<n> Joystick] codes, kept across the controller policy. */
 static int g_cfgRawJoyKeys[2][KEY_COUNT];
 
-void Config_ApplyAndroidJoystick(void);
+void Config_ApplyJoystickBindings(void);
 /* Per-player version, used when a controller attaches after start-up. */
 void Config_ApplyJoystickSlot(int player);
 #endif
@@ -591,7 +591,7 @@ int Config_Load(void)
     Config_ApplyVitaJoystick();
 #endif
     g = g_game;
-#ifdef ANDROID_PORT
+#ifdef MUGEN_GAMEPAD_POLICY
     /*
      * Keep the [P<n> Joystick] codes as configured. Config_ApplyJoystickSlot
      * overwrites joy_keys with the semantic controller layout for a slot that
@@ -669,10 +669,10 @@ static double Options_PctToVolume(int pct, double volume)
     return (volume - floor(volume + 0.5)) + pct;
 }
 
-#ifdef ANDROID_PORT
+#ifdef MUGEN_GAMEPAD_POLICY
 /*
- * Fix (port change): an Android pad is bound through SDL's game-controller
- * semantics, not by translating raw device indices.
+ * Fix (port change): a pad is bound through SDL's game-controller semantics on
+ * every SDL2 target, not by translating raw device indices.
  *
  * [P<n> Joystick] in the shipped mugen.cfg is a PC DirectInput pad's numbering:
  * Jump=9, Crou=10, Left=11, Right=12, A=13, B=14, X=15, Y=16, Z=18, C=20,
@@ -846,7 +846,7 @@ int Config_SetJoystickKeys(int player, int gamepad, const int *keys)
     return 1;
 }
 
-void Config_ApplyAndroidJoystick(void)
+void Config_ApplyJoystickBindings(void)
 {
     int player;
 
@@ -864,7 +864,7 @@ void Config_ApplyAndroidJoystick(void)
 /*
  * Applies the binding policy for one player.
  *
- * Split out of Config_ApplyAndroidJoystick so a controller that is plugged in
+ * Split out of Config_ApplyJoystickBindings so a controller that is plugged in
  * after start-up can be bound then and there (Pads_AttachController). Doing
  * all slots on a hotplug was wrong: Pads_ControllerBindings returns JOY_NONE
  * for a slot with no controller, so plugging in player 2's pad would have
@@ -962,7 +962,7 @@ void Config_RepublishJoystick(int player)
     Input_ResetState();
 }
 
-#endif /* ANDROID_PORT */
+#endif /* MUGEN_GAMEPAD_POLICY */
 
 #ifdef MUGEN_VITA_GL
 /*
@@ -1169,14 +1169,14 @@ void Options_Load(void)
     g->joystick_type[1] = g->option_input[1][1];
     g->use_joystick[0] = g->option_input[0][1] != 0;
     g->use_joystick[1] = g->option_input[1][1] != 0;
-#ifdef ANDROID_PORT
+#ifdef MUGEN_GAMEPAD_POLICY
     memcpy(g->joy_keys, g_cfgRawJoyKeys, sizeof(g_cfgRawJoyKeys));
 #endif
     Config_ReadKeys(ini, "P1 joystick", g->joy_keys[0]);
     Config_ReadKeys(ini, "P2 joystick", g_game->joy_keys[1]);
-#ifdef ANDROID_PORT
+#ifdef MUGEN_GAMEPAD_POLICY
     /* [P<n> Gamepad] describes the compact game-controller layout; see
-     * Config_ApplyAndroidJoystick for why Android uses that instead. */
+     * Config_ApplyJoystickBindings for why every SDL2 target uses that. */
     Config_LoadGamepadGroups(ini);
     {
         /* Startup only: write the defaults into the file once, so the group is
@@ -1193,7 +1193,7 @@ void Options_Load(void)
     g = g_game;
     Config_FillUnassigned(g->joy_keys[0], JOY_NONE);
     Config_FillUnassigned(g->joy_keys[1], JOY_NONE);
-#ifdef ANDROID_PORT
+#ifdef MUGEN_GAMEPAD_POLICY
     memcpy(g_cfgRawJoyKeys, g->joy_keys, sizeof(g_cfgRawJoyKeys));
 #endif
 #ifdef MUGEN_VITA_GL
@@ -1210,10 +1210,10 @@ void Options_Load(void)
 #endif
     Ini_Free(ini);
     Input_InitPads();
-#ifdef ANDROID_PORT
+#ifdef MUGEN_GAMEPAD_POLICY
     /* After the pads are open (their topology is only known then) and before
      * Input_Remap builds g_keyMap from these codes. */
-    Config_ApplyAndroidJoystick();
+    Config_ApplyJoystickBindings();
 #endif
     if (!Input_Remap()) {
         Error_Fatal("Cannot init input\n");
@@ -1284,7 +1284,7 @@ void Options_Save(void)
     }
     Options_SaveKeys(ini, "p1 keys", g_game->keys[0], KEY_NONE);
     Options_SaveKeys(ini, "p2 keys", g_game->keys[1], KEY_NONE);
-#ifdef ANDROID_PORT
+#ifdef MUGEN_GAMEPAD_POLICY
     Options_SaveKeys(ini, "p1 joystick", g_cfgRawJoyKeys[0], JOY_NONE);
     Options_SaveKeys(ini, "p2 joystick", g_cfgRawJoyKeys[1], JOY_NONE);
     if (!Config_SaveGamepadGroup(ini, 0) || !Config_SaveGamepadGroup(ini, 1)) {

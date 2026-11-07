@@ -99,6 +99,34 @@
 #endif
 
 /*
+ * Does the input layer bind pads through SDL's *game-controller* semantics
+ * instead of translating raw axis/hat/button indices?
+ *
+ * Yes on every SDL2 target. The raw model derives an engine code from the
+ * device's own topology (axis n -> n*2+1/+2, hat -> axes*2+1..4, button b ->
+ * axes*2+hats*4+1+b), which only lines up with the numbers in `[P<n> Joystick]`
+ * on a pad whose topology matches the PC pad those numbers were written for. A
+ * modern controller does not: with 8 axes and no hats its face buttons start at
+ * code 17 while the config's A/B/X/Y (13..16) are axis codes there, and its
+ * d-pad arrives as buttons past the 32 codes one pad slot holds -- so the pad
+ * opens, the stick steers, and the face buttons and d-pad are wrong or dead.
+ * That is exactly the "buttons swapped with the d-pad" report.
+ *
+ * SDL_GameController maps a device through SDL's own database, so A/B/X/Y, the
+ * d-pad, the shoulders and Start mean the same thing everywhere. `[P<n> Gamepad]`
+ * configures that layout, and a missing group falls back to the built-in one.
+ *
+ * Gated on MUGEN_SDL2_API rather than ANDROID_PORT: this was Android-only while
+ * Android was the only SDL2 consumer, which left linux-arm64 and the SDL2
+ * Windows builds on the raw path. The SDL 1.2 backend is the reference build
+ * for the differential tests and keeps the original's raw-joystick lifecycle,
+ * so it stays out.
+ */
+#if defined(MUGEN_SDL2_API)
+#define MUGEN_GAMEPAD_POLICY 1
+#endif
+
+/*
  * Does this build's SDL_mixer decode WAV, MP3 and Ogg Vorbis by itself?
  *
  * Both of this project's SDL_mixer link lines pull the codecs in statically --
