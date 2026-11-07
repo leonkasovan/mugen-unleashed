@@ -70,6 +70,7 @@ case "$TOOLCHAIN_KIND" in
         # GitLab (which starts at 11.2); they live on developer.arm.com behind
         # a redirect to armkeil.blob.core.windows.net.
         TOOLCHAIN_VER=9.2-2019.12
+        TOOLCHAIN_TAG=9.2
         TOOLCHAIN_GLIBC=2.30
         TOOLCHAIN_FILE="gcc-arm-${TOOLCHAIN_VER}-mingw-w64-i686-aarch64-none-linux-gnu.tar.xz"
         TOOLCHAIN_URL="https://developer.arm.com/-/media/Files/downloads/gnu-a/${TOOLCHAIN_VER}/binrel/${TOOLCHAIN_FILE}"
@@ -80,6 +81,7 @@ case "$TOOLCHAIN_KIND" in
         ;;
     15.3|15.3.rel2)
         TOOLCHAIN_VER=15.3.rel2
+        TOOLCHAIN_TAG=15.3
         TOOLCHAIN_GLIBC=2.42
         TOOLCHAIN_FILE="arm-gnu-toolchain-${TOOLCHAIN_VER}-mingw-w64-x86_64-aarch64-none-linux-gnu.zip"
         # Note %2F: the same URL with a literal "/" in the project path is 404.
@@ -93,7 +95,15 @@ esac
 # TOOLCHAIN_DIR must end up holding bin/aarch64-none-linux-gnu-gcc.exe. The two
 # archives differ in shape -- 15.3 unpacks its tree directly, 9.2 wraps it in a
 # gcc-arm-<version>-... directory -- so install_toolchain() flattens that.
-TOOLCHAIN_DIR="${TOOLCHAIN_DIR:-C:/arm-gnu-toolchain}"
+#
+# The default carries the toolchain version in its name: one directory per
+# ARM64_TOOLCHAIN. A single shared C:/arm-gnu-toolchain means switching the
+# version has to destroy whatever is already installed there, and a tree put
+# there by hand (no marker file) is indistinguishable from one --setup made --
+# so the default would have offered to wipe a perfectly good 15.3 install to
+# make room for the 9.2 one. Versioned directories cannot collide, and the two
+# can be kept side by side.
+TOOLCHAIN_DIR="${TOOLCHAIN_DIR:-C:/arm-gnu-toolchain-${TOOLCHAIN_TAG}}"
 
 CROSS=aarch64-none-linux-gnu-
 XSYSROOT="$ROOT/build/tmp/arm64-sysroot"
