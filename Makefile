@@ -156,9 +156,20 @@ ifneq ($(strip $(CROSS_COMPILE)),)
     # target .pc with -I${includedir} came back as the host's path and the build
     # compiled against the host's SDL2 headers. Pointing both variables at the
     # target tree is what makes ${includedir} resolve to the target.
+    #
+    # PKG_CONFIG_PATH has to be cleared as well, and it is not optional: pkgconf
+    # searches it *in addition to* PKG_CONFIG_LIBDIR, so an inherited value wins
+    # over the target tree. MSYS2 exports one by default
+    # (C:\msys64\mingw64\lib\pkgconfig;...), and the mingw64 tree carries a
+    # newer SDL2 under the same package name -- so the arm64 build silently
+    # compiled against the *host's* SDL2 2.32 headers and died inside the
+    # toolchain's arm_neon.h, thousands of lines away from the cause. The guard
+    # below CPPFLAGS catches the same class of leak if it returns another way.
+    # Port fix: the replacement was incomplete, not just the libdir.
     MUGEN_HOST_PKG_CONFIG ?= $(firstword $(foreach p,pkg-config pkgconf,$(if $(shell command -v $(p) 2>/dev/null && echo $(p)),$(p))))
     ifeq ($(filter default file environment undefined,$(origin PKG_CONFIG)),$(origin PKG_CONFIG))
       PKG_CONFIG := env PKG_CONFIG_LIBDIR='$(MUGEN_CROSS_LIB)/pkgconfig' \
+                          PKG_CONFIG_PATH='' \
                           PKG_CONFIG_SYSTEM_INCLUDE_PATH='$(MUGEN_CROSS_INC)' \
                           PKG_CONFIG_SYSTEM_LIBRARY_PATH='$(MUGEN_CROSS_LIB)' \
                           PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1 PKG_CONFIG_ALLOW_SYSTEM_LIBS=1 \
@@ -637,6 +648,33 @@ endif
 # A cross build puts the target's include tree first and -- with -nostdinc --
 # leaves only that plus the toolchain's own headers reachable. -isystem keeps
 # the dependency headers out of the -Wall/-W3 warnings: they are not ours.
+#
+# That ordering is the reason a leaked .pc file has to be an error rather than a
+# warning: cpp searches *every* -I before *any* -isystem, whatever order they
+# appear in on the command line, so one host -I from pkg-config outranks the
+# target tree above. Check what pkg-config actually answered instead of trusting
+# the environment to hold the right answer (see PKG_CONFIG_PATH at the top).
+#
+# Pure make on purpose: a case/loop in $(shell ...) is not safe here, because
+# make counts parentheses while it scans for the closing ')' of the function and
+# a shell 'case' pattern ends in one -- it truncates the script silently. The
+# tree is accepted under either spelling it can arrive in: make's $(abspath)
+# answers /c/... from MSYS while pkg-config answers C:/... for the same file, and
+# comparing only one of them reports a correct tree as a leak. cygpath -m is what
+# bridges the two; off MSYS the command is absent and the plain form is used.
+ifneq ($(strip $(MUGEN_CROSS_SYSROOT)),)
+  MUGEN_CROSS_SYSROOT_WIN := $(shell cygpath -m '$(MUGEN_CROSS_SYSROOT)' 2>/dev/null)
+  MUGEN_CROSS_INC_OK := $(MUGEN_CROSS_SYSROOT)% \
+                        $(if $(MUGEN_CROSS_SYSROOT_WIN),$(MUGEN_CROSS_SYSROOT_WIN)%)
+  MUGEN_CROSS_FOREIGN_INC := $(filter-out $(MUGEN_CROSS_INC_OK), \
+      $(patsubst -I%,%,$(filter -I%,$(PKG_CFLAGS) $(SDL_CFLAGS))))
+  ifneq ($(strip $(MUGEN_CROSS_FOREIGN_INC)),)
+    $(error pkg-config returned include paths outside the target tree: $(MUGEN_CROSS_FOREIGN_INC) \
+            every dependency header must come from $(MUGEN_CROSS_SYSROOT); \
+            a host .pc file was picked up (check PKG_CONFIG_PATH / PKG_CONFIG_LIBDIR, \
+            or rebuild the tree with port/arm64/build.sh --sysroot))
+  endif
+endif
 CPPFLAGS += $(CROSS_CPPFLAGS) \
             -I$(SRC_DIR) \
             -I$(TP_DIR)/libresample/include \

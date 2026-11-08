@@ -60,13 +60,13 @@ plays a full match with no errors; the 15.3 build is rejected by the loader.
 | Need | Handled by |
 |---|---|
 | An `aarch64-none-linux-gnu` compiler | `--setup` downloads Arm's Mingw-w64 build and verifies it against the vendor's published SHA-256. Installed into `TOOLCHAIN_DIR` (default `C:/arm-gnu-toolchain`). |
-| SDL2, SDL2_mixer, SDL2_ttf, zlib, libpng, FreeType for aarch64 | `tools/make_sysroot.sh` copies them out of an existing arm64 Ubuntu root into `build/tmp/arm64-sysroot/`. |
+| SDL2, SDL2_mixer, SDL2_ttf, zlib, libpng, FreeType for aarch64 | downloaded as `arm64-sysroot.zip` (a pinned, SHA-256-verified release asset) and unpacked into `build/tmp/arm64-sysroot/`. |
 | pkg-config | the host's, with its search path replaced by the tree above. |
 
 The Arm toolchain ships a complete glibc but **no SDL**: it is a bare
 `--target=aarch64-none-linux-gnu` toolchain, not a distribution root. That is why
-the dependency tree exists, and why its libraries are taken from an arm64 root
-rather than cross-built.
+the dependency tree exists, and why it is published as an asset instead of being
+assembled on the build machine.
 
 ## Usage
 
@@ -74,7 +74,7 @@ rather than cross-built.
 port/arm64/build.sh                 download anything missing, then build
 port/arm64/build.sh --setup         download the toolchain, then stop
 port/arm64/build.sh --check-tools   report what is present, build nothing
-port/arm64/build.sh --sysroot       rebuild the dependency tree, then build
+port/arm64/build.sh --sysroot       re-download the dependency tree, then build
 port/arm64/build.sh --clean         remove this port's build output
 port/arm64/build.sh --no-sysroot    use the existing tree as-is
 port/arm64/build.sh --offline       fail instead of downloading
@@ -91,7 +91,8 @@ Environment overrides:
 | Variable | Default | Meaning |
 |---|---|---|
 | `TOOLCHAIN_DIR` | `C:/arm-gnu-toolchain` | where the toolchain is unzipped |
-| `ARM64_ROOT_FS` | auto-detected | the arm64 root to copy dependencies from |
+| `ARM64_SYSROOT_URL` | the `toolchains-v1.0` release asset | where the dependency tree comes from |
+| `ARM64_SYSROOT_SHA256` | pinned in `build.sh` | its expected hash; needed when the asset is republished |
 | `MUGEN_GLES` | `1` | same as `make MUGEN_GLES=`; `--gles` wins |
 | `DEVICE` | `ark@192.168.7.2` | device for `--upload` |
 | `DEVICE_PASS` | *(prompted)* | its password; set it to run `--upload` unattended |
@@ -138,15 +139,30 @@ What it does, and why:
 `sshpass` is required locally (MSYS2: `pacman -S sshpass`). Without
 `DEVICE_PASS` the password is prompted for.
 
-## The dependency source root
+## The dependency tree
 
-`tools/make_sysroot.sh` copies from an **aarch64 Ubuntu/Debian root
-filesystem** — a WSL distro's root, a Docker `--platform linux/arm64` export, or
-a handheld's `/`. It only reads from it.
+`build.sh` downloads `arm64-sysroot.zip` from this project's `toolchains-v1.0`
+release into `build/tmp/arm64-sysroot/`, keeping the archive in
+`build/tmp/arm64-downloads/` as a cache. The SHA-256 is pinned in `build.sh` and
+checked on every use, so a truncated or replaced download cannot become the tree
+that gets linked:
 
-With no `ARM64_ROOT_FS`, it looks for `/home/deck/ubuntu_root_arm64` and, from
-Windows, the same path under `//wsl.localhost/<distro>/`, then prints what it
-found. Set `ARM64_ROOT_FS` when the root lives anywhere else.
+```
+arm64-sysroot.zip   15.8 MB  ->  39 MB unpacked, 273 files
+sha256 16bbbf25b83b770f92ab478e330ea9eca0351c1f5792037ba958f02bece65049
+```
+
+`ARM64_SYSROOT_URL` and `ARM64_SYSROOT_SHA256` override both, for a fork or a
+re-published asset. The tree holds SDL2, SDL2_mixer, SDL2_ttf, zlib, libpng16 and
+FreeType as shared objects, their headers, hand-written `.pc` files and the
+link-time closure in `usr/lib/rpath/` — see `docs/BUILD-LINUX.md` for what is in
+it and why. It was assembled once from an aarch64 Ubuntu 22.04 root and is the
+same for every host; nothing in this repository regenerates it, because that
+needs an aarch64 root filesystem most checkouts do not have.
+
+An install is uploaded only after its checksum, and it is unpacked beside the
+destination (`arm64-sysroot.mugen-new`) and swapped in, so a failed download or a
+half-extracted zip leaves the working tree in place.
 
 ## Limitations
 
@@ -205,7 +221,6 @@ game tree.
 ```
 port/arm64/
   build.sh              entry point: toolchain, dependency tree, make
-  tools/make_sysroot.sh builds build/tmp/arm64-sysroot from an arm64 root
   README.md             this file
 ```
 

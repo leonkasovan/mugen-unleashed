@@ -5,7 +5,7 @@
 #   port/arm64/build.sh              download anything missing, then build
 #   port/arm64/build.sh --setup      download the toolchain, then stop
 #   port/arm64/build.sh --check-tools  report what is present, build nothing
-#   port/arm64/build.sh --sysroot    rebuild the dependency tree, then build
+#   port/arm64/build.sh --sysroot    re-download the dependency tree, then build
 #   port/arm64/build.sh --clean      remove this port's build output
 #   port/arm64/build.sh --no-sysroot  use the existing tree as-is (do not check)
 #   port/arm64/build.sh --offline    fail instead of downloading anything
@@ -33,9 +33,17 @@
 #      (default C:/arm-gnu-toolchain). --setup downloads Arm's official archive
 #      and verifies it against the checksum Arm publishes.
 #   2. a dependency tree (SDL2, SDL2_mixer, SDL2_ttf, zlib, libpng, FreeType as
-#      shared objects). The toolchain ships no SDL, so the libraries are taken
-#      from an arm64 Ubuntu root. tools/make_sysroot.sh copies them;
-#      ARM64_ROOT_FS picks the root.
+#      shared objects, plus hand-written .pc files). The toolchain ships no SDL,
+#      the target has no sysroot to link against, and building the whole stack
+#      with a cross compiler is a project of its own -- so the tree is published
+#      as a release asset (arm64-sysroot.zip) and downloaded here. It is
+#      unpacked into build/tmp/arm64-sysroot/ and verified against a SHA-256
+#      pinned in this script; ARM64_SYSROOT_URL / ARM64_SYSROOT_SHA256 override
+#      both, for a fork or a re-published asset.
+#
+#      The tree's contents are the link-time closure of the six libraries the
+#      engine links (see docs/BUILD-LINUX.md). Its usr/lib/rpath/ is not a
+#      runtime search path: the finished binary has no RPATH.
 #
 # Output: build/linux-arm64-aarch64-none-linux-gnu-sdl2/
 #           mugen-linux-arm64-aarch64-none-linux-gnu
@@ -108,6 +116,18 @@ TOOLCHAIN_DIR="${TOOLCHAIN_DIR:-C:/arm-gnu-toolchain-${TOOLCHAIN_TAG}}"
 CROSS=aarch64-none-linux-gnu-
 XSYSROOT="$ROOT/build/tmp/arm64-sysroot"
 DOWNLOADS="$ROOT/build/tmp/arm64-downloads"
+
+# The dependency tree. A release asset rather than something assembled on the
+# build machine: it is the same 39 MB of headers, shared objects and .pc files
+# for every host, and producing it needs an aarch64 root filesystem that most
+# checkouts do not have. The SHA-256 is pinned so a changed or truncated
+# download cannot silently become the tree that gets linked; both values can be
+# overridden when a fork publishes its own copy:
+#
+#   ARM64_SYSROOT_URL=https://... ARM64_SYSROOT_SHA256=<hex> port/arm64/build.sh
+SYSROOT_URL="${ARM64_SYSROOT_URL:-https://github.com/leonkasovan/mugen-unleashed/releases/download/toolchains-v1.0/arm64-sysroot.zip}"
+SYSROOT_FILE="arm64-sysroot.zip"
+SYSROOT_SHA256="${ARM64_SYSROOT_SHA256:-16bbbf25b83b770f92ab478e330ea9eca0351c1f5792037ba958f02bece65049}"
 
 # Device for --upload. The password is not a variable here on purpose: it is
 # read from DEVICE_PASS, or prompted for, and only ever handed to sshpass on
@@ -257,6 +277,10 @@ install_toolchain() {
     # must hold bin/ either way, so whatever single top directory appears is
     # unwrapped.
     stage="$DOWNLOADS/stage-${TOOLCHAIN_VER}"
+    # Kept separately: flattening below reassigns $stage to the inner directory,
+    # and the wrapper around it is empty and must not outlive the install (an
+    # empty stage-<version> directory used to be left in $DOWNLOADS).
+    stageroot="$stage"
     rm -rf "$stage" && mkdir -p "$stage"
     case "$TOOLCHAIN_FILE" in
         *.zip)
@@ -297,7 +321,7 @@ install_toolchain() {
         [ ! -e "$backup" ] || mv "$backup" "$TOOLCHAIN_DIR"
         fail "cannot install replacement; previous toolchain restored"
     fi
-    rm -rf "$backup" "$stage"
+    rm -rf "$backup" "$stage" "$stageroot"
     info "installed into $TOOLCHAIN_DIR"
 
 }
@@ -345,11 +369,77 @@ check_sysroot() {
 }
 
 # --------------------------------------------------------------- sysroot
-build_sysroot() {
-    say "Dependency tree"
-    local args=()
-    [ -n "${ARM64_ROOT_FS:-}" ] && args+=(--root "$ARM64_ROOT_FS")
-    bash "$HERE/tools/make_sysroot.sh" "${args[@]}" --dest "$XSYSROOT"
+#
+# Download, verify and unpack the dependency tree. Same discipline as the
+# toolchain above: the archive is cached under $DOWNLOADS and checked against
+# the pinned SHA-256 every time it is used, and the tree is prepared beside the
+# destination and swapped in only once it is known to be complete. A
+# half-unpacked sysroot breaks every later run, and the tree already in place is
+# what would get the blame.
+install_sysroot() {
+    local archive stagedir tree dest backup
+    say "Dependency tree ($SYSROOT_FILE, sha256)"
+
+    mkdir -p "$DOWNLOADS"
+    archive="$DOWNLOADS/$SYSROOT_FILE"
+
+    if [ -f "$archive" ] && [ "$(hash_of sha256 "$archive")" = "$SYSROOT_SHA256" ]; then
+        info "cached download verified (sha256)"
+    else
+        [ "$OFFLINE" = 1 ] && fail "--offline: $archive is missing or fails its checksum"
+        rm -f "$archive"
+        info "downloading $SYSROOT_FILE (about 16 MB)"
+        info "$SYSROOT_URL"
+        fetch "$SYSROOT_URL" "$archive"
+        if [ "$(hash_of sha256 "$archive")" != "$SYSROOT_SHA256" ]; then
+            rm -f "$archive"
+            fail "$SYSROOT_FILE failed its SHA-256; nothing was extracted
+       expected $SYSROOT_SHA256
+       (a re-published asset needs ARM64_SYSROOT_SHA256=<new hash>)"
+        fi
+        info "sha256 verified"
+    fi
+
+    command -v unzip >/dev/null 2>&1 || fail "unzip is required (MSYS2: pacman -S unzip)"
+    stagedir="$DOWNLOADS/stage-sysroot"
+    rm -rf "$stagedir" && mkdir -p "$stagedir"
+    info "unpacking"
+    unzip -q -o "$archive" -d "$stagedir" || { rm -rf "$stagedir"; fail "unzip failed"; }
+
+    # The asset is packed with one top directory (arm64-sysroot/), but that is
+    # not its contract: whatever single directory appears is unwrapped, as with
+    # the toolchain archive above.
+    tree="$stagedir"
+    if [ ! -d "$tree/usr" ]; then
+        top=$(find "$stagedir" -mindepth 1 -maxdepth 1 -type d | head -1)
+        [ -n "$top" ] && [ -d "$top/usr" ] || { rm -rf "$stagedir"; fail "unexpected archive layout (no usr/ found)"; }
+        tree="$top"
+    fi
+    [ -f "$tree/usr/lib/pkgconfig/sdl2.pc" ] || {
+        rm -rf "$stagedir"
+        fail "$SYSROOT_FILE did not produce usr/lib/pkgconfig/sdl2.pc; the existing tree was kept"
+    }
+
+    # Prepare beside the destination so the final renames stay on one volume,
+    # and keep the old tree until the new one is in place.
+    dest="$XSYSROOT.mugen-new"
+    backup="$XSYSROOT.mugen-old"
+    [ ! -e "$dest" ] && [ ! -e "$backup" ] || {
+        rm -rf "$stagedir"
+        fail "unfinished sysroot transaction at $dest or $backup; existing tree was kept"
+    }
+    mkdir -p "$(dirname "$XSYSROOT")"
+    mv "$tree" "$dest" || { rm -rf "$stagedir"; fail "cannot stage the tree beside $XSYSROOT"; }
+    rm -rf "$stagedir"
+    if [ -e "$XSYSROOT" ]; then
+        mv "$XSYSROOT" "$backup" || { rm -rf "$dest"; fail "cannot back up the existing tree"; }
+    fi
+    if ! mv "$dest" "$XSYSROOT"; then
+        [ ! -e "$backup" ] || mv "$backup" "$XSYSROOT"
+        fail "cannot install the dependency tree; the previous one was restored"
+    fi
+    rm -rf "$backup"
+    info "installed into $XSYSROOT"
 }
 
 # ------------------------------------------------------------------ build
@@ -380,7 +470,7 @@ fi
 
 if [ "$SKIP_SYSROOT" = 0 ]; then
     if [ "$DO_SYSROOT" = 1 ] || ! check_sysroot >/dev/null 2>&1; then
-        build_sysroot
+        install_sysroot
     fi
 fi
 

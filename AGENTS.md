@@ -72,7 +72,7 @@ Each entry point owns its own subtree and never writes into another's.
 
 | `build/mingw64-sdl2/` | plain `make` with the 64-bit kit on `PATH`, or `make MUGEN_TARGET=win64` (Windows, experimental) | the same shape, `mugen-mingw-win64-sdl2.exe` |
 | `build/<linux-target>/` | root `Makefile` (Linux) | same shape, `mugen-linux-<arch>` |
-| `build/<linux-target>-<cross-prefix>-<sdl>/` | root `Makefile` with `CROSS_COMPILE=`/`XSYSROOT=` (via `port/arm64/build.sh`) | same shape, `mugen-linux-<arch>-<prefix>`; `build/tmp/arm64-sysroot/` holds the dependency tree it links against, `build/tmp/arm64-downloads/` the cached toolchain zip |
+| `build/<linux-target>-<cross-prefix>-<sdl>/` | root `Makefile` with `CROSS_COMPILE=`/`XSYSROOT=` (via `port/arm64/build.sh`) | same shape, `mugen-linux-<arch>-<prefix>`; `build/tmp/arm64-sysroot/` holds the dependency tree it links against, `build/tmp/arm64-downloads/` the cached toolchain and sysroot archives |
 | `build/mingw-debug/` | `make DEBUG=1 BUILD=build/mingw-debug` | an explicit `BUILD=` override |
 | `build/x86-release/`, `build/x86-debug/` | root `CMakeLists.txt` via `CMakePresets.json` | MSVC `mugen-msvc-win32-sdl1.exe` + `.pdb` |
 | `build/psvita*/` | `port/psvita/CMakeLists.txt` (you choose the dir) | `mugen`, `mugen-psvita.self`, `mugen-psvita.vpk`, `vita-mugen.cfg` |
@@ -223,10 +223,16 @@ downloads/gnu-a/9.2-2019.12/binrel/` with a top-level version directory and an
 SHA-256 and no version directory. The GitLab URL needs `%2F` in the project
 path — a literal `/` returns 404.
 
-`port/arm64/tools/make_sysroot.sh` then copies SDL2/SDL2_mixer/SDL2_ttf/zlib/
-libpng/FreeType out of an arm64 Ubuntu root into `build/tmp/arm64-sysroot/`
-(set `ARM64_ROOT_FS` to choose the root). It only reads from the root; the
-toolchain directory is written to by `--setup` alone, and nowhere else.
+The dependency tree those libraries live in is a **release asset**, not something
+this repository builds: `build.sh` downloads `arm64-sysroot.zip` from the
+project's `toolchains-v1.0` release into `build/tmp/arm64-sysroot/` (cache in
+`build/tmp/arm64-downloads/`) and verifies it against a SHA-256 pinned in
+`build.sh`; `ARM64_SYSROOT_URL`/`ARM64_SYSROOT_SHA256` override both for a fork or
+a republished asset. Assembling it needs an aarch64 Ubuntu root filesystem and
+produces the same tree every time, so it is published once and consumed as data;
+the generator that used to do it locally is no longer in the tree. The toolchain
+directory is written to by `--setup` alone, and nowhere else — see
+`docs/BUILD-LINUX.md` ("The dependency tree") for what it holds and why.
 
 **Pad binding.** Every SDL2 target binds controllers through SDL's
 game-controller semantics (`MUGEN_GAMEPAD_POLICY`, `src/mugen.h`), configured by

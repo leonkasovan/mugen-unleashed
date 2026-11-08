@@ -297,51 +297,51 @@ truncated binary where a working one was.
 #### The dependency tree
 
 The toolchain is a bare `--target=aarch64-none-linux-gnu` cross toolchain: it
-ships a complete glibc and **no SDL**. `port/arm64/tools/make_sysroot.sh` copies
-the missing libraries out of an existing arm64 Ubuntu root into
-`build/tmp/arm64-sysroot/`. `build.sh` runs it when the tree is absent;
-`--sysroot` forces it.
-
-Any aarch64 Ubuntu/Debian root filesystem (`usr/lib/aarch64-linux-gnu/`,
-`usr/include/{SDL2,...}`) works: a WSL distro's root, a Docker
-`--platform linux/arm64` export, or a handheld's `/`. It is only read from. Set
-`ARM64_ROOT_FS` when it lives somewhere unusual; otherwise the script probes the
-default and prints what it picked:
+ships a complete glibc and **no SDL**. The missing libraries arrive as a release
+asset, `arm64-sysroot.zip`, which `build.sh` downloads into
+`build/tmp/arm64-sysroot/` when the tree is absent; `--sysroot` re-downloads it.
+The archive is cached in `build/tmp/arm64-downloads/` and verified against a
+SHA-256 pinned in `build.sh` on every use, so a truncated or replaced download
+cannot become the tree that gets linked:
 
 ```
-root: //wsl.localhost/Ubuntu-22.04/home/deck/ubuntu_root_arm64
-      (found through the WSL share; pass --root to use another)
+arm64-sysroot.zip   15.8 MB
+sha256 16bbbf25b83b770f92ab478e330ea9eca0351c1f5792037ba958f02bece65049
+                    39 MB unpacked, 273 files
 ```
 
-Running from **MSYS** is the more fragile case, and the script compensates: the
-root's headers include links such as `usr/include/png.h -> libpng16/png.h` and
-`…/SDL2/SDL_platform.h`, which the Windows side cannot read through the share at
-all (`Input/output error`, even for `[ -e ]`). Those are resolved inside the
-already-copied tree instead, and the SONAME names are **copied** rather than
-symlinked, because a link the Windows-side `ld` cannot follow reads as
-`cannot find -l:libSDL2-2.0.so.0`.
+`ARM64_SYSROOT_URL` and `ARM64_SYSROOT_SHA256` override both, for a fork or a
+re-published asset. The tree is data, not a build step: it was assembled once
+from an aarch64 Ubuntu 22.04 root (SDL2 2.0.10, SDL2_mixer 2.0.4, SDL2_ttf
+0.14.1, zlib 1.2.11, libpng16, FreeType 2.10.1 — all shared objects) together
+with the headers and hand-written `.pc` files the Makefile asks for, and it is
+the same tree for every host that cross-builds this engine. Nothing in this
+repository regenerates it; producing it needs an aarch64 root filesystem that
+most checkouts do not have.
 
-`port/arm64/tools/make_sysroot.sh` copies from the root, it does not build: SDL2,
-SDL2_mixer, SDL2_ttf, zlib, libpng and FreeType as **shared** objects, plus the
-headers and hand-written `.pc` files the Makefile asks for. It is worth reading
-before using it, because three of its choices are not obvious:
+What is in it, and why — every row was a link failure at some point:
 
 | What | Why |
 |---|---|
-| Written `.pc` files, not the root's | The distribution's `sdl2.pc` lists X11, Wayland, ALSA and Pulse as its dependency set. This engine only calls into SDL itself. |
-| `-l:libSDL2-2.0.so.0` rather than `-lSDL2` | The tree carries the static archives too, and `ld` prefers a `.a` over a `.so` when both are present — the static links then fail on the Wayland/FLAC symbols nothing provides. |
-| `usr/lib/rpath/` | ld resolves the *transitive* `NEEDED` libraries of `libSDL2-2.0.so.0` (libasound, libpulse, libX11, libFLAC, ...) while linking. They are `-rpath-link` only: nothing is linked in and nothing ships. |
+| Written `.pc` files, not the distribution's | The distribution's `sdl2.pc` lists X11, Wayland, ALSA and Pulse as its dependency set. This engine only calls into SDL itself. |
+| `-l:libSDL2-2.0.so.0` rather than `-lSDL2` | The SONAME is named exactly, so the shared object is the one used and there is no archive for `ld` to prefer. |
+| `usr/lib/rpath/` | `ld` resolves `NEEDED` entries *only* through `-rpath-link`, never through `-L`. So the closure of the six libraries the engine links (libasound, libpulse, libX11, libFLAC, ...) lives here, the six included. `-rpath-link` only: nothing is linked in and nothing ships. |
+| The closure is *computed*, not swept | Walking `NEEDED` from the six libraries gives 59 objects / ~16 MB. The rest of the arm64 userspace — LLVM, ICU, the sanitizers, GTK — is unreachable from SDL2 and can never be asked for; carrying it made the tree 479 MB and produced a byte-identical binary. |
+| No `*.a` in the tree | Every `.pc` names its shared object (`-l:libSDL2-2.0.so.0`), so an archive is only reachable through `-lSDL2`, which nothing here asks for. |
+| No glibc, no `ld-linux*.so.1` | The arm64 root's `libc.so.6`/`libpthread.so.0`/`libdl.so.2` are `GLIBC_PRIVATE`-incompatible with the toolchain's own and must never enter the link line. The loader is the toolchain's business, not the tree's. |
 
-Everything the script copies stays inside the repository. The toolchain directory
-is only ever read — the sysroot it brings travels with it.
+Everything the tree holds stays inside the repository, under the git-ignored
+`build/`. The toolchain directory is only ever read — the sysroot it brings
+travels with it.
 
 #### What the Makefile does differently for a cross build
 
 | Variable | Effect |
 |---|---|
 | `CROSS_COMPILE` | Prefixes `CC`/`AR`/`STRIP`, so the host `gcc` cannot leak in. |
-| `XSYSROOT` | The dependency tree. pkg-config's search path is *replaced* with it (`PKG_CONFIG_LIBDIR`) — the host's `.pc` files have the same names. |
+| `XSYSROOT` | The dependency tree. pkg-config's search path is *replaced* with it (`PKG_CONFIG_LIBDIR`, and `PKG_CONFIG_PATH` is cleared — pkgconf searches the two together, and MSYS2 exports one by default). |
 | `PKG_CONFIG_SYSTEM_*` | Also replaced: pkgconf qualifies system `-I`/`-L` against the host (`/mingw64/include`), so a target `.pc` otherwise resolves to the host's paths. |
+| the `-I` guard | Every include path pkg-config returns must lie inside `XSYSROOT`; otherwise the build stops with one line instead of compiling against host headers. cpp searches *any* `-I` before *any* `-isystem`, so a leaked `.pc` outranks the tree. |
 | `-nostdinc` | The target's headers are the only headers; `-idirafter` puts the toolchain's own back. |
 | `--sysroot` | Only when the compiler was not configured with one. Arm's `aarch64-none-linux-gnu` carries its glibc sysroot; a bare cross gcc on Linux does not. |
 | `--static` | Asked of pkg-config, so SDL2's own `-lm -ldl -lpthread` are carried along. The libraries in the tree are still shared objects. |
@@ -438,7 +438,8 @@ does not own.
 The options that do work, in order of preference:
 
 1. **`XSYSROOT` (this page).** No writes outside the repository, and the tree is
-   reproducible from `port/arm64/tools/make_sysroot.sh`.
+   a pinned, checksum-verified release asset rather than something each machine
+   has to assemble.
 2. **Build a static SDL stack into the toolchain.** Configure SDL2 with
    `-DSDL_SHARED=OFF -DSDL_X11=OFF -DSDL_WAYLAND=OFF -DSDL_ALSA=OFF
    -DSDL_PULSEAUDIO=OFF -DSDL_OPENGLES=ON`, install into
@@ -461,14 +462,15 @@ appear in a first attempt.
 | `download failed its vendor SHA-256` | The zip was truncated or altered in transit; nothing was extracted. Re-run `--setup` (the bad file is deleted first). |
 | `the archive did not produce …/gcc` | A half-extracted toolchain. Remove `TOOLCHAIN_DIR` and re-run `--setup`. |
 | `fatal error: math.h: No such file or directory` | `-nostdinc` is on, and the toolchain's own include directories were not detected. The Makefile asks `$(CC) -E -v` for them and re-adds each with `-idirafter`; if you build by hand, do the same. Re-run `make check-toolchain` — it prints the resolved tree and sysroot flags. |
-| `fatal error: SDL2/_real_SDL_config.h` | Debian/Ubuntu splits SDL2's configuration: `include/SDL2/SDL_config.h` is an indirection to `include/<triple>/SDL2/_real_SDL_config.h`. `make_sysroot.sh` merges the two; a manual copy must too. |
-| `… SDL2/SDL_platform.h: Invalid argument` | The distribution ships some SDL2 headers as **symlinks into themselves**. Copy them with `cp -L` (dereference); `cp -a` produces links that dangle. |
-| `cp: cannot stat …/SDL_platform.h: Input/output error` | The root's headers contain links (`png.h -> libpng16/png.h`, `…/SDL2/SDL_platform.h`) that the Windows side cannot read through `//wsl.localhost` at all — `[ -e ]` and `[ -L ]` both fail on them, so a test before the copy skips the header silently. `make_sysroot.sh` copies optimistically and falls back to the already-copied target; a hand-written copy must do the same, or run the script inside WSL. |
-| `fatal error: png.h: No such file or directory` | As above, one step further on: `png.h`/`pngconf.h`/`pnglibconf.h` are links into `libpng16/`. They must be resolved inside the copy, not read from the share. |
-| `cannot find -l:libSDL2-2.0.so.0` | The SONAME link is missing or is a WSL symlink on a DrvFs mount, which the Windows-side `ld` cannot resolve. `make_sysroot.sh` copies instead of linking for exactly this reason. |
-| Undefined `X*` / `pa_*` / `snd_*` / `wl_*` | `ld` reached the **static** `libSDL2.a` (it prefers `.a` over `.so` when both are in one directory), or `-rpath-link` to `usr/lib/rpath/` is missing. |
-| `undefined reference to __libc_dlopen_mode@GLIBC_PRIVATE` | The arm64 root's `libc.so.6`/`libpthread.so.0`/`libdl.so.2` got into the link line and shadow the toolchain's own. They must never be copied into `usr/lib/rpath/`; `make_sysroot.sh` filters them by SONAME. A tree built by an older version of the script can still hold them — `--sysroot` rebuilds it. |
+| `arm64-sysroot.zip failed its SHA-256` | The download was truncated or the asset was replaced; nothing was extracted and the existing tree was kept. Re-run `--sysroot`. If you re-published the asset yourself, pass the new hash: `ARM64_SYSROOT_SHA256=<hex> port/arm64/build.sh --sysroot`. |
+| `unfinished sysroot transaction at …` | An earlier run died between the renames and left `build/tmp/arm64-sysroot.mugen-new` or `.mugen-old` behind. The tree in place was kept on purpose; delete the leftover and re-run. |
+| `… did not produce usr/lib/pkgconfig/sdl2.pc` | The archive unpacked but it is not the dependency tree (wrong asset, or a zip of a zip). Nothing was installed and the existing tree was kept. |
+| `cannot find -l:libSDL2-2.0.so.0` | The tree's SONAME-named copies are missing. They are real copies and not symlinks, because a link the Windows-side `ld` cannot follow reads as exactly this error. |
+| Undefined `X*` / `pa_*` / `snd_*` / `wl_*` | `ld` reached a **static** `libSDL2.a` (it prefers `.a` over `.so` when both are in one directory), or `-rpath-link` to `usr/lib/rpath/` is missing. |
+| `libSDL2_ttf-2.0.so.0: undefined reference to \`FT_Done_Face'` (and its siblings) | The `usr/lib/rpath/` copy of `libfreetype.so.6` is missing. `ld` finds a `NEEDED` entry through `-rpath-link` and **not** through `-L`, so being in `usr/lib/` is not enough for a library SDL2_ttf imports. Only a hand-made tree gets this wrong; the published one carries the six roots in `rpath/` for exactly this reason. |
+| `undefined reference to __libc_dlopen_mode@GLIBC_PRIVATE` | The arm64 root's `libc.so.6`/`libpthread.so.0`/`libdl.so.2` got into the link line and shadow the toolchain's own. The published tree ships no glibc at all; a hand-made one must filter it by SONAME. |
 | `CROSS_COMPILE=… needs XSYSROOT=<dir>` | Building by hand without a dependency tree. The Makefile refuses on purpose: without one, pkg-config answers from the **host**, the compile picks up host headers and the link mixes architectures. Run `port/arm64/build.sh`, or point `XSYSROOT` at `build/tmp/arm64-sysroot`. |
+| Thousands of errors inside `arm_neon.h` (`expected declaration specifiers before '__extension__'`), mentioning headers under `C:/msys64/mingw64/include/SDL2` | A **host** `.pc` was picked up, so the compile used MSYS2's SDL2 (2.3x) instead of the tree's. MSYS2 exports `PKG_CONFIG_PATH` by default and pkgconf searches it *in addition to* `PKG_CONFIG_LIBDIR`, so clearing only the libdir is not enough; the Makefile now clears both and refuses to build if any `-I` lies outside `XSYSROOT`. Nothing is wrong with the toolchain — read the *first* error, not the avalanche. |
 | `version GLIBC_2.38 not found` on the target | The glibc floor — the toolchain is newer than the device. `ARM64_TOOLCHAIN=9.2` for glibc-2.30 devices; see the table above. |
 
 To see what a cross build actually resolved, rather than guess:
