@@ -79,6 +79,9 @@ static void CapturePad(int code, int pressed)
     last_pressed = pressed;
 }
 
+/* Fullscreen is covered by test_fullscreen; these input tests have no window. */
+void Video_HandleFullscreenKey(int *key) { (void)key; }
+
 void Video_OnResize(int width, int height)
 {
     (void)width;
@@ -95,7 +98,7 @@ static void test_vita_topology(void)
     SDL_Event ev;
 
     SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER);
-    if (SDL_JoystickAttachVirtual(SDL_JOYSTICK_TYPE_GAMECONTROLLER, 4, 12, 0) < 0) {
+    if (SDL_JoystickAttachVirtual(SDL_JOYSTICK_TYPE_UNKNOWN, 4, 12, 0) < 0) {
         printf("SKIP: no virtual joystick support (%s)\n", SDL_GetError());
         return;
     }

@@ -113,6 +113,7 @@ void Sdl2_ResetRenderer(void);
 void Sdl2_PresentFrame(void);
 void Sdl2_MarkDisplayDirty(void);
 void Sdl2_SetCaption(const char *title, const char *icon);
+int Sdl2_SetFullscreen(SDL_Surface *screen, int fullscreen);
 int Sdl2_ToggleFullScreen(SDL_Surface *screen);
 int Sdl2_GL_SetAttribute(SDL_GLattr attr, int value);
 void Sdl2_GL_SwapBuffers(void);

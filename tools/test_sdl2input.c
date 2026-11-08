@@ -47,6 +47,9 @@ ActivateFn g_onActivate;
 int g_quitRequested;
 
 /* Called by Events_Poll on a window resize; nothing in these tests resizes. */
+/* Fullscreen is covered by test_fullscreen; these input tests have no window. */
+void Video_HandleFullscreenKey(int *key) { (void)key; }
+
 void Video_OnResize(int width, int height)
 {
     (void)width;
@@ -103,9 +106,9 @@ static void test_pad_slot_mapping(void)
      * forces the ids to shift, which is what makes this test able to tell the
      * mapping from indexing at all.
      */
-    if (SDL_JoystickAttachVirtual(SDL_JOYSTICK_TYPE_GAMECONTROLLER, 4, 12, 1) < 0 ||
-        SDL_JoystickAttachVirtual(SDL_JOYSTICK_TYPE_GAMECONTROLLER, 4, 12, 1) < 0 ||
-        SDL_JoystickAttachVirtual(SDL_JOYSTICK_TYPE_GAMECONTROLLER, 4, 12, 1) < 0) {
+    if (SDL_JoystickAttachVirtual(SDL_JOYSTICK_TYPE_UNKNOWN, 4, 12, 1) < 0 ||
+        SDL_JoystickAttachVirtual(SDL_JOYSTICK_TYPE_UNKNOWN, 4, 12, 1) < 0 ||
+        SDL_JoystickAttachVirtual(SDL_JOYSTICK_TYPE_UNKNOWN, 4, 12, 1) < 0) {
         printf("SKIP: SDL_JoystickAttachVirtual unavailable (%s)\n", SDL_GetError());
         return;
     }
@@ -355,9 +358,9 @@ static void test_console_integration(void)
      * which Console_Create() otherwise allocates. */
     g_console->pending = (DynArray *)calloc(1, sizeof(DynArray));
     if (g_console->pending != NULL) {
-        g_console->pending->data = calloc(0x40, 4);
+        g_console->pending->data = calloc(0x40, sizeof(char *));
         g_console->pending->capacity = 0x40;
-        g_console->pending->elem_size = 4;
+        g_console->pending->elem_size = sizeof(char *);
     }
     if (g_console->scratch == NULL || g_console->bindings == NULL || g_console->pending == NULL) {
         printf("SKIP: could not finish the console\n");

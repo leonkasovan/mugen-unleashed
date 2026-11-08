@@ -757,7 +757,9 @@ int Screen_ReadInput(ScreenLoop *screen)
     }
     g = g_game;
     if (g->safe_mode == 0) {
+#ifndef MUGEN_SDL2_API
         Video_HandleFullscreenKey(&screen->key);
+#endif
         g = g_game;
     } else {
         /* Port addition: safe mode skips the full-screen handler outright,

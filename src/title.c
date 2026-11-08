@@ -1632,7 +1632,9 @@ int KeyConfig_Run(int joystick, int ticks)
         }
         g = g_game;
         if (!g->safe_mode) {
+#ifndef MUGEN_SDL2_API
             Video_HandleFullscreenKey(&key);
+#endif
             g = g_game;
         }
         if (Input_CodePending() && (g_padsActive || g_keyboardActive)) {

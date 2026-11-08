@@ -897,23 +897,22 @@ void Sdl2_SetCaption(const char *title, const char *icon)
     }
 }
 
-int Sdl2_ToggleFullScreen(SDL_Surface *screen)
+/* Explicit, idempotent SDL2 state transition, shared by Windows and Linux. */
+int Sdl2_SetFullscreen(SDL_Surface *screen, int fullscreen)
 {
-    Uint32 flags;
-
     (void)screen;
     if (g_sdl2Video.window == NULL) {
+        SDL_SetError("No SDL2 window for fullscreen transition");
         return 0;
     }
-    flags = SDL_GetWindowFlags(g_sdl2Video.window);
-    if ((flags & SDL_WINDOW_FULLSCREEN) == 0) {
-        if (SDL_SetWindowFullscreen(g_sdl2Video.window, SDL_WINDOW_FULLSCREEN) != 0) {
-            return 0;
-        }
-    } else if (SDL_SetWindowFullscreen(g_sdl2Video.window, 0) != 0) {
-        return 0;
-    }
+    if (SDL_SetWindowFullscreen(g_sdl2Video.window, fullscreen ? SDL_WINDOW_FULLSCREEN : 0) != 0) return 0;
     return 1;
+}
+
+int Sdl2_ToggleFullScreen(SDL_Surface *screen)
+{
+    if (g_sdl2Video.window == NULL) return 0;
+    return Sdl2_SetFullscreen(screen, (SDL_GetWindowFlags(g_sdl2Video.window) & SDL_WINDOW_FULLSCREEN) == 0);
 }
 
 int Sdl2_GL_SetAttribute(SDL_GLattr attr, int value)

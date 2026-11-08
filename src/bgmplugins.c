@@ -945,14 +945,9 @@ int Sdlmix_Init(const BgmPluginConfig *config, const BgmHostCallbacks *host, Bgm
     g_sdlmixVolumes[SDLMIX_TYPE_MP3] = Sdlmix_ReadVolume(settings, "mp3volume", &scratch);
     g_sdlmixVolumes[SDLMIX_TYPE_MIDI] = Sdlmix_ReadVolume(settings, "midivolume", &scratch);
     g_sdlmixVolumes[SDLMIX_TYPE_OGG] = Sdlmix_ReadVolume(settings, "oggvolume", &scratch);
-    /*
-     * Port addition: the per-format volumes decide whether a track is audible
-     * at all, and one of them reading 0 is silence with no other symptom. The
-     * shipped mugen.cfg carries an *empty* `midivolume =`, and Sdlmix_ReadVolume
-     * keeps the original's quirk of treating that as "the value the scratch
-     * variable already holds" -- 0 here -- so MIDI was muted by a config line
-     * that looks like "not set". Printed once, at init.
-     */
+    /* Port diagnostic: an empty value inherits the last parsed format's
+     * scratch value (initially zero), not necessarily zero or the default.
+     * Report the actual values instead of guessing whether MIDI is muted. */
     Log_Printf("bgm: volumes mod=%g wav=%g mp3=%g midi=%g ogg=%g (percent)\n",
                g_sdlmixVolumes[SDLMIX_TYPE_MOD], g_sdlmixVolumes[SDLMIX_TYPE_WAV],
                g_sdlmixVolumes[SDLMIX_TYPE_MP3], g_sdlmixVolumes[SDLMIX_TYPE_MIDI],
@@ -1089,14 +1084,10 @@ int Sdlmix_Open(void *instance, const BgmPluginIo *io, BgmInfo *info, BgmOpenRes
         Log_Printf("bgm: sdlmix cannot decode %s (%s)\n", info->path, Mix_GetError());
         return 4;
     }
-    /* Port addition: MIDI is the one music type SDL_mixer does *not* decode
-     * into the mixer's stream -- it opens the system MIDI device and plays
-     * through that instead, so a machine without a synthesizer (no Microsoft GS
-     * Wavetable Synth, a bare VM, most non-Windows desktops) plays it in total
-     * silence while every call below succeeds. Say so once per track. */
+    /* Port fix: MUS_MID identifies a format, not its active decoder. SDL_mixer
+     * can synthesize MIDI into the audio stream or use native MIDI. */
     if (Mix_GetMusicType(inst->music) == MUS_MID) {
-        Log_Printf("bgm: %s is MIDI; SDL_mixer plays it through the system MIDI "
-                   "device, not through the audio stream\n", info->path);
+        Log_Printf("bgm: %s is MIDI; playback uses SDL_mixer's selected MIDI backend\n", info->path);
     }
     inst->loop = info->loop;
     inst->loop_start = info->loop_start;

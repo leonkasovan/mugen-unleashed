@@ -621,9 +621,9 @@ void Video_OnResize(int width, int height)
 #endif
 }
 
-/* 1 while an Alt+Enter chord has already been acted on; cleared when Alt is
- * released, so holding the pair cannot toggle at the repeat rate. */
-static int s_fullscreenChordHeld;
+#ifndef MUGEN_SDL2_API
+static int s_legacyFullscreenChordHeld;
+#endif
 
 /*
  * 0x0040B9D0 (stored with the command line code): Alt+Enter toggles
@@ -662,30 +662,23 @@ void Video_HandleFullscreenKey(int *key)
                        g_game != NULL ? g_game->fullscreen : -1);
         }
     }
+    if (g_game == NULL) return;
     if (!g_keyState[ENGINE_KEY_LALT] && !g_keyState[ENGINE_KEY_RALT]) {
-        /* Alt is up: the next Alt+Enter is a new chord and may toggle again. */
-        s_fullscreenChordHeld = 0;
+#ifndef MUGEN_SDL2_API
+        s_legacyFullscreenChordHeld = 0;
+#endif
         return;
     }
     if (*key != SDLK_RETURN) {
         return;
     }
-    /*
-     * Port fix: with Alt held, the platform repeats the Enter -- SDL delivers one
-     * keydown per repeat -- and every repeat toggled the window again. Holding
-     * Alt+Enter therefore flipped full screen and windowed back and forth at the
-     * repeat rate, which is reported as "it does not change, the character
-     * taunts": the last repeat decided where the window ended up. One toggle per
-     * chord; the same Enter is also cleared out of g_keyState so the match's
-     * command interpreter (which reads the *state*, not the key queue) never
-     * sees the Enter as gameplay input.
-     */
-    if (s_fullscreenChordHeld != 0) {
-        *key = 0;
-        g_keyState[SDLK_RETURN] = 0;
-        return;
-    }
-    s_fullscreenChordHeld = 1;
+#ifndef MUGEN_SDL2_API
+    if (s_legacyFullscreenChordHeld) { *key = 0; g_keyState[SDLK_RETURN] = 0; return; }
+    s_legacyFullscreenChordHeld = 1;
+#endif
+    /* SDL2 captures physical chords in Keyboard_HandleKey before either input
+     * queue or held state sees Return. Consume failed switches as well. */
+    *key = 0;
     g = g_game;
     g->fullscreen = g->fullscreen == 0;
     Log_Printf("Fullscreen toggle %i\n", g->fullscreen);
@@ -706,8 +699,7 @@ void Video_HandleFullscreenKey(int *key)
         /* Port addition: the flip above is a guess about what the window will
          * do. When the switch is refused the guess is wrong, and leaving it
          * made every later press toggle from a state the window was never in.
-         * Put it back and keep the key, so the caller's menu/game logic still
-         * sees the Enter (which is what a refused Alt+Enter did before). */
+         * Put it back; the fullscreen shortcut must not become gameplay. */
         g->fullscreen = g->fullscreen == 0;
         Log_Printf("fullscreen: switch to %d refused, state kept at %d\n",
                    g->fullscreen == 0, g->fullscreen);
@@ -717,32 +709,19 @@ void Video_HandleFullscreenKey(int *key)
     g = g_game;
     *key = 0;
     g_keyState[SDLK_RETURN] = 0;
-    /*
-     * Port addition: SDL reports the Enter of Alt+Enter twice -- once with Alt
-     * still down, which is the press handled here, and once more after the Alt
-     * is released. That second Enter then acted on whatever menu was open
-     * ("Alt+Enter selects ARCADE") or made the character taunt in a match.
-     * Drop the Enter still waiting in the keyboard queue, down or release; the
-     * queue is FIFO, so anything queued behind it is left alone.
-     */
-    while (g_keyboardQueueRead != g_keyboardQueueWrite) {
-        int queued = g_keyboardQueue[g_keyboardQueueRead];
-
-        if ((queued & ~KEYBOARD_RELEASE) != SDLK_RETURN) {
-            break;
-        }
-        g_keyboardQueueRead++;
-        if (g_keyboardQueueRead >= INPUT_RING_SIZE) {
-            g_keyboardQueueRead = 0;
-        }
-    }
     /* The rest of the engine asks this flag what the window is now: the BGM
      * background mode below, the resizable path and the system.c full-screen
      * check all read it, and it used to keep its start-up value forever. */
     if (g->fullscreen) {
         g_videoFlags |= VIDEO_FULLSCREEN;
+#ifndef ANDROID_PORT
+        g_videoSdlFlags |= SDL_FULLSCREEN;
+#endif
     } else {
         g_videoFlags &= ~VIDEO_FULLSCREEN;
+#ifndef ANDROID_PORT
+        g_videoSdlFlags &= ~SDL_FULLSCREEN;
+#endif
     }
     if (mode == RENDER_OPENGL || mode == RENDER_OPENGL_SCREEN) {
         g_glScreenResized = 1;
@@ -767,31 +746,27 @@ int Video_SetFullscreen(int fullscreen)
     }
     g_videoFullscreen = fullscreen;
     return 1;
+#elif defined(MUGEN_SDL2)
+    /* Port fix: SDL owns fullscreen on every SDL2 desktop. Mixing native
+     * Win32 styles with an SDL exclusive-fullscreen window leaves its flags,
+     * saved placement and display mode inconsistent on later switches. */
+    if (!Sdl2_SetFullscreen(g_screenSurface, fullscreen)) {
+        Log_Printf("fullscreen: SDL refused mode %d (%s)\n", fullscreen, SDL_GetError());
+        return 0;
+    }
+    g_videoFullscreen = fullscreen != 0;
+    return 1;
 #else
 
 #ifdef _WIN32
-#ifndef MUGEN_SDL2
     SDL_SysWMinfo info;
-#endif
     HWND hwnd;
     HWND after;
     int x, y, w, h;
 
-#ifdef MUGEN_SDL2
-    /* SDL2 has no SDL_GetWMInfo; the shim asks SDL_GetWindowWMInfo for the
-     * HWND, which is the only field this function ever read. */
-    hwnd = (HWND)Sdl2_GetWindowHandle();
-    if (hwnd == NULL) {
-        Log_Printf("fullscreen: no window handle\n");
-        return 0;
-    }
-#else
-    memset(&info, 0, sizeof(info));     /* the version is left at 0.0.0 */
-    if (!SDL_GetWMInfo(&info) || info.window == NULL) {
-        return 0;
-    }
+    memset(&info, 0, sizeof(info));
+    if (!SDL_GetWMInfo(&info) || info.window == NULL) return 0;
     hwnd = info.window;
-#endif
     if (g_videoFullscreen == fullscreen) {
         Log_Printf("fullscreen: window already at %d\n", fullscreen);
         return 1;
@@ -799,27 +774,8 @@ int Video_SetFullscreen(int fullscreen)
     if (!fullscreen &&
         (g_savedWindowRect.right <= g_savedWindowRect.left ||
          g_savedWindowRect.bottom <= g_savedWindowRect.top)) {
-        /*
-         * Port fix: the window was *created* full screen, so this function was
-         * never asked to enter it and has no rectangle to restore -- the old
-         * path then called SetWindowPos with an all-zero rect. SDL remembers
-         * the window geometry it created, so let it do the switch.
-         */
-#ifdef MUGEN_SDL2
-        if (g_screenSurface == NULL) {
-            Log_Printf("fullscreen: no surface to hand to SDL\n");
-            return 0;
-        }
-        if (!Sdl2_ToggleFullScreen(g_screenSurface)) {
-            Log_Printf("fullscreen: SDL refused the switch (%s)\n", SDL_GetError());
-            return 0;
-        }
-        Log_Printf("fullscreen: SDL switched to windowed (no saved rectangle)\n");
-        g_videoFullscreen = 0;
-        return 1;
-#else
+        /* SDL1 reference has no saved windowed placement to restore. */
         return 0;
-#endif
     }
     if (fullscreen) {
         HMONITOR monitor;

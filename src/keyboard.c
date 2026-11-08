@@ -14,6 +14,13 @@
 #include "sdl2keys.h"
 #endif
 
+#ifdef MUGEN_SDL2_API
+/* Port fix: physical Return state is separate from gameplay state. A consumed
+ * chord stays consumed until Return-up, even if Alt is released first. */
+static int g_fullscreenReturnHeld;
+static int g_fullscreenReturnConsumed;
+#endif
+
 /*
  * 0x0046E290: a key went down (pressed != 0) or up. Key 0 is ignored. The
  * change is queued, releases with KEYBOARD_RELEASE unless g_keyboardNoReleases
@@ -30,6 +37,30 @@ void Keyboard_HandleKey(int key, int pressed)
         return;
     }
     g_keyModState = SDL_GetModState();
+#ifdef MUGEN_SDL2_API
+    if (key == SDLK_RETURN) {
+        if (!pressed) {
+            g_fullscreenReturnHeld = 0;
+            if (g_fullscreenReturnConsumed) {
+                g_fullscreenReturnConsumed = 0;
+                return;
+            }
+        } else if (!g_fullscreenReturnHeld) {
+            g_fullscreenReturnHeld = 1;
+            if (g_game != NULL && !g_game->safe_mode &&
+                (g_keyState[ENGINE_KEY_LALT] || g_keyState[ENGINE_KEY_RALT])) {
+                int shortcut = SDLK_RETURN;
+                g_fullscreenReturnConsumed = 1;
+                /* SDL's event pump runs on the video thread. Capture before
+                 * g_keyHandler updates g_inputState and queues menu/gameplay. */
+                Video_HandleFullscreenKey(&shortcut);
+                return;
+            }
+        } else if (g_fullscreenReturnConsumed) {
+            return;
+        }
+    }
+#endif
     if (key == KEY_PAUSE_TOGGLE && pressed) {
         g_pauseToggled ^= 1;
     }
@@ -55,6 +86,9 @@ int Keyboard_Init(void)
         return 0;
     }
     memset(g_keyState, 0, sizeof(g_keyState));
+#ifdef MUGEN_SDL2_API
+    g_fullscreenReturnHeld = g_fullscreenReturnConsumed = 0;
+#endif
     g_keyHandler = NULL;
     if (g_keyboardKeepRepeat == 0) {
         g_keyboardKeepRepeat = 0;
@@ -94,6 +128,9 @@ void Keyboard_SyncState(void)
             g_keyState[i] = state[sc];
         }
     }
+    g_fullscreenReturnHeld = g_keyState[SDLK_RETURN] != 0;
+    if (!g_fullscreenReturnHeld) g_fullscreenReturnConsumed = 0;
+    if (g_fullscreenReturnConsumed) g_keyState[SDLK_RETURN] = 0;
     return;
 #endif
     if (count > 0x143) {
