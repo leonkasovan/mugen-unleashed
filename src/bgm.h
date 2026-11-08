@@ -291,9 +291,9 @@ MUGEN_ASSERT_SIZE(BgmEvent, 0x0C);
  * pthread_mutex_t are 4-byte pointers. The MUGEN_ASSERT_SIZE checks below pin
  * that layout, which is the point.
  *
- * BGM_NATIVE_PTHREAD (derived in mugen.h whenever pointers are wider than 4
- * bytes) makes the fields the real pthread_t / pthread_cond_t /
- * pthread_mutex_t instead, so no copy ever assumes a size or layout. There is
+ * BGM_NATIVE_PTHREAD (POSIX targets and 64-bit MinGW, derived in mugen.h)
+ * uses the real pthread_t / pthread_cond_t / pthread_mutex_t, so no copy
+ * assumes the reference ABI's size or layout. There is
  * deliberately no size assertion in that configuration: the types belong to
  * the toolchain, not to the original binary, so there is no invariant of ours
  * to pin. See PLANS.md.
@@ -309,7 +309,7 @@ MUGEN_ASSERT_SIZE(BgmEvent, 0x0C);
  *    operations reinterpreted the pointer's storage as a pthread_mutex_t while
  *    the BGM thread and Bgm_Pause held the real SDL mutex: two different
  *    locks, no mutual exclusion at all.
- *  - BGM_NATIVE_PTHREAD (any 64-bit target): the mutex does not fit the void *,
+ *  - BGM_NATIVE_PTHREAD (POSIX or 64-bit MinGW): the mutex does not fit the void *,
  *    so it lives in globals.c and Bgm_MutexPtr() returns it.
  *  - 32-bit Windows: g_bgmMutex's storage is itself the pthread_mutex_t.
  */

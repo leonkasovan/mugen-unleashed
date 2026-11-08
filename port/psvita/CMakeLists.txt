@@ -261,6 +261,15 @@ set(MUGEN_VITA_MEMSIZE "0" CACHE STRING
 # ownership exits, since the pinned vitaGL has no context teardown API.
 set(MUGEN_VITA_RENDERMODE "system" CACHE STRING
     "RenderMode written into the packed data/mugen.cfg (system | opengl | openglscreen)")
+if(NOT MUGEN_VITA_RENDERMODE MATCHES "^(system|opengl|openglscreen)?$")
+  message(FATAL_ERROR "MUGEN_VITA_RENDERMODE must be system, opengl, openglscreen or empty")
+endif()
+# Port fix: the background loader's 4 KiB default stack has overflowed on
+# hardware. Preserve the confirmed workaround when a fresh VPK is packed.
+set(MUGEN_VITA_PRECACHE "0" CACHE STRING "Precache written into the Vita configuration (0 or 1)")
+if(NOT MUGEN_VITA_PRECACHE MATCHES "^[01]$")
+  message(FATAL_ERROR "MUGEN_VITA_PRECACHE must be 0 or 1")
+endif()
 
 # ------------------------------------------------------------- vitaGL (opt) --
 #
@@ -606,7 +615,21 @@ target_link_libraries(mugen PRIVATE
 # as a DLL/.so, where the collision cannot occur at link time.
 target_link_options(mugen PRIVATE
   -Wl,--gc-sections
+  # VitaSDK's linker reserves this gap for the SCE metadata appended by
+  # vita-elf-create. Without it, small code-size changes can overlap LOAD
+  # segments. Supported upstream workaround: vita-toolchain issue #303.
+  -Wl,--defsym=__sce_headroom=0x10000
   -Wl,--allow-multiple-definition)
+
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_FOUND)
+  set(_mugen_elf_check "${MUGEN_ROOT}/tools/psvita/check_elf.py")
+  set_property(TARGET mugen APPEND PROPERTY LINK_DEPENDS "${_mugen_elf_check}")
+  add_custom_command(TARGET mugen POST_BUILD
+    COMMAND "${Python3_EXECUTABLE}" "${_mugen_elf_check}" "$<TARGET_FILE:mugen>"
+    COMMENT "Checking SCE metadata headroom before vita-elf-create"
+    VERBATIM)
+endif()
 
 # vita_create_self derives the input path from ${CMAKE_CURRENT_BINARY_DIR}/${target}
 # with no extra suffix handling, so the ELF keeps the target's plain name. Do
@@ -735,6 +758,12 @@ if(MUGEN_VITA_DATA_DIR)
         "\n\\1${MUGEN_VITA_RENDERMODE}" _cfg "${_cfg}")
     endif()
 
+    # Port fix: update the selected template too, rather than letting a build
+    # silently restore Precache=1 after a user disabled it on the device.
+    string(REGEX REPLACE
+      "\n([Pp][Rr][Ee][Cc][Aa][Cc][Hh][Ee][ \t]*=[ \t]*)[0-9]+"
+      "\n\\1${MUGEN_VITA_PRECACHE}" _cfg "${_cfg}")
+
     # Turn the on-screen frame counter on. The engine can only toggle it with
     # the console's "fps" command, which needs a backquote key -- unreachable on
     # a Vita. config.c now reads [Debug] ShowFPS, so it can be enabled here.
@@ -808,6 +837,7 @@ if(MUGEN_VITA_DATA_DIR)
         "GameWidth = ${MUGEN_VITA_VIDEO_WIDTH}"
         "GameHeight = ${MUGEN_VITA_VIDEO_HEIGHT}"
         "FirstRun = 0"
+        "Precache = ${MUGEN_VITA_PRECACHE}"
         "ShowFPS = 1")
       string(FIND "${_cfg}" "${_expect}" _found)
       if(_found EQUAL -1)
@@ -828,7 +858,7 @@ if(MUGEN_VITA_DATA_DIR)
     message(STATUS "mugen.cfg patched: GameWidth ${MUGEN_VITA_VIDEO_WIDTH}, "
                    "GameHeight ${MUGEN_VITA_VIDEO_HEIGHT}, "
                    "FullScreen ${MUGEN_VITA_FULLSCREEN}, "
-                   "RenderMode ${MUGEN_VITA_RENDERMODE}")
+                   "RenderMode ${MUGEN_VITA_RENDERMODE}, Precache ${MUGEN_VITA_PRECACHE}")
   else()
     set(MUGEN_VITA_CFG_OUT "")
     message(WARNING

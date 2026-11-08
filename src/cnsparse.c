@@ -472,7 +472,7 @@ int HitDefAttr_Parse(const char *s, const char **end)
     if (s == NULL) {
         return -1;
     }
-    if (isalpha(s[0])) {
+    if (isalpha((unsigned char)s[0])) {
         do {
             c = lower(s[i]);
             if (c == 'a') {
@@ -485,7 +485,7 @@ int HitDefAttr_Parse(const char *s, const char **end)
                 return -1;
             }
             i++;
-        } while (isalpha(s[i]));
+        } while (isalpha((unsigned char)s[i]));
     }
     while (is_blank(s[i])) {
         i++;
@@ -872,7 +872,7 @@ int CnsText_ParseFormat(const char *s, int *len)
         i++;
         flags = 1;
     }
-    while ((unsigned int)(s[i] - 1) <= 0x7E && isdigit(s[i])) {
+    while ((unsigned int)(s[i] - 1) <= 0x7E && isdigit((unsigned char)s[i])) {
         i++;
         width = 1;
     }
@@ -882,7 +882,7 @@ int CnsText_ParseFormat(const char *s, int *len)
         if (s[i] == '*') {
             return 0;
         }
-        while ((unsigned int)(s[i] - 1) <= 0x7E && isdigit(s[i])) {
+        while ((unsigned int)(s[i] - 1) <= 0x7E && isdigit((unsigned char)s[i])) {
             i++;
         }
     }

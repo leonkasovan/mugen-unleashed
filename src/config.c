@@ -972,7 +972,6 @@ void Config_RepublishJoystick(int player)
  */
 static void Config_ApplyVitaJoystick(void)
 {
-    GameVars *g = g_game;
 
 /*
  * PS Vita port (port/psvita): replace the joystick bindings with the real

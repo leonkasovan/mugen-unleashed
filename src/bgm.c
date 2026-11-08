@@ -203,7 +203,7 @@ DynArray *BgmPlugins_Load(Ini *ini)
             int i = pos - 1;
             int j;
 
-            if (isspace(value[i])) {
+            if (isspace((unsigned char)value[i])) {
                 while (i >= 0) {
                     char c = value[i - 1];
                     i--;
@@ -214,7 +214,7 @@ DynArray *BgmPlugins_Load(Ini *ini)
             }
             name_len = i + 1;
             j = pos + 1;
-            while (isspace(value[j])) {
+            while (isspace((unsigned char)value[j])) {
                 j++;
             }
             file = value + j;

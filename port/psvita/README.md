@@ -983,6 +983,63 @@ the dump tells you which *line*.
 
 ## Troubleshooting
 
+### Windows converter crash during rebuild
+
+`FAILED ... vita-elf-create.exe` followed by `Exit code 0xc0000374` is a
+Windows host-tool heap-corruption failure during ELF-to-VELF conversion. The
+engine has already compiled and linked; SELF/VPK creation has not completed.
+An older VPK still in the output directory is not evidence of a successful
+rebuild. This failure is separate from a Vita runtime crash.
+
+The Vita target now passes `-Wl,--defsym=__sce_headroom=0x10000`, the supported
+VitaSDK workaround for an executable LOAD segment ending too close to the
+next segment (vita-toolchain issue #303). With Python present, the build also
+checks the linked ELF's actual gap before starting the converter. This guards
+the layout; it does not establish that the Windows heap failure was caused by
+overlapping segments. The exact failing Windows ELF was not supplied, and the
+Windows converter crash has not been reproduced here.
+
+To explicitly build the OpenGL test configuration from MSYS2/Git Bash:
+
+```sh
+git pull --ff-only
+bash port/psvita/build.sh --renderer opengl --precache 0
+```
+
+`--renderer` writes `MUGEN_VITA_RENDERMODE`; without it, the existing CMake
+cache/default controls the mode (a fresh configuration defaults to System).
+`--precache` writes `MUGEN_VITA_PRECACHE`, whose Vita default is now 0 so that
+packing does not undo the confirmed precache workaround. The configure log
+prints both values. `--precache 1` is an explicit opt-in; the separate worker
+stack fix is not part of this change.
+
+If the converter still fails, keep `build/psvita/mugen` from **that failed
+build** and capture a verbose converter run, from the repository root in
+MSYS2/Git Bash:
+
+```sh
+C:/vitasdk/bin/vita-elf-create.exe -vv build/psvita/mugen build/psvita/diagnostic.velf > build/psvita/vita-elf-create.log 2>&1
+```
+
+Those two files are needed to investigate the Windows allocation failure. The
+rebuild script preserves a nonzero exit and points to the ELF on failure.
+
+The supplied warning about `BGM_THREAD_STORE` was a separate real overread:
+Vita's `pthread_t` is 4 bytes but the reference Windows handle is 8. POSIX
+targets now use the native pthread types regardless of pointer width; 32-bit
+Windows retains the reference ABI and Android retains SDL threads. The ctype
+warnings shown in the log are fixed by converting table arguments to
+`unsigned char`, rather than suppressing the warning. Unused Vita locals and
+an obsolete extension helper were removed.
+
+Validation: a full ARM ELF/VELF/SELF/VPK cross build on Linux with
+`-Werror=char-subscripts -Werror=array-bounds`; the linked `g_bgmThread` is
+4 bytes and the metadata gap is checked. Host build-argument, ELF-check,
+warning-regression, CNS ABI and Vita-video tests pass. This does not substitute
+for running the Windows-hosted converter on the original failing ELF.
+
+### Other diagnostics
+
 | Symptom | Cause and fix |
 |---|---|
 | **`Error 0x8010113D`** installing the VPK | `ScePromoterUtil` refused the package (`0x801011xx`; the console may show it as `C2-12691-9`). First suspect is `sce_sys/` artwork that is not 8-bit indexed — see "The bubble artwork"; then the ordered checks in "Verify the copy before installing" (copy size/SHA-256, free space on `ux0:`, a leftover `ux0:app/MSDK00001/`, installing from `ux0:` rather than `uma0:`) |

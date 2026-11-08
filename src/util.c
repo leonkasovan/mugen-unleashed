@@ -142,7 +142,7 @@ int Str_ReadIdent(const char *src, char *dst)
     while (Char_IsSpace(src[i])) {
         i++;
     }
-    while (isalnum(src[i]) || src[i] == '_') {
+    while (isalnum((unsigned char)src[i]) || src[i] == '_') {
         if (room > 1) {
             *dst++ = src[i];
             room--;

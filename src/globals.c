@@ -457,8 +457,8 @@ ExprValue g_exprStackValue[128]; /* 0x00505500 */
  *
  *  - ANDROID_PORT: g_bgmMutex holds an SDL_mutex * and is locked with SDL;
  *    Bgm_MutexPtr() is not used at all.
- *  - BGM_NATIVE_PTHREAD (any 64-bit target): a native pthread_mutex_t does not
- *    fit a void *, so it lives in s_bgmMutex below and g_bgmMutex keeps the
+ *  - BGM_NATIVE_PTHREAD (POSIX targets and 64-bit MinGW): the native mutex
+ *    lives in s_bgmMutex below and g_bgmMutex keeps the
  *    original's role of "there is a BGM mutex" without aliasing it.
  *  - 32-bit Windows: g_bgmMutex is the 4-byte slot the original used to hold a
  *    pthread_mutex_t by value, so its address is the mutex.

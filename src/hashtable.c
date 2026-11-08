@@ -395,7 +395,7 @@ static char *CmdTable_Rest(void)
     char *rest = strtok(NULL, "\r\n");
 
     if (rest != NULL) {
-        while (isspace(*rest)) {
+        while (isspace((unsigned char)*rest)) {
             rest++;
         }
     }

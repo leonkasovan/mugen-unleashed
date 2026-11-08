@@ -1747,7 +1747,7 @@ int Cmd_Parse(const char *s, CmdEntry *entry, const CmdRemap *remap)
             mods = 0;
             strict = 0;
             charge = 0;
-            while (s[pos] >= 1 && s[pos] <= 127 && isspace(s[pos]) && s[pos] != '\0') {
+            while (s[pos] >= 1 && s[pos] <= 127 && isspace((unsigned char)s[pos]) && s[pos] != '\0') {
                 pos++;
             }
             if (s[pos] == '\0') {

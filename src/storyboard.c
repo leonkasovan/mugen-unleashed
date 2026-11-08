@@ -994,7 +994,7 @@ int Storyboard_Utf8Prefix(const char *s, int chars)
             c = s[i];
             if (c != '\0') {
                 for (;;) {
-                    if (c > 0 && !((unsigned int)(c - 1) <= 0x7E && isspace(c)) && !iscntrl(s[i])) {
+                    if (c > 0 && !((unsigned int)(c - 1) <= 0x7E && isspace((unsigned char)c)) && !iscntrl((unsigned char)s[i])) {
                         break;
                     }
                     if ((unsigned char)s[i] == 0xE3 && (unsigned char)s[i + 1] == 0x80 &&

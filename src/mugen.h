@@ -24,12 +24,15 @@
 /*
  * Port addition: does the build use the native pthread_t/pthread_mutex_t/
  * pthread_cond_t instead of the 32-bit pthreads-win32 shapes the original
- * stored (see bgm.h)? The reconstructed layout only matches when pointers are
- * 4 bytes wide, so anything else takes the native types. Derived here, in the
+ * stored (see bgm.h)? Only the 32-bit Windows reference uses that layout;
+ * POSIX targets and 64-bit MinGW take the native types. Derived here, in the
  * one header every source includes, so globals.c, bgm.c and the lock sites in
  * gameloop.c/system.c/matchload.c all agree without a shared -D.
  */
-#if !defined(ANDROID_PORT) && defined(__SIZEOF_POINTER__) && __SIZEOF_POINTER__ > 4
+/* Port fix: Vita's 32-bit pthread_t is a 4-byte integer, not the original
+ * Windows 8-byte handle. Native pthread types are required on every POSIX
+ * target as well as on 64-bit MinGW. Android keeps its SDL thread path. */
+#if !defined(ANDROID_PORT) && (!defined(_WIN32) || (defined(__SIZEOF_POINTER__) && __SIZEOF_POINTER__ > 4))
 #define BGM_NATIVE_PTHREAD 1
 #endif
 

@@ -423,6 +423,42 @@ menu. Its own log confirmed the driver's report exactly
 
 ---
 
+## Windows rebuild — converter heap corruption (Windows retest pending)
+
+The supplied `port/psvita/build.sh` output compiled and linked the engine, then
+`vita-elf-create.exe` terminated with `0xc0000374` while creating `mugen.velf`.
+No new SELF/VPK was produced by that run. This is a host-tool failure, not an
+on-console OpenGL exception. The exact failing Windows ELF was not supplied.
+
+The build now reserves 64 KiB for the SCE tables using
+`--defsym=__sce_headroom=0x10000`, following the supported linker-layout
+workaround in https://github.com/vitasdk/vita-toolchain/issues/303. With Python,
+`tools/psvita/check_elf.py` validates the actual executable-to-next-LOAD gap
+before conversion. A Linux cross build verified a `0x10060` gap and completed
+ELF/VELF/SELF/VPK. This is a layout safeguard, not proof of the cause of the
+Windows heap corruption. Retesting the original Windows host is still open.
+
+Two independent defects in that log were corrected too:
+
+- The script had no renderer argument and reused a System CMake setting.
+  `--renderer opengl --precache 0` now explicitly selects the intended test
+  configuration. Vita packaging defaults Precache to 0, including when a
+  selected template still says 1, so rebuilding preserves the confirmed
+  worker-stack workaround. Failure status is retained and stale VPKs are
+  identified as potentially belonging to an earlier build.
+- `BGM_THREAD_STORE` read 8 bytes from Vita's 4-byte `pthread_t`. Native pthread
+  storage is now selected for all POSIX targets, including Vita, while 32-bit
+  Windows keeps its reference layout and Android keeps SDL threads. ARM symbol
+  inspection verifies `g_bgmThread` is 4 bytes. Ctype warnings from the same
+  log are fixed with unsigned-char arguments, and unused Vita code is removed.
+
+Validation: a real Linux-hosted VitaSDK ARM build with
+`-Werror=char-subscripts -Werror=array-bounds`; host tests of build options,
+failure status, ELF layout and BGM ABI selection; existing build-warning, CNS
+ABI and Vita-video regression suites. No Windows converter run was performed.
+If `0xc0000374` persists, preserve `build/psvita/mugen` and the verbose
+`vita-elf-create -vv` output described in README.md before another rebuild.
+
 ## OpenGL startup — NULL vitaGL GXM context (hardware retest pending)
 
 `mugen(2).log` reaches the Vita FBO probe and then stops. The supplied dump

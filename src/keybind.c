@@ -167,10 +167,10 @@ int Keybind_Parse(const char *str, KeyBind *out)
     const KeybindName *k;
 
     memset(out, 0, sizeof(*out));
-    while ((unsigned int)(*str - 1) <= 0x7E && isspace(*str)) {
+    while ((unsigned int)(*str - 1) <= 0x7E && isspace((unsigned char)*str)) {
         str++;
     }
-    if (!isalnum(*str)) {
+    if (!isalnum((unsigned char)*str)) {
         do {
             switch (*str) {
             case '$':
@@ -186,7 +186,7 @@ int Keybind_Parse(const char *str, KeyBind *out)
                 return 0;
             }
             str++;
-        } while (!isalnum(*str));
+        } while (!isalnum((unsigned char)*str));
     }
     for (k = g_keybindNames; k->name != NULL; k++) {
         if (_stricmp(str, k->name) == 0) {

@@ -49,31 +49,6 @@ static GLfloat MugenVita_blendColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 static GLuint MugenVita_shaderHandles[MUGEN_VITA_MAX_SHADERS];
 
 /*
- * True when the space-separated extension list `list` contains exactly `name`
- * -- GLEW's glewGetExtension semantics, including the fact that a substring
- * match is not enough ("GL_EXT_framebuffer_object" must not match
- * "GL_EXT_framebuffer_object_2").
- */
-static int VitaGl_HasExtension(const char *list, const char *name)
-{
-    size_t name_len = strlen(name);
-    const char *p = list;
-
-    if (list == NULL) {
-        return 0;
-    }
-    while ((p = strstr(p, name)) != NULL) {
-        const char *end = p + name_len;
-
-        if ((p == list || p[-1] == ' ') && (*end == ' ' || *end == '\0')) {
-            return 1;
-        }
-        p = end;
-    }
-    return 0;
-}
-
-/*
  * The capability flags, under the names glad would have defined and that
  * src/symbols.h maps the g_glew* macros onto. Declared here and not in glad.h
  * because glad is not part of this build (see the file comment).

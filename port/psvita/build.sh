@@ -12,6 +12,8 @@
 #   port/psvita/build.sh --data DIR     pack this M.U.G.E.N tree into the VPK
 #   port/psvita/build.sh --no-data      pack no game data (engine only)
 #   port/psvita/build.sh --titleid ID   nine-character title id (MSDK00001)
+#   port/psvita/build.sh --renderer MODE  system | opengl | openglscreen
+#   port/psvita/build.sh --precache N     0 | 1 (Vita default: 0)
 #   port/psvita/build.sh --env          print the exports, build nothing
 #
 # What it sets up, and where:
@@ -104,6 +106,8 @@ CHECK_TOOLS=0
 PRINT_ENV=0
 DATA_SET=0
 DATA_DIR=""
+RENDERER=""
+PRECACHE=""
 
 say()  { printf '\n==> %s\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
@@ -127,6 +131,14 @@ while [ $# -gt 0 ]; do
         --no-data) DATA_DIR=""; DATA_SET=1 ;;
         --titleid) TITLEID="${2:-}"; shift ;;
         --titleid=*) TITLEID="${1#*=}" ;;
+        --renderer) RENDERER="${2:-}"; shift
+            case "$RENDERER" in system|opengl|openglscreen) ;; *) fail "--renderer requires system, opengl or openglscreen" ;; esac ;;
+        --renderer=*) RENDERER="${1#*=}"
+            case "$RENDERER" in system|opengl|openglscreen) ;; *) fail "--renderer requires system, opengl or openglscreen" ;; esac ;;
+        --precache) PRECACHE="${2:-}"; shift
+            case "$PRECACHE" in 0|1) ;; *) fail "--precache requires 0 or 1" ;; esac ;;
+        --precache=*) PRECACHE="${1#*=}"
+            case "$PRECACHE" in 0|1) ;; *) fail "--precache requires 0 or 1" ;; esac ;;
         --help|-h) usage; exit 0 ;;
         *) printf 'unknown argument: %s (--help)\n' "$1" >&2; exit 2 ;;
     esac
@@ -536,12 +548,25 @@ cmake_args=(
 if [ -n "${TITLEID:-}" ]; then
     cmake_args+=("-DMUGEN_VITA_TITLEID=$TITLEID")
 fi
+if [ -n "$RENDERER" ]; then
+    cmake_args+=("-DMUGEN_VITA_RENDERMODE=$RENDERER")
+fi
+if [ -n "$PRECACHE" ]; then
+    cmake_args+=("-DMUGEN_VITA_PRECACHE=$PRECACHE")
+fi
 
 cmake "${cmake_args[@]}"
 
 say "Building"
 info "jobs      $JOBS"
-cmake --build "$OUT" --parallel "$JOBS"
+build_status=0
+cmake --build "$OUT" --parallel "$JOBS" || build_status=$?
+if [ "$build_status" -ne 0 ]; then
+    info "build failed (exit $build_status); an existing VPK may be from an earlier build"
+    info "if vita-elf-create crashed, keep $OUT/mugen (the linked ARM ELF)"
+    info "the ELF and converter output are needed to diagnose the Windows host-tool failure"
+    exit "$build_status"
+fi
 
 self="$OUT/mugen-psvita.self"
 vpk="$OUT/mugen-psvita.vpk"
