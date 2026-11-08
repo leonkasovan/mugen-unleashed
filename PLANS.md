@@ -11,7 +11,7 @@ lands; keep the research sections true to the findings they were based on.
 |---|---|
 | Windows build (MSVC/CMake) | **done, verified** — `build/x86-release/mugen-msvc-win32-sdl1.exe`; `docs/BUILD-MSVC.md` |
 | Windows static build (GNU Make + MinGW-x86) | **done, verified** — `mugen-mingw-win32-sdl2.exe` by default, `mugen-mingw-win32-sdl1.exe` with `SDL_BACKEND=1`; no game DLLs needed; `docs/BUILD-MINGW.md` |
-| Windows 64-bit (GNU Make, experimental) | **builds, not log-verified** — `MUGEN_TARGET=win64` → `mugen-mingw-win64-sdl2.exe`; the struct reads that used hardcoded offsets are member accesses now, a win32-vs-win64 `mugen.log` diff is still outstanding; `docs/BUILD-MINGW64.md` |
+| Windows 64-bit (GNU Make, experimental) | **done, log-verified** — `MUGEN_TARGET=win64` → `mugen-mingw-win64-sdl2.exe`; `mugen.log` identical to the win32 build after numeric normalisation, over both a quick VS and a 2-round AI-vs-AI match; the only residual difference is the SDL *revision* string, which comes from each kit's own SDL build. `docs/BUILD-MINGW64.md` |
 | SDL backend | **SDL2 is the default** (`SDL_BACKEND=2`: `src/sdl2compat.c`, `src/sdl2surface.c`); SDL 1.2 (`SDL_BACKEND=1`) is built on Windows for the differential log/render comparisons |
 | libresample | **vendored and ported** to multi-channel; `third_party/libresample/VENDORED.md` |
 | Lua | **done** — `lmode`/`lexec` implemented, full API documented in `docs/LUA.md` |
@@ -19,7 +19,8 @@ lands; keep the research sections true to the findings they were based on.
 | OpenGL loader | **GLEW 1.5.4 → glad 2.1 done** — smaller, faster to build, exactly generated |
 | Linux rendering | primitives **fixed** (constant blend factors dead on Mesa); sprite blending **outstanding** |
 | Modern GL (3.3/4.6) / Vulkan | researched, **not recommended** — reasons below |
-| Linux port | **linux-x64 done and verified** — builds and runs, `mugen.log` identical to the Windows build; `docs/BUILD-LINUX.md`. linux-x86 and arm64 are selectable but untested |
+| Linux port | **linux-x64 done and verified** — builds and runs, `mugen.log` identical to the Windows build; `docs/BUILD-LINUX.md`. **linux-arm64 builds and runs on hardware** (RG351MP/ArkOS, GLES 3.0 renderer) through `port/arm64/build.sh`; linux-x86 is still untested |
+| Windows build environment | **one command** — `setup.bat` installs both w64devkit kits and the published dependency trees into `build/sysroots/`; a skeeto kit ships no SDL and no `.pc` files, the tree supplies them |
 
 ## Codebase knowledge graph (codebase-memory-mcp)
 
@@ -78,12 +79,23 @@ not auto-update, and the CLI binary is not installed in every session. Re-run
 
 ## Build environment notes (verified)
 
-The Windows Makefile build is verified with GCC 16.1.0 + GNU Make 4.4.1 in
-MSYS2 bash, using the **x86 kit** at `/c/x86devkit` (`i686-w64-mingw32`).
-The x64 kit (`/c/w64devkit`, `x86_64-w64-mingw32`) **cannot link** the 32-bit
-target — it has no 32-bit runtime libraries, so `-m32` compiles but `ld` fails on
-`-lkernel32`. (The compiler's triple selects the target, so that kit builds the
-experimental win64 target instead; see `docs/BUILD-MINGW64.md`.)
+The Windows Makefile build is verified with GCC 16.2.0 + GNU Make in MSYS2
+bash, using the two **w64devkit 2.11.0** kits: `/c/x86devkit`
+(`i686-w64-mingw32`) for the reference build and `/c/w64devkit`
+(`x86_64-w64-mingw32`) for win64. `setup.bat` in the repository root installs
+both from github.com/skeeto/w64devkit 2.11.0 and then unpacks this project's
+dependency trees into `build/sysroots/win{32,64}-sysroot` — a clean kit ships no
+SDL, no libpng and **no `.pc` files at all**, so the tree is where the libraries
+come from, and the `Makefile` points pkg-config at it by itself. Nothing is
+exported by hand; `WINSYSROOT=` disables the automatic tree.
+
+The x64 kit **cannot link** the 32-bit target — it has no 32-bit runtime
+libraries, so `-m32` compiles but `ld` fails on `-lkernel32`. (The compiler's
+triple selects the target, so that kit builds win64 instead; see
+`docs/BUILD-MINGW64.md`.) Both kits ship their own `pkg-config`, and MSYS `sh`
+does not convert POSIX paths for a native executable, so `PKG_CONFIG_LIBDIR`
+must be spelled `C:/…` in anything a recipe sees — the `Makefile` does that
+conversion itself.
 `make check-toolchain` reports the target the compiler on `PATH` chose before any
 work is done and is the first thing to run after switching shells:
 
@@ -702,14 +714,34 @@ Three things the static Windows build already settled for the Linux port:
 | 5 | SDL stack | SDL2 is the only backend on Linux (`SDL_BACKEND=1` is win32-only); `sdlmain.c` has a non-`WinMain` path; `mugen.rc`/manifest skipped (not a PE) | **done** — `src/sdl2compat.c` over SDL2, packages listed in `docs/BUILD-LINUX.md` |
 | 6 | **Platform detection in the Makefile** | `UNAME_S`/`$(CC) -dumpmachine` selection block, per-target variable blocks (`TARGET`, float flags, `-mwindows`, `RC_OBJ`, `STATIC_PKGS`, `ENGINE_DEFS`, `SDL_BACKEND`), `check-toolchain` reporting the detected target, `MUGEN_TARGET=` override for cross-compiles. Linux installs into the same `install/` tree as `mugen-linux-<arch>` (never a `.exe`). **Unsupported triple = hard error** naming what was found | **done** |
 | 7 | **`MUGEN_LAYOUT_32BIT` assertion guard** | Wrap the 207 `MUGEN_ASSERT_SIZE` + 670 `MUGEN_ASSERT_OFFSET` in `#if MUGEN_LAYOUT_32BIT`, derived from `UINTPTR_MAX == 0xFFFFFFFFu` (`src/mugen.h`). Active on the reference build, no-ops on 64-bit; no struct changes | **done** |
-| 8 | 64-bit correctness pass | **`__int64`** (38 uses) and **`__cdecl`** (1629 uses) are shimmed in `src/compat_linux.h`; the struct reads that used hardcoded offsets (`camera.c`, `char.c`, `ai.c`, `sprite.c`) are member accesses now; `make MUGEN_TARGET=win64` builds it against the 64-bit kit and no log comparison has been run | **builds; win32-vs-win64 `mugen.log` diff outstanding** |
-| 9 | arm64 build | native compile on AArch64; expect `FLT_EVAL_METHOD == 0` and accept float drift. Audit the numeric lines of `mugen.log` by hand rather than by exact diff | **pending** — never built; `linux-arm64` is selectable in the `Makefile` |
+| 8 | 64-bit correctness pass | **`__int64`** (38 uses) and **`__cdecl`** (1629 uses) are shimmed in `src/compat_linux.h`; the struct reads that used hardcoded offsets (`camera.c`, `char.c`, `ai.c`, `sprite.c`) are member accesses now; `make MUGEN_TARGET=win64` builds against the 64-bit kit | **done** — win32-vs-win64 `mugen.log` matches; see "win32 vs win64, verified" |
+| 9 | arm64 build | native compile on AArch64; expect `FLT_EVAL_METHOD == 0` and accept float drift. Audit the numeric lines of `mugen.log` by hand rather than by exact diff | **builds and runs on hardware** — cross-built by `port/arm64/build.sh` (Arm 9.2 toolchain pinned for the device's glibc, published dependency tree, GLES 3.0 default) and played on an RG351MP. The numeric-line audit is what remains |
 
-Steps 1–5 built the first Linux target and 6–7 added the `Makefile`'s platform
-choice and the layout guard; 8 took the 64-bit targets as far as "builds and
-runs". What is left is the win32-vs-win64 log comparison (8) and arm64 (9).
-**9 has no fixed end**, because float drift on arm64 is a per-symptom
-investigation, not a checklist.
+Steps 1–5 built the first Linux target, 6–7 added the `Makefile`'s platform
+choice and the layout guard, 8 the 64-bit targets and 9 arm64. Both 64-bit
+targets now run: win64 under Wine-free native Windows, arm64 on the handheld.
+What is left of 9 is the per-symptom part — the arm64 `mugen.log` numeric lines
+have not been enumerated and explained one by one, and **that has no fixed end**,
+because float drift is an investigation rather than a checklist.
+
+### win32 vs win64, verified
+
+Both targets were built from the same tree, run from `install/` (a real
+M.U.G.E.N 1.1 Beta 1 installation) with the same arguments and the same timeout,
+and compared with `tools/compare_logs.py`:
+
+| Scenario | Log lines | Fragments | Result |
+|---|---|---|---|
+| Quick VS (`-nosound -p1 kfm -p2 kfm`) | 119 / 119 | 137 / 137 | identical after numeric normalisation |
+| 2-round AI vs AI (`-nosound -rounds 2 -p1.ai 1 -p2.ai 1`) | 215 / 215 | 254 / 254 | identical after numeric normalisation |
+
+The single residual difference is the SDL *revision* string in the start-up line
+(`revision SDL-2.32.10-g2c15525` vs `…-gff198c4`): each kit links its own build
+of SDL 2.32.10, so that text is a property of the kit, not of the engine. Both
+runs reached round resets, so the 64-bit target is covered for start-up, asset
+loading, mode select, a match and round transitions. What this does *not* cover
+is a full match to the result screen (both runs were stopped by their timeout in
+the same place) and the console commands, which need key injection.
 
 ### What "done" means per target
 
