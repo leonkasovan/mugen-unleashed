@@ -748,6 +748,10 @@ Windows SDKs were unavailable for this follow-up; rerun both Windows targets.
 
 ### Still open
 
+Revised 2026-11-08: the Linux bullet below was the largest claimed gap and is
+now partly closed by the arm64 target; what it actually costs today is a log
+comparison, not a port.
+
 - **Windowed/fullscreen *transitions* at runtime** (rather than starts) and
   display selection have not been exercised.
 - **Console command execution** is covered only up to the submitted line: it is
@@ -767,13 +771,22 @@ Windows SDKs were unavailable for this follow-up; rerun both Windows targets.
   — faithful to the original") described the code before that and was wrong
   afterwards. What is missing is a test: the only exercise is the Android device
   run, and `tools/test_sdl2input.sh` still attaches its virtual devices before
-  `Pads_Init`.
-- **Linux with SDL2 has not been built.** The Linux x64 verification in
-  `docs/BUILD-LINUX.md` dates from `812ea19`, when the Linux target linked SDL
-  1.2; that document never names the backend. Since `948380c`, `SDL_BACKEND=1`
-  is an error outside `MUGEN_TARGET=win32`, so the verified Linux configuration
-  can no longer be produced and the SDL2 one is untested. This is the largest
-  real gap in the migration.
+  `Pads_Init`. The handheld run does exercise the *attach* path in the field —
+  `Pads_AttachController` now also completes a pad's SDL mapping
+  (`pad_mapping_fixups[]` in `src/pads.c`, see PLANS.md), which only matters
+  because that path runs at all — but a plugged-after-start pad still has no
+  automated desktop test.
+- **linux-x64 with SDL2 has not been re-verified.** The backlog item this
+  replaces said "Linux with SDL2 has not been built", and that is no longer
+  true: **linux-arm64 is Linux + SDL2** (2.30.10 on the device) and has been
+  built, linked and *played* on an RG351MP through `port/arm64/build.sh`, whose
+  output needs `libSDL2-2.0.so.0` and which cannot be built with SDL 1.2 at all
+  since `948380c` rejects `SDL_BACKEND=1` outside `MUGEN_TARGET=win32`. So the
+  backend gap is closed and what remains is narrower: a **fresh log comparison
+  for linux-x64**, because the one recorded in `docs/BUILD-LINUX.md` dates from
+  `812ea19` and predates the switch, and no linux-x64 build output exists in the
+  tree today. (`docs/BUILD-LINUX.md` does now name the backend and its packages,
+  and documents the arm64 cross build end to end.)
 - **The MSVC/CMake build never moved to SDL2.** `CMakeLists.txt` still links the
   game's SDL 1.2 DLLs and does not define `MUGEN_SDL2`; that is why its output
   is named `mugen-msvc-win32-sdl1`. The plan's rollout rule ("make SDL2 the
