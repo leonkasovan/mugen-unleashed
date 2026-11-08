@@ -54,7 +54,8 @@ res/icons/      the window/bubble icon as one .ico per size (see below)
 res/shaders/    project-owned shader dialects: gles/ (staged as data/gles by the
                 Android build) and vita/ (substituted into the VPK); the desktop
                 shaders are the game installation's own data/*.{vert,frag}
-tools/          msvc_env.bat, extract_icon.py, iconpack.py, compare_logs.py, test_*.sh
+tools/          msvc_env.bat, extract_icon.py, iconpack.py, compare_logs.py,
+                make_win_sysroot.sh, test_*.sh
 port/           android/, psvita/ and arm64/ — the platform ports
 docs/           ANALYSIS.md, BUILD-MSVC.md, BUILD-MINGW.md, BUILD-LINUX.md, LUA.md
 install/        a real M.U.G.E.N 1.1b1 installation (untracked, for testing)
@@ -299,6 +300,14 @@ its own triple (`gcc -dumpmachine`, falling back to the `Target:` line of
 on `PATH` a plain `make` produces the experimental win64 build, not win32. For
 the 32-bit reference build, put `x86devkit` first or pass the compiler
 (`CC=/c/x86devkit/bin/gcc make`).
+
+Both kits ship their own `pkg-config`, and MSYS `sh` does not convert POSIX
+paths for a native executable, so `PKG_CONFIG_PATH=/c/...` in a make variable
+silently resolves nothing while the same value typed into bash works — use
+`C:/...` spellings. A kit without the SDL add-ons fails `check-pkgconfig`;
+`tools/make_win_sysroot.sh <kit> win32|win64` packages that kit's dependency set
+as a relocatable tree (published as `win32-sysroot.zip`/`win64-sysroot.zip`,
+same shape as `arm64-sysroot.zip`). Both traps: `docs/BUILD-MINGW64.md`.
 
 ## Exploring the code with CBM
 

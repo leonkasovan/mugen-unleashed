@@ -420,6 +420,19 @@ install_sysroot() {
         fail "$SYSROOT_FILE did not produce usr/lib/pkgconfig/sdl2.pc; the existing tree was kept"
     }
 
+    # No absolute path may survive in the tree. The published arm64 asset bakes
+    # the prefix of the machine that generated it (/c/Projects/...), so unpacked
+    # anywhere else every -I and -L points at a directory that does not exist --
+    # and the compile fails as "SDL.h: No such file or directory" far from the
+    # cause. ${pcfiledir} is the directory holding the .pc file, so ../.. is the
+    # tree's usr/: the tree then works wherever it is unpacked. Rewriting an
+    # already-relative prefix is a no-op, so this stays correct once the asset
+    # ships that way.
+    for pc in "$tree"/usr/lib/pkgconfig/*.pc; do
+        [ -f "$pc" ] || continue
+        sed -i 's|^prefix=.*|prefix=${pcfiledir}/../..|' "$pc"
+    done
+
     # Prepare beside the destination so the final renames stay on one volume,
     # and keep the old tree until the new one is in place.
     dest="$XSYSROOT.mugen-new"

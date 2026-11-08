@@ -162,7 +162,12 @@ needs an aarch64 root filesystem most checkouts do not have.
 
 An install is uploaded only after its checksum, and it is unpacked beside the
 destination (`arm64-sysroot.mugen-new`) and swapped in, so a failed download or a
-half-extracted zip leaves the working tree in place.
+half-extracted zip leaves the working tree in place. Every `.pc` `prefix=` is
+rewritten to `${pcfiledir}/../..` on install, so the tree works from any path.
+
+To rebuild and republish the tree (new library versions, another distro root),
+see "Updating the tree" in `docs/BUILD-LINUX.md` — the generator lives in git
+history, not in the tree.
 
 ## Limitations
 

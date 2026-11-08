@@ -155,6 +155,14 @@ the whole transitive set (freetype, bz2, ogg, vorbis, opus, FLAC, wavpack, gme,
 mpg123, zlib, pthread, stdc++). Hand-writing `-lSDL2_mixer -lSDL2_ttf` would
 miss about a dozen archives and fail at link.
 
+The devkit ships its own `pkg-config`, and under MSYS `sh` a POSIX
+`PKG_CONFIG_PATH`/`PKG_CONFIG_LIBDIR` is not converted for it, so it matches
+nothing — use `C:/...` spellings in make variables. `tools/make_win_sysroot.sh`
+turns either kit's dependency set into a relocatable tree
+(`win32-sysroot.zip`, `win64-sysroot.zip`, published beside
+`arm64-sysroot.zip`) for a machine whose kit lacks the SDL add-ons; both traps
+are in `docs/BUILD-MINGW64.md`.
+
 Because `SDL2_mixer` brings mpg123 and vorbisfile with it, **WAV, MP3 and Ogg
 Vorbis need no external decoder**: the `sdlmix` plugin decodes them through
 SDL_mixer (`MUGEN_SDLMIX_NATIVE_CODECS` in `src/mugen.h`). Neither

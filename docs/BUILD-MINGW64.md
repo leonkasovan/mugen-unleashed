@@ -29,6 +29,44 @@ The 32-bit reference build is then just the other kit: put `x86devkit` first on
 `PATH` (its gcc's triple is `i686-w64-mingw32`, which selects win32) — see
 `docs/BUILD-MINGW.md`.
 
+### Two traps in that `PKG_CONFIG_PATH`
+
+**The kit ships its own `pkg-config`** (0.34 at the time of writing). With the
+kit's `bin` first on `PATH` that one wins over MSYS2's pkgconf, and it is a
+native Windows binary — MSYS `/bin/sh`, which is what make runs recipes in, does
+**not** convert POSIX paths for native executables (`/c/msys64/...` even fails to
+exec: `env: can't execute ...: No such file or directory`). So a POSIX value
+reaches pkg-config unconverted and silently matches nothing:
+
+```sh
+# in a make recipe (sh), with the kit's pkg-config in front:
+env PKG_CONFIG_LIBDIR=/c/proj/build/tmp/win64-sysroot/usr/lib/pkgconfig pkg-config --exists sdl2   # rc=1
+env PKG_CONFIG_LIBDIR=C:/proj/build/tmp/win64-sysroot/usr/lib/pkgconfig pkg-config --exists sdl2   # rc=0
+```
+
+The same value exported from an interactive bash works, which makes this look
+like a missing package. Use the Windows spelling (`C:/...`) for anything that
+ends up in a make variable or a recipe, or keep MSYS2's `pkg-config` first on
+`PATH`.
+
+**A kit without the SDL add-ons fails `check-pkgconfig`.** `tools/make_win_sysroot.sh`
+packages one kit's dependency set as a relocatable tree the same shape as
+`arm64-sysroot.zip` — headers, static archives, and `.pc` files with
+`prefix=${pcfiledir}/../..`:
+
+```sh
+tools/make_win_sysroot.sh C:/w64devkit win64    # build/tmp/win64-sysroot.zip
+tools/make_win_sysroot.sh C:/x86devkit win32    # build/tmp/win32-sysroot.zip
+```
+
+Both are published beside `arm64-sysroot.zip` and are consumed the same way:
+point `PKG_CONFIG_LIBDIR` at `<tree>/usr/lib/pkgconfig` (Windows spelling, see
+above), with `PKG_CONFIG_SYSTEM_INCLUDE_PATH`/`_LIBRARY_PATH` at the tree's
+`usr/include`/`usr/lib` and the `PKG_CONFIG_ALLOW_SYSTEM_*` flags set — exactly
+what the Makefile does for a cross build. Verified by building both targets with
+nothing but the unpacked tree for their dependencies; the result imports only
+Windows system DLLs, so SDL2 is linked statically as before.
+
 `SDL_BACKEND=1` is rejected for this target (SDL 1.2 is win32-only, see the
 Makefile guard).
 

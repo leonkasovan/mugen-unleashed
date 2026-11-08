@@ -334,6 +334,55 @@ Everything the tree holds stays inside the repository, under the git-ignored
 `build/`. The toolchain directory is only ever read — the sysroot it brings
 travels with it.
 
+No absolute path is allowed to survive in it: `build.sh` rewrites every `.pc`
+`prefix=` to `${pcfiledir}/../..` on install, so the tree links correctly from
+wherever it is unpacked. That rewrite is also why the shipped asset does not
+have to be regenerated to move the checkout.
+
+#### Updating the tree
+
+The generator is not in the tree any more (producing the tree needs an aarch64
+Ubuntu root filesystem, so it is done once and published rather than re-done per
+checkout), but it is in the history — restore it, run it, repackage:
+
+```sh
+# 1. the generator, from the commit that removed it
+git show 86f64fd~1:port/arm64/tools/make_sysroot.sh > build/tmp/make_sysroot.sh
+
+# 2. rebuild the tree from an arm64 Ubuntu/Debian root. With no --root it probes
+#    /home/deck/ubuntu_root_arm64 and, from Windows, the same path under
+#    //wsl.localhost/<distro>/; ARM64_ROOT_FS is no longer read, pass --root.
+bash build/tmp/make_sysroot.sh --dest build/tmp/arm64-sysroot \
+     --root //wsl.localhost/Ubuntu-22.04/home/deck/ubuntu_root_arm64
+
+# 3. make the .pc files relocatable (the generator bakes an absolute prefix)
+sed -i 's|^prefix=.*|prefix=${pcfiledir}/../..|' \
+     build/tmp/arm64-sysroot/usr/lib/pkgconfig/*.pc
+
+# 4. record what is in it — the archives are opaque, this is the only place the
+#    versions and the exclusions are written down (copy the wording from
+#    tools/make_win_sysroot.sh, which writes the same file for the Windows trees)
+$EDITOR build/tmp/arm64-sysroot/SYSROOT.txt
+
+# 5. package it with the same single top directory
+cd build/tmp && zip -qr arm64-sysroot.zip arm64-sysroot && cd -
+sha256sum build/tmp/arm64-sysroot.zip
+```
+
+Then upload the zip to the release and put its hash in `SYSROOT_SHA256` in
+`port/arm64/build.sh` — the build refuses any other content on purpose. A fork
+that publishes its own copy does not have to edit the script: it can set
+`ARM64_SYSROOT_URL` and `ARM64_SYSROOT_SHA256` for one run.
+
+Check the result from a path that is not this checkout, because that is the one
+thing a same-path test cannot prove:
+
+```sh
+cp -a build/tmp/arm64-sysroot /some/other/dir/arm64-sysroot
+PKG_CONFIG_LIBDIR=/some/other/dir/arm64-sysroot/usr/lib/pkgconfig \
+  pkg-config --cflags sdl2     # must name /some/other/dir, not this checkout
+```
+
 #### What the Makefile does differently for a cross build
 
 | Variable | Effect |
