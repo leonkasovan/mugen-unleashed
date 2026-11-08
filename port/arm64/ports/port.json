@@ -1,0 +1,52 @@
+{
+    "version": 4,
+    "name": "mugen.zip",
+    "items": [
+        "Mugen.sh",
+        "mugen"
+    ],
+    "items_opt": null,
+    "attr": {
+        "title": "M.U.G.E.N",
+        "porter": [
+            "LeonKasovan"
+        ],
+        "desc": "M.U.G.E.N 1.1 Beta 1, rebuilt from the original engine (C) and ported to ARM handhelds with SDL2 and the GLES 3.0 renderer.\n\nAdd characters in /roms/ports/mugen/chars.\nAdd stages in /roms/ports/mugen/stages.\nThe pad is bound directly through SDL's game-controller API; SELECT is Back/Pause, START is Start and R3 is Escape.",
+        "desc_md": null,
+        "inst": "Ready to Run",
+        "inst_md": null,
+        "genres": [],
+        "image": {
+            "screenshot": "screenshot.png",
+            "covers": [],
+            "thumbnail": null,
+            "video": null
+        },
+        "rtr": true,
+        "exp": false,
+        "runtime": [],
+        "store": [
+            {
+                "name": "",
+                "gameurl": "",
+                "developerurl": "https://github.com/leonkasovan/mugen-unleashed"
+            }
+        ],
+        "availability": "full",
+        "reqs": [],
+        "arch": [
+            "aarch64"
+        ],
+        "min_glibc": "2.30"
+    },
+    "status": {
+        "source": "Unknown",
+        "md5": null,
+        "status": "Installed"
+    },
+    "files": {
+        "port.json": "mugen/port.json",
+        "Mugen.sh": "Mugen.sh",
+        "mugen": "mugen"
+    }
+}

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Front-end entry for the aarch64 M.U.G.E.N build.
+
+    This file lives in the port's own directory (/roms/ports/mugen/gameinfo.xml)
+    while <path> points at the launcher beside it in /roms/ports, which is how
+    PortMaster ports are listed. The <image> is relative to this directory.
+-->
+<gameList>
+  <game>
+    <path>./Mugen.sh</path>
+    <name>M.U.G.E.N</name>
+    <desc>M.U.G.E.N 1.1 Beta 1, rebuilt from the original engine and ported to ARM handhelds (SDL2 + GLES 3.0).
+
+Add characters to mugen/chars and stages to mugen/stages.</desc>
+    <releasedate>20130811T000000</releasedate>
+    <developer>Elecbyte (engine), Leon Kasovan (port)</developer>
+    <publisher>Elecbyte</publisher>
+    <genre>Fighting</genre>
+    <image>./mugen/screenshot.png</image>
+  </game>
+</gameList>

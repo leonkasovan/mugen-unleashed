@@ -412,6 +412,104 @@ static const PadCtrlMap pad_ctrl_map[] = {
 };
 #define PAD_CTRL_MAP_COUNT ((int)(sizeof(pad_ctrl_map) / sizeof(pad_ctrl_map[0])))
 
+/*
+ * Port fix: pads whose SDL mapping leaves the system buttons out.
+ *
+ * SDL_GameController reports only the controls its mapping names. The database
+ * entry for some handheld pads covers the face buttons, shoulders and d-pad and
+ * nothing else -- for the GO-Super Gamepad (RG351MP and other ArkOS handhelds)
+ * it names b0..b11 and stops, so SELECT, START and the stick clicks are simply
+ * invisible to the controller API. Nothing in the engine can recover them from
+ * there: the raw joystick still sees all 17 buttons, but a slot driven through
+ * the controller deliberately ignores raw codes (see Pads_ControllerBindings).
+ *
+ * The fix is to complete the mapping before the controller is opened: query the
+ * mapping SDL uses, append the missing bindings, register it again. SDL then
+ * delivers BACK/START/... like on any other pad and the semantic layer below
+ * needs no change at all.
+ *
+ * The numbers are raw joystick button indices, the same numbering the kernel and
+ * the distribution's own input profiles use (ArkOS ships
+ * ~/.config/retroarch/autoconfig/udev/GO-Super Gamepad.cfg: select=12,
+ * start=13). Keyed by GUID, so no other pad can be affected, and skipped when
+ * the mapping already carries back:/start: -- a newer SDL database, or a user's
+ * own mapping, wins over this table.
+ */
+typedef struct PadMappingFixup {
+    const char *guid;
+    const char *bindings;
+} PadMappingFixup;
+
+static const PadMappingFixup pad_mapping_fixups[] = {
+    /* GO-Super Gamepad (RG351MP and other ArkOS handhelds).
+     *
+     * The pad reports exactly seventeen BTN_* codes, in joydev order: b0..b7 are
+     * A/B/X/Y and the four shoulders, b8..b11 the d-pad, and b12..b16 the five
+     * buttons the vendor driver reports as 0x2c0..0x2c4 -- SELECT and START
+     * first, then the stick clicks and the hotkey button. The ArkOS input
+     * profile for this pad numbers them the same way (select=12, start=13), so
+     * the two agree on the numbering even though the kernel calls 0x2c0/0x2c1
+     * THUMBL/THUMBR.
+     *
+     *   b12 SELECT -> back      b13 START -> start
+     *   b14 L3     -> leftstick b15 R3    -> rightstick
+     */
+    { "1900bb3e4b4800000011000000010000",
+      "back:b12,start:b13,leftstick:b14,rightstick:b15" },
+};
+#define PAD_FIXUP_COUNT ((int)(sizeof pad_mapping_fixups / sizeof pad_mapping_fixups[0]))
+
+/* Called before SDL_GameControllerOpen: the mapping has to be in place when
+ * SDL builds its button table, otherwise the events still never arrive. */
+static void Pads_CompleteControllerMapping(int device_index)
+{
+    SDL_JoystickGUID guid = SDL_JoystickGetDeviceGUID(device_index);
+    char guidstr[33];
+    const char *extra = NULL;
+    char *current;
+    char *extended;
+    size_t need;
+    int i;
+
+    SDL_JoystickGetGUIDString(guid, guidstr, (int)sizeof guidstr);
+    for (i = 0; i < PAD_FIXUP_COUNT; i++) {
+        if (SDL_strcasecmp(guidstr, pad_mapping_fixups[i].guid) == 0) {
+            extra = pad_mapping_fixups[i].bindings;
+            break;
+        }
+    }
+    if (extra == NULL) {
+        return;
+    }
+    current = SDL_GameControllerMappingForGUID(guid);
+    if (current == NULL) {
+        Log_Printf("pads: %d has no controller mapping to complete\n", device_index);
+        return;
+    }
+    /* Logged in full: which mapping is in effect decides everything below, and
+     * a database file in the environment (PortMaster exports
+     * SDL_GAMECONTROLLERCONFIG_FILE) can supply an entry for the same pad that
+     * disagrees with the hardware -- it did here, binding back:/start: to
+     * buttons this model never sends, so the presses produced nothing at all.
+     * A mapping that already carries the keys is therefore overridden, not
+     * trusted: these indices were read off the device itself. */
+    Log_Printf("pads: %d mapping before: %s\n", device_index, current);
+    need = SDL_strlen(current) + SDL_strlen(extra) + 2;
+    extended = (char *)SDL_malloc(need);
+    if (extended != NULL) {
+        SDL_snprintf(extended, need, "%s,%s", current, extra);
+        if (SDL_GameControllerAddMapping(extended) < 0) {
+            Log_Printf("pads: %d could not complete the controller mapping: %s\n",
+                       device_index, SDL_GetError());
+        } else {
+            Log_Printf("pads: %d controller mapping completed for a pad whose database"
+                       " entry has no system buttons (%s)\n", device_index, extra);
+        }
+        SDL_free(extended);
+    }
+    SDL_free(current);
+}
+
 /* Port addition: shared by the screen loop and the standalone key-config
  * loop. Strip the release flag before decoding the slot. A raw joystick's
  * buttons 12/13 must retain their configured gameplay meaning. */
@@ -444,6 +542,7 @@ static int Pads_OpenControllers(void)
         if (g_pads[i].joystick == NULL) {
             continue;
         }
+        Pads_CompleteControllerMapping(i);
         if (!SDL_IsGameController(i)) {
             Log_Printf("pads: %d has no SDL game-controller mapping; raw codes only\n", i);
             continue;
@@ -554,6 +653,7 @@ void Pads_AttachController(int slot, int device_index)
         SDL_GameControllerClose(g_padController[slot]);
         g_padController[slot] = NULL;
     }
+    Pads_CompleteControllerMapping(device_index);
     if (!SDL_IsGameController(device_index)) {
         /* No mapping: the raw joystick codes are the only ones that can work,
          * so leave the existing bindings alone. */
@@ -617,8 +717,10 @@ void Pads_HandleControllerEvent(const SDL_Event *ev)
             }
             if (logged[i] < 2) {
                 logged[i]++;
-                Log_Printf("pads: controller %s %s -> code %d (slot %d)\n", pad_ctrl_map[i].name,
-                           pressed ? "down" : "up", slot * PAD_BUTTONS + pad_ctrl_map[i].code, slot);
+                Log_Printf("pads: controller %s %s -> code %d (slot %d, SDL button %d)\n",
+                           pad_ctrl_map[i].name, pressed ? "down" : "up",
+                           slot * PAD_BUTTONS + pad_ctrl_map[i].code, slot,
+                           (int)pad_ctrl_map[i].button);
             }
             if (pad_ctrl_map[i].code >= PAD_CTRL_UP && pad_ctrl_map[i].code <= PAD_CTRL_RIGHT) {
                 /* Directions are shared with the stick, so they go through the
@@ -640,6 +742,23 @@ void Pads_HandleControllerEvent(const SDL_Event *ev)
                 Pads_SetButton(slot * PAD_BUTTONS + pad_ctrl_map[i].code, pressed ? 1 : 0);
             }
             return;
+        }
+        /* Port addition: a control SDL reports but the engine does not use.
+         * Logged (once per button) because it is the difference between "the
+         * pad never sent it" and "it arrived under a name we do not bind" --
+         * the two look identical from the outside, and on a pad whose mapping
+         * numbers the buttons differently it is the whole diagnosis. */
+        {
+            static int loggedUnmapped[SDL_CONTROLLER_BUTTON_MAX];
+
+            if (ev->cbutton.button < SDL_CONTROLLER_BUTTON_MAX &&
+                loggedUnmapped[ev->cbutton.button] < 2) {
+                loggedUnmapped[ev->cbutton.button]++;
+                Log_Printf("pads: controller button %d (%s) %s has no engine binding\n",
+                           (int)ev->cbutton.button,
+                           SDL_GameControllerGetStringForButton(ev->cbutton.button),
+                           pressed ? "down" : "up");
+            }
         }
         return;
     }
