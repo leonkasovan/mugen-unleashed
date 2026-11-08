@@ -767,11 +767,38 @@ void Bgm_SetStreamVolume(double volume)
 }
 
 /* 0x00470BC0: loads info's BGM (stopped). Always 1. */
+/*
+ * Port addition: say which file the game asked for, and whether it is there.
+ *
+ * The original always reports success: the request is queued to the BGM thread
+ * and a plugin that cannot open the file simply plays nothing, so "no music"
+ * and "no music file" look identical from outside -- no log line, no error, an
+ * OK from Bgm_Init. That cost a debugging round on a tree whose stage pointed
+ * at sound/kfm.mid that was not in sound/. One check here names the file while
+ * it is still the caller's thread; it changes no behaviour.
+ */
+static void Bgm_LogRequest(const BgmInfo *info, const char *what)
+{
+    FILE *f;
+
+    if (info == NULL || info->path[0] == '\0') {
+        return;
+    }
+    f = fopen(info->path, "rb");
+    if (f == NULL) {
+        Log_Printf("bgm: cannot open %s\n", info->path);
+        return;
+    }
+    fclose(f);
+    Log_Printf("bgm: %s %s\n", what, info->path);
+}
+
 int Bgm_Load(const BgmInfo *info)
 {
     if (g_bgmActive == 0) {
         return 1;
     }
+    Bgm_LogRequest(info, "loading");
     BGM_LOCK();
     BgmQueue_Load(g_bgmGetHandle(), info);
     BGM_UNLOCK();
@@ -785,6 +812,7 @@ int Bgm_Play(const BgmInfo *info)
     if (g_bgmActive == 0) {
         return 1;
     }
+    Bgm_LogRequest(info, "playing");
     BGM_LOCK();
     BgmQueue_Play(g_bgmGetHandle(), info);
     BGM_UNLOCK();
