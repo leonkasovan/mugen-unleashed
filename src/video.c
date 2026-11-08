@@ -621,6 +621,10 @@ void Video_OnResize(int width, int height)
 #endif
 }
 
+/* 1 while an Alt+Enter chord has already been acted on; cleared when Alt is
+ * released, so holding the pair cannot toggle at the repeat rate. */
+static int s_fullscreenChordHeld;
+
 /*
  * 0x0040B9D0 (stored with the command line code): Alt+Enter toggles
  * [Video] FullScreen. Only the OpenGL renderer switches the window, and only
@@ -659,11 +663,29 @@ void Video_HandleFullscreenKey(int *key)
         }
     }
     if (!g_keyState[ENGINE_KEY_LALT] && !g_keyState[ENGINE_KEY_RALT]) {
+        /* Alt is up: the next Alt+Enter is a new chord and may toggle again. */
+        s_fullscreenChordHeld = 0;
         return;
     }
     if (*key != SDLK_RETURN) {
         return;
     }
+    /*
+     * Port fix: with Alt held, the platform repeats the Enter -- SDL delivers one
+     * keydown per repeat -- and every repeat toggled the window again. Holding
+     * Alt+Enter therefore flipped full screen and windowed back and forth at the
+     * repeat rate, which is reported as "it does not change, the character
+     * taunts": the last repeat decided where the window ended up. One toggle per
+     * chord; the same Enter is also cleared out of g_keyState so the match's
+     * command interpreter (which reads the *state*, not the key queue) never
+     * sees the Enter as gameplay input.
+     */
+    if (s_fullscreenChordHeld != 0) {
+        *key = 0;
+        g_keyState[SDLK_RETURN] = 0;
+        return;
+    }
+    s_fullscreenChordHeld = 1;
     g = g_game;
     g->fullscreen = g->fullscreen == 0;
     Log_Printf("Fullscreen toggle %i\n", g->fullscreen);
@@ -694,6 +716,7 @@ void Video_HandleFullscreenKey(int *key)
     mode = g_renderMode;
     g = g_game;
     *key = 0;
+    g_keyState[SDLK_RETURN] = 0;
     /*
      * Port addition: SDL reports the Enter of Alt+Enter twice -- once with Alt
      * still down, which is the press handled here, and once more after the Alt
