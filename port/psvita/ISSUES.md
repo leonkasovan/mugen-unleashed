@@ -459,6 +459,41 @@ ABI and Vita-video regression suites. No Windows converter run was performed.
 If `0xc0000374` persists, preserve `build/psvita/mugen` and the verbose
 `vita-elf-create -vv` output described in README.md before another rebuild.
 
+## OpenGL startup — rotating vitaGL splash, no input response
+
+**Symptom.** After successful build and installation, the user sees a rotating
+3D vitaGL logo indefinitely and buttons appear unresponsive.
+
+**Cause found in the adapter.** `VitaGl_CreateDisplay` interpreted
+`vglInitWithCustomSizes(...) == GL_TRUE` as successful initialization. The
+pinned `third_party/vitagl/src/source/vgl.c` instead returns `res_fallback`:
+normal successful initialization returns `GL_FALSE`. The adapter therefore
+rejected a valid context. This establishes a defect that explains the reported
+symptom; no new device log was supplied to confirm the exact error path.
+
+vitaGL starts a splash thread during initialization. Its `scene_reset`
+(`gxm.c`) signals and joins that thread at the first drawing scene, whereas
+`vglSwapBuffers` returns immediately while the splash is active. Taking an
+error path before drawing leaves the logo running; it is not waiting for a
+controller button. The earlier host mock also returned the wrong success
+value, so its passing result did not cover the actual library contract.
+
+**Fix.** Accept normal `GL_FALSE` initialization, start a scene with an opaque
+black color/depth clear and present once before engine resources load. Query
+the initialized viewport and reject dimensions different from the request.
+Existing guards prevent duplicate initialization and competing SDL GXM
+ownership; a rejected viewport cannot retry. Resolution and `Precache = 0`
+settings are preserved. The viewport check does not verify all GPU allocations.
+
+**Evidence and limits.** Inspected the pinned initialization, splash, scene and
+swap implementations. Host tests use the real adapter with mocks reflecting
+the return flag and ignored swaps during splash; they cover normal init,
+allocation failure, mismatched/fallback dimensions and context reuse. Restoring
+the false-as-failure check, removing the scene clear, or swapping before the
+clear each makes the normal-startup test fail at runtime. Full
+VitaSDK rebuild and on-device startup/rendering of this correction remain
+pending. Look for `GL: vitaGL splash handed off to engine` in the new log.
+
 ## OpenGL startup — NULL vitaGL GXM context (hardware retest pending)
 
 `mugen(2).log` reaches the Vita FBO probe and then stops. The supplied dump

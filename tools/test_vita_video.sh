@@ -9,5 +9,6 @@ ${CC:-gcc} ${CFLAGS:-} -std=c11 -Wall -Wextra -Werror -O1 -Isrc \
     tools/test_vita_video.c src/gl_mvp.c -lm -o "$out/probe"
 "$out/probe"
 "$out/probe" alloc-fail
-"$out/probe" init-fail
+"$out/probe" invalid-viewport
+"$out/probe" resolution-fallback
 "$out/probe" sdl-owned

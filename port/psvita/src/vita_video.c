@@ -20,6 +20,8 @@ int VitaGl_HasContext(void) { return ready; }
 SDL_Surface *VitaGl_CreateDisplay(int width, int height, int depth)
 {
     SDL_Surface *surface;
+    GLint viewport[4] = { 0, 0, 0, 0 };
+    GLboolean resolution_fallback;
 
     if (width <= 0 || height <= 0 || width > 960 || height > 544 || depth != 32) {
         SDL_SetError("VitaGL requires a display up to 960x544 at depth 32");
@@ -50,18 +52,35 @@ SDL_Surface *VitaGl_CreateDisplay(int width, int height, int depth)
         }
         attempted = 1;
         /* Keep the 64 MiB newlib heap separate from bounded GPU pools. */
-        ready = vglInitWithCustomSizes(1024 * 1024, width, height,
-                                      16 * 1024 * 1024, 64 * 1024 * 1024,
-                                      0, 0, SCE_GXM_MULTISAMPLE_NONE) == GL_TRUE;
-        if (!ready) {
+        /* Port fix: the return is res_fallback, NOT an initialization status.
+         * GL_FALSE is the normal successful, requested-resolution result.
+         * This adapter's attempted/SDL-owner guards prevent duplicate init. */
+        Log_Printf("GL: initializing vitaGL display %ix%i\n", width, height);
+        resolution_fallback = vglInitWithCustomSizes(1024 * 1024, width, height,
+                                                   16 * 1024 * 1024, 64 * 1024 * 1024,
+                                                   0, 0, SCE_GXM_MULTISAMPLE_NONE);
+        /* A swap alone is ignored while the library's splash thread runs.
+         * glClear starts the first scene, which stops/joins that thread;
+         * then present black before shader/font loading or an error dialog. */
+        vglWaitVblankStart(vsync ? GL_TRUE : GL_FALSE);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        vglSwapBuffers(GL_FALSE);
+        glGetIntegerv(GL_VIEWPORT, viewport);
+        if (viewport[0] != 0 || viewport[1] != 0 ||
+            viewport[2] != width || viewport[3] != height) {
             SDL_FreeSurface(surface);
-            SDL_SetError("vglInitWithCustomSizes failed");
-            Log_Printf("GL: vitaGL context creation failed\n");
+            SDL_SetError("VitaGL did not retain the requested display dimensions");
+            Log_Printf("GL: requested %ix%i, viewport %i,%i %ix%i (resolution fallback=%i)\n",
+                       width, height, viewport[0], viewport[1], viewport[2], viewport[3],
+                       (int)resolution_fallback);
             return NULL;
         }
-        vglWaitVblankStart(vsync ? GL_TRUE : GL_FALSE);
+        ready = 1;
         display_width = width;
         display_height = height;
+        Log_Printf("GL: vitaGL splash handed off to engine (resolution fallback=%i)\n",
+                   (int)resolution_fallback);
         Log_Printf("GL: vitaGL owns %ix%i display (SDL presenter bypassed)\n", width, height);
     }
     display = surface;

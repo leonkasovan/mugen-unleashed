@@ -1125,6 +1125,7 @@ live GXM context.
 | Component | Current path |
 |---|---|
 | Context | `vglInitWithCustomSizes` before any GL probe or viewport call; no `SDL_SetVideoMode` in the GL path |
+| Splash handoff | Start the first scene with `glClear`, then present black once before loading engine resources |
 | Memory | 16 MiB RAM and 64 MiB CDRAM pools; no MSAA; existing newlib heap unchanged |
 | Display size | Requested config dimensions, limited to 960x544; existing defaults unchanged |
 | Present and vsync | `vglSwapBuffers` and `vglWaitVblankStart`, including debug/vsync call sites |
@@ -1164,10 +1165,14 @@ Keep `[Misc] Precache = 0` in the configuration used for the hardware test.
 The precache stack issue is separate. The build patches a copy of the selected
 configuration; check `build/psvita-gl/vita-mugen.cfg` before installing.
 
-A Linux VitaSDK cross build completed through ELF, SELF and VPK. Host tests
-check the actual adapter with mocked calls: creation and allocation failures,
-context ownership, one swap per call, vsync, repeated release, reuse of the
-same context, matrix upload and projective texture coordinates. Existing MVP
+A Linux VitaSDK cross build of the preceding adapter completed through ELF,
+SELF and VPK. The splash correction below is host-tested; its full Vita build
+and device verification remain pending. Host tests check the actual adapter
+with mocked calls: normal `GL_FALSE` initialization, allocation failure,
+invalid/fallback viewport rejection, splash handoff before presentation,
+context ownership, one bootstrap presentation and one swap per subsequent
+call, vsync, repeated release, reuse of the same context, matrix upload and
+projective texture coordinates. Existing MVP
 and Vita shader dialect gates pass. They do not execute GXM or the Vita shader
 compiler and do not prove displayed pixels, performance or blending parity.
 
@@ -1175,6 +1180,36 @@ Hardware verification remains required: startup, menu/selection, KFM match,
 RGBA and indexed sprites, transparency/PalFX, FBO orientation, screenshot,
 repeated matches and exit. The supplied test VPK preserves the previous
 480x272 config; no resolution change is part of this fix.
+
+### A rotating vitaGL logo that never reaches the game
+
+The logo is the library's startup splash, not an input screen. No button is
+required: vitaGL ends its splash thread when the application starts its first
+drawing scene. Swaps are ignored while that thread is active.
+
+The first native adapter incorrectly treated the return from
+`vglInitWithCustomSizes` as a success status. In the pinned source it returns
+`res_fallback`: `GL_FALSE` is normal successful initialization at the requested
+resolution, while `GL_TRUE` reports resolution fallback. The old check sent
+normal initialization into an error path before any drawing scene. Its test
+mock made the same incorrect assumption, so the previous passing tests missed
+this defect.
+
+The adapter now accepts normal initialization, clears/presents an initial
+black frame to hand off the splash, and checks the initialized viewport against
+the requested dimensions. A mismatched viewport is rejected without retrying
+GXM initialization or switching to SDL's presenter. This dimension check is
+not a general GPU-allocation health check. No resolution setting changes.
+
+Rebuild and reinstall:
+
+```sh
+bash port/psvita/build.sh --renderer opengl --precache 0
+```
+
+Expect `GL: vitaGL splash handed off to engine` in `mugen.log`.
+If the game still fails to reach its menu, retain the new log: shader loading
+and actual rendering still require hardware verification.
 
 ### Ownership and limitations
 

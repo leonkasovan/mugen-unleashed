@@ -8,16 +8,19 @@
 
 #define MUGEN_H /* Supply only the adapter's dependencies, without a Vita SDK. */
 typedef unsigned GLuint;
+typedef unsigned char GLboolean;
 typedef int GLint, SDL_GLattr;
 typedef float GLfloat;
 typedef struct { int w, h; } SDL_Surface;
 typedef struct DrawParams { float top_offset, bottom_offset, width_ratio; } DrawParams;
 enum { GL_FALSE, GL_TRUE, GL_PROJECTION_MATRIX, GL_MODELVIEW_MATRIX,
-       GL_ARRAY_BUFFER, GL_FLOAT, GL_TRIANGLE_STRIP, SDL_GL_SWAP_CONTROL };
+       GL_ARRAY_BUFFER, GL_FLOAT, GL_TRIANGLE_STRIP, SDL_GL_SWAP_CONTROL,
+       GL_VIEWPORT, GL_COLOR_BUFFER_BIT = 0x4000, GL_DEPTH_BUFFER_BIT = 0x100 };
 #define SDL_SWSURFACE 0
 #define SCE_GXM_MULTISAMPLE_NONE 0
 static int allocations, frees, inits, swaps, draws, enables, disables;
-static int allocation_failure, init_failure, missing_attribute, last_vsync = -1;
+static int allocation_failure, invalid_viewport, resolution_fallback, missing_attribute, last_vsync = -1;
+static int splash_active, clears;
 static SDL_Surface *sdl_display;
 static const float *position_pointer, *texcoord_pointer;
 static float uploaded_mvp[16], submitted[24];
@@ -34,15 +37,30 @@ static void SDL_FreeSurface(SDL_Surface *s) { assert(s); ++frees; free(s); }
 static SDL_Surface *SDL_GetVideoSurface(void) { return sdl_display; }
 static void SDL_SetError(const char *format, ...) { (void)format; }
 static void Log_Printf(const char *format, ...) { (void)format; }
-static int vglInitWithCustomSizes(int pool, int w, int h, int ram, int cdram,
-                                 int phy, int dialog, int msaa)
+static GLboolean vglInitWithCustomSizes(int pool, int w, int h, int ram, int cdram,
+                                       int phy, int dialog, int msaa)
 {
     assert(pool == 1024*1024 && w == 640 && h == 480);
     assert(ram == 16*1024*1024 && cdram == 64*1024*1024 && !phy && !dialog && !msaa);
-    ++inits; return !init_failure;
+    ++inits; splash_active = 1;
+    return resolution_fallback; /* GL_FALSE is successful normal initialization. */
 }
 static void vglWaitVblankStart(int value) { last_vsync = value; }
-static void vglSwapBuffers(int dialog) { assert(!dialog); ++swaps; }
+static void vglSwapBuffers(int dialog) { assert(!dialog); if (!splash_active) ++swaps; }
+static void glClearColor(float r, float g, float b, float a)
+{ assert(r == 0 && g == 0 && b == 0 && a == 1); }
+static void glClear(unsigned bits)
+{
+    assert(inits == 1 && bits == (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT));
+    splash_active = 0; ++clears; /* scene_reset stops the real splash thread. */
+}
+static void glGetIntegerv(int name, int *v)
+{
+    assert(name == GL_VIEWPORT);
+    v[0] = v[1] = 0;
+    v[2] = invalid_viewport ? 0 : (resolution_fallback ? 320 : 640);
+    v[3] = invalid_viewport ? 0 : (resolution_fallback ? 240 : 480);
+}
 static GLint glGetAttribLocation(GLuint p, const char *name)
 { assert(p == 7); return missing_attribute ? -1 : (strcmp(name, "aPosition") == 0 ? 2 : 5); }
 static GLint glGetUniformLocation(GLuint p, const char *name)
@@ -80,7 +98,8 @@ int main(int argc, char **argv)
     DrawParams dp = { .top_offset = 0, .bottom_offset = 0, .width_ratio = 2 };
     float corners[8] = {0,0,10,0,0,20,10,20};
     if (argc > 1 && strcmp(argv[1], "alloc-fail") == 0) allocation_failure = 1;
-    if (argc > 1 && strcmp(argv[1], "init-fail") == 0) init_failure = 1;
+    if (argc > 1 && strcmp(argv[1], "invalid-viewport") == 0) invalid_viewport = 1;
+    if (argc > 1 && strcmp(argv[1], "resolution-fallback") == 0) resolution_fallback = 1;
     if (argc > 1 && strcmp(argv[1], "sdl-owned") == 0) {
         SDL_Surface existing = {640,480};
         sdl_display = &existing;
@@ -100,16 +119,18 @@ int main(int argc, char **argv)
         assert(!s && !inits && !VitaGl_OwnsDisplay());
         allocation_failure = 0; s = VitaGl_CreateDisplay(640,480,32); assert(s);
     }
-    if (init_failure) {
+    if (invalid_viewport || resolution_fallback) {
         assert(!s && inits == 1 && allocations == frees);
+        assert(!splash_active && clears == 1 && swaps == 1);
         assert(VitaGl_OwnsDisplay() && !VitaGl_HasContext());
         assert(!VitaGl_CreateDisplay(640,480,32) && inits == 1);
-        assert(allocations == frees); puts("ok: partial init cannot retry GXM"); return 0;
+        assert(allocations == frees); puts("ok: rejected viewport cannot retry GXM; splash ended"); return 0;
     }
     assert(s && inits == 1 && last_vsync == 0 && VitaGl_HasContext());
+    assert(!splash_active && clears == 1 && swaps == 1);
     assert(VitaGl_CreateDisplay(640,480,32) == s && inits == 1);
     assert(!VitaGl_CreateDisplay(480,272,32));
-    VitaGl_SwapBuffers(); assert(swaps == 1);
+    VitaGl_SwapBuffers(); assert(swaps == 2);
     VitaGl_SetAttribute(SDL_GL_SWAP_CONTROL, 1); assert(last_vsync == 1);
     VitaGl_DrawQuad(7,corners,1,2,1,&dp);
     assert(draws == 1 && enables == 2 && disables == 2);
@@ -123,9 +144,10 @@ int main(int argc, char **argv)
     assert(submitted[17] == 2 && submitted[23] == 2); /* Q survives submission */
     missing_attribute = 1; VitaGl_DrawQuad(7,corners,0,1,1,&dp); assert(draws == 2);
     VitaGl_ReleaseDisplay(); VitaGl_ReleaseDisplay(); assert(allocations == frees);
-    VitaGl_SwapBuffers(); assert(swaps == 1);
+    VitaGl_SwapBuffers(); assert(swaps == 2);
     assert(!VitaGl_CreateDisplay(480,272,32));
     assert(VitaGl_CreateDisplay(640,480,32) && inits == 1);
+    assert(clears == 1 && swaps == 2); /* Reuse does not run another bootstrap. */
     VitaGl_ReleaseDisplay(); assert(allocations == frees);
     puts("ok: Vita display ownership, swap, MVP and quad submission");
     return 0;
