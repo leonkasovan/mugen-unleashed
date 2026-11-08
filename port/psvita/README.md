@@ -322,6 +322,50 @@ cp build/psvita/mugen-psvita.vpk /path/to/ux0:/
 
 Installs to `ux0:app/MSDK00001/`. Start it from the LiveArea bubble.
 
+### Verify the copy before installing
+
+`port/psvita/build.sh` ends by printing the VPK's **exact byte size and
+SHA-256**. Those describe *that build* (the archive carries file timestamps), so
+the digest changes whenever the VPK is rebuilt — compare against the run that
+produced the file you copied, not against this document:
+
+```
+bytes     5211064  mugen-psvita.vpk
+sha256    29ec3d72…
+```
+
+A short copy is the most common reason a VPK fails at install time, and the
+console reports it as an anonymous promoter error with no hint that the file is
+the problem. On the console, VitaShell's file list shows the size; with a memory
+card reader `sha256sum` closes the question.
+
+If the installer rejects a package that verifies, work through this in order.
+The code is a `ScePromoterUtil` value (`0x801011xx`), which the console may also
+show as a dialog code (`0x8010113D` is `C2-12691-9`), and it means "this package
+was refused", not which check failed:
+
+1. **Free space on `ux0:`.** The promoter unpacks the package beside the app and
+   then moves it; it needs roughly twice the VPK's unpacked size free. A nearly
+   full memory card fails here.
+2. **A leftover bubble with the same title ID.** A previous failed install can
+   leave `ux0:app/MSDK00001/` behind, and the promoter then refuses the reinstall.
+   Delete the bubble (or the directory) and retry.
+3. **Transfer method.** Copy over VitaShell's USB/FTP mode into `ux0:` and
+   install from there. A file on a USB-mounted partition (`uma0:`) is not a
+   location VitaShell installs from.
+4. **Isolate the payload.** `port/psvita/build.sh --no-data` builds a 2.3 MB
+   engine-only VPK (7 entries instead of 105). If that installs, the package
+   format and the SELF are fine and the difference is the packed game tree; if
+   it fails the same way, the problem is the console or the copy, not the data.
+5. **The SELF.** `vita-make-fself -c` (no `-s`, no `-m`) is what this build runs,
+   which is the normal-app form the promoter expects. A SELF made by a mismatched
+   `vita-make-fself` is also refused, so if the package verifies, the console has
+   space and the engine-only VPK still fails, reinstall VitaSDK from the pinned
+   archive (`port/psvita/build.sh --setup`) and rebuild.
+
+Once it installs, the failure modes move to launch and `mugen.log` — see
+"Diagnosing a failure on the console" below.
+
 ### Game data — read this
 
 **This repository ships no M.U.G.E.N data and none of Elecbyte's files.** The
@@ -920,6 +964,7 @@ the dump tells you which *line*.
 
 | Symptom | Cause and fix |
 |---|---|
+| **`Error 0x8010113D`** installing the VPK | `ScePromoterUtil` refused the package (`0x801011xx`; the console may show it as `C2-12691-9`). See "Verify the copy before installing" for the ordered checks: byte size/SHA-256 of the copy, free space on `ux0:`, a leftover `ux0:app/MSDK00001/`, installing from `ux0:` rather than `uma0:`, and the `--no-data` 2.3 MB VPK as the payload/console discriminator |
 | `VITASDK is not set` | `eval "$(port/psvita/build.sh --env)"`, or pass `-DCMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake` |
 | `arm-vita-eabi/include/SDL/SDL.h not found` | VitaSDK's `sdl` package is missing: `port/psvita/build.sh` reinstalls it with `vdpm`, or by hand `vdpm install sdl` |
 | `libvitaGL.a not found` | `vdpm install vitaGL` (not part of a hand-made base SDK) |

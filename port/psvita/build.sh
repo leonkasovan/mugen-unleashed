@@ -555,6 +555,13 @@ say "Done"
 info "$self  $(human "$(size_of "$self")")"
 info "$vpk  $(human "$(size_of "$vpk")")"
 info ""
+# The console rejects an incomplete package with a generic promoter error and no
+# way to tell a short copy from a bad build, so the exact size and digest are
+# printed here: compare them before blaming the build (see port/psvita/README.md,
+# Troubleshooting).
+info "bytes     $(size_of "$vpk")  $(basename "$vpk")"
+info "sha256    $(hash_of sha256 "$vpk")"
+info ""
 info "Copy the VPK to the console and install it with VitaShell:"
 info "  ux0:/  (USB or FTP mode), then VitaShell -> select mugen-psvita.vpk -> Install"
 info ""
