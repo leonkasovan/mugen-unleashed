@@ -4,7 +4,7 @@
 #
 # Usage:
 #   sh tools/measure_perf.sh [-l label] logfile ...
-#   sh tools/measure_perf.sh build/perf/gles/mugen.log
+#   sh tools/measure_perf.sh build/tmp/perf/gles/mugen.log
 #
 # Reads what the engine already writes:
 #

@@ -182,6 +182,16 @@ int SpriteSet_Free(SpriteSet *set)
     return 1;
 }
 
+/* The console view releases its font when it is torn down (the port keeps the
+ * font's lifetime separate from the console text). src/font.c is not part of
+ * this test's source list, so the release is stubbed like the rest of the
+ * font API above. */
+int Font_Free(Font *font)
+{
+    (void)font;
+    return 1;
+}
+
 /* --- hashing and arrays the command table uses --- */
 
 void HashTable_Free(HashTable *ht)
@@ -219,4 +229,14 @@ void Player_SetPower(Player *p, int power)
 int Round_GetStartTime(void)
 {
     return 0;
+}
+
+/* --- config, touched by the pad layer ---
+ *
+ * src/pads.c republishes a slot's bindings when a controller attaches or the
+ * mapping changes; that lives in src/config.c, which carries the whole
+ * configuration model. This test drives the pad and key paths only. */
+void Config_RepublishJoystick(int player)
+{
+    (void)player;
 }

@@ -1,14 +1,14 @@
 #!/bin/sh
-# M0 baseline harness: records build/dependency/driver metadata and runs the
+# M0 baseline harness: records build/tmp/dependency/driver metadata and runs the
 # shared fixture generator under SDL1 and SDL2.
 #
 # Usage: tools/test_render_baseline.sh [--sdl1-only | --sdl2-only]
-# Artefacts go under build/render-baseline/<target>/ per AGENTS.md.
+# Artefacts go under build/tmp/render-baseline/<target>/ per AGENTS.md.
 set -eu
 
 cd "$(dirname "$0")/.."
 
-OUT=build/render-baseline
+OUT=build/tmp/render-baseline
 SDLKIT=C:/x86devkit
 CC="${CC:-gcc}"
 MODE="${1:-all}"

@@ -5,12 +5,12 @@
 #   MUGEN_TEST_TARGET=win32|win64 selects the compiler and pointer width;
 #   tools/test_qualify.sh sets it from --target. A harness SKIP exits 77,
 #   which the runner records as SKIP rather than PASS.
-# Artefacts go under build/render-regress per AGENTS.md.
+# Artefacts go under build/tmp/render-regress per AGENTS.md.
 set -eu
 
 cd "$(dirname "$0")/.."
 
-OUT=build/render-regress
+OUT=build/tmp/render-regress
 . tools/lib_target.sh
 PKGS="sdl2"
 

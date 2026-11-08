@@ -3,7 +3,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 CC="${CC:-cc}"
-OUT="${OUT:-$PWD/build/pad-detection}"
+OUT="${OUT:-$PWD/build/tmp/pad-detection}"
 mkdir -p "$OUT/tmp"
 export TMPDIR="$OUT/tmp"
 SDL_CFLAGS="${SDL_CFLAGS:-$(pkg-config --cflags sdl2 SDL2_mixer SDL2_ttf)}"

@@ -5,12 +5,12 @@
 #
 # Usage: tools/test_gles_shader.sh
 #   MUGEN_TEST_TARGET=win32|win64 selects compiler and pointer width.
-# Artefacts go under build/render-gles per AGENTS.md.
+# Artefacts go under build/tmp/render-gles per AGENTS.md.
 set -eu
 
 cd "$(dirname "$0")/.."
 
-OUT=build/render-gles
+OUT=build/tmp/render-gles
 . tools/lib_target.sh
 
 mkdir -p "$OUT"

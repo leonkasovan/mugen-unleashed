@@ -8,12 +8,12 @@
 # is needed.
 #
 # Usage: tools/test_sdl2input.sh     (from the repository root)
-# Artefacts go under build/sdl2input-test per AGENTS.md.
+# Artefacts go under build/tmp/sdl2input-test per AGENTS.md.
 set -eu
 
 cd "$(dirname "$0")/.."
 
-OUT=build/sdl2input-test
+OUT=build/tmp/sdl2input-test
 CC="${CC:-gcc}"
 PKGS="sdl2 SDL2_ttf SDL2_mixer zlib libpng16"
 

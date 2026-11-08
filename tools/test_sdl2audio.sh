@@ -8,14 +8,14 @@
 # device, reporting a SKIP rather than passing silently when it does not.
 #
 # Usage: tools/test_sdl2audio.sh     (from the repository root)
-# Artefacts go under build/sdl2audio-test per AGENTS.md.
+# Artefacts go under build/tmp/sdl2audio-test per AGENTS.md.
 set -eu
 
 cd "$(dirname "$0")/.."
 
 # The qualifier exports MUGEN_TEST_TARGET; use its compiler, kit and ABI.
 . tools/lib_target.sh
-OUT="build/sdl2audio-test/$TARGET"
+OUT="build/tmp/sdl2audio-test/$TARGET"
 PKGS="sdl2 SDL2_mixer zlib"
 PLATFORM_SOURCE=""
 mkdir -p "$OUT/tmp"

@@ -11,12 +11,12 @@
 # Usage: tools/test_render_select.sh <engine.exe> [workdir]
 #   workdir must be a M.U.G.E.N game tree (install/). The tree is not
 #   modified: mugen.cfg is copied to a temp file and restored.
-# Artefacts go under build/render-select per AGENTS.md.
+# Artefacts go under build/tmp/render-select per AGENTS.md.
 set -eu
 
 BIN="${1:?usage: test_render_select.sh <engine.exe> [workdir]}"
 WORKDIR="${2:-install}"
-OUT=build/render-select
+OUT=build/tmp/render-select
 
 cd "$(dirname "$0")/.."
 mkdir -p "$OUT"

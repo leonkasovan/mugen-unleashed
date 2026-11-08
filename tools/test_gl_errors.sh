@@ -10,7 +10,7 @@ if [ -n "${MUGEN_TEST_TARGET:-}" ]; then
     TARGET_FLAGS="$ARCHFLAGS -DTEST_EXPECT_BITS=$EXPECT_BITS"
 fi
 CC="${CC:-cc}"
-OUT="${OUT:-$PWD/build/gl-errors}"
+OUT="${OUT:-$PWD/build/tmp/gl-errors}"
 mkdir -p "$OUT/tmp" "$OUT/data/gles"
 export TMPDIR="$OUT/tmp"
 FLAGS="$TARGET_FLAGS ${CFLAGS:-} -std=gnu11 -O1 -g -UNDEBUG -Wall -Wextra -Wno-unused-parameter -ffunction-sections -fdata-sections"

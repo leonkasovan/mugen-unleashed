@@ -7,12 +7,12 @@
 # needing the game data.
 #
 # Usage: tools/test_sdl2shim.sh        (from the repository root)
-# Artefacts go under build/sdl2shim-test per AGENTS.md.
+# Artefacts go under build/tmp/sdl2shim-test per AGENTS.md.
 set -eu
 
 cd "$(dirname "$0")/.."
 
-OUT=build/sdl2shim-test
+OUT=build/tmp/sdl2shim-test
 CC="${CC:-gcc}"
 PKGS="sdl2"
 

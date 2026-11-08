@@ -4,12 +4,12 @@
 #
 # Usage: tools/test_render_policy.sh
 #   MUGEN_TEST_TARGET=win32|win64 selects compiler, kit and pointer width.
-# Artefacts go under build/render-policy per AGENTS.md.
+# Artefacts go under build/tmp/render-policy per AGENTS.md.
 set -eu
 
 cd "$(dirname "$0")/.."
 
-OUT=build/render-policy
+OUT=build/tmp/render-policy
 . tools/lib_target.sh
 
 mkdir -p "$OUT"

@@ -7,12 +7,12 @@
 # after (the script aborts otherwise).
 #
 # Usage: tools/test_mutate.sh
-# Artefacts go under build/render-mutate per AGENTS.md.
+# Artefacts go under build/tmp/render-mutate per AGENTS.md.
 set -eu
 
 cd "$(dirname "$0")/.."
 
-OUT=build/render-mutate
+OUT=build/tmp/render-mutate
 mkdir -p "$OUT"
 
 if [ -n "$(git status --porcelain -- src/)" ]; then

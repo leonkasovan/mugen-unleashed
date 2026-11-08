@@ -6,12 +6,12 @@
 # must use member access (see the camera.c/ai.c/char.c fixes).
 #
 # Usage: tools/test_abi_layout.sh       (from the repository root)
-# Artefacts go under build/render-abi per AGENTS.md.
+# Artefacts go under build/tmp/render-abi per AGENTS.md.
 set -eu
 
 cd "$(dirname "$0")/.."
 
-OUT=build/render-abi
+OUT=build/tmp/render-abi
 # The 64-bit kit's gcc.exe is a wrapper that needs its own bin dir on PATH
 # to find cc1 (same reason the Makefile demands the kit first on PATH).
 case "$PATH" in
@@ -24,10 +24,20 @@ CC64="${CC64:-gcc}"
 mkdir -p "$OUT"
 
 # shellcheck disable=SC2086
-$CC32 -m32 -std=gnu11 -O1 -g -Wall \
+# SDL's headers are not in the devkit: a clean w64devkit ships no SDL, so
+# they come from the dependency tree (build/sysroots/<target>-sysroot) or
+# from whatever pkg-config resolves. This test only prints sizeof's, so the
+# include path is all it needs -- no library is linked.
+SDL_CFLAGS="$(pkg-config --cflags sdl2 2>/dev/null || true)"
+if [ -z "$SDL_CFLAGS" ]; then
+    for d in build/sysroots/win32-sysroot build/sysroots/win64-sysroot; do
+        [ -d "$d/usr/include/SDL2" ] && SDL_CFLAGS="-I$d/usr/include -I$d/usr/include/SDL2" && break
+    done
+fi
+
+$CC32 -m32 -std=gnu11 -O1 -g -Wall $SDL_CFLAGS \
     -Isrc -Ithird_party/glad-2.1 -Ithird_party/minizip-0.15 \
     -Ithird_party/lua-5.1.4/src -Ithird_party/sdk/include \
-    -IC:/x86devkit/include/SDL \
     tools/test_abi_layout.c -o "$OUT/layout32.exe" -lwinmm
 "$OUT/layout32.exe" | tee "$OUT/layout32.txt"
 
@@ -51,7 +61,7 @@ fi
 $CC64 -m64 -std=gnu11 -O1 -g -Wall \
     -Isrc -Ithird_party/glad-2.1 -Ithird_party/minizip-0.15 \
     -Ithird_party/lua-5.1.4/src -Ithird_party/libpng-1.2.38 \
-    -IC:/w64devkit/include/SDL2 \
+    $SDL_CFLAGS \
     tools/test_abi_layout.c -o "$OUT/layout64.exe" -lwinmm
 "$OUT/layout64.exe" | tee "$OUT/layout64.txt"
 
@@ -71,7 +81,7 @@ echo "== 64-bit syntax check of the fixed units (§8.8) =="
 /c/w64devkit/bin/gcc -m64 -std=gnu11 -fsyntax-only \
     -Isrc -Ithird_party/lua-5.1.4/src -Ithird_party/glad-2.1 \
     -Ithird_party/minizip-0.15 -Ithird_party/libpng-1.2.38 \
-    -IC:/w64devkit/include/SDL2 \
+    $SDL_CFLAGS \
     src/camera.c src/ai.c src/char.c src/bgmstream.c
 
 echo "layout + 64-bit syntax: OK"

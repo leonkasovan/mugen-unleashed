@@ -4,7 +4,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 CC="${CC:-cc}"
-OUT="${OUT:-$PWD/build/sdl2-gles-context}"
+OUT="${OUT:-$PWD/build/tmp/sdl2-gles-context}"
 mkdir -p "$OUT/tmp"
 export TMPDIR="$OUT/tmp"
 SDL2_CFLAGS="${SDL2_CFLAGS:-$(pkg-config --cflags sdl2 SDL2_mixer SDL2_ttf)}"

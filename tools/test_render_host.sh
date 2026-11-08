@@ -8,12 +8,12 @@
 #   -m32, win64 uses w64devkit with -m64. The harness prints its pointer width
 #   and the script fails when it does not match the target, so a 64-bit
 #   qualification cannot be met by a 32-bit build.
-# Artefacts go under build/render-host per AGENTS.md.
+# Artefacts go under build/tmp/render-host per AGENTS.md.
 set -eu
 
 cd "$(dirname "$0")/.."
 
-OUT=build/render-host
+OUT=build/tmp/render-host
 . tools/lib_target.sh
 
 mkdir -p "$OUT"

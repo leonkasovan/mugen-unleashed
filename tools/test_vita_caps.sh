@@ -8,12 +8,12 @@
 #
 # Usage: tools/test_vita_caps.sh
 #   MUGEN_TEST_TARGET=win32|win64 selects compiler, kit and pointer width.
-# Artefacts go under build/render-vita per AGENTS.md.
+# Artefacts go under build/tmp/render-vita per AGENTS.md.
 set -eu
 
 cd "$(dirname "$0")/.."
 
-OUT=build/render-vita
+OUT=build/tmp/render-vita
 . tools/lib_target.sh
 
 mkdir -p "$OUT"

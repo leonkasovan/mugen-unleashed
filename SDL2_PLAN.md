@@ -18,8 +18,9 @@ decisions, and the numbers in the stage narrative (engine names, case counts,
 - SDL2 is the **default** backend of the Makefile (`SDL_BACKEND ?= 2`);
   `make SDL_BACKEND=1` builds the SDL 1.2 reference on `MUGEN_TARGET=win32`
   only, and every other target rejects it outright.
-- The MSVC/CMake build is still **SDL 1.2** by decision (see `CMakeLists.txt`
-  and "Current status"): the migration did not move it.
+- The **`Makefile` is the project's build**. The MSVC/CMake path remains on
+  SDL 1.2 (`CMakeLists.txt`, `mugen-msvc-win32-sdl1`) and is out of scope for
+  this migration; nothing here waits on it.
 - The engine is unchanged in behaviour: the eight deterministic scenario
   comparisons against SDL 1.2 still decide regressions, not the fact that the
   SDL2 build runs.
@@ -787,13 +788,11 @@ comparison, not a port.
   `812ea19` and predates the switch, and no linux-x64 build output exists in the
   tree today. (`docs/BUILD-LINUX.md` does now name the backend and its packages,
   and documents the arm64 cross build end to end.)
-- **The MSVC/CMake build never moved to SDL2.** `CMakeLists.txt` still links the
-  game's SDL 1.2 DLLs and does not define `MUGEN_SDL2`; that is why its output
-  is named `mugen-msvc-win32-sdl1`. The plan's rollout rule ("make SDL2 the
-  default once *both* build systems pass") was therefore not satisfied — the
-  default changed in the Makefile only. That is a deliberate scope decision, not
-  an oversight, but it means the MSVC path is a second, SDL-1.2-only backend to
-  maintain.
+- **MSVC/CMake on SDL2 is out of scope, by decision.** The `Makefile` is the
+  project's build; `CMakeLists.txt` stays on SDL 1.2 (`mugen-msvc-win32-sdl1`)
+  and is no longer part of this migration, so the original rollout rule ("default
+  to SDL2 once *both* build systems pass") no longer applies and there is no
+  second SDL2 backend to keep in step.
 
 The Android renderer work is tracked separately in `RENDERING_PLAN.md` §12;
 `SDL2_PLAN.md` covers only the desktop backend.

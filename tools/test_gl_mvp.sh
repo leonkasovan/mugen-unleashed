@@ -4,12 +4,12 @@
 #
 # Usage: tools/test_gl_mvp.sh
 #   MUGEN_TEST_TARGET=win32|win64 selects compiler and pointer width.
-# Artefacts go under build/render-gl per AGENTS.md.
+# Artefacts go under build/tmp/render-gl per AGENTS.md.
 set -eu
 
 cd "$(dirname "$0")/.."
 
-OUT=build/render-gl
+OUT=build/tmp/render-gl
 . tools/lib_target.sh
 
 mkdir -p "$OUT"

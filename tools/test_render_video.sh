@@ -5,12 +5,12 @@
 #   MUGEN_TEST_TARGET=win32|win64 selects the compiler and pointer width;
 #   tools/test_qualify.sh sets it from --target. A missing GL context is a
 #   SKIP (exit 77), never a pass.
-# Artefacts go under build/render-video per AGENTS.md.
+# Artefacts go under build/tmp/render-video per AGENTS.md.
 set -eu
 
 cd "$(dirname "$0")/.."
 
-OUT=build/render-video
+OUT=build/tmp/render-video
 . tools/lib_target.sh
 
 mkdir -p "$OUT"

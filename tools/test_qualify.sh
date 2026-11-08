@@ -2,7 +2,7 @@
 # M9 qualification runner (RENDERING_PLAN.md section 13).
 #
 # Maps each test ID to the harness that implements it and stores evidence
-# under build/render-validation/<sha>/<target>/ (plan section 13.3).
+# under build/tmp/render-validation/<sha>/<target>/ (plan section 13.3).
 # Test IDs without an implemented harness are reported as OPEN with the
 # reason -- never as pass (plan section 13.4).
 #
@@ -15,7 +15,7 @@
 #     match the target fails (tools/test_render_host.sh checks it).
 # A harness that cannot run here exits 77 and is recorded as SKIP, which is
 # listed with the OPEN rows; an exit 0 alone is never evidence of a pass.
-# Artefacts go under build/render-validation per AGENTS.md.
+# Artefacts go under build/tmp/render-validation per AGENTS.md.
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -37,7 +37,7 @@ esac
 export MUGEN_TEST_TARGET="$TARGET"
 
 SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
-OUT="build/render-validation/$SHA/$TARGET"
+OUT="build/tmp/render-validation/$SHA/$TARGET"
 mkdir -p "$OUT"
 
 PASS=0
