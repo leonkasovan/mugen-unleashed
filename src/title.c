@@ -226,6 +226,27 @@ int Title_Update(ScreenLoop *screen, TitleState *st)
     int key = screen->key;
     int chosen = 0;
 
+#ifdef MUGEN_GAMEPAD_POLICY
+    {
+        PadMenuAction action = Pads_MenuAction(screen->input2, PAD_CONTEXT_TITLE);
+        if (action != PAD_MENU_NONE) screen->input2 = 0;
+        if (action == PAD_MENU_BACK && !st->chosen && !screen->fade_out) {
+            /* Port addition: R3 requires a separate confirm to exit. Close
+             * the info panel first; SELECT itself does nothing at the root. */
+            if (st->box_shown || st->show_info) {
+                st->show_info = 0;
+                st->box_shown = 0;
+                st->box_moving = 1;
+                st->box_y_target = st->box_y_hidden;
+            } else if (st->items[TITLE_ITEM_EXIT] != NULL) {
+                st->item = TITLE_ITEM_EXIT;
+            }
+            screen->input = 0;
+            screen->key_code = 0;
+            screen->idle_ticks = 0;
+        }
+    }
+#endif
     if (screen->fade_out && screen->fade_ticks > 0) {
         /* escape skips the fade out */
         if (key == SDLK_ESCAPE || g_quitRequested) {
@@ -1624,6 +1645,13 @@ int KeyConfig_Run(int joystick, int ticks)
                 g_keyQueue.read = 0;
             }
         }
+#ifdef MUGEN_GAMEPAD_POLICY
+        {
+            PadMenuAction action = Pads_MenuAction((unsigned int)pad, PAD_CONTEXT_MENU);
+            if (action != PAD_MENU_NONE) pad = 0;
+            if (action == PAD_MENU_BACK) key = SDLK_ESCAPE;
+        }
+#endif
         button = pad & ~0x60;
         if (key == SDLK_RETURN || (unsigned int)(button - 5) <= 26) {
             accept = 1;
@@ -1770,7 +1798,11 @@ int KeyConfig_Run(int joystick, int ticks)
             } else if (ticks % 450 < 300) {
                 strcpy(text, "Press spacebar to disable entry");
             } else {
+#ifdef MUGEN_GAMEPAD_POLICY
+                strcpy(text, "Esc / Select / R3 to cancel");
+#else
                 strcpy(text, "Press esc to cancel");
+#endif
             }
             if (state == 1) {
                 KeyConfig_Text(text, font, (float)box_x, (float)(row_h * 15 + box_y + line_h), FONT_ALIGN_LEFT,

@@ -4,6 +4,42 @@ The win32 and win64 SDL2 builds share `src/pads.c`, the SDL2 event path, and
 the per-player configuration policy in `src/config.c`. Detection does not use
 pointer-sized integer casts or depend on the reconstructed 32-bit `Pad` layout.
 
+## Back and Pause controls
+
+Mapped SDL2 controllers use separate system controls, outside the eleven
+configurable gameplay actions. No new `mugen.cfg` entries are needed.
+
+| Context | SELECT / Back | R3 / right-stick click |
+|---|---|---|
+| Options, character selection and other screens | Escape / Back | Escape / Back |
+| Keyboard or joystick button configuration | Cancel the current assignment and restore its previous bindings; press again to leave | Same |
+| Match, including training | Pause / resume | Escape: leave the match using the existing keyboard path |
+| Main title / mode select | No action | Close the info panel first, otherwise highlight Exit when that item exists |
+
+At the main title, highlighting Exit never activates it: confirm separately
+with an ordinary menu button. Keyboard Escape keeps its existing behavior.
+Controllers without R3 can still use SELECT to leave menus and to pause or
+resume fights; keyboard Escape remains available to leave a match. No
+SELECT+START chord is reserved, so START retains its gameplay/palette role.
+
+System presses are edge-triggered. Releases and repeated button-down events
+do not trigger another action or confirm an item on the next screen. SELECT
+and R3 do not enter the gameplay callback or held-button state. A raw joystick
+without an SDL controller mapping retains its existing button 12/13 meanings.
+The decoder handles all four slot offsets, rather than recognizing P1 only.
+
+`tools/test_gamepad_config.sh` exercises production SDL2 button dispatch,
+`Screen_ReadInput`, `Game_ReadInput`, `Title_Update`, and `KeyConfig_Run` with
+virtual mapped P1/P2 controllers. It checks pause/resume, Escape, safe title
+exit, info-panel closure, a hidden Exit item, release/repeat suppression,
+rollback of partial keyboard/joystick assignments, ordinary attacks, and raw
+joystick fallback. Rendering, event scheduling and input-map rebuilding remain
+stubbed boundaries. Both desktop and Android compile paths passed on Linux
+x86-64 with ASan/UBSan (leak detection disabled for the sandbox). The mock
+pad suite also checks all four slot offsets on x86-64 and i386 through QEMU.
+Removing slot normalization makes the P2 pause assertion fail. This is host
+coverage, not Windows hardware verification.
+
 ## What the reported log establishes
 
 The reported win64 log reaches `SDL_NumJoysticks() = 0` and then disables

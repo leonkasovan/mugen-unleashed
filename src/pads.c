@@ -243,12 +243,8 @@ int Pads_Init(void)
 #define PAD_CTRL_Y      9
 #define PAD_CTRL_Z      10
 #define PAD_CTRL_START  11
-/*
- * Select opens the in-match menu: the engine's menu key is PAUSE, which
- * Game_ReadInput turns into defocus_paused (the pause screen) while a match is
- * running. A pad has no keyboard, so Select is bound to that code here -- a
- * gamepad's Back/Select is the conventional button for it.
- */
+/* SELECT is a system control: Back in menus, Pause in a match. The screen
+ * loop translates it before Game_ReadInput runs the keyboard pause logic. */
 #define PAD_CTRL_SELECT PAD_SELECT_CODE
 
 /*
@@ -267,6 +263,10 @@ int Pads_Init(void)
 
 /* Sidecars, not fields on Pad: the reconstructed struct has a fixed layout. */
 static unsigned char g_padDirHeld[PAD_DIR_SOURCES][PAD_MAX];
+#ifdef MUGEN_GAMEPAD_POLICY
+/* System controls never enter g_padButtonState or the gameplay input map. */
+static unsigned char g_padMenuHeld[PAD_MAX];
+#endif
 
 static void Pads_ComposeDirections(int slot)
 {
@@ -326,6 +326,9 @@ void Pads_ResetDirectionSources(void)
     for (slot = 0; slot < PAD_MAX; slot++) {
         g_padDirHeld[0][slot] = 0;
         g_padDirHeld[1][slot] = 0;
+#ifdef MUGEN_GAMEPAD_POLICY
+        g_padMenuHeld[slot] = 0;
+#endif
     }
 }
 
@@ -337,6 +340,9 @@ void Pads_ClearDirectionSources(int slot)
     }
     g_padDirHeld[0][slot] = 0;
     g_padDirHeld[1][slot] = 0;
+#ifdef MUGEN_GAMEPAD_POLICY
+    g_padMenuHeld[slot] = 0;
+#endif
     Pads_ComposeDirections(slot);
 }
 
@@ -399,12 +405,32 @@ static const PadCtrlMap pad_ctrl_map[] = {
     { SDL_CONTROLLER_BUTTON_Y, PAD_CTRL_Y, KEY_Y, "Y" },
     { SDL_CONTROLLER_BUTTON_LEFTSHOULDER, PAD_CTRL_Z, KEY_Z, "Z" },
     { SDL_CONTROLLER_BUTTON_START, PAD_CTRL_START, KEY_START, "Start" },
-    /* Select has no KEY_* slot: it is not a player action but the in-match
-     * menu key, handled in Game_ReadInput. -1 keeps it out of the binding
-     * table while the event path still emits its code. */
+    /* System controls have no KEY_* slot. The screen/key-config loops
+     * interpret them; -1 keeps them out of the player binding table. */
     { SDL_CONTROLLER_BUTTON_BACK, PAD_CTRL_SELECT, -1, "Select" },
+    { SDL_CONTROLLER_BUTTON_RIGHTSTICK, PAD_BACK_CODE, -1, "Back (R3)" },
 };
 #define PAD_CTRL_MAP_COUNT ((int)(sizeof(pad_ctrl_map) / sizeof(pad_ctrl_map[0])))
+
+/* Port addition: shared by the screen loop and the standalone key-config
+ * loop. Strip the release flag before decoding the slot. A raw joystick's
+ * buttons 12/13 must retain their configured gameplay meaning. */
+PadMenuAction Pads_MenuAction(unsigned int code, PadMenuContext context)
+{
+    unsigned int button = code & ~PAD_RELEASE;
+    int slot = (int)(button / PAD_BUTTONS);
+    int local = (int)(button % PAD_BUTTONS);
+
+    if (button >= INPUT_PAD_COUNT || !Pads_SlotUsesController(slot) ||
+        (local != PAD_SELECT_CODE && local != PAD_BACK_CODE)) {
+        return PAD_MENU_NONE;
+    }
+    if ((code & PAD_RELEASE) != 0 ||
+        (local == PAD_SELECT_CODE && context == PAD_CONTEXT_TITLE)) {
+        return PAD_MENU_CONSUMED;
+    }
+    return local == PAD_SELECT_CODE && context == PAD_CONTEXT_MATCH ? PAD_MENU_PAUSE : PAD_MENU_BACK;
+}
 
 /* Opens the game controllers that back the joysticks already opened. Returns
  * how many opened. A pad SDL has no mapping for stays unopened and the caller
@@ -496,9 +522,8 @@ void Pads_ControllerBindings(int slot, int *out)
         return;
     }
     for (i = 0; i < PAD_CTRL_MAP_COUNT; i++) {
-        /* key < 0 marks a control with no KEY_* slot (Select: it is the menu
-         * key, not a player action). Writing out[-1] would corrupt the caller's
-         * stack. */
+        /* key < 0 marks a system control with no KEY_* slot (Select / R3).
+         * Writing out[-1] would corrupt the caller's stack. */
         if (pad_ctrl_map[i].key < 0 || pad_ctrl_map[i].key >= KEY_COUNT) {
             continue;
         }
@@ -601,6 +626,16 @@ void Pads_HandleControllerEvent(const SDL_Event *ev)
                  * a d-pad release must not clear a direction the stick holds,
                  * and vice versa. */
                 Pads_SetDirectionSource(slot, 1, pad_ctrl_map[i].code, pressed);
+            } else if (pad_ctrl_map[i].key < 0) {
+                int bit = 1 << (pad_ctrl_map[i].code - PAD_SELECT_CODE);
+                /* Port addition: edge-triggered menu input bypasses the
+                 * gameplay callback and state, even with a stale key map. */
+                if (((g_padMenuHeld[slot] & bit) != 0) != pressed) {
+                    int code = slot * PAD_BUTTONS + pad_ctrl_map[i].code;
+                    if (pressed) g_padMenuHeld[slot] |= (unsigned char)bit;
+                    else g_padMenuHeld[slot] &= (unsigned char)~bit;
+                    Pads_QueueCode(pressed ? code : code | PAD_RELEASE);
+                }
             } else {
                 Pads_SetButton(slot * PAD_BUTTONS + pad_ctrl_map[i].code, pressed ? 1 : 0);
             }

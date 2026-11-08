@@ -112,25 +112,8 @@ int Game_ReadInput(ScreenLoop *screen)
     if (g->console_open != 0) {
         return 1;
     }
-#ifdef MUGEN_GAMEPAD_POLICY
-    /*
-     * Port addition: the pad's Select/Back button opens the in-match menu.
-     *
-     * The pause path below is keyboard-only -- it tests screen->key, while pad
-     * codes arrive in screen->input2 -- so a controller had no way to reach the
-     * menu once a match started. Pads_HandleControllerEvent emits
-     * PAD_SELECT_CODE for SDL's Back/Select button; translating it here keeps
-     * the reconstructed pause logic untouched and gives the pad the same entry
-     * point the Pause key has. The press is consumed so it cannot also read as
-     * a player action.
-     */
-    if (screen->input2 != 0 && (int)(screen->input2 & ~0x100u) == PAD_SELECT_CODE) {
-        if ((screen->input2 & 0x100u) == 0) {
-            key = ENGINE_KEY_PAUSE;
-        }
-        screen->input2 = 0;
-    }
-#endif
+    /* SDL2 system controls are translated by Screen_ReadInput before the
+     * screen's Escape handling; this also handles non-fight inner screens. */
     if (screen->kind != 8 && screen->kind != 7 && g->defocus_paused == 0 && key == ENGINE_KEY_PAUSE &&
         screen->ticks > 0) {
         g->defocus_paused = 1;
@@ -815,6 +798,23 @@ int Screen_ReadInput(ScreenLoop *screen)
         screen->input = (unsigned int)r;
         screen->input_side = (int)(r >> 32);
     }
+#ifdef MUGEN_GAMEPAD_POLICY
+    /* Port addition: SELECT backs out of menus and pauses/resumes a match;
+     * R3 is Escape. Title_Update handles its own Back action so R3 can select
+     * Exit without triggering the keyboard Escape's immediate exit path. */
+    if (screen->kind != 1) {
+        PadMenuAction action = Pads_MenuAction(screen->input2,
+                                               screen->kind == 4 ? PAD_CONTEXT_MATCH : PAD_CONTEXT_MENU);
+        if (action != PAD_MENU_NONE) screen->input2 = 0;
+        if (action == PAD_MENU_BACK || action == PAD_MENU_PAUSE) {
+            screen->key = action == PAD_MENU_BACK ? SDLK_ESCAPE : ENGINE_KEY_PAUSE;
+            screen->key_code = 0;
+            screen->input = 0;
+            g->key_codes.read = g->key_codes.write = 0;
+            screen->idle_ticks = 0;
+        }
+    }
+#endif
 #ifdef MUGEN_VITA_GL
     /*
      * PS Vita port (port/psvita): trace what each screen frame actually acts on.

@@ -96,6 +96,7 @@ static void reset(void)
 }
 int main(void)
 {
+    int slot, context;
 #ifdef TEST_EXPECT_BITS
     assert(sizeof(void*)*8==TEST_EXPECT_BITS);
 #endif
@@ -121,6 +122,33 @@ int main(void)
     reset();pending_devices=1;
     assert(Pads_Init()>0 && pumps>0 && g_padsActive);
     reset();
+    /* All four slot offsets, independent of host pointer width. No OS driver
+     * is involved: only a non-NULL semantic handle enables system controls. */
+    for (slot = 0; slot < PAD_MAX; slot++) {
+        unsigned int select = (unsigned int)(slot * PAD_BUTTONS + PAD_SELECT_CODE);
+        unsigned int back = (unsigned int)(slot * PAD_BUTTONS + PAD_BACK_CODE);
+        assert(Pads_MenuAction(select, PAD_CONTEXT_MENU) == PAD_MENU_NONE);
+        assert(Pads_MenuAction(back, PAD_CONTEXT_MATCH) == PAD_MENU_NONE);
+        g_padController[slot] = (SDL_GameController *)&joy_object;
+        assert(Pads_MenuAction(select, PAD_CONTEXT_MENU) == PAD_MENU_BACK);
+        assert(Pads_MenuAction(select, PAD_CONTEXT_MATCH) == PAD_MENU_PAUSE);
+        assert(Pads_MenuAction(select, PAD_CONTEXT_TITLE) == PAD_MENU_CONSUMED);
+        for (context = PAD_CONTEXT_MENU; context <= PAD_CONTEXT_MATCH; context++) {
+            assert(Pads_MenuAction(back, (PadMenuContext)context) == PAD_MENU_BACK);
+            assert(Pads_MenuAction(back | PAD_RELEASE, (PadMenuContext)context) == PAD_MENU_CONSUMED);
+            assert(Pads_MenuAction(select | PAD_RELEASE, (PadMenuContext)context) == PAD_MENU_CONSUMED);
+        }
+        assert(Pads_MenuAction((unsigned int)(slot * PAD_BUTTONS + 5), PAD_CONTEXT_MENU) == PAD_MENU_NONE);
+        g_padMenuHeld[slot] = 3;
+        Pads_ClearDirectionSources(slot);
+        assert(!g_padMenuHeld[slot]);
+        g_padMenuHeld[slot] = 3;
+        g_padController[slot] = NULL;
+    }
+    Pads_ResetDirectionSources();
+    for (slot = 0; slot < PAD_MAX; slot++) assert(!g_padMenuHeld[slot]);
+    assert(Pads_MenuAction(~0u, PAD_CONTEXT_MENU) == PAD_MENU_NONE);
     puts("ok: failed controller init preserves raw input; errors, discovery refresh and service ownership pass");
+    puts("ok: menu actions decode all slot offsets and consume releases; raw buttons remain ordinary input");
     return 0;
 }

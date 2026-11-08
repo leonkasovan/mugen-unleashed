@@ -45,6 +45,8 @@ void Error_Fatal(const char *fmt, ...)
     abort();
 }
 void Bgm_SetVolume(double volume) { (void)volume; }
+void Sound_PlaySystem(Snd *snd, int group, int channel, int number, double volume)
+{ (void)snd; (void)group; (void)channel; (void)number; (void)volume; }
 void Input_InitPads(void) {}
 int Input_Remap(void) { map_rebuilds++; return 1; }
 int Input_UpdateMap(void) { map_rebuilds++; return 1; }
@@ -121,6 +123,196 @@ static void reset_menu(void)
 {
     menu_count = menu_pos = 0;
     enqueue(0, 0, 0); /* The entry-point poll precedes the menu's frame loop. */
+}
+
+static int gameplay_events;
+static void record_gameplay(int code, int pressed)
+{
+    (void)code;
+    (void)pressed;
+    gameplay_events++;
+}
+
+static void controller_button(int slot, SDL_GameControllerButton button, int pressed)
+{
+    SDL_Event event;
+    memset(&event, 0, sizeof(event));
+    event.type = pressed ? SDL_CONTROLLERBUTTONDOWN : SDL_CONTROLLERBUTTONUP;
+    event.cbutton.which = SDL_JoystickInstanceID(g_pads[slot].joystick);
+    event.cbutton.button = (Uint8)button;
+    Pads_HandleControllerEvent(&event);
+}
+
+static void read_frame(ScreenLoop *screen)
+{
+    menu_count = menu_pos = 0;
+    enqueue(0, 0, 0);
+    Screen_ReadInput(screen);
+    assert(menu_pos == menu_count);
+}
+
+static void check_menu_actions(void)
+{
+    ScreenLoop screen;
+    TitleState title;
+    int p, b, k;
+    int before[2][KEY_COUNT];
+    int keyboard_before[2][KEY_COUNT];
+    static const SDL_GameControllerButton buttons[] = {
+        SDL_CONTROLLER_BUTTON_BACK, SDL_CONTROLLER_BUTTON_RIGHTSTICK
+    };
+
+    memcpy(before, game.joy_keys, sizeof(before));
+    memcpy(keyboard_before, game.keys, sizeof(keyboard_before));
+    g_padHandler = record_gameplay;
+    for (p = 0; p < 2; p++) {
+        memset(&screen, 0, sizeof(screen));
+        screen.kind = 4;
+        screen.ticks = 1;
+        game.defocus_paused = 0;
+        game.training_menu = p; /* P1 normal pause, P2 training pause */
+        controller_button(p, SDL_CONTROLLER_BUTTON_BACK, 1);
+        read_frame(&screen);
+        assert(screen.key == ENGINE_KEY_PAUSE && !screen.done && !screen.input2);
+        Game_ReadInput(&screen);
+        assert(game.defocus_paused);
+        controller_button(p, SDL_CONTROLLER_BUTTON_BACK, 1); /* no repeat */
+        read_frame(&screen);
+        assert(!screen.key);
+        controller_button(p, SDL_CONTROLLER_BUTTON_BACK, 0);
+        read_frame(&screen);
+        Game_ReadInput(&screen);
+        assert(game.defocus_paused && !screen.key && !screen.done);
+        controller_button(p, SDL_CONTROLLER_BUTTON_BACK, 1);
+        read_frame(&screen);
+        Game_ReadInput(&screen);
+        assert(!game.defocus_paused);
+        controller_button(p, SDL_CONTROLLER_BUTTON_BACK, 0);
+        read_frame(&screen);
+        game.defocus_paused = p; /* Escape from running and paused matches */
+        controller_button(p, SDL_CONTROLLER_BUTTON_RIGHTSTICK, 1);
+        read_frame(&screen);
+        assert(screen.done && screen.key == SDLK_ESCAPE);
+        Game_ReadInput(&screen);
+        assert(!game.defocus_paused);
+        controller_button(p, SDL_CONTROLLER_BUTTON_RIGHTSTICK, 0);
+        screen.done = 0;
+        read_frame(&screen);
+        assert(!screen.done && !screen.key);
+
+        for (k = 2; k <= 3; k++) { /* character selection and options */
+            for (b = 0; b < 2; b++) {
+                memset(&screen, 0, sizeof(screen));
+                screen.kind = k;
+                controller_button(p, buttons[b], 1);
+                read_frame(&screen);
+                assert(screen.key == SDLK_ESCAPE && screen.done && !screen.input && !screen.input2);
+                controller_button(p, buttons[b], 0);
+                screen.done = 0;
+                read_frame(&screen);
+                assert(!screen.key && !screen.done);
+            }
+        }
+
+        memset(&screen, 0, sizeof(screen));
+        memset(&title, 0, sizeof(title));
+        screen.kind = 1;
+        title.items[TITLE_ITEM_EXIT] = "Exit";
+        game.demo_wait = -1;
+        controller_button(p, SDL_CONTROLLER_BUTTON_BACK, 1);
+        read_frame(&screen);
+        Title_Update(&screen, &title);
+        assert(!title.chosen && title.item == 0 && !screen.done);
+        controller_button(p, SDL_CONTROLLER_BUTTON_BACK, 0);
+        read_frame(&screen);
+        Title_Update(&screen, &title);
+        controller_button(p, SDL_CONTROLLER_BUTTON_RIGHTSTICK, 1);
+        read_frame(&screen);
+        Title_Update(&screen, &title);
+        assert(title.item == TITLE_ITEM_EXIT && !title.chosen && !screen.done && !screen.fade_out);
+        controller_button(p, SDL_CONTROLLER_BUTTON_RIGHTSTICK, 0);
+        read_frame(&screen);
+        Title_Update(&screen, &title);
+        assert(!title.chosen && !screen.fade_out);
+        title.box_shown = 1;
+        title.item = TITLE_ITEM_ARCADE;
+        controller_button(p, SDL_CONTROLLER_BUTTON_RIGHTSTICK, 1);
+        read_frame(&screen);
+        Title_Update(&screen, &title);
+        assert(!title.box_shown && title.box_moving && !title.chosen && title.item == TITLE_ITEM_ARCADE);
+        controller_button(p, SDL_CONTROLLER_BUTTON_RIGHTSTICK, 0);
+        read_frame(&screen);
+        Title_Update(&screen, &title);
+        title.box_moving = 0;
+        title.items[TITLE_ITEM_EXIT] = NULL;
+        controller_button(p, SDL_CONTROLLER_BUTTON_RIGHTSTICK, 1);
+        read_frame(&screen);
+        Title_Update(&screen, &title);
+        assert(!title.chosen && title.item == TITLE_ITEM_ARCADE); /* hidden Exit */
+        controller_button(p, SDL_CONTROLLER_BUTTON_RIGHTSTICK, 0);
+        read_frame(&screen);
+        Title_Update(&screen, &title);
+        title.items[TITLE_ITEM_EXIT] = "Exit";
+        controller_button(p, SDL_CONTROLLER_BUTTON_RIGHTSTICK, 1);
+        read_frame(&screen);
+        Title_Update(&screen, &title);
+        controller_button(p, SDL_CONTROLLER_BUTTON_RIGHTSTICK, 0);
+        read_frame(&screen);
+        Title_Update(&screen, &title);
+        assert(title.item == TITLE_ITEM_EXIT && !title.chosen);
+        screen.input = 0x10; /* a separate ordinary attack confirms */
+        Title_Update(&screen, &title);
+        assert(title.chosen && screen.fade_out);
+    }
+    assert(gameplay_events == 0);
+    for (p = 0; p < 2; p++) {
+        assert(!g_padButtonState[p * PAD_BUTTONS + PAD_SELECT_CODE]);
+        assert(!g_padButtonState[p * PAD_BUTTONS + PAD_BACK_CODE]);
+        for (b = 0; b < 2; b++) {
+            int code = p * PAD_BUTTONS + (b ? PAD_BACK_CODE : PAD_SELECT_CODE);
+            reset_menu();
+            enqueue(p ? ENGINE_KEY_F2 : ENGINE_KEY_F1, 0, 0);
+            enqueue(0, p * PAD_BUTTONS + 5, 0); /* partially edit Config all */
+            enqueue(0, code, 0);              /* cancel edits */
+            enqueue(0, code | PAD_RELEASE, 0); /* release must not confirm */
+            enqueue(0, code, 0);              /* leave the config screen */
+            KeyConfig_Run(1, 0);
+            assert(menu_pos == menu_count);
+            assert(!memcmp(before, game.joy_keys, sizeof(before)));
+            reset_menu();
+            enqueue(p ? ENGINE_KEY_F2 : ENGINE_KEY_F1, 0, 0);
+            enqueue(SDLK_q, 0, 0);
+            enqueue(0, code, 0);
+            enqueue(0, code | PAD_RELEASE, 0);
+            enqueue(0, code, 0);
+            KeyConfig_Run(0, 0);
+            assert(menu_pos == menu_count);
+            assert(!memcmp(keyboard_before, game.keys, sizeof(keyboard_before)));
+        }
+    }
+    /* Ordinary mapped attacks still reach the gameplay callback. */
+    controller_button(0, SDL_CONTROLLER_BUTTON_A, 1);
+    controller_button(0, SDL_CONTROLLER_BUTTON_A, 0);
+    assert(gameplay_events == 2);
+    g_padQueueRead = g_padQueueWrite;
+
+    /* Generic joystick buttons 12/13 are not stolen as system controls. */
+    remove_pad(1);
+    add_pad(1, 0);
+    assert(Pads_MenuAction(PAD_BUTTONS + PAD_SELECT_CODE, PAD_CONTEXT_MENU) == PAD_MENU_NONE);
+    assert(Pads_MenuAction(PAD_BUTTONS + PAD_BACK_CODE, PAD_CONTEXT_MATCH) == PAD_MENU_NONE);
+    {
+        SDL_Event event;
+        memset(&event, 0, sizeof(event));
+        event.type = SDL_JOYBUTTONDOWN;
+        event.jbutton.which = SDL_JoystickInstanceID(g_pads[1].joystick);
+        event.jbutton.button = 0; /* 6 axes => first button is raw code 13 */
+        gameplay_events = 0;
+        Pads_HandleEvent(&event);
+        assert(gameplay_events == 1 && g_padButtonState[PAD_BUTTONS + 13]);
+    }
+    g_padHandler = NULL;
+    puts("gamepad menu: P1/P2 pause, Back, safe title exit, remap cancellation and raw fallback passed");
 }
 
 static void configure_pads(void)
@@ -256,7 +448,9 @@ int main(int argc, char **argv)
     }
     add_pad(0, 1);
     add_pad(1, !raw_p2);
-    if (!strcmp(argv[1], "reload")) {
+    if (!strcmp(argv[1], "menu-actions")) {
+        check_menu_actions();
+    } else if (!strcmp(argv[1], "reload")) {
         check_active();
         check_saved(0);
     } else {

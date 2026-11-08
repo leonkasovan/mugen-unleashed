@@ -1578,6 +1578,8 @@ void __cdecl Pads_LogBindings(void);
 /* Controller path: SDL game-controller semantics, on every SDL2 target. */
 void __cdecl Pads_HandleControllerEvent(const SDL_Event *ev);
 int __cdecl Pads_SlotUsesController(int slot);
+/* Port addition: decode system controls, never raw joystick button numbers. */
+PadMenuAction __cdecl Pads_MenuAction(unsigned int code, PadMenuContext context);
 void __cdecl Pads_ControllerBindings(int slot, int *out);
 void __cdecl Pads_AttachController(int slot, int device_index);
 /* Re-applies a player's joystick binding policy and republishes g_keyMap. */
