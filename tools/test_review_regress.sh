@@ -10,7 +10,7 @@ if [ -n "${MUGEN_TEST_TARGET:-}" ]; then
 fi
 CC="${CC:-cc}"
 PKG_CONFIG="${PKG_CONFIG:-pkg-config}"
-OUT="$PWD/build/review-regress-test"
+OUT="$PWD/build/tmp/review-regress-test"
 mkdir -p "$OUT/tmp"
 export TMPDIR="$OUT/tmp"
 SDL_CFLAGS="${SDL_CFLAGS:-$("$PKG_CONFIG" --cflags sdl2)}"

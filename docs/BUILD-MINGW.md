@@ -8,6 +8,63 @@ GCC, as an alternative to the CMake/MSVC build (`CMakeLists.txt`,
 Everything third-party is either compiled from source in `third_party/` or
 linked statically from `C:\x86devkit`.
 
+## Zero to build: `setup.bat`
+
+The repository root carries `setup.bat`, which installs the whole Windows build
+environment from nothing and can then build both targets:
+
+```bat
+setup.bat             :: both devkits + their dependency trees, then verify
+setup.bat /build      :: ... and build win32 and win64
+setup.bat /build32    :: ... only the reference build
+setup.bat /check      :: verify what is installed, install nothing
+setup.bat /force      :: re-download and re-extract
+```
+
+It downloads the two 2.11.0 devkits from `github.com/skeeto/w64devkit` into
+`C:\w64devkit` and `C:\x86devkit` (`W64DEVKIT_DIR`/`X86DEVKIT_DIR` override),
+then unpacks this project's published dependency trees into
+`build\sysroots\win64-sysroot\` and `build\sysroots\win32-sysroot\`
+(`toolchains-v1.0` release: `win64-sysroot.zip`, `win32-sysroot.zip`). The
+downloads themselves are cached in `build\downloads\`, all four are checked
+against a pinned SHA-256, and unpacking happens in `build\tmp\` — the three
+folders under `build\` are the project-wide rule (see `AGENTS.md`). A non-empty
+kit directory is left alone unless `/force` is given.
+
+That split matters: **a devkit from skeeto ships no SDL, no libpng and not a
+single `.pc` file** — it is gcc, binutils, make, sh/sed/awk and its own
+pkg-config. The `.pc` files and the static archives they name come from the
+sysroot tree, which is why the same kit works on any machine.
+
+Because the tree sits at a fixed path inside the repository, **the `Makefile`
+finds it by itself** — no exported variables are needed:
+
+```sh
+export PATH=/c/w64devkit/bin:$PATH      # or /c/x86devkit/bin for win32
+make -j8                                # the target follows gcc's own triple
+make check-toolchain                    # prints the tree it resolved
+```
+
+`WINSYSROOT=<dir>` points the build at another tree; `WINSYSROOT=` (empty)
+disables the automatic one and falls back to whatever pkg-config the kit
+provides, which is what the build did before the trees existed.
+
+What the Makefile does with it, and why each part is needed:
+
+| Variable | Value | Why |
+|---|---|---|
+| `PKG_CONFIG_LIBDIR` | `<tree>\usr\lib\pkgconfig` | the kit has no `.pc` files of its own |
+| `PKG_CONFIG_PATH` | cleared | an inherited one (MSYS2 exports one) is searched *in addition*, and its SDL2 would win |
+| `PKG_CONFIG_SYSTEM_*` | the tree's `usr\include` / `usr\lib` | otherwise pkgconf drops `-I`/`-L` as "system" paths |
+| `PKG_CONFIG_ALLOW_SYSTEM_*` | `1` | ... and that is exactly what must not happen here |
+
+All of them use the **Windows spelling** (`C:/...`), which is why the Makefile
+runs the resolved path through `cygpath`. `sh` — what make runs recipes in —
+does not convert POSIX paths for a native `pkg-config.exe`, so
+`PKG_CONFIG_LIBDIR=/c/...` silently matches nothing, and the build then stops
+with `pkg-config cannot find: SDL2_mixer SDL2_ttf libpng16` even though the tree
+is right there.
+
 For SDL2 controllers missing in either Windows architecture, see
 [GAMEPAD_DETECTION.md](GAMEPAD_DETECTION.md) for diagnostics and regression
 coverage.

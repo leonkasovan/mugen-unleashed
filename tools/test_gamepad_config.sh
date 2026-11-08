@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 
 CC="${CC:-cc}"
 PKG_CONFIG="${PKG_CONFIG:-pkg-config}"
-OUT="${OUT:-$PWD/build/gamepad-config-test}"
+OUT="${OUT:-$PWD/build/tmp/gamepad-config-test}"
 case "${TEST_PLATFORM:-android}" in
     android) PLATFORM_DEFS="-DANDROID_PORT -DMUGEN_ANDROID_SW"; PLATFORM_SRCS="" ;;
     desktop) PLATFORM_DEFS="-DMUGEN_SDL2"; PLATFORM_SRCS="src/sdl2compat.c" ;;

@@ -256,7 +256,7 @@ C:\arm-gnu-toolchain\aarch64-none-linux-gnu\libc\      <- its glibc sysroot
 The script flattens the 9.2 archive's version directory, so both versions leave
 `bin/` at the top. A `.mugen-toolchain-<version>` marker records that the install
 finished, so a re-run neither re-extracts nor re-downloads (the archive is cached
-in `build/tmp/arm64-downloads/`). Installing a *different* version replaces the
+in `build/downloads/`). Installing a *different* version replaces the
 tree rather than overlaying it — mixing two glibc sysroots is not something to
 discover at link time.
 
@@ -299,8 +299,9 @@ truncated binary where a working one was.
 The toolchain is a bare `--target=aarch64-none-linux-gnu` cross toolchain: it
 ships a complete glibc and **no SDL**. The missing libraries arrive as a release
 asset, `arm64-sysroot.zip`, which `build.sh` downloads into
-`build/tmp/arm64-sysroot/` when the tree is absent; `--sysroot` re-downloads it.
-The archive is cached in `build/tmp/arm64-downloads/` and verified against a
+`build/sysroots/arm64-sysroot/` when the tree is absent; `--sysroot` re-downloads
+it.
+The archive is cached in `build/downloads/` and verified against a
 SHA-256 pinned in `build.sh` on every use, so a truncated or replaced download
 cannot become the tree that gets linked:
 
@@ -352,20 +353,21 @@ git show 86f64fd~1:port/arm64/tools/make_sysroot.sh > build/tmp/make_sysroot.sh
 # 2. rebuild the tree from an arm64 Ubuntu/Debian root. With no --root it probes
 #    /home/deck/ubuntu_root_arm64 and, from Windows, the same path under
 #    //wsl.localhost/<distro>/; ARM64_ROOT_FS is no longer read, pass --root.
-bash build/tmp/make_sysroot.sh --dest build/tmp/arm64-sysroot \
+bash build/tmp/make_sysroot.sh --dest build/sysroots/arm64-sysroot \
      --root //wsl.localhost/Ubuntu-22.04/home/deck/ubuntu_root_arm64
 
 # 3. make the .pc files relocatable (the generator bakes an absolute prefix)
 sed -i 's|^prefix=.*|prefix=${pcfiledir}/../..|' \
-     build/tmp/arm64-sysroot/usr/lib/pkgconfig/*.pc
+     build/sysroots/arm64-sysroot/usr/lib/pkgconfig/*.pc
 
 # 4. record what is in it — the archives are opaque, this is the only place the
 #    versions and the exclusions are written down (copy the wording from
 #    tools/make_win_sysroot.sh, which writes the same file for the Windows trees)
-$EDITOR build/tmp/arm64-sysroot/SYSROOT.txt
+$EDITOR build/sysroots/arm64-sysroot/SYSROOT.txt
 
-# 5. package it with the same single top directory
-cd build/tmp && zip -qr arm64-sysroot.zip arm64-sysroot && cd -
+# 5. package it with the same single top directory. The zip is a release
+#    artefact, so it goes to build/tmp (scratch), not next to the tree.
+cd build/sysroots && zip -qr ../../tmp/arm64-sysroot.zip arm64-sysroot && cd -
 sha256sum build/tmp/arm64-sysroot.zip
 ```
 
@@ -378,7 +380,7 @@ Check the result from a path that is not this checkout, because that is the one
 thing a same-path test cannot prove:
 
 ```sh
-cp -a build/tmp/arm64-sysroot /some/other/dir/arm64-sysroot
+cp -a build/sysroots/arm64-sysroot /some/other/dir/arm64-sysroot
 PKG_CONFIG_LIBDIR=/some/other/dir/arm64-sysroot/usr/lib/pkgconfig \
   pkg-config --cflags sdl2     # must name /some/other/dir, not this checkout
 ```
@@ -512,19 +514,19 @@ appear in a first attempt.
 | `the archive did not produce …/gcc` | A half-extracted toolchain. Remove `TOOLCHAIN_DIR` and re-run `--setup`. |
 | `fatal error: math.h: No such file or directory` | `-nostdinc` is on, and the toolchain's own include directories were not detected. The Makefile asks `$(CC) -E -v` for them and re-adds each with `-idirafter`; if you build by hand, do the same. Re-run `make check-toolchain` — it prints the resolved tree and sysroot flags. |
 | `arm64-sysroot.zip failed its SHA-256` | The download was truncated or the asset was replaced; nothing was extracted and the existing tree was kept. Re-run `--sysroot`. If you re-published the asset yourself, pass the new hash: `ARM64_SYSROOT_SHA256=<hex> port/arm64/build.sh --sysroot`. |
-| `unfinished sysroot transaction at …` | An earlier run died between the renames and left `build/tmp/arm64-sysroot.mugen-new` or `.mugen-old` behind. The tree in place was kept on purpose; delete the leftover and re-run. |
+| `unfinished sysroot transaction at …` | An earlier run died between the renames and left `build/sysroots/arm64-sysroot.mugen-new` or `.mugen-old` behind. The tree in place was kept on purpose; delete the leftover and re-run. |
 | `… did not produce usr/lib/pkgconfig/sdl2.pc` | The archive unpacked but it is not the dependency tree (wrong asset, or a zip of a zip). Nothing was installed and the existing tree was kept. |
 | `cannot find -l:libSDL2-2.0.so.0` | The tree's SONAME-named copies are missing. They are real copies and not symlinks, because a link the Windows-side `ld` cannot follow reads as exactly this error. |
 | Undefined `X*` / `pa_*` / `snd_*` / `wl_*` | `ld` reached a **static** `libSDL2.a` (it prefers `.a` over `.so` when both are in one directory), or `-rpath-link` to `usr/lib/rpath/` is missing. |
 | `libSDL2_ttf-2.0.so.0: undefined reference to \`FT_Done_Face'` (and its siblings) | The `usr/lib/rpath/` copy of `libfreetype.so.6` is missing. `ld` finds a `NEEDED` entry through `-rpath-link` and **not** through `-L`, so being in `usr/lib/` is not enough for a library SDL2_ttf imports. Only a hand-made tree gets this wrong; the published one carries the six roots in `rpath/` for exactly this reason. |
 | `undefined reference to __libc_dlopen_mode@GLIBC_PRIVATE` | The arm64 root's `libc.so.6`/`libpthread.so.0`/`libdl.so.2` got into the link line and shadow the toolchain's own. The published tree ships no glibc at all; a hand-made one must filter it by SONAME. |
-| `CROSS_COMPILE=… needs XSYSROOT=<dir>` | Building by hand without a dependency tree. The Makefile refuses on purpose: without one, pkg-config answers from the **host**, the compile picks up host headers and the link mixes architectures. Run `port/arm64/build.sh`, or point `XSYSROOT` at `build/tmp/arm64-sysroot`. |
+| `CROSS_COMPILE=… needs XSYSROOT=<dir>` | Building by hand without a dependency tree. The Makefile refuses on purpose: without one, pkg-config answers from the **host**, the compile picks up host headers and the link mixes architectures. Run `port/arm64/build.sh`, or point `XSYSROOT` at `build/sysroots/arm64-sysroot`. |
 | Thousands of errors inside `arm_neon.h` (`expected declaration specifiers before '__extension__'`), mentioning headers under `C:/msys64/mingw64/include/SDL2` | A **host** `.pc` was picked up, so the compile used MSYS2's SDL2 (2.3x) instead of the tree's. MSYS2 exports `PKG_CONFIG_PATH` by default and pkgconf searches it *in addition to* `PKG_CONFIG_LIBDIR`, so clearing only the libdir is not enough; the Makefile now clears both and refuses to build if any `-I` lies outside `XSYSROOT`. Nothing is wrong with the toolchain — read the *first* error, not the avalanche. |
 | `version GLIBC_2.38 not found` on the target | The glibc floor — the toolchain is newer than the device. `ARM64_TOOLCHAIN=9.2` for glibc-2.30 devices; see the table above. |
 
 To see what a cross build actually resolved, rather than guess:
 
 ```sh
-make check-toolchain CROSS_COMPILE=aarch64-none-linux-gnu- XSYSROOT=build/tmp/arm64-sysroot MUGEN_TARGET=linux-arm64
-make -n CROSS_COMPILE=… XSYSROOT=build/tmp/arm64-sysroot MUGEN_TARGET=linux-arm64 | grep -o '\-l:[^ ]*'
+make check-toolchain CROSS_COMPILE=aarch64-none-linux-gnu- XSYSROOT=build/sysroots/arm64-sysroot MUGEN_TARGET=linux-arm64
+make -n CROSS_COMPILE=… XSYSROOT=build/sysroots/arm64-sysroot MUGEN_TARGET=linux-arm64 | grep -o '\-l:[^ ]*'
 ```

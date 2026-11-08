@@ -33,7 +33,7 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BUILD="$ROOT/build/vita-icon"
+BUILD="$ROOT/build/tmp/vita-icon"
 MODULE="$ROOT/port/psvita/cmake/Icon.cmake"
 SCE_SYS="$ROOT/port/psvita/sce_sys"
 ICO="$ROOT/res/icons/1.ico"

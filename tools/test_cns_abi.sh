@@ -11,7 +11,7 @@ if [ -n "${MUGEN_TEST_TARGET:-}" ]; then
     TARGET_FLAGS="$ARCHFLAGS -DTEST_EXPECT_BITS=$EXPECT_BITS"
 fi
 CC="${CC:-cc}"
-OUT="${OUT:-$PWD/build/cns-abi-test}"
+OUT="${OUT:-$PWD/build/tmp/cns-abi-test}"
 mkdir -p "$OUT/tmp"
 export TMPDIR="$OUT/tmp"
 FLAGS="$TARGET_FLAGS ${CFLAGS:-} -std=gnu11 -O1 -g -UNDEBUG -ffunction-sections -fdata-sections"

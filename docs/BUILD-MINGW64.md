@@ -40,8 +40,8 @@ reaches pkg-config unconverted and silently matches nothing:
 
 ```sh
 # in a make recipe (sh), with the kit's pkg-config in front:
-env PKG_CONFIG_LIBDIR=/c/proj/build/tmp/win64-sysroot/usr/lib/pkgconfig pkg-config --exists sdl2   # rc=1
-env PKG_CONFIG_LIBDIR=C:/proj/build/tmp/win64-sysroot/usr/lib/pkgconfig pkg-config --exists sdl2   # rc=0
+env PKG_CONFIG_LIBDIR=/c/proj/build/sysroots/win64-sysroot/usr/lib/pkgconfig pkg-config --exists sdl2   # rc=1
+env PKG_CONFIG_LIBDIR=C:/proj/build/sysroots/win64-sysroot/usr/lib/pkgconfig pkg-config --exists sdl2   # rc=0
 ```
 
 The same value exported from an interactive bash works, which makes this look
@@ -55,16 +55,20 @@ packages one kit's dependency set as a relocatable tree the same shape as
 `prefix=${pcfiledir}/../..`:
 
 ```sh
-tools/make_win_sysroot.sh C:/w64devkit win64    # build/tmp/win64-sysroot.zip
-tools/make_win_sysroot.sh C:/x86devkit win32    # build/tmp/win32-sysroot.zip
+tools/make_win_sysroot.sh C:/w64devkit win64    # -> build/sysroots/win64-sysroot
+tools/make_win_sysroot.sh C:/x86devkit win32    # -> build/sysroots/win32-sysroot
 ```
 
-Both are published beside `arm64-sysroot.zip` and are consumed the same way:
-point `PKG_CONFIG_LIBDIR` at `<tree>/usr/lib/pkgconfig` (Windows spelling, see
-above), with `PKG_CONFIG_SYSTEM_INCLUDE_PATH`/`_LIBRARY_PATH` at the tree's
-`usr/include`/`usr/lib` and the `PKG_CONFIG_ALLOW_SYSTEM_*` flags set — exactly
-what the Makefile does for a cross build. Verified by building both targets with
-nothing but the unpacked tree for their dependencies; the result imports only
+The tree lands under `build/sysroots/` (and the zip to publish in `build/tmp/`),
+which is exactly where `setup.bat` puts the downloaded ones, so the `Makefile`
+consumes it with no variables at all: it points `PKG_CONFIG_LIBDIR` at
+`<tree>/usr/lib/pkgconfig` in Windows spelling (see above), sets
+`PKG_CONFIG_SYSTEM_INCLUDE_PATH`/`_LIBRARY_PATH` at the tree's
+`usr/include`/`usr/lib` and the `PKG_CONFIG_ALLOW_SYSTEM_*` flags. `WINSYSROOT=`
+turns that off if a kit is prepared by hand instead.
+
+Verified by building both targets with nothing but the unpacked tree for their
+dependencies (a clean 2.11.0 kit has no SDL at all); the result imports only
 Windows system DLLs, so SDL2 is linked statically as before.
 
 `SDL_BACKEND=1` is rejected for this target (SDL 1.2 is win32-only, see the

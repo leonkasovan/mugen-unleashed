@@ -47,7 +47,7 @@
 #   make BUILD=build/mingw-debug DEBUG=1  unoptimised build with debug info
 #   make MUGEN_GLES=0                     force the desktop-GL renderer on a
 #                                         Linux GLES target (see below)
-#   make CROSS_COMPILE=aarch64-none-linux-gnu- XSYSROOT=build/tmp/arm64-sysroot
+#   make CROSS_COMPILE=aarch64-none-linux-gnu- XSYSROOT=build/sysroots/arm64-sysroot
 #                                         cross-compile the Linux target with a
 #                                         foreign toolchain + dependency tree;
 #                                         port/arm64/build.sh wraps this
@@ -88,7 +88,7 @@ PKG_CONFIG ?= pkg-config
 # Equivalently, by hand:
 #
 #     make CROSS_COMPILE=aarch64-none-linux-gnu- \
-#          XSYSROOT=build/tmp/arm64-sysroot MUGEN_TARGET=linux-arm64
+#          XSYSROOT=build/sysroots/arm64-sysroot MUGEN_TARGET=linux-arm64
 #
 # Full recipe, and what a first attempt gets wrong and why:
 # docs/BUILD-LINUX.md, "Cross-building arm64 from Windows".
@@ -324,6 +324,51 @@ ifeq ($(MUGEN_TARGET_AUTO),1)
   $(info       kit on PATH, e.g. PATH=/c/x86devkit/bin:$$PATH)
 endif
 
+# -------------------------------------------------- the Windows dependency tree
+#
+# setup.bat installs win32-sysroot/ or win64-sysroot/ under build/sysroots/, and
+# a kit from skeeto's w64devkit ships no SDL, no libpng and no .pc file at all --
+# so that tree is where the libraries come from. Pointing pkg-config at it here
+# is what makes a plain `make` work after setup.bat, with nothing exported.
+#
+# The paths are converted to Windows spelling on purpose: sh (what make runs
+# recipes in) does not convert POSIX paths for a native pkg-config.exe, so a
+# /c/... path silently matches nothing and the build dies with "pkg-config
+# cannot find: SDL2_mixer ..." while the tree sits right there. $(abspath)
+# answers C:/... under cmd but /c/... under MSYS, hence the cygpath pass; off
+# MSYS cygpath does not exist and the plain form stands.
+#
+#   WINSYSROOT=<dir>   another tree          WINSYSROOT=   do not use one (the
+#                                                        kit's own pkg-config
+#                                                        setup, as before)
+ifeq ($(MUGEN_FAMILY),win32)
+  MUGEN_WIN_SYSROOT := $(if $(filter undefined,$(origin WINSYSROOT)),\
+      $(firstword $(wildcard build/sysroots/$(MUGEN_TARGET)-sysroot)),$(WINSYSROOT))
+  ifeq ($(wildcard $(MUGEN_WIN_SYSROOT)/usr/lib/pkgconfig/sdl2.pc),)
+    ifneq ($(strip $(MUGEN_WIN_SYSROOT)),)
+      $(warning WINSYSROOT=$(MUGEN_WIN_SYSROOT) has no usr/lib/pkgconfig/sdl2.pc; using the kit's own pkg-config setup)
+    endif
+    MUGEN_WIN_SYSROOT :=
+  endif
+  ifneq ($(strip $(MUGEN_WIN_SYSROOT)),)
+    MUGEN_WIN_SYSROOT := $(abspath $(MUGEN_WIN_SYSROOT))
+    MUGEN_WIN_SYSROOT_WIN := $(shell cygpath -m '$(MUGEN_WIN_SYSROOT)' 2>/dev/null)
+    ifeq ($(strip $(MUGEN_WIN_SYSROOT_WIN)),)
+      MUGEN_WIN_SYSROOT_WIN := $(MUGEN_WIN_SYSROOT)
+    endif
+    MUGEN_WIN_INC := $(MUGEN_WIN_SYSROOT_WIN)/usr/include
+    MUGEN_WIN_LIB := $(MUGEN_WIN_SYSROOT_WIN)/usr/lib
+    ifeq ($(filter default file environment undefined,$(origin PKG_CONFIG)),$(origin PKG_CONFIG))
+      PKG_CONFIG := env PKG_CONFIG_LIBDIR='$(MUGEN_WIN_LIB)/pkgconfig' \
+                          PKG_CONFIG_PATH='' \
+                          PKG_CONFIG_SYSTEM_INCLUDE_PATH='$(MUGEN_WIN_INC)' \
+                          PKG_CONFIG_SYSTEM_LIBRARY_PATH='$(MUGEN_WIN_LIB)' \
+                          PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1 PKG_CONFIG_ALLOW_SYSTEM_LIBS=1 \
+                          $(firstword $(foreach p,pkg-config pkgconf,$(if $(shell command -v $(p) 2>/dev/null && echo $(p)),$(p))))
+    endif
+  endif
+endif
+
 # --------------------------------------------------------------- GLES backend
 #
 # linux-arm64 defaults to the GLES 3.0 backend (MUGEN_GLES) instead of desktop
@@ -400,6 +445,12 @@ CONFIG_STAMP := $(OBJ_DIR)/.config
 # $(MUGEN_TARGET) already distinguishes win32/win64/linux-<arch>, so it covers
 # the pointer width and architecture that ARCHFLAGS would add.
 CONFIG_ID    := backend=$(SDL_BACKEND) target=$(MUGEN_TARGET) gles=$(MUGEN_GLES)
+ifneq ($(strip $(MUGEN_WIN_SYSROOT)),)
+# The dependency tree decides which headers and archives the objects were built
+# against, so switching trees (or switching between a tree and an augmented kit)
+# must recompile rather than reuse.
+CONFIG_ID += winsysroot=$(MUGEN_WIN_SYSROOT)
+endif
 ifneq ($(strip $(MUGEN_CROSS)),)
 # Port fix: the prefix is identical for Arm 9.2 and 15.3. Record the resolved
 # compiler and version so selecting another kit cannot reuse the old binary.
@@ -1010,6 +1061,10 @@ check-toolchain: check-pkgconfig $(if $(filter win32,$(MUGEN_FAMILY)),check-libs
 	echo "toolchain ok: $$($(CC) --version | head -1) / $$triple"; \
 	echo "target:       $(MUGEN_TARGET) ($(MUGEN_PTRBITS)-bit) -> $(TARGET)"; \
 	echo "python: $(if $(strip $(PYTHON3)),$$($(PYTHON3) --version),not found (only needed for MUGEN_GAME_DIR))"
+ifeq ($(MUGEN_FAMILY),win32)
+	@echo "dependencies: $(if $(strip $(MUGEN_WIN_SYSROOT)),$(MUGEN_WIN_SYSROOT),the kit's own pkg-config setup (no build/sysroots/$(MUGEN_TARGET)-sysroot))"; \
+	echo "  packages:     $(STATIC_PKGS)"
+endif
 ifneq ($(strip $(MUGEN_CROSS)),)
 	@echo "cross: $(CROSS_COMPILE)"; \
 	echo "  dependency tree: $(MUGEN_CROSS_SYSROOT)"; \

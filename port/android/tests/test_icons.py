@@ -39,7 +39,7 @@ BUCKETS = [("mdpi", 48, 108), ("hdpi", 72, 162), ("xhdpi", 96, 216),
            ("xxhdpi", 144, 324), ("xxxhdpi", 192, 432)]
 # work/ is git-ignored and inside the project; the default tempfile location can
 # be outside the repository.
-WORK = ROOT / "build/android-icon-test"
+WORK = ROOT / "build/tmp/android-icon-test"
 
 
 def read_png(path):

@@ -7,7 +7,7 @@
 #     tools/make_win_sysroot.sh C:/w64devkit win64
 #     tools/make_win_sysroot.sh C:/x86devkit win32
 #
-# Writes build/tmp/<name>-sysroot/ and build/tmp/<name>-sysroot.zip: the
+# Writes build/sysroots/<name>-sysroot/ and build/tmp/<name>-sysroot.zip: the
 # headers, static archives and .pc files the Windows Makefile asks for by
 # package name (sdl2 SDL2_mixer SDL2_ttf zlib libpng16), resolved through
 # pkg-config so the tree carries the whole --static closure and nothing else.
@@ -82,7 +82,10 @@ case "$NAME" in *[!a-z0-9-]*|"") die "name must be simple (win32, win64): $NAME"
 [ -d "$KIT/lib/pkgconfig" ] || die "$KIT/lib/pkgconfig is not a directory - not a devkit?"
 [ -d "$KIT/include" ] || die "$KIT/include is not a directory"
 
-OUT="$ROOT/build/tmp/$NAME-sysroot"
+# The tree is an installed sysroot, so it goes where sysroots live and stays
+# usable by `make`; the zip is a scratch artefact for releasing, so it goes to
+# build/tmp. See "What lives under build/" in AGENTS.md.
+OUT="$ROOT/build/sysroots/$NAME-sysroot"
 ZIP="$ROOT/build/tmp/$NAME-sysroot.zip"
 
 # pkg-config resolves the kit's .pc files and nothing else. PKG_CONFIG_PATH is

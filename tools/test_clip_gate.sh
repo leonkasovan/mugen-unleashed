@@ -14,7 +14,7 @@ set -u
 cd "$(dirname "$0")/.."
 . tools/lib_target.sh
 
-OUT=build/test-clip-gate
+OUT=build/tmp/test-clip-gate
 mkdir -p "$OUT"
 
 SDL_CFLAGS=$("$PKGCONF" --cflags sdl2 | sed 's/-Dmain=SDL_main//')

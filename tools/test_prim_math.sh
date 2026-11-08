@@ -4,7 +4,7 @@
 # Usage: bash tools/test_prim_math.sh
 set -eu
 cd "$(dirname "$0")/.."
-OUT=build/test-prim-math
+OUT=build/tmp/test-prim-math
 . tools/lib_target.sh
 mkdir -p "$OUT"
 # shellcheck disable=SC2086

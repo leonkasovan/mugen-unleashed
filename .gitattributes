@@ -1,0 +1,17 @@
+# Keep the repository itself LF: every shell script, C source and doc here is
+# written with LF and the build tools (bash, make, gcc) do not care. Windows
+# batch files are the exception -- cmd.exe wants CRLF, and a script full of
+# goto labels is exactly where an LF-only file can misbehave on older Windows.
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# Binary artefacts that must never be line-ending converted.
+*.png   binary
+*.ico   binary
+*.7z    binary
+*.zip   binary
+*.exe   binary
+*.dll   binary
+*.a     binary
+*.sff   binary
+*.snd   binary

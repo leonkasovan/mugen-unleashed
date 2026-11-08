@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")/.."
-OUT=build/vita-pad-test
+OUT=build/tmp/vita-pad-test
 CC="${CC:-gcc}"
 PKGS="sdl2"
 mkdir -p "$OUT"

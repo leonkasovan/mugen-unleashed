@@ -14,7 +14,7 @@ set -u
 
 . tools/lib_target.sh
 
-OUT="build/test-compile-gates"
+OUT="build/tmp/test-compile-gates"
 mkdir -p "$OUT"
 
 #include dirs, valid for every backend below

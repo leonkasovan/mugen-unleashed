@@ -9,12 +9,12 @@
 # library the engine was built against.
 #
 # Usage: tools/test_zoomdiff.sh     (from the repository root)
-# Artefacts go under build/zoomdiff per AGENTS.md.
+# Artefacts go under build/tmp/zoomdiff, the scratch folder (AGENTS.md).
 set -eu
 
 cd "$(dirname "$0")/.."
 
-OUT=build/zoomdiff
+OUT=build/tmp/zoomdiff
 SDLKIT=C:/x86devkit
 CC="${CC:-gcc}"
 FAIL=0

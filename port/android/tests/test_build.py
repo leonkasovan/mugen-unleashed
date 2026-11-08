@@ -18,7 +18,7 @@ import zipfile
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[3]
 ANDROID = ROOT / "port/android"
-WORK = ROOT / "build/android-bootstrap-tests"
+WORK = ROOT / "build/tmp/android-bootstrap-tests"
 WORK.mkdir(parents=True, exist_ok=True)
 spec = importlib.util.spec_from_file_location("metadata", ANDROID / "tools/toolchain_metadata.py")
 metadata = importlib.util.module_from_spec(spec)

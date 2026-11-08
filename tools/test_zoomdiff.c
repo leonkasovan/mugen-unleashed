@@ -401,7 +401,7 @@ static int dump(SDL_Surface *s, const char *path, int src_had_alpha, int npal)
 
 int main(int argc, char **argv)
 {
-    const char *dir = argc > 1 ? argv[1] : "build/zoomdiff";
+    const char *dir = argc > 1 ? argv[1] : "build/tmp/zoomdiff";
     char path[512];
     int i;
 

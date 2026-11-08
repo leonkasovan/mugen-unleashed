@@ -3,7 +3,7 @@
 # Pure host test, no GPU. Usage: bash tools/test_blend_math.sh
 set -eu
 cd "$(dirname "$0")/.."
-OUT=build/test-blend-math
+OUT=build/tmp/test-blend-math
 . tools/lib_target.sh
 mkdir -p "$OUT"
 # shellcheck disable=SC2086

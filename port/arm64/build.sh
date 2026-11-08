@@ -37,7 +37,7 @@
 #      the target has no sysroot to link against, and building the whole stack
 #      with a cross compiler is a project of its own -- so the tree is published
 #      as a release asset (arm64-sysroot.zip) and downloaded here. It is
-#      unpacked into build/tmp/arm64-sysroot/ and verified against a SHA-256
+#      unpacked into build/sysroots/arm64-sysroot/ and verified against a SHA-256
 #      pinned in this script; ARM64_SYSROOT_URL / ARM64_SYSROOT_SHA256 override
 #      both, for a fork or a re-published asset.
 #
@@ -114,8 +114,14 @@ esac
 TOOLCHAIN_DIR="${TOOLCHAIN_DIR:-C:/arm-gnu-toolchain-${TOOLCHAIN_TAG}}"
 
 CROSS=aarch64-none-linux-gnu-
-XSYSROOT="$ROOT/build/tmp/arm64-sysroot"
-DOWNLOADS="$ROOT/build/tmp/arm64-downloads"
+# Project layout (AGENTS.md, "What lives under build/"): downloads are caches of
+# things fetched from the network, sysroots are installed dependency trees, and
+# build/tmp is for anything transient. Keeping the tree under build/sysroots/
+# rather than in build/tmp/ is what makes it a thing you keep, not a thing that
+# a "clean the scratch space" sweep takes with it.
+XSYSROOT="$ROOT/build/sysroots/arm64-sysroot"
+DOWNLOADS="$ROOT/build/downloads"
+SCRATCH="$ROOT/build/tmp"
 
 # The dependency tree. A release asset rather than something assembled on the
 # build machine: it is the same 39 MB of headers, shared objects and .pc files
@@ -276,10 +282,10 @@ install_toolchain() {
     # gcc-arm-<version>-mingw-w64-i686-aarch64-none-linux-gnu/. TOOLCHAIN_DIR
     # must hold bin/ either way, so whatever single top directory appears is
     # unwrapped.
-    stage="$DOWNLOADS/stage-${TOOLCHAIN_VER}"
+    stage="$SCRATCH/stage-${TOOLCHAIN_VER}"
     # Kept separately: flattening below reassigns $stage to the inner directory,
     # and the wrapper around it is empty and must not outlive the install (an
-    # empty stage-<version> directory used to be left in $DOWNLOADS).
+    # empty stage-<version> directory used to be left behind).
     stageroot="$stage"
     rm -rf "$stage" && mkdir -p "$stage"
     case "$TOOLCHAIN_FILE" in
@@ -401,7 +407,7 @@ install_sysroot() {
     fi
 
     command -v unzip >/dev/null 2>&1 || fail "unzip is required (MSYS2: pacman -S unzip)"
-    stagedir="$DOWNLOADS/stage-sysroot"
+    stagedir="$SCRATCH/stage-sysroot"
     rm -rf "$stagedir" && mkdir -p "$stagedir"
     info "unpacking"
     unzip -q -o "$archive" -d "$stagedir" || { rm -rf "$stagedir"; fail "unzip failed"; }
@@ -538,9 +544,9 @@ upload() {
     # keeps OpenSSH's post-quantum advisory out of the output; the device's
     # OpenSSH is older than the client's default KEX policy.
     SSHOPTS=(-o StrictHostKeyChecking=no
-             -o UserKnownHostsFile="$ROOT/build/tmp/arm64-ssh-known-hosts"
+             -o UserKnownHostsFile="$SCRATCH/arm64-ssh-known-hosts"
              -o ConnectTimeout=15 -o LogLevel=ERROR)
-    mkdir -p "$ROOT/build/tmp"
+    mkdir -p "$SCRATCH"
 
     remote() { sshpass -p "$DEVICE_PASS" ssh "${SSHOPTS[@]}" "$DEVICE" "$@"; }
 
