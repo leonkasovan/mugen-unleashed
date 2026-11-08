@@ -430,6 +430,21 @@ android_surface_ready:
     g_videoGameHeight = game_height;
     g_videoGamePixels = game_width * game_height;
     g_videoFlags = flags;
+    /*
+     * Port fix: the two fields that track whether the window is full screen were
+     * only ever written by Video_SetFullscreen, so a mode *started* full screen
+     * believed it was windowed. The first Alt+Enter then "entered" full screen
+     * -- a no-op that saved the full-screen rectangle as the windowed one -- and
+     * the window could never be brought back, which is what was reported as
+     * "Alt+Enter does nothing with FullScreen = 1". Seed them from the flags the
+     * mode was actually created with.
+     */
+    g_videoFullscreen = (flags & VIDEO_FULLSCREEN) ? 1 : 0;
+    if (g_game != NULL) {
+        g_game->fullscreen = g_videoFullscreen;
+    }
+    Log_Printf("video: window is %s (from %s)\n", g_videoFullscreen ? "full screen" : "windowed",
+               (flags & VIDEO_FULLSCREEN) ? "[Video] FullScreen" : "windowed mode");
     g_videoSdlFlags = sdl_flags;
     g_videoWidth = sdl_width;
     g_videoHeight = sdl_height;
@@ -633,7 +648,7 @@ void Video_HandleFullscreenKey(int *key)
     {
         static int logged;
 
-        if (logged < 8 &&
+        if (logged < 12 && *key != 0 &&
             (*key == SDLK_RETURN || g_keyState[ENGINE_KEY_LALT] ||
              g_keyState[ENGINE_KEY_RALT])) {
             logged++;
@@ -666,11 +681,38 @@ void Video_HandleFullscreenKey(int *key)
      * a bug.
      */
     if (!Video_SetFullscreen(g->fullscreen)) {
+        /* Port addition: the flip above is a guess about what the window will
+         * do. When the switch is refused the guess is wrong, and leaving it
+         * made every later press toggle from a state the window was never in.
+         * Put it back and keep the key, so the caller's menu/game logic still
+         * sees the Enter (which is what a refused Alt+Enter did before). */
+        g->fullscreen = g->fullscreen == 0;
+        Log_Printf("fullscreen: switch to %d refused, state kept at %d\n",
+                   g->fullscreen == 0, g->fullscreen);
         return;
     }
     mode = g_renderMode;
     g = g_game;
     *key = 0;
+    /*
+     * Port addition: SDL reports the Enter of Alt+Enter twice -- once with Alt
+     * still down, which is the press handled here, and once more after the Alt
+     * is released. That second Enter then acted on whatever menu was open
+     * ("Alt+Enter selects ARCADE") or made the character taunt in a match.
+     * Drop the Enter still waiting in the keyboard queue, down or release; the
+     * queue is FIFO, so anything queued behind it is left alone.
+     */
+    while (g_keyboardQueueRead != g_keyboardQueueWrite) {
+        int queued = g_keyboardQueue[g_keyboardQueueRead];
+
+        if ((queued & ~KEYBOARD_RELEASE) != SDLK_RETURN) {
+            break;
+        }
+        g_keyboardQueueRead++;
+        if (g_keyboardQueueRead >= INPUT_RING_SIZE) {
+            g_keyboardQueueRead = 0;
+        }
+    }
     /* The rest of the engine asks this flag what the window is now: the BGM
      * background mode below, the resizable path and the system.c full-screen
      * check all read it, and it used to keep its start-up value forever. */
@@ -717,6 +759,7 @@ int Video_SetFullscreen(int fullscreen)
      * HWND, which is the only field this function ever read. */
     hwnd = (HWND)Sdl2_GetWindowHandle();
     if (hwnd == NULL) {
+        Log_Printf("fullscreen: no window handle\n");
         return 0;
     }
 #else
@@ -727,6 +770,7 @@ int Video_SetFullscreen(int fullscreen)
     hwnd = info.window;
 #endif
     if (g_videoFullscreen == fullscreen) {
+        Log_Printf("fullscreen: window already at %d\n", fullscreen);
         return 1;
     }
     if (!fullscreen &&
@@ -739,9 +783,15 @@ int Video_SetFullscreen(int fullscreen)
          * the window geometry it created, so let it do the switch.
          */
 #ifdef MUGEN_SDL2
-        if (g_screenSurface == NULL || !Sdl2_ToggleFullScreen(g_screenSurface)) {
+        if (g_screenSurface == NULL) {
+            Log_Printf("fullscreen: no surface to hand to SDL\n");
             return 0;
         }
+        if (!Sdl2_ToggleFullScreen(g_screenSurface)) {
+            Log_Printf("fullscreen: SDL refused the switch (%s)\n", SDL_GetError());
+            return 0;
+        }
+        Log_Printf("fullscreen: SDL switched to windowed (no saved rectangle)\n");
         g_videoFullscreen = 0;
         return 1;
 #else
@@ -781,7 +831,11 @@ int Video_SetFullscreen(int fullscreen)
         SetWindowLongA(hwnd, GWL_EXSTYLE, g_savedWindowExStyle);
         after = HWND_NOTOPMOST;
     }
-    SetWindowPos(hwnd, after, x, y, w, h, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    if (!SetWindowPos(hwnd, after, x, y, w, h, SWP_FRAMECHANGED | SWP_SHOWWINDOW)) {
+        Log_Printf("fullscreen: SetWindowPos failed (%lu)\n", (unsigned long)GetLastError());
+        return 0;
+    }
+    Log_Printf("fullscreen: SetWindowPos to %d (%d,%d %dx%d)\n", fullscreen, x, y, w, h);
     g_videoFullscreen = fullscreen;
     return 1;
 #else
