@@ -50,6 +50,7 @@ src/            83 .c + 52 .h — the engine, one file per original module
 third_party/    Lua 5.1.4, libpng 1.2.38, glad 2.1, minizip 0.15, sdk,
                 libresample, glew-1.5.4 (reference only, no longer built), vitagl
 cmake/          build helpers (MugenSdk.cmake, ThirdParty.cmake)
+setup.bat       installs the two Windows devkits + dependency trees, then builds
 res/icons/      the window/bubble icon as one .ico per size (see below)
 res/shaders/    project-owned shader dialects: gles/ (staged as data/gles by the
                 Android build) and vita/ (substituted into the VPK); the desktop
@@ -73,13 +74,21 @@ Each entry point owns its own subtree and never writes into another's.
 
 | `build/mingw64-sdl2/` | plain `make` with the 64-bit kit on `PATH`, or `make MUGEN_TARGET=win64` (Windows, experimental) | the same shape, `mugen-mingw-win64-sdl2.exe` |
 | `build/<linux-target>/` | root `Makefile` (Linux) | same shape, `mugen-linux-<arch>` |
-| `build/<linux-target>-<cross-prefix>-<sdl>/` | root `Makefile` with `CROSS_COMPILE=`/`XSYSROOT=` (via `port/arm64/build.sh`) | same shape, `mugen-linux-<arch>-<prefix>`; `build/tmp/arm64-sysroot/` holds the dependency tree it links against, `build/tmp/arm64-downloads/` the cached toolchain and sysroot archives |
+| `build/<linux-target>-<cross-prefix>-<sdl>/` | root `Makefile` with `CROSS_COMPILE=`/`XSYSROOT=` (via `port/arm64/build.sh`) | same shape, `mugen-linux-<arch>-<prefix>`; the dependency tree it links against is `build/sysroots/arm64-sysroot/` |
 | `build/mingw-debug/` | `make DEBUG=1 BUILD=build/mingw-debug` | an explicit `BUILD=` override |
 | `build/x86-release/`, `build/x86-debug/` | root `CMakeLists.txt` via `CMakePresets.json` | MSVC `mugen-msvc-win32-sdl1.exe` + `.pdb` |
 | `build/psvita*/` | `port/psvita/CMakeLists.txt` (you choose the dir) | `mugen`, `mugen-psvita.self`, `mugen-psvita.vpk`, `vita-mugen.cfg` |
 | `build/android/` | `port/android/build.sh` | `toolchains/` (JDK/SDK/NDK/CMake, `env.sh`), `sdl2/<abi>/`, `android-deps/<abi>/`, `android-deps-src/`, `sources/`, `build-sdl2/`, `gradle-user-home/`, `asset-list.txt`, `mugen-unleashed-<abi>.apk` |
 | `build/baseline/` | hand-made, kept on purpose | SDL1 reference binary and log used by the log-comparison workflow |
-| `build/<test-name>/` | `tools/test_*.sh` | each test's scratch output |
+
+Three of those are not any single entry point's private output, so they are named
+by *kind* rather than by owner and every script uses the same ones:
+
+| Path | Written by | Contents |
+|---|---|---|
+| `build/downloads/` | `port/arm64/build.sh`, `setup.bat`, `tools/make_win_sysroot.sh` callers | every file fetched from the network: the Arm toolchain archive, `arm64-sysroot.zip`, the two w64devkit self-extractors, `win32-sysroot.zip`, `win64-sysroot.zip`. Purely a cache — safe to delete, and re-verifying it costs a download |
+| `build/sysroots/` | `port/arm64/build.sh`, `setup.bat` | the installed dependency trees: `arm64-sysroot/`, `win32-sysroot/`, `win64-sysroot/`. Each holds `usr/{include,lib/lib/pkgconfig}` and is consumed through `XSYSROOT=` (Arm) or found automatically by the `Makefile` (Windows) |
+| `build/tmp/` | anything | scratch: staging directories during an install, test output (`build/tmp/<test-name>/`), probe programs and logs. Nothing here is expected to survive; `make` never reads it, and deleting it must never break a build |
 
 Two rules follow from the "keep temporary files inside the project" rule above:
 
@@ -226,9 +235,8 @@ path — a literal `/` returns 404.
 
 The dependency tree those libraries live in is a **release asset**, not something
 this repository builds: `build.sh` downloads `arm64-sysroot.zip` from the
-project's `toolchains-v1.0` release into `build/tmp/arm64-sysroot/` (cache in
-`build/tmp/arm64-downloads/`) and verifies it against a SHA-256 pinned in
-`build.sh`; `ARM64_SYSROOT_URL`/`ARM64_SYSROOT_SHA256` override both for a fork or
+project's `toolchains-v1.0` release into `build/sysroots/arm64-sysroot/` (cache
+in `build/downloads/`) and verifies it against a SHA-256 pinned in `build.sh`; `ARM64_SYSROOT_URL`/`ARM64_SYSROOT_SHA256` override both for a fork or
 a republished asset. Assembling it needs an aarch64 Ubuntu root filesystem and
 produces the same tree every time, so it is published once and consumed as data;
 the generator that used to do it locally is no longer in the tree. The toolchain
@@ -243,6 +251,21 @@ the original model and only line up with a pad whose axis/hat/button topology
 matches the PC pad they were written for — on a handheld the d-pad arrives as
 buttons, so those indices land on the wrong controls. The SDL 1.2 backend keeps
 the original raw lifecycle, so the reference build is unchanged.
+
+SDL's game-controller API reports only the controls its *mapping* names, and
+some handheld entries in its database stop at the face buttons: the GO-Super
+Gamepad (RG351MP/ArkOS) names `b0..b11` and nothing else, so SELECT, START and
+the stick clicks never arrived as controller buttons at all — the raw joystick
+saw them, but a controller-driven slot ignores raw codes. `pad_mapping_fixups[]`
+in `src/pads.c` completes such a mapping before the controller is opened
+(query the mapping SDL uses, append the missing `back:`/`start:`/stick-click
+bindings, register it again), keyed by GUID so no other pad is affected and
+skipped when the mapping is already complete. Its indices are raw joystick
+button numbers — the same numbering the kernel reports through the `BTN_*` order
+and that ArkOS's own `~/.config/retroarch/autoconfig/udev/GO-Super Gamepad.cfg`
+uses (`select=12, start=13`). Read a pad's numbering with `EVIOCGBIT(EV_KEY)`
+on its `/dev/input/eventN`, not from the `BTN_*` names: the vendor driver
+reports SELECT/START on the codes the kernel calls `THUMBL`/`THUMBR`.
 
 Three things neither script can fix, all in `docs/BUILD-LINUX.md` (which also
 has a troubleshooting table for the errors a first attempt produces):
@@ -300,6 +323,21 @@ its own triple (`gcc -dumpmachine`, falling back to the `Target:` line of
 on `PATH` a plain `make` produces the experimental win64 build, not win32. For
 the 32-bit reference build, put `x86devkit` first or pass the compiler
 (`CC=/c/x86devkit/bin/gcc make`).
+
+`setup.bat` (repository root) installs both devkits and both dependency trees
+from nothing, verifies them and can build: `setup.bat /build`,
+`/build32`, `/build64`, `/check`, `/force`. The kits go to `C:\w64devkit` and
+`C:\x86devkit`; the trees go to `build/sysroots/win64-sysroot` and
+`build/sysroots/win32-sysroot`.
+
+A kit from skeeto's w64devkit ships **no SDL, no libpng and no `.pc` files**, so
+the tree is what supplies the libraries — and because it sits at a fixed path
+inside the repository, the `Makefile` finds it by itself and points pkg-config
+at it (in Windows `C:/...` spelling, since `sh` does not convert POSIX paths for
+a native `pkg-config.exe`). So the whole Windows build is `PATH=/c/w64devkit/bin:$PATH
+make`; `WINSYSROOT=<dir>` picks another tree and `WINSYSROOT=` disables the
+automatic one. `make check-toolchain` prints which tree it resolved. See
+`docs/BUILD-MINGW.md`.
 
 Both kits ship their own `pkg-config`, and MSYS `sh` does not convert POSIX
 paths for a native executable, so `PKG_CONFIG_PATH=/c/...` in a make variable

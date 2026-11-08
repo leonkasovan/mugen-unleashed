@@ -60,7 +60,7 @@ plays a full match with no errors; the 15.3 build is rejected by the loader.
 | Need | Handled by |
 |---|---|
 | An `aarch64-none-linux-gnu` compiler | `--setup` downloads Arm's Mingw-w64 build and verifies it against the vendor's published SHA-256. Installed into `TOOLCHAIN_DIR` (default `C:/arm-gnu-toolchain`). |
-| SDL2, SDL2_mixer, SDL2_ttf, zlib, libpng, FreeType for aarch64 | downloaded as `arm64-sysroot.zip` (a pinned, SHA-256-verified release asset) and unpacked into `build/tmp/arm64-sysroot/`. |
+| SDL2, SDL2_mixer, SDL2_ttf, zlib, libpng, FreeType for aarch64 | downloaded as `arm64-sysroot.zip` (a pinned, SHA-256-verified release asset) and unpacked into `build/sysroots/arm64-sysroot/`. |
 | pkg-config | the host's, with its search path replaced by the tree above. |
 
 The Arm toolchain ships a complete glibc but **no SDL**: it is a bare
@@ -100,7 +100,7 @@ Environment overrides:
 
 `--setup` is the only thing that writes outside the repository, and only into
 `TOOLCHAIN_DIR`. The download is cached at
-`build/tmp/arm64-downloads/`, so a re-run does not transfer it again.
+`build/downloads/`, so a re-run does not transfer it again.
 
 ## Uploading to the device
 
@@ -139,11 +139,34 @@ What it does, and why:
 `sshpass` is required locally (MSYS2: `pacman -S sshpass`). Without
 `DEVICE_PASS` the password is prompted for.
 
+## PortMaster launcher
+
+`ports/` holds the three files a PortMaster-style front end needs, so the port
+can be packaged the same way as any other:
+
+| File | Goes to | What it is |
+|---|---|---|
+| `ports/Mugen.sh` | `/roms/ports/Mugen.sh` | the launcher: PortMaster boilerplate, then `mugen-linux-arm64` from `/roms/ports/mugen` |
+| `ports/gameinfo.xml` | `/roms/ports/mugen/` | the front-end entry (name, description, screenshot) |
+| `ports/port.json` | `/roms/ports/mugen/` | PortMaster metadata (title, porter, arch, glibc floor) |
+
+Two things in the launcher are deliberate:
+
+- **No `gptokeyb`.** The engine binds the pad itself through SDL's
+  game-controller API, and `src/pads.c` completes the SDL mapping entry for a pad
+  whose database entry has no system buttons (the GO-Super Gamepad names only
+  `b0..b11`). PortMaster's helper grabs the pad and re-publishes it as a virtual
+  device, which changes the GUID that fixup is keyed on.
+- **Both binary names are accepted** and the one started is logged with a short
+  hash — `launcher: starting mugen-linux-arm64 (2cc89c08)`. A launcher that
+  silently ran an older file while the new build sat next to it cost a debugging
+  round once; the log line makes that impossible to miss.
+
 ## The dependency tree
 
 `build.sh` downloads `arm64-sysroot.zip` from this project's `toolchains-v1.0`
-release into `build/tmp/arm64-sysroot/`, keeping the archive in
-`build/tmp/arm64-downloads/` as a cache. The SHA-256 is pinned in `build.sh` and
+release into `build/sysroots/arm64-sysroot/`, keeping the archive in
+`build/downloads/` as a cache. The SHA-256 is pinned in `build.sh` and
 checked on every use, so a truncated or replaced download cannot become the tree
 that gets linked:
 
