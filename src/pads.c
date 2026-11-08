@@ -1203,6 +1203,12 @@ void Pads_DeviceEvent(const SDL_Event *event)
                     Pads_SetButton(code, 0);
                 }
             }
+            /* Port addition: the attach path has always said what it attached,
+             * so a removal that printed nothing was the one half of hot-plug a
+             * mugen.log could not show. Logged before the handles go so the
+             * instance id still identifies the device. */
+            Log_Printf("pads: device removed from slot %d (instance %d)\n", i,
+                       (int)event->jdevice.which);
             SDL_JoystickClose(g_pads[i].joystick);
 #ifdef MUGEN_GAMEPAD_POLICY
             /*
