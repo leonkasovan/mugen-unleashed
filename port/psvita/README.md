@@ -9,6 +9,60 @@ the LiveArea assets, and the OpenGL adaptation.
 
 Output: a `mugen-psvita.vpk` you can copy to the console and install with VitaShell.
 
+## Quick start
+
+From the repository root, in MSYS2 / Git Bash, on Windows:
+
+```sh
+port/psvita/build.sh
+```
+
+That is the whole thing on a clean machine. It downloads VitaSDK (196 MB,
+cached in `build/downloads/vitasdk.zip`, SHA-256 checked), installs it to
+`C:\vitasdk`, puts it on `PATH` for the build, checks the VitaSDK packages,
+configures CMake and builds. The result:
+
+```
+build/psvita/mugen-psvita.self   2171 KB   the runnable module
+build/psvita/mugen-psvita.vpk    2335 KB   installable, engine only
+                                 5089 KB   with install/ packed as /data
+```
+
+Because `install/` is a real M.U.G.E.N tree, the VPK is built with its data
+inside by default — a VPK without data installs and then exits. `--no-data`
+builds the engine-only one, `--data DIR` packs another tree.
+
+| Flag | Effect |
+|---|---|
+| *(none)* | install what is missing, then build `build/psvita/` |
+| `--setup` | install VitaSDK and its packages, then stop |
+| `--check-tools` | report VitaSDK, packages, cmake/ninja/pkg-config; never downloads |
+| `--clean` | remove `build/psvita/` before building |
+| `--offline` | fail instead of downloading (needs the cached zip or an SDK already present) |
+| `--debug` | `Debug` build instead of `Release` |
+| `--jobs N` | parallel jobs (default: CPU count) |
+| `--data DIR` / `--no-data` | pack this game tree / pack no game data |
+| `--titleid ID` | nine-character title ID (default `MSDK00001`) |
+| `--env` | print the three exports for your own shell, build nothing |
+
+The environment it sets for its children (a script cannot change its caller's):
+
+```sh
+export VITASDK=C:/vitasdk
+export PATH=$VITASDK/bin:$PATH
+export CMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake
+```
+
+`eval "$(port/psvita/build.sh --env)"` applies them to the current shell, which
+is what the manual CMake commands under "Building" below need. `VITASDK_DIR=`
+installs or uses the SDK somewhere else; an exported `VITASDK` is used as-is
+when it already holds a compiler, so an SDK you installed yourself (including
+one from `setup_psvita_dev.bat`) is never re-downloaded.
+
+The script needs Windows: the pinned archive is the Windows-hosted VitaSDK, its
+compiler is `arm-vita-eabi-gcc.exe`. On Linux/macOS install VitaSDK natively and
+use the manual commands below.
+
 ---
 
 ## What this build actually is
@@ -50,38 +104,58 @@ because `src/symbols.h` pins their versions and no Vita package matches them.
 
 ## Prerequisites
 
-**VitaSDK.** The setup script this project's PS Vita environment uses is
-`C:\Projects\setup_psvita_dev.bat`, which sets
+`port/psvita/build.sh` provides all of this on Windows. The list is what it
+provides, and what to arrange yourself on a host it does not cover.
+
+**VitaSDK.** The project publishes the SDK as a release asset
+(`vitasdk.zip` on the `toolchains-v1.0` release, 196 MB packed / 600 MB
+installed), pinned by SHA-256 in the script and unpacked to `C:\vitasdk`. It is
+a complete SDK with the packages below already installed, so there is no `vdpm`
+step on a clean machine. The environment it needs is
 
 ```bat
 set VITASDK=C:\vitasdk
-set PATH=%VITASDK%\bin;C:\w64devkit\bin;C:\Python314;%PATH%
+set PATH=%VITASDK%\bin;%PATH%
 set CMAKE_TOOLCHAIN_FILE=%VITASDK%\share\vita.toolchain.cmake
 ```
 
-Any equivalent shell works; the build only needs `VITASDK` and the toolchain
-file.
+which is also what `C:\Projects\setup_psvita_dev.bat` sets for an SDK installed
+by hand. Any equivalent shell works; the build only needs `VITASDK` and the
+toolchain file.
 
-**VitaSDK packages.** These are separate installs, not part of the base SDK:
+**VitaSDK packages.** The pinned SDK ships all of them. With a hand-made SDK
+they are separate installs:
 
 ```sh
-vdpm install sdl sdl_gfx sdl_mixer sdl_ttf zlib libpng      # already in the base SDK
-vdpm install vitaGL                                        # REQUIRED, not installed by default
+vdpm install sdl sdl_gfx sdl_mixer sdl_ttf zlib libpng
+vdpm install vitaGL      # pulls in vitaShaRK, SceShaccCgExt and libmathneon
 ```
 
-`vitaGL` pulls in `vitaShaRK`, `SceShaccCgExt` and `libmathneon`. SDL 1.2's
-OpenGL video driver cannot initialise without it, and the CMake configure fails
-with an explicit message if it is missing.
+SDL 1.2's OpenGL video driver cannot initialise without vitaGL, and the CMake
+configure fails with an explicit message if any of the four libraries is
+missing. `build.sh` checks for the artefacts themselves (`libSDL.a`,
+`libvitaGL.a`, ...) rather than trusting `vdpm`'s bookkeeping, because an SDK
+unpacked from the archive has no package database to ask.
 
 **A host `pkg-config`.** VitaSDK's `arm-vita-eabi-pkg-config` is a bash wrapper
-around the host `pkg-config`, so one has to be on `PATH` — w64devkit's is what
-the setup script provides.
+around the host `pkg-config`, so one has to be on `PATH` — MSYS2's `pkgconf` or
+w64devkit's.
 
 **CMake ≥ 3.16 and Ninja** (or Make). CMake 4.x is fine.
 
 ---
 
 ## Building
+
+### With the script
+
+```sh
+port/psvita/build.sh
+```
+
+See "Quick start" at the top for what it installs and the flags it takes.
+
+### By hand
 
 From the repository root, in a shell with `VITASDK` set:
 
@@ -95,20 +169,28 @@ cmake -S port/psvita -B build/psvita -G Ninja \
 cmake --build build/psvita
 ```
 
-Result (verified, clean build directory, nothing else set):
+Result (verified against the pinned VitaSDK, clean build directory, nothing else
+set; the exact bytes move as the engine changes):
 
 ```
-build/psvita/mugen       4264 KB   ARM EABI ELF (intermediate)
-build/psvita/mugen-psvita.self  2203 KB   SELF, compressed
-build/psvita/mugen-psvita.vpk   2198 KB   installable homebrew
+build/psvita/mugen       4208 KB   ARM EABI ELF (intermediate)
+build/psvita/mugen-psvita.self  2171 KB   SELF, compressed
+build/psvita/mugen-psvita.vpk   2335 KB   installable homebrew, no game data
 ```
 
 ### Building without Ninja
 
+From an MSYS2/Git Bash shell, where `sh.exe` is on `PATH`, use Unix Makefiles —
+`MinGW Makefiles` refuses to configure while `sh.exe` is visible:
+
 ```sh
-cmake -S port/psvita -B build/psvita -G "MinGW Makefiles" ...
+cmake -S port/psvita -B build/psvita -G "Unix Makefiles" ...
 cmake --build build/psvita -j8
 ```
+
+From `cmd.exe` (no `sh.exe` on `PATH`) `-G "MinGW Makefiles"` is the equivalent,
+and `cmake --build build/psvita` picks the tool itself. `port/psvita/build.sh`
+chooses Ninja, then Unix Makefiles, for exactly this reason.
 
 ### The packed `mugen.cfg` comes from `port/psvita/mugen.cfg`
 
@@ -421,6 +503,13 @@ from `glGetString`, exactly as GLEW did, so if a future vitaGL gains
 `EXT_blend_logic_op` or `ARB_fragment_program` the engine picks it up with no
 code change.
 
+Two GL *constants* also needed adapting, and `vita_gl_shim.h` carries both
+(guarded `#ifndef`, so they are inert wherever the real header defines them):
+`GL_FRAMEBUFFER_BINDING_EXT` (the desktop glad set's name for `0x8CA6`, which
+vitaGL and GLES call `GL_FRAMEBUFFER_BINDING`) and `GL_FRAMEBUFFER_UNSUPPORTED`
+(`0x8CDD`, which `vitaGL.h` does not define). Without them `Gl_AttachFramebuffer`
+and the FBO probe do not compile on this target, which is how they were found.
+
 ### Where the port's code lives
 
 The engine sources are guarded with `MUGEN_VITA_GL` and are otherwise
@@ -434,6 +523,7 @@ unchanged. The port's own code is `port/psvita/src/`; `src/mugen.h` includes
 
 ```
 port/psvita/
+  build.sh                installs VitaSDK if needed, then builds (see above)
   CMakeLists.txt          the build
   README.md               this file
   src/vita_gl_shim.c      GL capability probe + the entry points vitaGL lacks
@@ -830,9 +920,9 @@ the dump tells you which *line*.
 
 | Symptom | Cause and fix |
 |---|---|
-| `VITASDK is not set` | Export it, or pass `-DCMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake` |
-| `arm-vita-eabi/include/SDL/SDL.h not found` | VitaSDK's `sdl` package is missing: `vdpm install sdl` |
-| `libvitaGL.a not found` | `vdpm install vitaGL` (not installed by default) |
+| `VITASDK is not set` | `eval "$(port/psvita/build.sh --env)"`, or pass `-DCMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake` |
+| `arm-vita-eabi/include/SDL/SDL.h not found` | VitaSDK's `sdl` package is missing: `port/psvita/build.sh` reinstalls it with `vdpm`, or by hand `vdpm install sdl` |
+| `libvitaGL.a not found` | `vdpm install vitaGL` (not part of a hand-made base SDK) |
 | `libvitashark.a / libSceShaccCgExt.a / libmathneon.a not found` | Same package — `vdpm install vitaGL` pulls them in |
 | `Could NOT find PkgConfig` | No host `pkg-config` on `PATH`; install one or pass `-DPKG_CONFIG_EXECUTABLE=` |
 | `could not find package 'SDL_ttf'` | The generated `libpng.pc` shell was not reached — check the `.pc dirs` line in the configure output |

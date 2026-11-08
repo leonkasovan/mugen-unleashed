@@ -20,10 +20,18 @@ Corollaries learned the hard way:
   project. Use project-relative paths.
 - Native Windows tools do not inherit the MSYS working directory. Use absolute
   paths or `cd` inside the same command.
-- **One sanctioned exception**: CBM keeps its own config and index under the
-  user profile. That is the tool's state, not ours, and it is not ours to move
-  — see [Exploring the code with CBM](#exploring-the-code-with-cbm). Everything
-  *we* create still goes in the project.
+- **Two sanctioned exceptions**, both because the thing is not our artefact and
+  cannot work anywhere else:
+  - CBM keeps its own config and index under the user profile. That is the
+    tool's state, not ours, and it is not ours to move — see
+    [Exploring the code with CBM](#exploring-the-code-with-cbm).
+  - VitaSDK lives at `C:/vitasdk` (or `VITASDK_DIR=`), installed there by
+    `port/psvita/build.sh`. A toolchain has to sit at the path the environment
+    variables name and other Vita tools expect; its 600 MB of unpacked SDK does
+    not belong in a git-ignored build tree. What the script *downloads* still
+    goes to `build/downloads/`, and its staging still happens in `build/tmp/`.
+
+Everything *we* create still goes in the project.
 
 ## What this is
 
@@ -77,7 +85,7 @@ Each entry point owns its own subtree and never writes into another's.
 | `build/<linux-target>-<cross-prefix>-<sdl>/` | root `Makefile` with `CROSS_COMPILE=`/`XSYSROOT=` (via `port/arm64/build.sh`) | same shape, `mugen-linux-<arch>-<prefix>`; the dependency tree it links against is `build/sysroots/arm64-sysroot/` |
 | `build/mingw-debug/` | `make DEBUG=1 BUILD=build/mingw-debug` | an explicit `BUILD=` override |
 | `build/x86-release/`, `build/x86-debug/` | root `CMakeLists.txt` via `CMakePresets.json` | MSVC `mugen-msvc-win32-sdl1.exe` + `.pdb` |
-| `build/psvita*/` | `port/psvita/CMakeLists.txt` (you choose the dir) | `mugen`, `mugen-psvita.self`, `mugen-psvita.vpk`, `vita-mugen.cfg` |
+| `build/psvita*/` | `port/psvita/build.sh` (default `build/psvita/`) or `port/psvita/CMakeLists.txt` by hand (`BUILD=<dir>` picks another) | `mugen`, `mugen-psvita.self`, `mugen-psvita.vpk`, `vita-mugen.cfg` |
 | `build/android/` | `port/android/build.sh` | `toolchains/` (JDK/SDK/NDK/CMake, `env.sh`), `sdl2/<abi>/`, `android-deps/<abi>/`, `android-deps-src/`, `sources/`, `build-sdl2/`, `gradle-user-home/`, `asset-list.txt`, `mugen-unleashed-<abi>.apk` |
 | `build/baseline/` | hand-made, kept on purpose | SDL1 reference binary and log used by the log-comparison workflow |
 
@@ -86,7 +94,7 @@ by *kind* rather than by owner and every script uses the same ones:
 
 | Path | Written by | Contents |
 |---|---|---|
-| `build/downloads/` | `port/arm64/build.sh`, `setup.bat`, `tools/make_win_sysroot.sh` callers | every file fetched from the network: the Arm toolchain archive, `arm64-sysroot.zip`, the two w64devkit self-extractors, `win32-sysroot.zip`, `win64-sysroot.zip`. Purely a cache — safe to delete, and re-verifying it costs a download |
+| `build/downloads/` | `port/arm64/build.sh`, `port/psvita/build.sh`, `setup.bat`, `tools/make_win_sysroot.sh` callers | every file fetched from the network: the Arm toolchain archive, `arm64-sysroot.zip`, `vitasdk.zip` (196 MB), the two w64devkit self-extractors, `win32-sysroot.zip`, `win64-sysroot.zip`. Purely a cache — safe to delete, and re-verifying it costs a download |
 | `build/sysroots/` | `port/arm64/build.sh`, `setup.bat` | the installed dependency trees: `arm64-sysroot/`, `win32-sysroot/`, `win64-sysroot/`. Each holds `usr/{include,lib/lib/pkgconfig}` and is consumed through `XSYSROOT=` (Arm) or found automatically by the `Makefile` (Windows) |
 | `build/tmp/` | anything | scratch: staging directories during an install, test output (`build/tmp/<test-name>/`), probe programs and logs. Nothing here is expected to survive; `make` never reads it, and deleting it must never break a build |
 
@@ -346,6 +354,24 @@ silently resolves nothing while the same value typed into bash works — use
 `tools/make_win_sysroot.sh <kit> win32|win64` packages that kit's dependency set
 as a relocatable tree (published as `win32-sysroot.zip`/`win64-sysroot.zip`,
 same shape as `arm64-sysroot.zip`). Both traps: `docs/BUILD-MINGW64.md`.
+
+### PS Vita (VitaSDK)
+
+```sh
+port/psvita/build.sh              # installs VitaSDK if absent, then builds
+port/psvita/build.sh --check-tools
+```
+
+VitaSDK is a release asset (`vitasdk.zip`, SHA-256 pinned in the script) and is
+unpacked to `C:/vitasdk` — one of the two sanctioned exceptions to the
+temp-file rule above. It is a complete SDK: `sdl`, `sdl_gfx`, `sdl_mixer`,
+`sdl_ttf`, `zlib`, `libpng`, `vitaGL` and vitaGL's helpers are already in it, so
+a clean machine needs no `vdpm` run; the script checks the artefacts and only
+calls `vdpm` for something genuinely missing. Output is
+`build/psvita/mugen-psvita.{self,vpk}`, and the VPK packs `install/` as `/data`
+unless `--no-data` is given. The build needs Windows (the SDK's compiler is
+`arm-vita-eabi-gcc.exe`); `--offline` forbids every download. Details:
+`port/psvita/README.md`.
 
 ## Exploring the code with CBM
 

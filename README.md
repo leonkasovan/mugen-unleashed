@@ -88,8 +88,12 @@ directory explicitly. See **[docs/BUILD-MINGW64.md](docs/BUILD-MINGW64.md)**.
 
 ### Other platforms
 
-- **Android** — `port/android/`, native SDL2, arm64.
-- **PS Vita** — `port/psvita/`.
+- **Android** — `port/android/build.sh` (native SDL2, arm64-v8a).
+- **PS Vita** — `port/psvita/build.sh` (VitaSDK, SDL 1.2 over vitaGL). It
+  downloads and installs VitaSDK to `C:\vitasdk` if it is not there, sets up the
+  environment, and builds `build/psvita/mugen-psvita.vpk`. See
+  [port/psvita/README.md](port/psvita/README.md).
+- **Linux arm64 cross build** — `port/arm64/build.sh`.
 
 ## Requirements on the machine
 
@@ -115,6 +119,8 @@ platform expectations:
 | [docs/BUILD-MINGW.md](docs/BUILD-MINGW.md) | The static Windows build in detail |
 | [docs/BUILD-MSVC.md](docs/BUILD-MSVC.md) | The MSVC/CMake build in detail |
 | [docs/BUILD-LINUX.md](docs/BUILD-LINUX.md) | The Linux build |
+| [port/psvita/README.md](port/psvita/README.md) | The PS Vita build (`port/psvita/build.sh`), packaging and on-console diagnosis |
+| [docs/ANDROID.md](docs/ANDROID.md) | The Android port |
 | [docs/LUA.md](docs/LUA.md) | The embedded Lua 5.1.4 layer |
 | [SDL2_PLAN.md](SDL2_PLAN.md) | The SDL 1.2 → SDL2 migration |
 | [PLANS.md](PLANS.md) | Working plan and open items |

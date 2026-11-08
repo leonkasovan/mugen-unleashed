@@ -60,6 +60,31 @@ extern int MugenVita_ConstantAlphaSupported;
 #define GL_XOR 0x1506
 #endif
 
+/*
+ * Port fix: the framebuffer-binding query. GL_FRAMEBUFFER_BINDING (0x8CA6) is
+ * the core GL 3.0 spelling, which is what vitaGL and the GLES headers use; the
+ * desktop glad set this project builds against (third_party/glad-2.1) carries
+ * only the EXT_framebuffer_object alias GL_FRAMEBUFFER_BINDING_EXT. Both name
+ * the same enum, so the missing alias is supplied here instead of in
+ * src/glrender.c, which keeps the original's single spelling (Gl_AttachFramebuffer
+ * queries the currently bound framebuffer with it) and still compiles on every
+ * target.
+ */
+#ifndef GL_FRAMEBUFFER_BINDING_EXT
+#define GL_FRAMEBUFFER_BINDING_EXT GL_FRAMEBUFFER_BINDING
+#endif
+
+/*
+ * Port fix: same idea in the other direction. vitaGL.h defines
+ * GL_FRAMEBUFFER_COMPLETE and GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT but
+ * not GL_FRAMEBUFFER_UNSUPPORTED (0x8CDD, the value every other GL header
+ * gives it). vita_gl_shim.c uses it only as the initial value of the FBO
+ * probe's status, which glCheckFramebufferStatus overwrites.
+ */
+#ifndef GL_FRAMEBUFFER_UNSUPPORTED
+#define GL_FRAMEBUFFER_UNSUPPORTED 0x8CDD
+#endif
+
 #ifdef __cplusplus
 }
 #endif

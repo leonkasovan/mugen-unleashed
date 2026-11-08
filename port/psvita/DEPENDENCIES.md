@@ -8,12 +8,21 @@ here claims a device result.
 
 | Dependency | Pin | Where |
 |---|---|---|
+| VitaSDK | `vitasdk.zip` on the `toolchains-v1.0` release, SHA-256 `12410f2edaedb5de51bfba8a66c4c807dd587ee540311d846544daa556fb4b7d` | `port/psvita/build.sh` (`VITASDK_URL` / `VITASDK_SHA256`), cached in `build/downloads/` |
 | vitaGL (vendored) | `9bf3e3f4e55efd1f4a191b179144f7f9a98cd925` | `third_party/vitagl/VENDORED.md` |
-| vitaGL (SDK) | whatever `vdpm install vitaGL` put in `$VITASDK/arm-vita-eabi` | reported by `cmake --status` line `vitaGL` |
+| vitaGL (SDK) | whatever `vdpm install vitaGL` put in `$VITASDK/arm-vita-eabi` — shipped in the pinned SDK archive | reported by `cmake --status` line `vitaGL` |
 | vitashark / SceShaccCgExt / mathneon | SDK-provided, resolved by `find_library` | `port/psvita/CMakeLists.txt` |
 | SDL 1.2 | VitaSDK `vdpm sdl` (no OpenGL video driver) | `CMakeLists.txt` pkg-config check |
 | SDL2 / SDL2_ttf / SDL2_mixer | VitaSDK `vdpm` packages | same |
 | Lua 5.1.4, libpng 1.2.38, minizip 0.15, libresample 0.1.3 | vendored in `third_party/` | `port/psvita/CMakeLists.txt` |
+
+The VitaSDK archive is pinned the same way `arm64-sysroot.zip` is in
+`port/arm64/build.sh`: downloaded once into `build/downloads/vitasdk.zip`,
+verified against the SHA-256 on every use, then unpacked (600 MB) into
+`C:/vitasdk` and given a `.mugen-vitasdk-<hash>` marker so a later run can tell
+this project's installation from one made by hand. The archive already carries
+the `vdpm` packages above, which is why a clean machine needs no `vdpm` step;
+`build.sh` still verifies the artefacts and installs anything genuinely absent.
 
 The configure step prints the chosen vitaGL under `vitaGL       <value>` so a
 build log records which copy was linked.
