@@ -103,7 +103,9 @@ standard `memcpy` declaration.
 (see `docs/ANALYSIS.md`). Those layouts are only correct with 4-byte pointers
 and MSVC's 32-bit type sizes, so the build is `-m32` and must use an
 `i686-w64-mingw32` toolchain. A 64-bit MinGW (`x86_64-w64-mingw32`) cannot
-produce this program. `make check-toolchain` refuses anything else.
+produce this program; the Makefile sees that triple and builds the experimental
+`win64` target instead of this one, and `make check-toolchain` reports which
+target the compiler on `PATH` selected (`docs/BUILD-MINGW64.md`).
 
 `make check-toolchain` also requires `pkg-config` to resolve every package in
 `STATIC_PKGS` and names the ones it cannot (that check, `check-pkgconfig`, is a
@@ -285,8 +287,9 @@ build.
   declares `dllimport` unconditionally. Likewise `third_party/sdk/include`
   stays ahead of anything that would shadow `zlib.h`/`zconf.h` for libpng and
   minizip.
-* An `i686-w64-mingw32` toolchain is mandatory. `x86_64-w64-mingw32` will
-  compile `-m32` objects but cannot link them (no 32-bit CRT).
+* An `i686-w64-mingw32` toolchain is mandatory for this target. `x86_64-w64-mingw32`
+  will compile `-m32` objects but cannot link them (no 32-bit CRT); with that
+  compiler on `PATH` the Makefile builds the experimental win64 target instead.
 * GCC 14 and later make `-Wincompatible-pointer-types` an error; the Makefile
   turns that specific diagnostic back into a warning (`src/globals.c` has one,
   from the original's BGM subsystem table).

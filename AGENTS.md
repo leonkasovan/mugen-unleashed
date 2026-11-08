@@ -70,7 +70,7 @@ Each entry point owns its own subtree and never writes into another's.
 | `build/mingw/` | root `Makefile` (Windows, default) | `obj/`, `lib/`, `mugen-mingw-win32-sdl2.exe`, `-stripped.exe` (SDL2 backend) |
 | `build/mingw-sdl1/` | `make SDL_BACKEND=1` (Windows) | the same shape, `mugen-mingw-win32-sdl1.exe` |
 
-| `build/mingw64/` | `make MUGEN_TARGET=win64` (Windows, experimental) | the same shape, `mugen-mingw-win64.exe` |
+| `build/mingw64-sdl2/` | plain `make` with the 64-bit kit on `PATH`, or `make MUGEN_TARGET=win64` (Windows, experimental) | the same shape, `mugen-mingw-win64-sdl2.exe` |
 | `build/<linux-target>/` | root `Makefile` (Linux) | same shape, `mugen-linux-<arch>` |
 | `build/<linux-target>-<cross-prefix>-<sdl>/` | root `Makefile` with `CROSS_COMPILE=`/`XSYSROOT=` (via `port/arm64/build.sh`) | same shape, `mugen-linux-<arch>-<prefix>`; `build/tmp/arm64-sysroot/` holds the dependency tree it links against, `build/tmp/arm64-downloads/` the cached toolchain zip |
 | `build/mingw-debug/` | `make DEBUG=1 BUILD=build/mingw-debug` | an explicit `BUILD=` override |
@@ -130,8 +130,11 @@ run the same scenario under both builds and compare the logs with
 `tools/compare_logs.py`.
 
 The CMake/MSVC build still hard-rejects anything but 32-bit MSVC. The Makefile
-builds Linux x64/arm64 and an experimental `win64` target (`MUGEN_TARGET=win64`,
-needs a 64-bit static kit) — see `PLANS.md` for what is still outstanding there,
+builds Linux x64/arm64 and an experimental `win64` target (a 64-bit static kit).
+On Windows the target follows the compiler's own triple, so the kit on `PATH`
+chooses it: `x86devkit`'s `i686-w64-mingw32` gcc builds win32, `w64devkit`'s
+`x86_64-w64-mingw32` gcc builds win64 — no variable needed, and `MUGEN_TARGET=`
+still overrides. See `PLANS.md` for what is still outstanding on the 64-bit side,
 and do not describe either as verified until the offsets above are dealt with.
 
 Output names differ by build: `mugen-msvc-win32-sdl1.exe` (MSVC),
@@ -284,7 +287,12 @@ BUILD=build/mingw-debug` for an unoptimised build. Details:
 
 Do not assume the shell's default `gcc` is the 32-bit one: this environment has
 both `w64devkit` (x86_64) and `x86devkit` (i686) on `PATH`, and the x64 kit
-compiles `-m32` but cannot link.
+compiles `-m32` but cannot link. The Makefile therefore asks the compiler for
+its own triple (`gcc -dumpmachine`, falling back to the `Target:` line of
+`gcc -v`) and builds the target that triple belongs to: with `w64devkit` first
+on `PATH` a plain `make` produces the experimental win64 build, not win32. For
+the 32-bit reference build, put `x86devkit` first or pass the compiler
+(`CC=/c/x86devkit/bin/gcc make`).
 
 ## Exploring the code with CBM
 

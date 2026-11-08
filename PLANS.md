@@ -80,10 +80,12 @@ not auto-update, and the CLI binary is not installed in every session. Re-run
 
 The Windows Makefile build is verified with GCC 16.1.0 + GNU Make 4.4.1 in
 MSYS2 bash, using the **x86 kit** at `/c/x86devkit` (`i686-w64-mingw32`).
-The x64 kit (`/c/w64devkit`, `x86_64-w64-mingw32`) **cannot link** the target —
-it has no 32-bit runtime libraries, so `-m32` compiles but `ld` fails on
-`-lkernel32`. `make check-toolchain` catches this before any work is done and
-is the first thing to run after switching shells:
+The x64 kit (`/c/w64devkit`, `x86_64-w64-mingw32`) **cannot link** the 32-bit
+target — it has no 32-bit runtime libraries, so `-m32` compiles but `ld` fails on
+`-lkernel32`. (The compiler's triple selects the target, so that kit builds the
+experimental win64 target instead; see `docs/BUILD-MINGW64.md`.)
+`make check-toolchain` reports the target the compiler on `PATH` chose before any
+work is done and is the first thing to run after switching shells:
 
 ```sh
 export PATH=/c/x86devkit/bin:$PATH   # 32-bit kit first
@@ -353,7 +355,7 @@ Four targets, all from the existing `Makefile`:
 | Target | Detection | Output | Fidelity |
 |---|---|---|---|
 | Windows i686 | `uname -s` = `Windows_NT`/`MINGW*`/`MSYS*` **and** triple `i686-w64-mingw32` | `mugen-mingw-win32-sdl2.exe` (`-sdl1` for SDL 1.2) | **reference**: layouts and x87 bit-identical to the original |
-| Windows x86-64 (experimental) | opt-in `MUGEN_TARGET=win64`, triple `x86_64-w64-mingw32`, 64-bit kit | `mugen-mingw-win64-sdl2.exe` | **functional**: layouts are natural, not the original's; not log-verified yet |
+| Windows x86-64 (experimental) | compiler triple `x86_64-w64-mingw32` (64-bit kit on `PATH`; `MUGEN_TARGET=win64` pins it) | `mugen-mingw-win64-sdl2.exe` | **functional**: layouts are natural, not the original's; not log-verified yet |
 | Linux x86-64 | `uname -s` = `Linux`, triple `x86_64-*-linux-gnu` | `mugen-linux-x64` | **faithful**: x87 reproducible via `-mfpmath=387` (verified, see below) |
 | Linux arm64 | `uname -s` = `Linux`, triple `aarch64-*-linux-gnu` | `mugen-linux-arm64` | **functional**: no x87 exists, float drift accepted and log-diffed |
 
@@ -387,7 +389,7 @@ ABI, and the compiler wins on any disagreement. The selection:
 | `uname -s` | `-dumpmachine` | Target |
 |---|---|---|
 | `Windows_NT`, `MINGW*`, `MSYS*`, `CYGWIN*` | `i686-w64-mingw32` | win32 (default on Windows) |
-| `Windows_NT`, `MINGW*`, `MSYS*`, `CYGWIN*` | `x86_64-w64-mingw32` | error unless `MUGEN_TARGET=win64` is given (the 32-bit target cannot link) |
+| `Windows_NT`, `MINGW*`, `MSYS*`, `CYGWIN*` | `x86_64-w64-mingw32` | win64 (the 32-bit target cannot link with this kit) |
 | `Linux` | `x86_64-*-linux-gnu` | linux-x64 |
 | `Linux` | `aarch64-*-linux-gnu` | linux-arm64 |
 | `Linux` | `i686-*-linux-gnu` | linux-x86 |
@@ -486,7 +488,7 @@ prototype kept out of the build tree:
 | Input | Result |
 |---|---|
 | MSYS + `i686-w64-mingw32` | `win32` |
-| MSYS + `x86_64-w64-mingw32` | **error**: "cannot link this 32-bit target; use the i686 kit" |
+| MSYS + `x86_64-w64-mingw32` | **error**: "cannot link this 32-bit target; use the i686 kit" — since replaced by selecting `win64` |
 | Linux + `x86_64-linux-gnu` | `linux-x64` |
 | Linux + `aarch64-linux-gnu` (stub compiler) | `linux-arm64` |
 | anything else | **error**, naming the triple found |

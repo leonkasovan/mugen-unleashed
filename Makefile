@@ -13,9 +13,13 @@
 # The static counterpart to the CMake/MSVC build in CMakeLists.txt, which still
 # links the game's DLLs. Same sources, different link step.
 #
-# The Windows target is a 32-bit GUI executable. It must be built with an
-# i686-w64-mingw32 toolchain (x86_64-w64-mingw32 will not do: the engine is a
-# 32-bit binary reconstruction, its struct layouts and pointers are 4 bytes).
+# The Windows reference build is a 32-bit GUI executable and needs an
+# i686-w64-mingw32 toolchain (x86devkit): the engine is a 32-bit binary
+# reconstruction, its struct layouts and pointers are 4 bytes. An
+# x86_64-w64-mingw32 toolchain (w64devkit) builds the experimental win64
+# target instead. Which one is built is decided by the compiler that is
+# actually on PATH -- the Makefile asks it for its own triple -- so neither
+# needs a variable; see "platform detection" below.
 #
 # The same Makefile also builds a Linux target, chosen from uname and the
 # compiler's triple (docs/BUILD-LINUX.md). There the distro's shared SDL is
@@ -198,27 +202,40 @@ SDL_BACKEND_TAG := $(if $(filter 1,$(SDL_BACKEND)),sdl1,sdl2)
 # ------------------------------------------------------- platform detection
 #
 # uname -s decides the OS family; the compiler's own target triple decides the
-# CPU and ABI. uname -m must NOT decide the architecture: inside MSYS it reports
-# the host (x86_64 here) while the compiler targets i686-w64-mingw32, so
-# trusting it would select 64-bit flags for a binary this project cannot link.
-# The compiler wins on any disagreement.
+# CPU, the ABI and -- on Windows -- which of win32/win64 is built. uname -m must
+# NOT decide the architecture: inside MSYS it reports the host (x86_64 here)
+# while the compiler targets i686-w64-mingw32, so trusting it would select
+# 64-bit flags for a binary this project cannot link. The compiler wins on any
+# disagreement.
 #
-# Override for cross-compiling:  make MUGEN_TARGET=linux-arm64
+# The triple is asked of the compiler, never assumed: -dumpmachine answers it
+# directly, and -v prints the same triple on its "Target:" line, which is the
+# only form a wrapper that swallows the first query prints. On Windows that
+# means the kit on PATH decides the target with no variable to remember:
+#
+#   i686-w64-mingw32    (x86devkit)  -> win32, the reference build
+#   x86_64-w64-mingw32  (w64devkit)  -> win64, the experimental 64-bit build
+#
+# Override with MUGEN_TARGET=<target> for cross-compiling, or to build the
+# other Windows target with a compiler that is not first on PATH.
 
 UNAME_S := $(shell uname -s 2>/dev/null)
 TRIPLE  := $(shell $(CC) -dumpmachine 2>/dev/null)
+ifeq ($(strip $(TRIPLE)),)
+  TRIPLE := $(shell $(CC) -v 2>&1 </dev/null | sed -n 's/^Target: *//p' | head -n 1)
+endif
 
 ifeq ($(origin MUGEN_TARGET),undefined)
   ifneq (,$(filter Windows_NT MINGW% MSYS% CYGWIN% NT,$(UNAME_S)))
     ifneq (,$(findstring i686-w64-mingw32,$(TRIPLE)))
       MUGEN_TARGET := win32
     else ifneq (,$(findstring x86_64-w64-mingw32,$(TRIPLE)))
-      # An explicit MUGEN_TARGET=win64 opts in; otherwise this is the i686
-      # build pointed at the wrong kit, which is a mistake worth naming.
-      ifeq ($(strip $(MUGEN_TARGET_ANNOUNCED)),)
-        $(error $(TRIPLE) is the 64-bit kit; the reference build is win32 (use the i686 kit), \
-                or ask for the experimental 64-bit target with MUGEN_TARGET=win64)
-      endif
+      # The compiler on PATH is the 64-bit kit, so build the 64-bit target.
+      # This used to be a hard error telling the caller to pass
+      # MUGEN_TARGET=win64, which meant a plain `make` refused to run on a
+      # w64devkit-only PATH even with every dependency present and readable.
+      MUGEN_TARGET := win64
+      MUGEN_TARGET_AUTO := 1
     else
       $(error unsupported Windows toolchain "$(TRIPLE)"; expected i686-w64-mingw32 or x86_64-w64-mingw32)
     endif
@@ -245,10 +262,10 @@ endif
 # MUGEN_TARGET below, never by the family: Windows targets still need the
 # Win32 sys_libs, the .rc/manifest resources, -mwindows and static archives.
 #
-# win64 is experimental and opt-in. It links a 64-bit static dependency kit
-# (SDL2, zlib, libpng16) with winpthreads instead of pthreadVC2, and the engine
-# has 64-bit-specific fixes in the BGM thread (native pthread storage, pointer
-# packing). See docs/BUILD-MINGW64.md.
+# win64 is experimental and never the reference build. It links a 64-bit
+# static dependency kit (SDL2, zlib, libpng16) with winpthreads instead of
+# pthreadVC2, and the engine has 64-bit-specific fixes in the BGM thread (native
+# pthread storage, pointer packing). See docs/BUILD-MINGW64.md.
 ifeq ($(MUGEN_TARGET),win32)
   MUGEN_FAMILY := win32
   MUGEN_PTRBITS := 32
@@ -275,8 +292,25 @@ endif
 # or nothing, so the name stays within the approved set.
 ifeq ($(SDL_BACKEND),1)
 ifneq ($(MUGEN_TARGET),win32)
-$(error SDL_BACKEND=1 is only supported for MUGEN_TARGET=win32, not "$(MUGEN_TARGET)")
+  ifeq ($(MUGEN_TARGET),win64)
+    $(error SDL_BACKEND=1 is only supported for MUGEN_TARGET=win32; $(CC) targets $(TRIPLE), so the \
+            64-bit target was selected -- the SDL 1.2 reference backend needs the i686 kit \
+            (x86devkit on PATH, or CC=i686-w64-mingw32-gcc))
+  else
+    $(error SDL_BACKEND=1 is only supported for MUGEN_TARGET=win32, not "$(MUGEN_TARGET)")
+  endif
 endif
+endif
+
+# A target picked from the compiler, rather than asked for, is announced: on a
+# w64devkit-only PATH a plain `make` now produces the experimental 64-bit binary
+# instead of refusing, and an unannounced swap of the reference build for it is
+# the one surprise worth a line of output. Printed after the guards above, so a
+# rejected configuration reports its error alone.
+ifeq ($(MUGEN_TARGET_AUTO),1)
+  $(info note: $(TRIPLE) is the 64-bit kit, so the win64 target is selected:)
+  $(info       $(notdir $(TARGET)) -- the win32 reference build needs the i686)
+  $(info       kit on PATH, e.g. PATH=/c/x86devkit/bin:$$PATH)
 endif
 
 # --------------------------------------------------------------- GLES backend
@@ -936,6 +970,7 @@ check-toolchain: check-pkgconfig $(if $(filter win32,$(MUGEN_FAMILY)),check-libs
 	    || { echo "error: $$t not found in PATH"; exit 1; }; \
 	done; \
 	echo "toolchain ok: $$($(CC) --version | head -1) / $$triple"; \
+	echo "target:       $(MUGEN_TARGET) ($(MUGEN_PTRBITS)-bit) -> $(TARGET)"; \
 	echo "python: $(if $(strip $(PYTHON3)),$$($(PYTHON3) --version),not found (only needed for MUGEN_GAME_DIR))"
 ifneq ($(strip $(MUGEN_CROSS)),)
 	@echo "cross: $(CROSS_COMPILE)"; \

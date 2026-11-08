@@ -72,14 +72,19 @@ the compiler's own triple. See **[docs/BUILD-LINUX.md](docs/BUILD-LINUX.md)**.
 
 ### MinGW Win64 (experimental)
 
+With the 64-bit kit first on `PATH` there is nothing to ask for — the Makefile
+reads the compiler's triple and builds the 64-bit target, printing a note that
+it did:
+
 ```sh
 export PATH=/c/w64devkit/bin:$PATH
 export PKG_CONFIG_PATH=/c/w64devkit/lib/pkgconfig
-make MUGEN_TARGET=win64 BUILD=build/win64-sdl2 -j8
+make -j8
 ```
 
-Produces `build/win64-sdl2/mugen-mingw-win64-sdl2.exe`. See
-**[docs/BUILD-MINGW64.md](docs/BUILD-MINGW64.md)**.
+Produces `build/mingw64-sdl2/mugen-mingw-win64-sdl2.exe`. `make
+MUGEN_TARGET=win64 BUILD=build/win64-sdl2 -j8` pins the target and the
+directory explicitly. See **[docs/BUILD-MINGW64.md](docs/BUILD-MINGW64.md)**.
 
 ### Other platforms
 
