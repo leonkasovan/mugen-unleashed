@@ -749,34 +749,53 @@ Windows SDKs were unavailable for this follow-up; rerun both Windows targets.
 
 ### Still open
 
-Revised 2026-11-08: the Linux bullet below was the largest claimed gap and is
-now partly closed by the arm64 target; what it actually costs today is a log
-comparison, not a port.
+Revised 2026-11-08, twice. The first pass corrected the Linux bullet (the
+largest claimed gap, now closed by the arm64 target and down to a log
+comparison). The second records what the four testable items above actually
+measured when they were exercised, and what each one still leaves uncovered —
+the entries now say what was run, where, and what stayed untested, rather than
+"not exercised".
 
-- **Windowed/fullscreen *transitions* at runtime** (rather than starts) and
-  display selection have not been exercised.
-- **Console command execution** is covered only up to the submitted line: it is
-  queued, not run, because the debug commands need a running match.
-- **Audio is verified by buffer contents, not by ear**: the hook callback,
-  `Mix_QuerySpecEx`, the RWops size and the real callback length are measured
-  against an expected image on a machine with an audio device, and the harness
-  reports SKIP (exit 77, counted as SKIP, not PASS) where there is none. Nobody
-  has *listened* to the output. `Sdlmix_Open` / `Mix_LoadMUS_RW` are not
-  exercised end to end (no tracker or MIDI file is loaded by the quick-VS
-  scenario), and neither is effect playback.
-- **Controller hot-plug has no desktop test.** It *is* implemented and wired on
-  both SDL2 backends: `events.c` dispatches `SDL_JOYDEVICEADDED`/`REMOVED` to
-  `Pads_DeviceEvent`, and `Pads_Init` refuses to disable joystick events when no
-  pad opens, which is what made hot-plug work only if a pad was present at
-  start-up. The earlier entry here ("the engine has no hot-plug handling at all
-  — faithful to the original") described the code before that and was wrong
-  afterwards. What is missing is a test: the only exercise is the Android device
-  run, and `tools/test_sdl2input.sh` still attaches its virtual devices before
-  `Pads_Init`. The handheld run does exercise the *attach* path in the field —
-  `Pads_AttachController` now also completes a pad's SDL mapping
-  (`pad_mapping_fixups[]` in `src/pads.c`, see PLANS.md), which only matters
-  because that path runs at all — but a plugged-after-start pad still has no
-  automated desktop test.
+- **Fullscreen transitions: verified on Windows/win64, one renderer.** Measured
+  2026-11-08 in a live match (OpenGL, 1280x720): Alt+Enter produced
+  `Fullscreen toggle 1` in `mugen.log`, ran at 60 fps for ~17 s of full-screen
+  play, and Alt+Enter again produced `Fullscreen toggle 0` back to the original
+  window — the projection/viewport reset behind `g_glScreenResized` is what
+  regresses here, and it held. Still unexercised: the `System` renderer, the
+  same toggle with `[Video] FullScreen = 1` at start, and a second display
+  (the port hands display choice to the window manager, the original used the
+  primary monitor's rect — that, not a defect, is the expected difference).
+- **Console command execution: verified, one command.** Measured 2026-11-08 with
+  a match running: `Ctrl+`` opened the console, `roundreset` entered and ran
+  (`Requesting round reset` in `mugen.log`), so the queue-to-execution gap is
+  closed. Still open: an automated assertion (it needs key injection), and the
+  commands whose output goes only to the console view (`stats`, `help`) cannot
+  be asserted from a log at all.
+- **Audio: listened to, for a stage BGM.** Measured 2026-11-08: `Initializing
+  sound...OK` / `Initializing BGM...OK`, a stage MP3 loaded (`bgm: loading
+  sound/Title.mp3`, a diagnostic added that day because a missing file used to
+  be silent) and was heard playing, then clean `Deinitializing BGM...OK` /
+  `Deinitializing sound...OK` with no mixer errors. What the earlier entry said
+  still holds for the parts not covered: the hook callback, `Mix_QuerySpecEx`,
+  the RWops size and the callback length are checked against a buffer image and
+  not by ear; `Sdlmix_Open` / `Mix_LoadMUS_RW` are still not exercised end to end
+  (no tracker or MIDI file is loaded by these scenarios); effect playback and a
+  long session (underrun, pitch drift) remain unheard, as does an A/B against the
+  SDL 1.2 build.
+- **Controller hot-plug: attach verified by hand, unplug not re-tested, no
+  automated test.** Measured 2026-11-08 on Windows/win64: the game started with
+  `SDL_NumJoysticks() = 0`, an Xbox 360 pad was plugged in mid-match, and
+  `Pads: controller slot 0 opened on attach` was followed by
+  `config: P1 bound through the game controller` and
+  `pads: attached device 0 to slot 0, instance=0` — after which every control
+  worked (`R3` included, `code 13`). The removal half was silent in `mugen.log`
+  until the same day (`pads: device removed from slot N`, committed after the
+  run), so an unplug/replug cycle still needs one re-run to be evidenced. The
+  automated desktop test is still missing: `tools/test_sdl2input.sh` attaches
+  its virtual pads as *game controllers*, and the gamepad policy deliberately
+  ignores raw codes for those slots, so its three routing assertions fail for
+  reasons unrelated to hot-plug and must be fixed before a hot-plug case can be
+  added to it.
 - **linux-x64 with SDL2 has not been re-verified.** The backlog item this
   replaces said "Linux with SDL2 has not been built", and that is no longer
   true: **linux-arm64 is Linux + SDL2** (2.30.10 on the device) and has been
