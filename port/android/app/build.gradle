@@ -95,6 +95,19 @@ android {
         assets.srcDirs = ['src/main/assets']
     }
 
+    // Launcher icons derived from res/icons by build.sh
+    // (tools/make_android_icons.sh). They go into the debug and release source
+    // sets rather than main on purpose: a buildType's res directory *overrides*
+    // main instead of colliding with it, so the freshly generated PNGs win over
+    // the committed fallback copies under src/main/res (mipmap-<density>, one
+    // directory per bucket). A plain `gradlew assembleDebug` (no build.sh, no
+    // Python) simply finds no generated directory and uses the committed ones.
+    def generatedIcons = file("$buildDir/generated/res/mugen-icons")
+    if (generatedIcons.directory) {
+        sourceSets.debug.res.srcDir generatedIcons
+        sourceSets.release.res.srcDir generatedIcons
+    }
+
     if (haveReleaseKey) {
         signingConfigs {
             release {

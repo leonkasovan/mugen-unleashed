@@ -204,6 +204,28 @@ cmake -S port/psvita -B build/psvita -G Ninja \
 | `MUGEN_VITA_VIDEO_HEIGHT` | `272` | `GameHeight` (render size; the panel is 544) |
 | `MUGEN_VITA_FULLSCREEN` | `ON` | Write `FullScreen = 1` into the packed `mugen.cfg` |
 | `MUGEN_VITA_RENDERMODE` | `system` | `RenderMode` in the packed `mugen.cfg` (`opengl` needs an SDL built with vitaGL) |
+| `MUGEN_VITA_ICON_ICO` | `res/icons/1.ico` | the artwork every `sce_sys/` image is derived from |
+| `MUGEN_VITA_ICON_SIZE` | `128` | `icon0.png` edge length (the Vita expects 128) |
+| `MUGEN_VITA_BG_W` / `_BG_H` | `840` / `500` | LiveArea background size |
+| `MUGEN_VITA_STARTUP_W` / `_H` | `280` / `158` | LiveArea start-up image size |
+
+### The bubble artwork
+
+`sce_sys/` is not hand-drawn: `cmake/Icon.cmake` derives all three images from
+`res/icons/1.ico` — the same artwork the Windows and Android builds use — at
+configure time, with `tools/iconpack.py` (standard library only):
+
+| Packed as | From | Size |
+|---|---|---|
+| `sce_sys/icon0.png` | the icon | 128x128 |
+| `sce_sys/livearea/contents/bg.png` | the icon on the average colour of its own pixels | 840x500 |
+| `sce_sys/livearea/contents/startup.png` | the icon on a transparent frame | 280x158 |
+
+The generated files go into the build directory; the committed copies under
+`port/psvita/sce_sys/` are the same derivation and are packed only when the
+conversion cannot run (no Python, or a missing `.ico`), so a tree without Python
+still builds. Replacing the artwork means replacing `res/icons/`, not editing
+PNGs. `bash tools/test_vita_icon.sh` checks the conversions without a VitaSDK.
 
 ---
 

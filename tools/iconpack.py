@@ -12,6 +12,18 @@ Usage:
       Write the largest image of IN.ico as a PNG, scaled to SIZE x SIZE
       (default 128, the size the PS Vita wants for sce_sys/icon0.png).
 
+  python tools/iconpack.py canvas OUT.png IN.ico W H [SCALE] [BG]
+      Compose the artwork onto a W x H canvas, so that it also covers the places
+      that want more than a square icon: the Android adaptive-icon foreground
+      (108dp canvas, artwork confined to the safe zone) and the PS Vita LiveArea
+      artwork (840x500 background, 280x158 start-up image).
+
+      SCALE is the artwork's edge as a percentage of the canvas *height*
+      (default 100). BG is `none` for transparent (the default), a `#rrggbb`
+      colour, or `auto` for the average colour of the artwork's own opaque
+      pixels -- derived from the icon rather than invented, which is what keeps
+      a generated LiveArea background recognisably the same artwork.
+
 Only the standard library is used, so the build needs no imaging package.
 The .ico files here are BMP/DIB entries (not PNG-compressed) with an AND mask;
 that is what the decoder below handles.
@@ -225,6 +237,83 @@ def png(src, out, size=128):
     return w, h, bits
 
 
+def average_colour(pixels):
+    """Alpha-weighted mean of the artwork, rounded to #rrggbb.
+
+    Weighting by alpha keeps the transparent surround of a bubble icon from
+    dragging the result towards black; the answer is the colour the artwork
+    actually looks like.
+    """
+    total = 0.0
+    acc = [0.0, 0.0, 0.0]
+    for row in pixels:
+        for r, g, b, a in row:
+            if a == 0:
+                continue
+            total += a
+            acc[0] += r * a
+            acc[1] += g * a
+            acc[2] += b * a
+    if total <= 0.0:
+        return (0, 0, 0)
+    return (int(acc[0] / total + 0.5), int(acc[1] / total + 0.5), int(acc[2] / total + 0.5))
+
+
+def over(dst, src):
+    """Source-over compositing of two RGBA tuples."""
+    sa = src[3] / 255.0
+    if sa <= 0.0:
+        return dst
+    da = dst[3] / 255.0
+    oa = sa + da * (1.0 - sa)
+    if oa <= 0.0:
+        return (0, 0, 0, 0)
+    out = []
+    for c in range(3):
+        out.append(max(0, min(255, int((src[c] * sa + dst[c] * da * (1.0 - sa)) / oa + 0.5))))
+    out.append(max(0, min(255, int(oa * 255 + 0.5))))
+    return tuple(out)
+
+
+def canvas(src, out, w, h, scale=100, background="none"):
+    """Compose the artwork, centred, onto a w x h canvas.
+
+    `scale` is the artwork's edge as a percentage of the canvas height. The
+    artwork is scaled to a square, never distorted: a 280x158 start-up image
+    therefore gets a square picture with the spare width left as background.
+    """
+    entries = read_ico(src)
+    ew, eh, bits, blob = max(entries, key=lambda e: (e[0] * e[1], e[2]))
+    iw, ih, pixels = decode_dib(blob)
+
+    if background == "auto":
+        fill = average_colour(pixels) + (255,)
+    elif background == "none":
+        fill = (0, 0, 0, 0)
+    elif background.startswith("#") and len(background) == 7:
+        fill = (int(background[1:3], 16), int(background[3:5], 16),
+                int(background[5:7], 16), 255)
+    else:
+        raise ValueError("background must be none, auto or #rrggbb, not %r" % background)
+
+    edge = max(1, int(round(h * scale / 100.0)))
+    art = resize(pixels, iw, ih, edge, edge)
+    ox = (w - edge) // 2
+    oy = (h - edge) // 2
+
+    rows = []
+    for y in range(h):
+        row = []
+        for x in range(w):
+            px = fill
+            if 0 <= x - ox < edge and 0 <= y - oy < edge:
+                px = over(fill, art[y - oy][x - ox])
+            row.append(px)
+        rows.append(row)
+    write_png(out, rows, w, h)
+    return ew, eh, bits
+
+
 def main(argv):
     if len(argv) < 3:
         print(__doc__.strip(), file=sys.stderr)
@@ -238,6 +327,18 @@ def main(argv):
         size = int(argv[4]) if len(argv) > 4 else 128
         w, h, bits = png(argv[3], argv[2], size)
         print("%s <- %s (%dx%d, %d bpp, scaled to %d)" % (argv[2], argv[3], w, h, bits, size))
+        return 0
+    if cmd == "canvas":
+        if len(argv) < 6:
+            print(__doc__.strip(), file=sys.stderr)
+            return 2
+        w = int(argv[4])
+        h = int(argv[5])
+        scale = int(argv[6]) if len(argv) > 6 else 100
+        background = argv[7] if len(argv) > 7 else "none"
+        ew, eh, bits = canvas(argv[3], argv[2], w, h, scale, background)
+        print("%s <- %s (%dx%d, %d bpp, %d%% of %dx%d, background %s)" %
+              (argv[2], argv[3], ew, eh, bits, scale, w, h, background))
         return 0
     print("unknown command %r" % cmd, file=sys.stderr)
     return 2

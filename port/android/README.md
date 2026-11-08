@@ -43,6 +43,7 @@ port/android/
     toolchain_metadata.py          vendor metadata, checksums, extraction
     build_sdl2_companions.sh        SDL2_ttf / SDL2_mixer cross-build
   tests/test_build.py               offline bootstrap/orchestration fixtures
+  tests/test_icons.py               launcher icons come from res/icons
   tests/CMakeLists.txt              host build of the actual Android engine paths
   tests/test_native_sdl2.c           native SDL2 runtime tests
 ```
@@ -197,6 +198,25 @@ bash port/android/build.sh --download-tools --debug --no-assets
 `--no-assets` really clears the generated asset staging. It does not provide
 game data at runtime: use it only for a previously provisioned data directory
 or diagnostic builds. The first-run extraction/update limitations still apply.
+
+### The launcher icon
+
+The icon is not a hand-drawn resource either. `build.sh` runs
+`tools/make_android_icons.sh` before Gradle, which scales `res/icons/1.ico` —
+the same artwork the Windows and PS Vita builds use — into
+`app/build/generated/res/mugen-icons/`:
+
+| Resource | Sizes | Where it shows |
+|---|---|---|
+| `mipmap-<density>/ic_launcher.png` | 48/72/96/144/192 | the legacy icon (below Android 8) |
+| `mipmap-<density>/ic_launcher_foreground.png` | 108/162/216/324/432 | the adaptive icon's foreground, on a 108dp canvas with the artwork inside the 72dp safe zone |
+
+`build.gradle` adds that directory to the debug and release resource sets, which
+override the committed copies in `app/src/main/res/mipmap-*` instead of colliding
+with them; those copies are the same generation and are what a build without
+Python (or a bare `gradlew assembleDebug`) shows. Replacing the artwork means
+replacing `res/icons/`, and `python3 port/android/tests/test_icons.py` keeps the
+two in step.
 `--clean` removes generated app build/CMake output; it does not uninstall tools.
 
 Output: **`build/android/mugen-android-arm64-v8a.apk`**.
@@ -337,6 +357,7 @@ Bootstrap/orchestration fixtures:
 ```sh
 bash -n port/android/build.sh port/android/tools/bootstrap_toolchains.sh port/android/tools/build_sdl2_companions.sh
 python3 port/android/tests/test_build.py
+python3 port/android/tests/test_icons.py     # launcher icons vs res/icons
 ```
 
 Native Linux host tests require a C compiler, GNU-compatible linker,

@@ -647,23 +647,28 @@ else()
     UNSAFE)
 endif()
 
-# The LiveArea assets are the ones the VitaSDK sample ships; they are MIT/zlib
-# artwork, not Elecbyte's. Replace sce_sys/ with your own if you distribute a
-# custom bubble.
+# The LiveArea assets under sce_sys/ are derived from res/icons/*.ico by
+# cmake/Icon.cmake; the committed copies are what a tree without Python3 packs.
+# Replace them with your own if you distribute a custom bubble.
 set(MUGEN_VITA_SCE_SYS "${CMAKE_CURRENT_SOURCE_DIR}/sce_sys")
 
-# The bubble icon comes from res/icons/*.ico, the same artwork the Windows build
-# embeds, so both platforms show one picture. The conversion (the Vita wants a
-# 128x128 PNG, res/icons tops out at 64x64) lives in cmake/Icon.cmake, which
-# tools/test_vita_icon.sh also runs on its own.
+# The bubble icon and the LiveArea artwork come from res/icons/*.ico, the same
+# art the Windows build embeds, so every platform shows one picture. The
+# conversions (the Vita wants a 128x128 icon, an 840x500 LiveArea background and
+# a 280x158 start-up image, while res/icons tops out at 64x64) live in
+# cmake/Icon.cmake, which tools/test_vita_icon.sh also runs on its own.
 # The values are cached here for ccmake; the module carries the same defaults so
 # that it can also be run on its own (tools/test_vita_icon.sh).
 set(MUGEN_VITA_ICON_ICO "${MUGEN_ROOT}/res/icons/1.ico" CACHE FILEPATH
     "Icon to derive sce_sys/icon0.png from")
 set(MUGEN_VITA_ICON_SIZE "128" CACHE STRING
     "icon0.png edge length; the Vita expects 128")
+set(MUGEN_VITA_BG_W "840" CACHE STRING "LiveArea background width")
+set(MUGEN_VITA_BG_H "500" CACHE STRING "LiveArea background height")
+set(MUGEN_VITA_STARTUP_W "280" CACHE STRING "LiveArea start-up image width")
+set(MUGEN_VITA_STARTUP_H "158" CACHE STRING "LiveArea start-up image height")
 set(MUGEN_VITA_ICON_OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/sce_sys" CACHE PATH
-    "where the generated icon0.png is written")
+    "where the generated sce_sys/ artwork is written")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Icon.cmake")
 
 if(MUGEN_VITA_DATA_DIR)
@@ -897,8 +902,8 @@ set(_mugen_vpk_args
   -s ${MUGEN_VITA_SFO}
   -b ${MUGEN_VITA_EBOOT}
   -a ${MUGEN_VITA_ICON_PNG}=sce_sys/icon0.png
-  -a ${MUGEN_VITA_SCE_SYS}/livearea/contents/bg.png=sce_sys/livearea/contents/bg.png
-  -a ${MUGEN_VITA_SCE_SYS}/livearea/contents/startup.png=sce_sys/livearea/contents/startup.png
+  -a ${MUGEN_VITA_BG_PNG}=sce_sys/livearea/contents/bg.png
+  -a ${MUGEN_VITA_STARTUP_PNG}=sce_sys/livearea/contents/startup.png
   -a ${MUGEN_VITA_SCE_SYS}/livearea/contents/template.xml=sce_sys/livearea/contents/template.xml)
 
 if(MUGEN_VITA_DATA_DIR)
@@ -964,7 +969,8 @@ endif()
 add_custom_command(
   OUTPUT ${MUGEN_VITA_VPK}
   COMMAND ${VITA_PACK_VPK} ${_mugen_vpk_args} ${MUGEN_VITA_VPK}
-  DEPENDS ${MUGEN_VITA_SFO} ${MUGEN_VITA_EBOOT} mugen-psvita.self ${MUGEN_VITA_ICON_PNG}
+  DEPENDS ${MUGEN_VITA_SFO} ${MUGEN_VITA_EBOOT} mugen-psvita.self
+          ${MUGEN_VITA_ICON_PNG} ${MUGEN_VITA_BG_PNG} ${MUGEN_VITA_STARTUP_PNG}
   COMMENT "Building mugen-psvita.vpk"
   VERBATIM)
 

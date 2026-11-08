@@ -385,7 +385,7 @@ is the tool's own state, not ours.
 `res/icons/` holds the project's own artwork as one single-size `.ico` per size:
 `1.ico` 64x64, `2.ico` 48, `8.ico` 32, `3.ico` 24, `4.ico` 16 (all 32-bit with
 alpha); `5`, `6`, `7` and `9` are the same drawing as 8-bit palette images.
-Both platform builds use it:
+All three platforms use it, and nothing else: the artwork is edited in one place.
 
 - The Windows Makefile merges the 32-bit set into `build/mingw/icon/mugen.ico`
   with `tools/iconpack.py` and `windres` embeds it as icon group 101. Windows
@@ -393,14 +393,27 @@ Both platform builds use it:
   single-size icon is scaled and looks soft. Without `python3` the first icon is
   copied as-is and the build still works. `MUGEN_ICONS=` picks other files,
   `MUGEN_GAME_DIR=` reverts to the original `mugen.exe`'s icon.
-- The PS Vita build converts `res/icons/1.ico` to the 128x128
-  `sce_sys/icon0.png` at configure time (`port/psvita/cmake/Icon.cmake`),
-  writing into the build tree; the committed sample asset is only packed when
-  the conversion cannot run.
+- The PS Vita build derives all of `sce_sys/` from `res/icons/1.ico` at
+  configure time (`port/psvita/cmake/Icon.cmake`, run through
+  `cmake -P` by `tools/test_vita_icon.sh`): the 128x128 bubble icon, the 840x500
+  LiveArea background and the 280x158 start-up image. They are written into the
+  build tree; the committed copies under `port/psvita/sce_sys/` are the same
+  derivation and are packed only when the conversion cannot run.
+- The Android build runs `tools/make_android_icons.sh` from `port/android/build.sh`
+  before Gradle, deriving the five density buckets (`ic_launcher.png`,
+  48/72/96/144/192) and the adaptive icon's foreground (108dp canvas,
+  108/162/216/324/432, artwork confined to the 66% safe zone). It writes into
+  `app/build/generated/res/mugen-icons`, which `build.gradle` adds to the debug
+  and release source sets so it overrides — rather than collides with — the
+  committed copies in `app/src/main/res/mipmap-*`, which are that same
+  generation and serve a build without Python. `port/android/tests/test_icons.py`
+  keeps the two from drifting.
 
-`tools/iconpack.py` is standard-library only, so neither build needs an imaging
+`tools/iconpack.py` is standard-library only, so no build needs an imaging
 package. It is the only place that decodes `.ico` (BMP/DIB entries with an AND
-mask) and writes PNG; keep it that way rather than duplicating the decoder.
+mask) and writes PNG; keep it that way rather than duplicating the decoder. Its
+`png` subcommand makes a square icon, `canvas` composes the artwork onto a
+larger frame (Vita LiveArea, Android adaptive foreground).
 
 ## Testing
 

@@ -165,6 +165,27 @@ else
   say "Skipping game data (--no-assets)"
 fi
 
+# --- launcher icon ---------------------------------------------------------
+#
+# The artwork is res/icons/*.ico, the same set the Windows and PS Vita builds
+# use; tools/make_android_icons.sh scales it to the five density buckets and
+# composes the adaptive icon's foreground. It writes into the module's build
+# directory, not into src/main/res, so res/icons stays the single source and a
+# build never dirties a checkout. build.gradle picks the directory up from there
+# and gives it priority over the committed fallback copies.
+#
+say "Launcher icon"
+ICON_RES="$APP/build/generated/res/mugen-icons"
+if bash "$ROOT/tools/make_android_icons.sh" "$ICON_RES"; then
+  say "generated from res/icons ($(find "$ICON_RES" -name '*.png' | wc -l | tr -d ' ' ) PNGs)"
+else
+  # Not fatal: the committed mipmaps under src/main/res are the same artwork, so
+  # the APK still ships the right icon. Typical cause is no working Python.
+  say "WARNING: could not derive the icons from res/icons; " \
+      "the committed mipmaps in src/main/res are used instead"
+  rm -rf "$ICON_RES"
+fi
+
 say "Configuring Gradle project"
 # Use forward slashes for Java/native Windows paths, and escape Java-properties
 # metacharacters. Do not rewrite the tracked gradle.properties.override file.
