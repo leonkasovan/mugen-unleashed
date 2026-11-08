@@ -463,6 +463,19 @@ All three platforms use it, and nothing else: the artwork is edited in one place
   LiveArea background and the 280x158 start-up image. They are written into the
   build tree; the committed copies under `port/psvita/sce_sys/` are the same
   derivation and are packed only when the conversion cannot run.
+
+  **These three PNGs must be 8-bit indexed (colour type 3), not RGBA.** The Vita's
+  package validation refuses RGBA artwork at install time with `0x8010113D` — the
+  file packs and copies fine, only the console says no, with a code that names
+  neither the file nor the reason. `tools/iconpack.py --indexed` writes the
+  palette PNG (`--flatten` drops the alpha, which `icon0`/`bg` require; the
+  start-up image keeps transparency as a `tRNS` chunk) and `Icon.cmake` reads
+  each packed asset's IHDR afterwards, failing the configure unless it is type 3,
+  bit depth 8 (or 1, as the VitaSDK sample backgrounds are) and non-interlaced.
+  Every VitaSDK sample ships that format under
+  `$VITASDK/share/gcc-arm-vita-eabi/samples/*/sce_sys`; treat it as the
+  reference. The committed fallbacks are regenerated with the same commands, so
+  a machine without Python still packs a VPK the console accepts.
 - The Android build runs `tools/make_android_icons.sh` from `port/android/build.sh`
   before Gradle, deriving the five density buckets (`ic_launcher.png`,
   48/72/96/144/192) and the adaptive icon's foreground (108dp canvas,

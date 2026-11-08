@@ -24,8 +24,8 @@ configures CMake and builds. The result:
 
 ```
 build/psvita/mugen-psvita.self   2171 KB   the runnable module
-build/psvita/mugen-psvita.vpk    2335 KB   installable, engine only
-                                 5089 KB   with install/ packed as /data
+build/psvita/mugen-psvita.vpk    2203 KB   installable, engine only
+                                 4957 KB   with install/ packed as /data
 ```
 
 Because `install/` is a real M.U.G.E.N tree, the VPK is built with its data
@@ -175,7 +175,7 @@ set; the exact bytes move as the engine changes):
 ```
 build/psvita/mugen       4208 KB   ARM EABI ELF (intermediate)
 build/psvita/mugen-psvita.self  2171 KB   SELF, compressed
-build/psvita/mugen-psvita.vpk   2335 KB   installable homebrew, no game data
+build/psvita/mugen-psvita.vpk   2203 KB   installable homebrew, no game data
 ```
 
 ### Building without Ninja
@@ -297,17 +297,35 @@ cmake -S port/psvita -B build/psvita -G Ninja \
 `res/icons/1.ico` — the same artwork the Windows and Android builds use — at
 configure time, with `tools/iconpack.py` (standard library only):
 
-| Packed as | From | Size |
-|---|---|---|
-| `sce_sys/icon0.png` | the icon | 128x128 |
-| `sce_sys/livearea/contents/bg.png` | the icon on the average colour of its own pixels | 840x500 |
-| `sce_sys/livearea/contents/startup.png` | the icon on a transparent frame | 280x158 |
+| Packed as | From | Size | Format |
+|---|---|---|---|
+| `sce_sys/icon0.png` | the icon, flattened onto its average colour | 128x128 | 8-bit indexed, opaque |
+| `sce_sys/livearea/contents/bg.png` | the icon on the average colour of its own pixels | 840x500 | 8-bit indexed, opaque |
+| `sce_sys/livearea/contents/startup.png` | the icon on a transparent frame | 280x158 | 8-bit indexed, tRNS transparency |
+
+**The format is not cosmetic.** The Vita's package validation accepts only
+8-bit *palette* PNGs (colour type 3) for this artwork; an RGBA one packs
+correctly, copies correctly, and is then rejected by VitaShell on the console
+with `Error 0x8010113D` — which names neither the file nor the reason, and is
+the same code a truncated copy produces. Every VitaSDK sample ships colour type
+3 (check `$VITASDK/share/gcc-arm-vita-eabi/samples/*/sce_sys`), and the assets
+here were RGBA until that was tracked down.
+
+So `tools/iconpack.py` takes `--indexed` (write a palette PNG, quantised to 256
+colours) and `--flatten [auto|#rrggbb]` (composite the alpha away), and
+`cmake/Icon.cmake` passes both for `icon0`/`bg` and `--indexed` alone for
+`startup`. The same module then **reads each packed asset's IHDR and fails the
+configure** unless it is colour type 3, bit depth 8 (1 is also accepted, which
+is what the sample backgrounds use) and non-interlaced — so a regression costs a
+configure error instead of a console round trip.
 
 The generated files go into the build directory; the committed copies under
-`port/psvita/sce_sys/` are the same derivation and are packed only when the
-conversion cannot run (no Python, or a missing `.ico`), so a tree without Python
-still builds. Replacing the artwork means replacing `res/icons/`, not editing
-PNGs. `bash tools/test_vita_icon.sh` checks the conversions without a VitaSDK.
+`port/psvita/sce_sys/` are the same derivation — same commands, same bytes — and
+are packed only when the conversion cannot run (no Python, or a missing `.ico`),
+so a tree without Python still builds a VPK the console accepts. Replacing the
+artwork means replacing `res/icons/`, not editing PNGs. `bash
+tools/test_vita_icon.sh` checks the conversions (and the format) without a
+VitaSDK.
 
 ---
 
@@ -330,8 +348,8 @@ the digest changes whenever the VPK is rebuilt — compare against the run that
 produced the file you copied, not against this document:
 
 ```
-bytes     5211064  mugen-psvita.vpk
-sha256    29ec3d72…
+bytes     5076204  mugen-psvita.vpk
+sha256    9aa8c82a…
 ```
 
 A short copy is the most common reason a VPK fails at install time, and the
@@ -344,24 +362,31 @@ The code is a `ScePromoterUtil` value (`0x801011xx`), which the console may also
 show as a dialog code (`0x8010113D` is `C2-12691-9`), and it means "this package
 was refused", not which check failed:
 
-1. **Free space on `ux0:`.** The promoter unpacks the package beside the app and
+1. **The `sce_sys/` artwork format.** This was the cause the first time it was
+   reported: RGBA LiveArea PNGs are rejected, 8-bit indexed ones are accepted,
+   and the per-file format is invisible from the outside. It is guarded at
+   configure time now, so a VPK from this tree cannot carry the wrong type —
+   check with `unzip -p build/psvita/mugen-psvita.vpk sce_sys/icon0.png | xxd -l 32`:
+   byte 25 is the colour type and must be `3`. See "The bubble artwork" above.
+2. **Free space on `ux0:`.** The promoter unpacks the package beside the app and
    then moves it; it needs roughly twice the VPK's unpacked size free. A nearly
    full memory card fails here.
-2. **A leftover bubble with the same title ID.** A previous failed install can
+3. **A leftover bubble with the same title ID.** A previous failed install can
    leave `ux0:app/MSDK00001/` behind, and the promoter then refuses the reinstall.
    Delete the bubble (or the directory) and retry.
-3. **Transfer method.** Copy over VitaShell's USB/FTP mode into `ux0:` and
+4. **Transfer method.** Copy over VitaShell's USB/FTP mode into `ux0:` and
    install from there. A file on a USB-mounted partition (`uma0:`) is not a
    location VitaShell installs from.
-4. **Isolate the payload.** `port/psvita/build.sh --no-data` builds a 2.3 MB
-   engine-only VPK (7 entries instead of 105). If that installs, the package
-   format and the SELF are fine and the difference is the packed game tree; if
-   it fails the same way, the problem is the console or the copy, not the data.
 5. **The SELF.** `vita-make-fself -c` (no `-s`, no `-m`) is what this build runs,
    which is the normal-app form the promoter expects. A SELF made by a mismatched
    `vita-make-fself` is also refused, so if the package verifies, the console has
-   space and the engine-only VPK still fails, reinstall VitaSDK from the pinned
-   archive (`port/psvita/build.sh --setup`) and rebuild.
+   space and the artwork is indexed, reinstall VitaSDK from the pinned archive
+   (`port/psvita/build.sh --setup`) and rebuild.
+
+A `--no-data` build is **not** a way to isolate this failure: the artwork, the
+SELF and the SFO are identical to the full VPK, only the game tree is missing, so
+a packaging fault fails both exactly alike. It is still useful for a different
+question — whether a *large* package installs at all — but check items 1–4 first.
 
 Once it installs, the failure modes move to launch and `mugen.log` — see
 "Diagnosing a failure on the console" below.
@@ -964,7 +989,7 @@ the dump tells you which *line*.
 
 | Symptom | Cause and fix |
 |---|---|
-| **`Error 0x8010113D`** installing the VPK | `ScePromoterUtil` refused the package (`0x801011xx`; the console may show it as `C2-12691-9`). See "Verify the copy before installing" for the ordered checks: byte size/SHA-256 of the copy, free space on `ux0:`, a leftover `ux0:app/MSDK00001/`, installing from `ux0:` rather than `uma0:`, and the `--no-data` 2.3 MB VPK as the payload/console discriminator |
+| **`Error 0x8010113D`** installing the VPK | `ScePromoterUtil` refused the package (`0x801011xx`; the console may show it as `C2-12691-9`). First suspect is `sce_sys/` artwork that is not 8-bit indexed — see "The bubble artwork"; then the ordered checks in "Verify the copy before installing" (copy size/SHA-256, free space on `ux0:`, a leftover `ux0:app/MSDK00001/`, installing from `ux0:` rather than `uma0:`) |
 | `VITASDK is not set` | `eval "$(port/psvita/build.sh --env)"`, or pass `-DCMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake` |
 | `arm-vita-eabi/include/SDL/SDL.h not found` | VitaSDK's `sdl` package is missing: `port/psvita/build.sh` reinstalls it with `vdpm`, or by hand `vdpm install sdl` |
 | `libvitaGL.a not found` | `vdpm install vitaGL` (not part of a hand-made base SDK) |

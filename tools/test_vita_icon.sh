@@ -10,15 +10,20 @@
 #
 # Asserts:
 #   1. all three PNGs are produced with the sizes the Vita wants (128x128,
-#      840x500, 280x158), all RGBA;
-#   2. they carry the artwork rather than a blank canvas: the icon is transparent
-#      at the corners and opaque in the middle, the background is opaque
-#      everywhere with the artwork over its own average colour, and the start-up
-#      image is transparent outside the artwork;
+#      840x500, 280x158) and in the **only** format its package validation
+#      accepts: 8-bit palette (colour type 3), non-interlaced. An RGBA asset
+#      packs fine and is then refused by VitaShell on the console with
+#      `Error 0x8010113D`, which is what this gate exists to prevent;
+#   2. they carry the artwork rather than a blank canvas: icon0.png and bg.png
+#      are fully opaque (no tRNS) with the artwork visible against the derived
+#      background colour, and the start-up image is transparent outside the
+#      artwork and opaque at its centre;
 #   3. the committed assets under sce_sys/ are left alone (the build writes into
 #      the build tree, so a git checkout stays clean);
 #   4. with no Python the module falls back to those committed assets and still
-#      sets each variable to a file that exists;
+#      sets each variable to a file that exists -- and those committed files are
+#      the same indexed derivation, so a machine without Python still produces a
+#      VPK the console accepts;
 #   5. a missing .ico falls back the same way.
 #
 # Note on (3): the committed assets are the same derivation, so the generated
@@ -126,21 +131,42 @@ def load(path):
     if data[:8] != b"\x89PNG\r\n\x1a\n":
         raise SystemExit("%s: not a png" % path)
     w, h, depth, ctype = struct.unpack(">IIBB", data[16:26])
-    pos, idat = 8, b""
+    interlace = data[28]
+    plte, trns, idat, pos = None, None, b"", 8
     while pos < len(data):
         (ln,) = struct.unpack(">I", data[pos:pos + 4])
-        kind = data[pos + 4:pos + 8]
-        if kind == b"IDAT":
-            idat += data[pos + 8:pos + 8 + ln]
+        kind, body = data[pos + 4:pos + 8], data[pos + 8:pos + 8 + ln]
+        if kind == b"PLTE":
+            plte = [tuple(body[i:i + 3]) for i in range(0, len(body), 3)]
+        elif kind == b"tRNS":
+            trns = body
+        elif kind == b"IDAT":
+            idat += body
         pos += 12 + ln
     raw = zlib.decompress(idat)
-    stride = w * 4 + 1
-    rows = [raw[i * stride + 1:(i + 1) * stride] for i in range(h)]
-    return w, h, depth, ctype, rows
+    rows = []
+    for y in range(h):
+        if ctype == 3:                       # indexed: the Vita's requirement
+            alpha = [255] * (len(plte) or 1)
+            for i, byte in enumerate(trns or b""):
+                alpha[i] = byte
+            off = y * (w + 1) + 1            # our writer emits filter 0 only
+            row = []
+            for x in range(w):
+                idx = raw[off + x]
+                rgb = plte[idx] if plte and idx < len(plte) else (0, 0, 0)
+                row.append(rgb + (alpha[idx] if idx < len(alpha) else 255,))
+        elif ctype == 6:                     # RGBA, which the Vita rejects
+            off = y * (w * 4 + 1) + 1
+            row = [tuple(raw[off + x * 4:off + x * 4 + 4]) for x in range(w)]
+        else:
+            raise SystemExit("unsupported colour type %d in %s" % (ctype, path))
+        rows.append(row)
+    return w, h, depth, ctype, interlace, trns is not None, rows
 
 
 def pixel(rows, x, y):
-    return tuple(rows[y][x * 4:x * 4 + 4])
+    return rows[y][x]
 
 
 src_w, src_h, src = iconpack.decode_dib(iconpack.read_ico(ico)[0][3])
@@ -150,46 +176,60 @@ if not any(p[3] > 0 for row in src for p in row):
 problems = []
 notes = []
 
-# --- the bubble icon: 128x128, artwork with transparent corners --------------
-w, h, depth, ctype, rows = load(icon_png)
-if (w, h, depth, ctype) != (128, 128, 8, 6):
-    problems.append("icon0.png header is %dx%d depth %d type %d" % (w, h, depth, ctype))
-for x, y in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)):
-    if pixel(rows, x, y)[3] != 0:
-        problems.append("icon0.png corner %d,%d is not transparent" % (x, y))
-if pixel(rows, w // 2, h // 2)[3] != 255:
-    problems.append("icon0.png centre is not opaque")
-opaque = sum(1 for y in range(h) for x in range(w) if pixel(rows, x, y)[3] > 0)
-notes.append("icon0 %dx%d, %.0f%% opaque" % (w, h, 100.0 * opaque / (w * h)))
+# --- the bubble icon: 128x128, indexed, opaque ------------------------------
+w, h, depth, ctype, interlace, has_trns, rows = load(icon_png)
+if (w, h) != (128, 128):
+    problems.append("icon0.png is %dx%d" % (w, h))
+if ctype != 3 or depth != 8 or interlace != 0:
+    problems.append("icon0.png header is depth %d type %d interlace %d (want 8/3/0)"
+                    % (depth, ctype, interlace))
+if has_trns:
+    problems.append("icon0.png carries a tRNS chunk; the icon must be opaque")
+if any(pixel(rows, x, y)[3] != 255 for y in range(h) for x in range(w)):
+    problems.append("icon0.png is not fully opaque")
+corner = pixel(rows, 0, 0)
+centre = pixel(rows, w // 2, h // 2)
+if corner[:3] == centre[:3]:
+    problems.append("icon0.png has no artwork in the middle (same colour as the surround)")
+notes.append("icon0 %dx%d, opaque, surround #%02x%02x%02x" % (w, h, corner[0], corner[1], corner[2]))
 
-# --- the LiveArea background: 840x500, opaque field with the artwork ---------
-w, h, depth, ctype, rows = load(bg_png)
-if (w, h, depth, ctype) != (840, 500, 8, 6):
-    problems.append("bg.png header is %dx%d depth %d type %d" % (w, h, depth, ctype))
+# --- the LiveArea background: 840x500, indexed, opaque ----------------------
+w, h, depth, ctype, interlace, has_trns, rows = load(bg_png)
+if (w, h) != (840, 500):
+    problems.append("bg.png is %dx%d" % (w, h))
+if ctype != 3 or depth != 8 or interlace != 0:
+    problems.append("bg.png header is depth %d type %d interlace %d (want 8/3/0)"
+                    % (depth, ctype, interlace))
+if has_trns:
+    problems.append("bg.png carries a tRNS chunk; the background must be opaque")
 corner = pixel(rows, 0, 0)
 if corner[3] != 255:
     problems.append("bg.png is not opaque at the corner (alpha %d)" % corner[3])
 if corner[:3] in ((0, 0, 0), (255, 255, 255)):
     problems.append("bg.png background is %s, so it did not come from the artwork's colour"
                     % ("black" if corner[:3] == (0, 0, 0) else "white"))
-centre = pixel(rows, w // 2, h // 2)
-if centre[:3] == corner[:3]:
+if pixel(rows, w // 2, h // 2)[:3] == corner[:3]:
     problems.append("bg.png has no artwork in the middle (same colour as the background)")
 # The logo must stay inside the middle half: nothing of it in the far corners.
 if pixel(rows, 5, 5)[:3] != corner[:3]:
     problems.append("bg.png artwork bleeds into the top-left corner")
-notes.append("bg %dx%d, background #%02x%02x%02x" % (w, h, corner[0], corner[1], corner[2]))
+notes.append("bg %dx%d, opaque, #%02x%02x%02x" % (w, h, corner[0], corner[1], corner[2]))
 
-# --- the start-up image: 280x158, transparent outside the artwork -----------
-w, h, depth, ctype, rows = load(startup_png)
-if (w, h, depth, ctype) != (280, 158, 8, 6):
-    problems.append("startup.png header is %dx%d depth %d type %d" % (w, h, depth, ctype))
+# --- the start-up image: 280x158, indexed, transparency allowed -------------
+w, h, depth, ctype, interlace, has_trns, rows = load(startup_png)
+if (w, h) != (280, 158):
+    problems.append("startup.png is %dx%d" % (w, h))
+if ctype != 3 or depth != 8 or interlace != 0:
+    problems.append("startup.png header is depth %d type %d interlace %d (want 8/3/0)"
+                    % (depth, ctype, interlace))
+if not has_trns:
+    problems.append("startup.png has no tRNS chunk, so its transparency was lost")
 for x, y in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)):
     if pixel(rows, x, y)[3] != 0:
         problems.append("startup.png corner %d,%d is not transparent" % (x, y))
 if pixel(rows, w // 2, h // 2)[3] != 255:
     problems.append("startup.png centre is not opaque")
-notes.append("startup %dx%d" % (w, h))
+notes.append("startup %dx%d, transparent frame" % (w, h))
 
 print("; ".join(notes) + ("" if not problems else " | " + "; ".join(problems)))
 raise SystemExit(1 if problems else 0)
