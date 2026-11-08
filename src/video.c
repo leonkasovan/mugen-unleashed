@@ -632,20 +632,38 @@ void Video_HandleFullscreenKey(int *key)
     g = g_game;
     g->fullscreen = g->fullscreen == 0;
     Log_Printf("Fullscreen toggle %i\n", g->fullscreen);
-    if (g_renderMode != RENDER_OPENGL || (g_videoFlags & VIDEO_FULLSCREEN)) {
-        return;
-    }
-    if (!Video_SetFullscreen(g_game->fullscreen)) {
+    /*
+     * Port fix: the original switches the window only for the OpenGL renderer,
+     * and only when the mode was not *started* full screen. Both restrictions
+     * are DirectDraw history -- the System renderer ran exclusive full screen,
+     * so there was no window to give back, and a full-screen start never
+     * captured a window rectangle to restore.
+     *
+     * Under SDL both renderers present through the same window and
+     * Video_SetFullscreen keeps the geometry itself, so the same call works in
+     * every combination. Refusing them made Alt+Enter appear dead with
+     * RenderMode=System, and with FullScreen=1 at start, which was reported as
+     * a bug.
+     */
+    if (!Video_SetFullscreen(g->fullscreen)) {
         return;
     }
     mode = g_renderMode;
     g = g_game;
     *key = 0;
+    /* The rest of the engine asks this flag what the window is now: the BGM
+     * background mode below, the resizable path and the system.c full-screen
+     * check all read it, and it used to keep its start-up value forever. */
+    if (g->fullscreen) {
+        g_videoFlags |= VIDEO_FULLSCREEN;
+    } else {
+        g_videoFlags &= ~VIDEO_FULLSCREEN;
+    }
     if (mode == RENDER_OPENGL || mode == RENDER_OPENGL_SCREEN) {
         g_glScreenResized = 1;
-        if (g_bgmInitialized) {
-            g_bgmBackgroundMode = (g_videoFlags & VIDEO_FULLSCREEN) ? 0 : g->bgm_background_mode;
-        }
+    }
+    if (g_bgmInitialized) {
+        g_bgmBackgroundMode = (g_videoFlags & VIDEO_FULLSCREEN) ? 0 : g->bgm_background_mode;
     }
     g->frame_skip_count = 0;
     g->skip_draw = 0;
@@ -690,6 +708,25 @@ int Video_SetFullscreen(int fullscreen)
 #endif
     if (g_videoFullscreen == fullscreen) {
         return 1;
+    }
+    if (!fullscreen &&
+        (g_savedWindowRect.right <= g_savedWindowRect.left ||
+         g_savedWindowRect.bottom <= g_savedWindowRect.top)) {
+        /*
+         * Port fix: the window was *created* full screen, so this function was
+         * never asked to enter it and has no rectangle to restore -- the old
+         * path then called SetWindowPos with an all-zero rect. SDL remembers
+         * the window geometry it created, so let it do the switch.
+         */
+#ifdef MUGEN_SDL2
+        if (g_screenSurface == NULL || !Sdl2_ToggleFullScreen(g_screenSurface)) {
+            return 0;
+        }
+        g_videoFullscreen = 0;
+        return 1;
+#else
+        return 0;
+#endif
     }
     if (fullscreen) {
         HMONITOR monitor;

@@ -945,6 +945,18 @@ int Sdlmix_Init(const BgmPluginConfig *config, const BgmHostCallbacks *host, Bgm
     g_sdlmixVolumes[SDLMIX_TYPE_MP3] = Sdlmix_ReadVolume(settings, "mp3volume", &scratch);
     g_sdlmixVolumes[SDLMIX_TYPE_MIDI] = Sdlmix_ReadVolume(settings, "midivolume", &scratch);
     g_sdlmixVolumes[SDLMIX_TYPE_OGG] = Sdlmix_ReadVolume(settings, "oggvolume", &scratch);
+    /*
+     * Port addition: the per-format volumes decide whether a track is audible
+     * at all, and one of them reading 0 is silence with no other symptom. The
+     * shipped mugen.cfg carries an *empty* `midivolume =`, and Sdlmix_ReadVolume
+     * keeps the original's quirk of treating that as "the value the scratch
+     * variable already holds" -- 0 here -- so MIDI was muted by a config line
+     * that looks like "not set". Printed once, at init.
+     */
+    Log_Printf("bgm: volumes mod=%g wav=%g mp3=%g midi=%g ogg=%g (percent)\n",
+               g_sdlmixVolumes[SDLMIX_TYPE_MOD], g_sdlmixVolumes[SDLMIX_TYPE_WAV],
+               g_sdlmixVolumes[SDLMIX_TYPE_MP3], g_sdlmixVolumes[SDLMIX_TYPE_MIDI],
+               g_sdlmixVolumes[SDLMIX_TYPE_OGG]);
     g_sdlmixFormat = config->format;
     return 0;
 }
@@ -1071,7 +1083,20 @@ int Sdlmix_Open(void *instance, const BgmPluginIo *io, BgmInfo *info, BgmOpenRes
 #if !defined(ANDROID_PORT) && !defined(MUGEN_SDL2_API)
         Sdlmix_DropRwops();
 #endif
+        /* Port addition: the original reports the refusal to the BGM thread and
+         * nothing else, so a file the decoder cannot open is silence with no
+         * explanation. Name it, with the decoder's own reason. */
+        Log_Printf("bgm: sdlmix cannot decode %s (%s)\n", info->path, Mix_GetError());
         return 4;
+    }
+    /* Port addition: MIDI is the one music type SDL_mixer does *not* decode
+     * into the mixer's stream -- it opens the system MIDI device and plays
+     * through that instead, so a machine without a synthesizer (no Microsoft GS
+     * Wavetable Synth, a bare VM, most non-Windows desktops) plays it in total
+     * silence while every call below succeeds. Say so once per track. */
+    if (Mix_GetMusicType(inst->music) == MUS_MID) {
+        Log_Printf("bgm: %s is MIDI; SDL_mixer plays it through the system MIDI "
+                   "device, not through the audio stream\n", info->path);
     }
     inst->loop = info->loop;
     inst->loop_start = info->loop_start;
@@ -1124,7 +1149,13 @@ int Sdlmix_Start(void *instance)
      * Desktop path passed 1, playing a non-looping track twice. -1 is still
      * "loop forever".
      */
-    Mix_PlayMusic(inst->music, inst->loop == 0 ? 0 : -1);
+    if (Mix_PlayMusic(inst->music, inst->loop == 0 ? 0 : -1) < 0) {
+        /* Port addition: the result was dropped, so a track that loaded but
+         * would not start was another silent no-op. */
+        Log_Printf("bgm: sdlmix could not start the track (%s)\n", Mix_GetError());
+        Mix_HookMusicFinished(NULL);
+        return 3;
+    }
     Mix_HookMusicFinished(Sdlmix_OnFinished);
     inst->ended = 0;
 #endif
