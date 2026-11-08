@@ -61,6 +61,39 @@ static SDL_JoystickID test_instance(SDL_Joystick *joy) {return 42;}
 static SDL_JoystickGUID test_guid(SDL_Joystick *joy) {SDL_JoystickGUID g={{0}};return g;}
 static void test_guid_string(SDL_JoystickGUID guid,char *text,int size) {snprintf(text,(size_t)size,"mock-guid");}
 
+static int db_available, db_result, db_opens, db_loads, db_closes;
+static SDL_RWops db_rw;
+static SDL_RWops *test_db_open(const char *path, const char *mode)
+{
+    assert(!strcmp(path, "data/gamecontrollerdb.txt") && !strcmp(mode, "rb"));
+    db_opens++;
+    if (!db_available) { error_text="mock optional database missing"; return NULL; }
+    return &db_rw;
+}
+static int test_db_load(SDL_RWops *rw, int freerw)
+{
+    assert(rw==&db_rw && freerw==1);
+    db_loads++; db_closes++;
+    if (db_result<0) error_text="mock mapping read failure";
+    return db_result;
+}
+static SDL_JoystickGUID test_device_guid(int index) { return test_guid(NULL); }
+static char *test_mapping(SDL_JoystickGUID guid) { return NULL; }
+static int test_add_mapping(const char *mapping) { return 1; }
+#define SDL_RWFromFile test_db_open
+#define SDL_GameControllerAddMappingsFromRW test_db_load
+#define SDL_JoystickGetDeviceGUID test_device_guid
+#define SDL_GameControllerMappingForGUID test_mapping
+#define SDL_GameControllerAddMapping test_add_mapping
+#define SDL_strcasecmp strcmp
+#define SDL_strlen strlen
+#define SDL_strchr strchr
+#define SDL_strncmp strncmp
+#undef SDL_memcpy
+#define SDL_memcpy memcpy
+#define SDL_malloc malloc
+#define SDL_free free
+
 #define SDL_InitSubSystem test_init
 #define SDL_WasInit test_was_init
 #define SDL_QuitSubSystem test_quit
@@ -93,6 +126,7 @@ static void reset(void)
     joy_refs=ctrl_refs=fail_joy=fail_ctrl=devices=pending_devices=0;
     enum_error=open_error=enum_calls=init_calls=close_calls=pumps=0;
     error_text=NULL;messages[0]=0;
+    db_available=db_result=db_opens=db_loads=db_closes=0;
 }
 int main(void)
 {
@@ -104,6 +138,7 @@ int main(void)
     reset();devices=1;fail_ctrl=1;
     assert(Pads_Init()>0 && g_padsActive && g_pads[0].joystick!=NULL);
     assert(joy_refs==1 && ctrl_refs==0 && strstr(messages,"mock controller failure"));
+    assert(db_opens==0);
     Input_DeinitPads();assert(joy_refs==0 && ctrl_refs==0 && close_calls==1);
     reset();devices=1;fail_joy=1;
     assert(!Pads_Init() && g_padCount==0 && !g_padsActive && enum_calls==0);
@@ -121,6 +156,17 @@ int main(void)
     assert(!Pads_Init() && !g_padsActive && strstr(messages,"mock open failure"));
     reset();pending_devices=1;
     assert(Pads_Init()>0 && pumps>0 && g_padsActive);
+    reset();
+    db_available=1;db_result=3;
+    assert(!Pads_Init() && db_opens==1 && db_loads==1 && db_closes==1);
+    assert(!Pads_Init() && db_opens==1); /* no repeated I/O without teardown */
+    Input_DeinitPads();
+    assert(!Pads_Init() && db_opens==2 && db_closes==2);
+    reset();db_available=1;db_result=-1;
+    assert(!Pads_Init() && db_loads==1 && db_closes==1);
+    assert(strstr(messages,"mock mapping read failure"));
+    reset();db_available=1;db_result=0;
+    assert(!Pads_Init() && db_closes==1 && strstr(messages,"0 new mappings"));
     reset();
     /* All four slot offsets, independent of host pointer width. No OS driver
      * is involved: only a non-NULL semantic handle enables system controls. */
@@ -149,6 +195,7 @@ int main(void)
     for (slot = 0; slot < PAD_MAX; slot++) assert(!g_padMenuHeld[slot]);
     assert(Pads_MenuAction(~0u, PAD_CONTEXT_MENU) == PAD_MENU_NONE);
     puts("ok: failed controller init preserves raw input; errors, discovery refresh and service ownership pass");
+    puts("ok: optional controller database errors, stream ownership, one load per session and reload pass");
     puts("ok: menu actions decode all slot offsets and consume releases; raw buttons remain ordinary input");
     return 0;
 }

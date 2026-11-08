@@ -22,6 +22,35 @@ void Config_RepublishJoystick(int player);
 /* Port fix: own only the subsystem references acquired here. Options reloads
  * must not increment SDL's refcounts indefinitely or shut down another owner. */
 static Uint32 g_padOwnedSubsystems;
+static int g_padMappingDbChecked;
+
+/* Port addition: optional, game-local SDL2 mappings. Use SDL's file layer so
+ * native Android assets work too. SDL parses platform fields and owns rw. */
+static void Pads_LoadControllerMappings(void)
+{
+    const char *path = "data/gamecontrollerdb.txt";
+    SDL_RWops *rw;
+    int added;
+
+    if (g_padMappingDbChecked ||
+        (SDL_WasInit(SDL_INIT_GAMECONTROLLER) & SDL_INIT_GAMECONTROLLER) == 0) {
+        return;
+    }
+    g_padMappingDbChecked = 1;
+    rw = SDL_RWFromFile(path, "rb");
+    if (rw == NULL) {
+        Log_Printf("pads: optional %s unavailable (%s); keeping SDL mappings\n", path, SDL_GetError());
+        return;
+    }
+    added = SDL_GameControllerAddMappingsFromRW(rw, 1);
+    if (added < 0) {
+        Log_Printf("pads: could not load %s (%s); keeping available SDL mappings\n", path, SDL_GetError());
+    } else {
+        /* SDL's count excludes replacements of an existing GUID. Zero can
+         * mean successful updates, an empty file, or no matching platform. */
+        Log_Printf("pads: loaded %s: %d new mappings (existing entries may be updated)\n", path, added);
+    }
+}
 
 static void Pads_LogDevice(SDL_Joystick *joy, int index)
 {
@@ -81,6 +110,8 @@ static int Pads_InitSdl2(void)
                (SDL_WasInit(SDL_INIT_GAMECONTROLLER) & SDL_INIT_GAMECONTROLLER) != 0);
     SDL_JoystickEventState(SDL_ENABLE);
     if (SDL_WasInit(SDL_INIT_GAMECONTROLLER) & SDL_INIT_GAMECONTROLLER) {
+        /* Load even with no devices, before enumeration and controller opens. */
+        Pads_LoadControllerMappings();
         SDL_GameControllerEventState(SDL_ENABLE);
     }
     /* Pad initialization is on the SDL/video thread. Refresh discovery before
@@ -432,8 +463,8 @@ static const PadCtrlMap pad_ctrl_map[] = {
  * the distribution's own input profiles use (ArkOS ships
  * ~/.config/retroarch/autoconfig/udev/GO-Super Gamepad.cfg: select=12,
  * start=13). Keyed by GUID, so no other pad can be affected, and skipped when
- * the mapping already carries back:/start: -- a newer SDL database, or a user's
- * own mapping, wins over this table.
+ * a field already exists -- a newer SDL database, or a user's own mapping,
+ * wins over this table.
  */
 typedef struct PadMappingFixup {
     const char *guid;
@@ -459,18 +490,37 @@ static const PadMappingFixup pad_mapping_fixups[] = {
 };
 #define PAD_FIXUP_COUNT ((int)(sizeof pad_mapping_fixups / sizeof pad_mapping_fixups[0]))
 
+/* Only binding fields count: neither the GUID nor a controller's name may
+ * masquerade as a key. Match a complete field name, not a substring. */
+static int Pads_MappingHasBinding(const char *mapping, const char *key, size_t len)
+{
+    const char *field = SDL_strchr(mapping, ',');
+    if (field != NULL) field = SDL_strchr(field + 1, ',');
+    while (field != NULL) {
+        field++;
+        if (SDL_strncmp(field, key, len) == 0 && field[len] == ':') return 1;
+        field = SDL_strchr(field, ',');
+    }
+    return 0;
+}
+
 /* Called before SDL_GameControllerOpen: the mapping has to be in place when
  * SDL builds its button table, otherwise the events still never arrive. */
 static void Pads_CompleteControllerMapping(int device_index)
 {
-    SDL_JoystickGUID guid = SDL_JoystickGetDeviceGUID(device_index);
+    SDL_JoystickGUID guid;
     char guidstr[33];
     const char *extra = NULL;
     char *current;
     char *extended;
-    size_t need;
-    int i;
+    size_t need, current_len, extra_len, used;
+    const char *binding;
+    int i, changed = 0;
 
+    /* Hotplug can reach this without an initial Pads_Init (for example when
+     * player joystick preferences were disabled at startup). */
+    Pads_LoadControllerMappings();
+    guid = SDL_JoystickGetDeviceGUID(device_index);
     SDL_JoystickGetGUIDString(guid, guidstr, (int)sizeof guidstr);
     for (i = 0; i < PAD_FIXUP_COUNT; i++) {
         if (SDL_strcasecmp(guidstr, pad_mapping_fixups[i].guid) == 0) {
@@ -486,24 +536,43 @@ static void Pads_CompleteControllerMapping(int device_index)
         Log_Printf("pads: %d has no controller mapping to complete\n", device_index);
         return;
     }
-    /* Logged in full: which mapping is in effect decides everything below, and
-     * a database file in the environment (PortMaster exports
-     * SDL_GAMECONTROLLERCONFIG_FILE) can supply an entry for the same pad that
-     * disagrees with the hardware -- it did here, binding back:/start: to
-     * buttons this model never sends, so the presses produced nothing at all.
-     * A mapping that already carries the keys is therefore overridden, not
-     * trusted: these indices were read off the device itself. */
+    /* Port fix: complete missing fields only. Appending duplicate keys did
+     * not honor user mappings, and depended on SDL's duplicate-key behavior.
+     * Explicit bindings from data/gamecontrollerdb.txt must remain intact. */
     Log_Printf("pads: %d mapping before: %s\n", device_index, current);
-    need = SDL_strlen(current) + SDL_strlen(extra) + 2;
+    current_len = SDL_strlen(current);
+    extra_len = SDL_strlen(extra);
+    if (current_len > SIZE_MAX - extra_len - 2) {
+        SDL_free(current);
+        return;
+    }
+    need = current_len + extra_len + 2;
     extended = (char *)SDL_malloc(need);
     if (extended != NULL) {
-        SDL_snprintf(extended, need, "%s,%s", current, extra);
-        if (SDL_GameControllerAddMapping(extended) < 0) {
+        SDL_memcpy(extended, current, current_len + 1);
+        used = current_len;
+        for (binding = extra; *binding != '\0'; ) {
+            const char *end = SDL_strchr(binding, ',');
+            const char *colon = SDL_strchr(binding, ':');
+            size_t len;
+            if (end == NULL) end = binding + SDL_strlen(binding);
+            len = (size_t)(end - binding);
+            if (colon != NULL && colon < end &&
+                !Pads_MappingHasBinding(extended, binding, (size_t)(colon - binding))) {
+                if (used != 0 && extended[used - 1] != ',') extended[used++] = ',';
+                SDL_memcpy(extended + used, binding, len);
+                used += len;
+                extended[used] = '\0';
+                changed = 1;
+            }
+            binding = *end == ',' ? end + 1 : end;
+        }
+        if (changed && SDL_GameControllerAddMapping(extended) < 0) {
             Log_Printf("pads: %d could not complete the controller mapping: %s\n",
                        device_index, SDL_GetError());
-        } else {
-            Log_Printf("pads: %d controller mapping completed for a pad whose database"
-                       " entry has no system buttons (%s)\n", device_index, extra);
+        } else if (changed) {
+            Log_Printf("pads: %d controller mapping completed with missing system bindings: %s\n",
+                       device_index, extended);
         }
         SDL_free(extended);
     }
@@ -851,6 +920,7 @@ void Input_DeinitPads(void)
     if (g_padOwnedSubsystems & SDL_INIT_GAMECONTROLLER) SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);
     if (g_padOwnedSubsystems & SDL_INIT_JOYSTICK) SDL_QuitSubSystem(SDL_INIT_JOYSTICK);
     g_padOwnedSubsystems = 0;
+    g_padMappingDbChecked = 0;
 #endif
 }
 

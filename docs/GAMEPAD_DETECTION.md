@@ -4,6 +4,51 @@ The win32 and win64 SDL2 builds share `src/pads.c`, the SDL2 event path, and
 the per-player configuration policy in `src/config.c`. Detection does not use
 pointer-sized integer casts or depend on the reconstructed 32-bit `Pad` layout.
 
+## Optional controller mapping database
+
+SDL2 builds load **`data/gamecontrollerdb.txt`**, relative to the game's working
+directory (the same directory that contains `data/mugen.cfg`). For an executable
+run from `install/`, put the file at **`install/data/gamecontrollerdb.txt`**.
+No `mugen.cfg` setting is required. The file is optional and is not downloaded
+or bundled automatically. A maintained database is available from
+[SDL_GameControllerDB](https://github.com/mdqinc/SDL_GameControllerDB/blob/master/gamecontrollerdb.txt).
+
+Use complete SDL2 mapping records with the correct GUID and `platform:` field
+(`Windows`, `Linux`, `Android`, etc.). SDL handles parsing and platform filtering.
+A record for an existing GUID replaces that mapping according to SDL's mapping
+priority rules; it is not a patch containing only changed buttons. Include all
+the controller's desired bindings in a custom record.
+
+The database is checked once per pad initialization session, after the
+controller subsystem is initialized and before controller handles are opened.
+It is loaded even when no device is attached yet. The hotplug path also checks
+it when no initial scan took place. Teardown allows a subsequent session to
+read the file again; restart the game after editing the database for a reliable
+reload. Missing/unreadable files and SDL load failures are logged and do not
+disable ordinary input. Empty files, rejected lines, and entries for other
+platforms are handled by SDL and can add zero mappings.
+
+`Pads_CompleteControllerMapping` now adds **only missing system-control fields**
+for the known handheld GUID. It preserves existing `back`, `start`, `leftstick`
+and `rightstick` fields, including user bindings that differ from the hardcoded
+fallback. It no longer appends duplicate fields or relies on duplicate-key
+precedence. If an external database contains incorrect bindings, correct its
+complete GUID record in the local database instead of relying on a forced
+hardware fixup to replace existing fields.
+
+The log reports the file path and SDL's **new mapping** count. A result of zero
+can still mean that existing GUID entries were updated successfully. This
+feature supplies semantic mappings for devices SDL can enumerate; it cannot
+make a device appear when `SDL_NumJoysticks()` is zero.
+
+`tools/test_controller_db.sh` exercises the real SDL parser, virtual joysticks,
+startup/hotplug, platform filtering, reload and fixup precedence. Set
+`TEST_PLATFORM=android` for the native Android compile path on the host.
+The mock pad suite additionally checks stream closure, load failure, and one
+read per session on 32-bit and 64-bit hosts. These tests do not verify Windows
+drivers, Android asset packaging, or physical handheld hardware. SDL1 is
+unaffected by the database loader.
+
 ## Back and Pause controls
 
 Mapped SDL2 controllers use separate system controls, outside the eleven
