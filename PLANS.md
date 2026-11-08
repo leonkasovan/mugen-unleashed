@@ -748,7 +748,7 @@ the same place) and the console commands, which need key injection.
 | Target | Done when |
 |---|---|
 | win32 | `mugen.log` identical to the original (already true) |
-| win64 | `mugen.log` identical to the win32 build after numeric normalisation (not yet run) |
+| win64 | `mugen.log` identical to the win32 build after numeric normalisation — **met**, see "win32 vs win64, verified" |
 | linux-x64 | `mugen.log` identical to the original **on the numeric lines** — the x87 flags make bit equality the expectation, not a hope |
 | linux-arm64 | runs a full match without crashing; numeric differences enumerated and explained. Exact equality is **not** a goal here |
 
