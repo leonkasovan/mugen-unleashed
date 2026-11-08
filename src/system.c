@@ -162,7 +162,13 @@ void System_Init(void)
         Log_Printf("SDL audio init failed (video is unaffected): %s\n", SDL_GetError());
     }
 #else
+#ifdef MUGEN_SDL2_API
+    /* Port fix: preserve the startup request, but expose a failed optional
+     * subsystem instead of making its rollback look like zero input devices. */
+    if (SDL_Init(0xFFFF) < 0) Log_Printf("SDL startup initialization failed: %s\n", SDL_GetError());
+#else
     SDL_Init(0xFFFF);
+#endif
 #endif
     g_libraryError = LIBERR_NONE;
     g_unused505200 = 0;

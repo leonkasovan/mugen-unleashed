@@ -885,6 +885,14 @@ void Config_ApplyJoystickSlot(int player)
     }
     jk = g_game->joy_keys[player];
 
+    /* Port fix: both raw joysticks and mapped controllers can arrive after
+     * Input_InitPads disabled runtime input for an empty startup slot. Restore
+     * the configured preference only when this slot actually has a device. */
+    if (g_pads[player].joystick != NULL && g_game->joystick_type[player] != 0 && !g_game->nojoy) {
+        g_game->use_joystick[player] = 1;
+        g_game->force_feedback = g_game->use_joystick[0] || g_game->use_joystick[1];
+    }
+
     if (!Pads_SlotUsesController(player)) {
         /*
          * No controller in this slot: the raw [P<n> Joystick] codes are the
@@ -899,20 +907,6 @@ void Config_ApplyJoystickSlot(int player)
         Log_Printf("config: P%d has no game controller; raw [P%d Joystick] bindings in force\n",
                    player + 1, player + 1);
         return;
-    }
-
-    /*
-     * use_joystick is runtime state, not the preference: Input_InitPads clears
-     * it when no pad can be opened at start-up. The preference is
-     * joystick_type, read from the cfg (and written by the options screen). A
-     * controller plugged in later must be usable without restarting, so the
-     * slot is re-enabled here -- otherwise the semantic bindings were
-     * configured but never published: a pad-less start-up reported
-     * enabled=0, configured=5, active=13 for button A and pressed nothing.
-     */
-    if (g_game->joystick_type[player] != 0 && !g_game->nojoy) {
-        g_game->use_joystick[player] = 1;
-        g_game->force_feedback = g_game->use_joystick[0] || g_game->use_joystick[1];
     }
 
     cfg = g_cfgGamepadKeys[player];

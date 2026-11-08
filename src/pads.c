@@ -18,6 +18,78 @@
 void Config_RepublishJoystick(int player);
 #endif
 
+#ifdef MUGEN_SDL2_API
+/* Port fix: own only the subsystem references acquired here. Options reloads
+ * must not increment SDL's refcounts indefinitely or shut down another owner. */
+static Uint32 g_padOwnedSubsystems;
+
+static void Pads_LogDevice(SDL_Joystick *joy, int index)
+{
+    char guid[33];
+    const char *name = SDL_JoystickName(joy);
+    SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(joy), guid, sizeof(guid));
+    Log_Printf("pads: device %d name=\"%s\" instance=%d guid=%s mapped=%d\n", index,
+               name != NULL ? name : "(unnamed)", (int)SDL_JoystickInstanceID(joy),
+               guid, (int)SDL_IsGameController(index));
+}
+
+static void Pads_LogSdl2(void)
+{
+    static int version_logged;
+    static const char *const hints[] = {
+        "SDL_XINPUT_ENABLED", "SDL_DIRECTINPUT_ENABLED", "SDL_JOYSTICK_HIDAPI",
+        "SDL_JOYSTICK_RAWINPUT", "SDL_JOYSTICK_WGI", "SDL_GAMECONTROLLER_IGNORE_DEVICES",
+        "SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT"
+    };
+    int i;
+    if (!version_logged) {
+        SDL_version linked;
+        SDL_GetVersion(&linked);
+        Log_Printf("pads: SDL runtime %u.%u.%u, headers %u.%u.%u, ABI %u-bit, revision %s\n",
+                   (unsigned)linked.major, (unsigned)linked.minor, (unsigned)linked.patch,
+                   (unsigned)SDL_MAJOR_VERSION, (unsigned)SDL_MINOR_VERSION, (unsigned)SDL_PATCHLEVEL,
+                   (unsigned)(sizeof(void *) * 8), SDL_GetRevision());
+        version_logged = 1;
+    }
+    for (i = 0; i < (int)(sizeof(hints) / sizeof(hints[0])); i++) {
+        const char *value = SDL_GetHint(hints[i]);
+        Log_Printf("pads: hint %s=%s\n", hints[i], value != NULL ? value : "(default)");
+    }
+}
+
+static int Pads_InitSdl2(void)
+{
+    Pads_LogSdl2();
+    /* Initialize raw enumeration independently. A failed controller service
+     * must not roll back an otherwise usable joystick service. */
+    if ((SDL_WasInit(SDL_INIT_JOYSTICK) & SDL_INIT_JOYSTICK) == 0) {
+        if (SDL_InitSubSystem(SDL_INIT_JOYSTICK) < 0) {
+            Log_Printf("pads: joystick init failed: %s\n", SDL_GetError());
+            return 0;
+        }
+        g_padOwnedSubsystems |= SDL_INIT_JOYSTICK;
+    }
+    if ((SDL_WasInit(SDL_INIT_GAMECONTROLLER) & SDL_INIT_GAMECONTROLLER) == 0) {
+        if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) < 0) {
+            Log_Printf("pads: controller init failed: %s; raw joystick input remains available\n", SDL_GetError());
+        } else {
+            g_padOwnedSubsystems |= SDL_INIT_GAMECONTROLLER;
+        }
+    }
+    Log_Printf("pads: subsystems joystick=%d controller=%d\n",
+               (SDL_WasInit(SDL_INIT_JOYSTICK) & SDL_INIT_JOYSTICK) != 0,
+               (SDL_WasInit(SDL_INIT_GAMECONTROLLER) & SDL_INIT_GAMECONTROLLER) != 0);
+    SDL_JoystickEventState(SDL_ENABLE);
+    if (SDL_WasInit(SDL_INIT_GAMECONTROLLER) & SDL_INIT_GAMECONTROLLER) {
+        SDL_GameControllerEventState(SDL_ENABLE);
+    }
+    /* Pad initialization is on the SDL/video thread. Refresh discovery before
+     * the first count without consuming queued hotplug or keyboard events. */
+    SDL_PumpEvents();
+    return 1;
+}
+#endif
+
 /* Axis values beyond this press the axis' button. */
 #define PAD_AXIS_THRESHOLD 16000
 
@@ -40,18 +112,22 @@ int Pads_Init(void)
     int i;
 
 #ifdef MUGEN_SDL2_API
-    /*
-     * SDL2: the joystick and game-controller subsystems are separate services
-     * and SDL_NumJoysticks/SDL_JoystickOpen return 0 with "Joystick system not
-     * initialized" unless SDL_INIT_JOYSTICK was requested. SDL 1.2 folded them
-     * into SDL_INIT_VIDEO, which is why the original never had to ask. The
-     * request goes here, at the one place that opens joysticks, so the
-     * reconstructed SDL_Init calls elsewhere stay as they are.
-     */
-    SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER);
+    if (!Pads_InitSdl2()) {
+        g_padCount = 0;
+        g_padsActive = 0;
+        return 0;
+    }
 #endif
 
     g_padCount = SDL_NumJoysticks();
+#ifdef MUGEN_SDL2_API
+    if (g_padCount < 0) {
+        Log_Printf("pads: joystick enumeration failed: %s\n", SDL_GetError());
+        g_padCount = 0;
+        g_padsActive = 0;
+        return 0;
+    }
+#endif
     /*
      * Diagnostic (port addition): how many devices SDL reports, and what each
      * one looks like. Without this the only evidence was "Initializing pads...
@@ -70,6 +146,7 @@ int Pads_Init(void)
          * ignores events while g_padsActive is 0, and the add event is what
          * sets it.
          */
+        Log_Printf("pads: input initialized, no devices enumerated; check SDL backend/driver visibility\n");
         SDL_JoystickEventState(SDL_ENABLE);
         g_padsActive = 0;
         g_padCount = 0;
@@ -89,11 +166,15 @@ int Pads_Init(void)
         int count;
 
         if (joy == NULL) {
+#ifdef MUGEN_SDL2_API
+            Log_Printf("pads: SDL_JoystickOpen(%d) failed: %s\n", i, SDL_GetError());
+#endif
             continue;
         }
         /* Port fix: SDL1 names a device index; SDL2 names an open handle. */
 #ifdef MUGEN_SDL2_API
         name = SDL_JoystickName(joy);
+        Pads_LogDevice(joy, i);
 #else
         name = SDL_JoystickName(i);
 #endif
@@ -612,6 +693,11 @@ void Input_DeinitPads(void)
     }
     g_padsActive = 0;
     g_padCount = 0;
+#ifdef MUGEN_SDL2_API
+    if (g_padOwnedSubsystems & SDL_INIT_GAMECONTROLLER) SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);
+    if (g_padOwnedSubsystems & SDL_INIT_JOYSTICK) SDL_QuitSubSystem(SDL_INIT_JOYSTICK);
+    g_padOwnedSubsystems = 0;
+#endif
 }
 
 /* 0x00474750: reports a button change (code = pad * PAD_BUTTONS + button). */
@@ -997,6 +1083,7 @@ void Pads_DeviceEvent(const SDL_Event *event)
     }
     id = SDL_JoystickGetDeviceInstanceID(event->jdevice.which);
     if (id < 0) {
+        Log_Printf("pads: hotplug device %d identity failed: %s\n", event->jdevice.which, SDL_GetError());
         return;
     }
     for (i = 0; i < PAD_MAX; i++) {
@@ -1007,9 +1094,15 @@ void Pads_DeviceEvent(const SDL_Event *event)
             slot = i;
         }
     }
-    if (slot < 0 || (joystick = SDL_JoystickOpen(event->jdevice.which)) == NULL) {
+    if (slot < 0) {
         return;
     }
+    joystick = SDL_JoystickOpen(event->jdevice.which);
+    if (joystick == NULL) {
+        Log_Printf("pads: SDL_JoystickOpen(%d) failed during hotplug: %s\n", event->jdevice.which, SDL_GetError());
+        return;
+    }
+    Pads_LogDevice(joystick, event->jdevice.which);
     pad = &g_pads[slot];
     pad->joystick = joystick;
 #ifdef MUGEN_GAMEPAD_POLICY
@@ -1027,6 +1120,12 @@ void Pads_DeviceEvent(const SDL_Event *event)
     }
     g_padsActive = 1;
     SDL_JoystickEventState(SDL_ENABLE);
+#ifdef MUGEN_GAMEPAD_POLICY
+    /* A generic joystick may have no controller mapping. It still needs its
+     * configured raw bindings published after a pad-less startup. */
+    if (!Pads_SlotUsesController(slot)) Config_RepublishJoystick(slot);
+#endif
+    Log_Printf("pads: attached device %d to slot %d, instance=%d\n", event->jdevice.which, slot, (int)id);
 }
 #endif
 

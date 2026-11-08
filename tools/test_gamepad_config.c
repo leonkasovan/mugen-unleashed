@@ -1,5 +1,5 @@
 /*
- * Regression test for the Android key menu -> cfg -> reload/hotplug path.
+ * Regression test for the SDL2 key menu -> cfg -> reload/hotplug path.
  * Runs the production KeyConfig_Run, Options_Save/Load and SDL virtual pads.
  * Rendering, timing and the input-map rebuild are stubbed at their boundaries.
  */
@@ -235,6 +235,25 @@ int main(int argc, char **argv)
 
     original = read_config();
     Options_Load();
+    if (!strcmp(argv[1], "late-raw")) {
+        /* The initial scan disabled runtime input because no device existed.
+         * A later generic joystick must re-enable its saved raw bindings. */
+        assert(!Pads_Init());
+        /* Input_InitPads is stubbed for the menu harness: reproduce its
+         * documented no-device result at this boundary. */
+        game.use_joystick[0] = game.use_joystick[1] = 0;
+        memset(game.joy_keys_active, 0, sizeof(game.joy_keys_active));
+        add_pad(0, 0);
+        assert(game.use_joystick[0] && game.joystick_type[0]);
+        assert(game.joy_keys[0][KEY_A] == 13 && game.joy_keys_active[0][KEY_A] == 13);
+        remove_pad(0);
+        Input_DeinitPads();
+        SDL_Quit();
+        free(original);
+        assert(map_rebuilds > 0);
+        puts("gamepad cfg: late raw joystick is detected and its bindings become active");
+        return 0;
+    }
     add_pad(0, 1);
     add_pad(1, !raw_p2);
     if (!strcmp(argv[1], "reload")) {

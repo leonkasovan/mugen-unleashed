@@ -8,6 +8,10 @@ GCC, as an alternative to the CMake/MSVC build (`CMakeLists.txt`,
 Everything third-party is either compiled from source in `third_party/` or
 linked statically from `C:\x86devkit`.
 
+For SDL2 controllers missing in either Windows architecture, see
+[GAMEPAD_DETECTION.md](GAMEPAD_DETECTION.md) for diagnostics and regression
+coverage.
+
 The instructions below are for the environment this project was verified in:
 
 | Tool | Verified with |

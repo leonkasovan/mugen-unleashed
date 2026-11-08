@@ -1,12 +1,18 @@
 #!/bin/sh
-# Run the Android gamepad key menu and cfg persistence with SDL virtual pads.
+# Run the SDL2 gamepad key menu and cfg persistence with virtual pads.
+# TEST_PLATFORM=desktop also exercises the Windows/Linux SDL2 compile path.
 # Supports native Linux and MinGW via CC/CFLAGS and the selected pkg-config.
 set -eu
 cd "$(dirname "$0")/.."
 
 CC="${CC:-cc}"
 PKG_CONFIG="${PKG_CONFIG:-pkg-config}"
-OUT="$PWD/build/gamepad-config-test"
+OUT="${OUT:-$PWD/build/gamepad-config-test}"
+case "${TEST_PLATFORM:-android}" in
+    android) PLATFORM_DEFS="-DANDROID_PORT -DMUGEN_ANDROID_SW"; PLATFORM_SRCS="" ;;
+    desktop) PLATFORM_DEFS="-DMUGEN_SDL2"; PLATFORM_SRCS="src/sdl2compat.c" ;;
+    *) echo "TEST_PLATFORM must be android or desktop" >&2; exit 2 ;;
+esac
 mkdir -p "$OUT/tmp"
 export TMPDIR="$OUT/tmp"
 
@@ -15,13 +21,13 @@ SDL_LIBS="${SDL_LIBS:-$("$PKG_CONFIG" --libs sdl2 zlib | sed 's/-lSDL2main//g; s
 # Flags are intentionally split so CC can carry a compiler/target wrapper.
 # shellcheck disable=SC2086
 $CC ${CFLAGS:-} -std=gnu11 -O1 -g -UNDEBUG -Werror=implicit-function-declaration \
-    -DANDROID_PORT -DMUGEN_ANDROID_SW -DSDL_MAIN_HANDLED \
+    $PLATFORM_DEFS -DSDL_MAIN_HANDLED \
     -ffunction-sections -fdata-sections \
     -Isrc -Iport/android/app/src/main/jni/src \
     -Ithird_party/glad-2.1 -Ithird_party/minizip-0.15 \
     -Ithird_party/libpng-1.2.38 -Ithird_party/lua-5.1.4/src \
     -Ithird_party/libresample/include $SDL_CFLAGS \
-    tools/test_gamepad_config.c src/config.c src/title.c src/ini.c src/stream.c \
+    $PLATFORM_SRCS tools/test_gamepad_config.c src/config.c src/title.c src/ini.c src/stream.c \
     src/file.c src/util.c src/compat_linux.c src/pads.c src/sdl2keys.c src/globals.c \
     third_party/minizip-0.15/unzip.c -Wl,--gc-sections \
     ${LDFLAGS:-} $SDL_LIBS -lm -o "$OUT/test_gamepad_config"
@@ -78,7 +84,7 @@ A = 5 ; keep this inline comment
 [P2 Gamepad]
 A = 5
 """
-for scenario in ("lf", "crlf", "mixed", "missing", "missing-p1", "missing-p2"):
+for scenario in ("lf", "crlf", "mixed", "missing", "missing-p1", "missing-p2", "late-raw"):
     groups = "" if scenario == "missing" else partial_groups
     if scenario == "missing-p1":
         groups = "\n[P2 Gamepad]\nA = 5\n"
@@ -93,7 +99,7 @@ for scenario in ("lf", "crlf", "mixed", "missing", "missing-p1", "missing-p2"):
     cfg.write_bytes(data)
 PY
 
-for scenario in lf crlf mixed missing missing-p1 missing-p2; do
+for scenario in lf crlf mixed missing missing-p1 missing-p2 late-raw; do
     (cd "$OUT/$scenario" && "$OUT/test_gamepad_config" "$scenario")
 done
 # A second process reads the saved mappings without any in-memory tables.
@@ -104,7 +110,7 @@ from pathlib import Path
 import sys
 
 out = Path(sys.argv[1])
-for scenario in ("lf", "crlf", "mixed", "missing", "missing-p1", "missing-p2"):
+for scenario in ("lf", "crlf", "mixed", "missing", "missing-p1", "missing-p2", "late-raw"):
     data = (out / scenario / "data" / "mugen.cfg").read_bytes()
     assert data.count(b"[P1 Gamepad]") == 1
     assert data.count(b"[P2 Gamepad]") == 1
