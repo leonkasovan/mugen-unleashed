@@ -759,6 +759,16 @@ int Screen_ReadInput(ScreenLoop *screen)
     if (g->safe_mode == 0) {
         Video_HandleFullscreenKey(&screen->key);
         g = g_game;
+    } else {
+        /* Port addition: safe mode skips the full-screen handler outright,
+         * which is one more way for Alt+Enter to do nothing without leaving a
+         * trace anywhere. Say it once. */
+        static int logged_safe;
+
+        if (!logged_safe) {
+            logged_safe = 1;
+            Log_Printf("fullscreen key: not handled, the game is in safe mode\n");
+        }
     }
     g->key_codes.write = 0;
     g->key_codes.read = 0;

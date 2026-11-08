@@ -623,6 +623,26 @@ void Video_HandleFullscreenKey(int *key)
      * the engine's own value; events.c converts every key to that numbering.
      */
 
+    /*
+     * Port addition: Alt+Enter doing nothing gives no way to tell whether the
+     * Enter arrived, whether Alt was seen at that moment, or whether this ran at
+     * all -- the two early returns below are silent. Log the first few candidate
+     * presses (Enter, or any key while Alt is held) with the state that decides
+     * them.
+     */
+    {
+        static int logged;
+
+        if (logged < 8 &&
+            (*key == SDLK_RETURN || g_keyState[ENGINE_KEY_LALT] ||
+             g_keyState[ENGINE_KEY_RALT])) {
+            logged++;
+            Log_Printf("fullscreen key: key=%d (%s) altL=%d altR=%d fullscreen=%d\n",
+                       *key, *key == SDLK_RETURN ? "Enter" : "other",
+                       g_keyState[ENGINE_KEY_LALT], g_keyState[ENGINE_KEY_RALT],
+                       g_game != NULL ? g_game->fullscreen : -1);
+        }
+    }
     if (!g_keyState[ENGINE_KEY_LALT] && !g_keyState[ENGINE_KEY_RALT]) {
         return;
     }
