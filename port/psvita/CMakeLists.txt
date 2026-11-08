@@ -255,33 +255,19 @@ set(MUGEN_VITA_MEMSIZE "0" CACHE STRING
 #
 # The renderer written into the packed data/mugen.cfg.
 #
-# OpenGL is the only sane choice on the Vita: the System (software) renderer
-# draws to a 16-bit surface in main memory and the CPU blits the whole frame
-# through SceDisplay every frame, whereas the OpenGL path draws through
-# vitaGL/SceGxm. A desktop mugen.cfg may say `system` (that is the engine's own
-# default), so it is rewritten rather than trusted.
-#
-# `system` is still accepted, for isolating a GL problem; see README.md.
-# Default to the System (software) renderer, because VitaSDK's SDL 1.2 has no
-# OpenGL support: its Vita video driver (SDL_vitavideo.o) is a SceGxm 2D blitter
-# that references no GL context API and never calls vglInit, so SDL_OPENGL
-# yields a surface with no context and Gl_Init cannot start. The System renderer
-# needs only a surface to blit to, which is exactly what that driver provides.
-#
-# The engine also falls back to System automatically if a requested GL renderer
-# fails (see System_Init), so `opengl` here is safe to try -- it just costs a
-# failed attempt on every launch. Set it if you build SDL 1.2 with vitaGL
-# support yourself.
+# System remains the default pending hardware qualification of the native
+# vitaGL display and explicit-attribute sprite path. An OpenGL request bypasses
+# SDL's separate SceGxm video driver; see src/vita_video.c. A failure after GL
+# ownership exits, since the pinned vitaGL has no context teardown API.
 set(MUGEN_VITA_RENDERMODE "system" CACHE STRING
     "RenderMode written into the packed data/mugen.cfg (system | opengl | openglscreen)")
 
 # ------------------------------------------------------------- vitaGL (opt) --
 #
 # Vendored vitaGL built with the flags the OpenGL renderer would need. Off by
-# default: the software renderer is the shipping path, and the OpenGL renderer
-# still cannot run on this stack (see README.md, "The OpenGL renderer"). Turning
-# this on compiles and links the library so the remaining work can be done, but
-# it does not by itself give a working renderer.
+# default: the native path uses standard 2D palettes, explicit MVP and vertex
+# attributes, so it does not need the optional legacy compatibility flags.
+# Kept as a source-build option for diagnostics and future vitaGL changes.
 option(MUGEN_VITA_BUILD_VITAGL
        "Build the vendored vitaGL (needed only for the OpenGL renderer work)" OFF)
 
@@ -354,6 +340,7 @@ set(MUGEN_VITA_FORCE_INCLUDE -include "${MUGEN_SRC}/compat_linux.h")
 add_executable(mugen
   ${MUGEN_ENGINE_SOURCES}
   src/vita_gl_shim.c
+  src/vita_video.c
   src/vita_caps.c
   src/vita_fps.c
   src/vita_newlib.c
@@ -459,7 +446,12 @@ foreach(_extra IN LISTS MUGEN_VITA_PKGCONFIG_DIRS)
   endif()
 endforeach()
 list(REMOVE_DUPLICATES MUGEN_VITA_PC_DIRS)
-set(ENV{PKG_CONFIG_LIBDIR} "${MUGEN_VITA_PC_DIRS}")
+if(CMAKE_HOST_WIN32)
+  set(ENV{PKG_CONFIG_LIBDIR} "${MUGEN_VITA_PC_DIRS}")
+else()
+  list(JOIN MUGEN_VITA_PC_DIRS ":" _mugen_pc_path)
+  set(ENV{PKG_CONFIG_LIBDIR} "${_mugen_pc_path}")
+endif()
 set(ENV{PKG_CONFIG_PATH} "")
 set(ENV{PKG_CONFIG_SYSROOT_DIR} "")
 
@@ -971,6 +963,10 @@ add_custom_command(
   COMMAND ${VITA_PACK_VPK} ${_mugen_vpk_args} ${MUGEN_VITA_VPK}
   DEPENDS ${MUGEN_VITA_SFO} ${MUGEN_VITA_EBOOT} mugen-psvita.self
           ${MUGEN_VITA_ICON_PNG} ${MUGEN_VITA_BG_PNG} ${MUGEN_VITA_STARTUP_PNG}
+          ${MUGEN_VITA_CFG_OUT}
+          "${MUGEN_VITA_SCE_SYS}/livearea/contents/template.xml"
+          ${MUGEN_VITA_SHADER_indexed.vert} ${MUGEN_VITA_SHADER_indexed.frag}
+          ${MUGEN_VITA_SHADER_rgba.vert} ${MUGEN_VITA_SHADER_rgba.frag}
   COMMENT "Building mugen-psvita.vpk"
   VERBATIM)
 

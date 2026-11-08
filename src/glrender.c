@@ -40,6 +40,7 @@
 static void Glr_ForgetFormat(const GlTex *tex);
 static int *Glr_FormatSlot(const GlTex *tex);
 static void Glr_FreeProgram(GlProgram *prog);
+static int Glr_LogObject(unsigned int obj, int is_shader);
 static unsigned int g_attachedTexture, g_attachedDepth;
 
 /* Port fix: reject unsafe payloads and impossible storage before touching GL. */
@@ -401,11 +402,21 @@ int GlTex_Upload1D(GlTex *tex, int width, const void *pixels)
     glPixelStorei(GL_PACK_ALIGNMENT, 4);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
     Glr_ClearErrors();
+#ifdef MUGEN_VITA_GL
+    /* Port fix: stored and streamed palettes both match the Vita 2D sampler. */
+    glBindTexture(GL_TEXTURE_2D, tex->id);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GLR_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GLR_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+#else
     glBindTexture(GL_TEXTURE_1D, tex->id);
     glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_WRAP_S, GLR_CLAMP_TO_EDGE);
     glTexImage1D(GL_TEXTURE_1D, 0, GL_RGBA, width, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+#endif
     err = Glr_LastError();
     if (err == GL_NO_ERROR) {
         Glr_AddMemory(tex, Gl_TexBytes((unsigned int)width, GL_RGBA));
@@ -702,7 +713,17 @@ int Gl_Init(int framebuffers)
     }
     glViewport(0, 0, w, h);
     if (framebuffers == 1) {
+#ifdef MUGEN_VITA_GL
+        /* Port fix: desktop calibration uses legacy shader built-ins and
+         * immediate mode. Vita's explicit attributes use pixel-aligned quads
+         * and normalized indices; do not run incompatible calibration. */
+        g_glOffsetX = g_glOffsetY = 0.0f;
+        g_glPalOffset = g_glRgbaOffsetX = g_glRgbaOffsetY = 0.0f;
+        g_glIndexMode = 0;
+        Log_Printf("GL: explicit Vita quad path, standard index sampling\n");
+#else
         Gl_DetectOffsets();
+#endif
         if (!Gl_LoadShaders()) {
             MatchLog_Printf(3, "GL: Could not load shaders.\n");
             goto fail;
@@ -887,6 +908,7 @@ static void Glr_SetUniforms(const GlProgram *prog, const PalFx *fx, const GlrFx 
  * The four corners of a quad with texture coordinates; stretched quads use
  * projective coordinates for the bottom edge.
  */
+#ifndef MUGEN_VITA_GL
 static void Glr_QuadVertices(const float *v, const DrawParams *dp, float c0, float c1, int special)
 {
     if (!special) {
@@ -920,6 +942,7 @@ static void Glr_QuadVertices(const float *v, const DrawParams *dp, float c0, flo
     }
     glVertex2f(v[6], v[7]);
 }
+#endif
 
 /* Uses a program unless it is current. */
 static void Glr_UseProgram(unsigned int program)
@@ -957,9 +980,13 @@ void Gl_DrawQuadRgba(const PalFx *fx, GlTex *tex, float x0, float y0, float x1, 
     if (prog->program != 0) {
         Glr_SetUniforms(prog, fx, &t, tex, dp, mask);
     }
+#ifdef MUGEN_VITA_GL
+    VitaGl_DrawQuad(prog->program, v, special, c0, c1, dp);
+#else
     glBegin(GL_TRIANGLE_STRIP);
     Glr_QuadVertices(v, dp, c0, c1, special);
     glEnd();
+#endif
     glDisable(GL_TEXTURE_2D);
 }
 
@@ -984,13 +1011,21 @@ void Gl_DrawQuadIndexed(const PalFx *fx, GlTex *tex, GlTex *pal, float x0, float
     glBindTexture(GL_TEXTURE_2D, tex->id);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, special ? GL_REPEAT : GL_CLAMP);
     g_glewActiveTexture(GLR_TEXTURE1);
+#ifdef MUGEN_VITA_GL
+    glBindTexture(GL_TEXTURE_2D, pal->id);
+#else
     glBindTexture(GL_TEXTURE_1D, pal->id);
+#endif
     if (prog->program != 0) {
         Glr_SetUniforms(prog, fx, &t, tex, dp, mask);
     }
+#ifdef MUGEN_VITA_GL
+    VitaGl_DrawQuad(prog->program, v, special, c0, c1, dp);
+#else
     glBegin(GL_TRIANGLE_STRIP);
     Glr_QuadVertices(v, dp, c0, c1, special);
     glEnd();
+#endif
 }
 
 /* -1 for a set flip bit, 1 otherwise. */
@@ -1104,7 +1139,13 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
 
     if (blended) {
         glEnable(GL_BLEND);
+#ifdef MUGEN_VITA_GL
+        /* Port approximation: vitaGL rejects GL_CONSTANT_ALPHA. Use the
+         * documented additive destination instead of retaining stale state. */
+        glBlendFunc(GL_ONE, GL_ONE);
+#else
         glBlendFunc(GL_ONE, GLR_CONSTANT_ALPHA);
+#endif
         g_glewBlendColor(dp->alpha_src, dp->alpha_src, dp->alpha_src, dp->alpha_dst);
         if (blend == BLEND_ADD) {
             double sum;
@@ -1469,7 +1510,12 @@ static unsigned int Glr_CompileShader(unsigned int type, char *src)
         g_glewShaderSource(shader, 1, &p, NULL);
         g_glewCompileShader(shader);
         g_glewGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+#ifdef MUGEN_VITA_GL
+        /* Vita shader and program integers occupy separate namespaces. */
+        Glr_LogObject(shader, 1);
+#else
         Gl_LogInfo(shader);
+#endif
     }
     free(src);
     if (!compiled) {
@@ -1522,8 +1568,20 @@ int Gl_LoadShader(const char **defines, GlProgram *prog, const char *name)
     g_glewAttachShader(built.program, built.frag);
     g_glewLinkProgram(built.program);
     g_glewGetProgramiv(built.program, GL_LINK_STATUS, &linked);
+#ifdef MUGEN_VITA_GL
+    Glr_LogObject(built.program, 0);
+#else
     Gl_LogInfo(built.program);
+#endif
     if (!linked) goto fail;
+#ifdef MUGEN_VITA_GL
+    if (glGetAttribLocation(built.program, "aPosition") < 0 ||
+        glGetAttribLocation(built.program, "aTexCoord") < 0 ||
+        glGetUniformLocation(built.program, "uMvp") < 0) {
+        Log_Printf("GL: %s is missing the Vita vertex interface\n", name);
+        goto fail;
+    }
+#endif
 #define GLR_UNIFORM(field) built.field = g_glewGetUniformLocation(built.program, #field)
     GLR_UNIFORM(texunit0); GLR_UNIFORM(texunit1); GLR_UNIFORM(mask);
     GLR_UNIFORM(add); GLR_UNIFORM(mul); GLR_UNIFORM(invertall);
@@ -1533,6 +1591,9 @@ int Gl_LoadShader(const char **defines, GlProgram *prog, const char *name)
     *prog = built;
     return 1;
 fail:
+#ifdef MUGEN_VITA_GL
+    Log_Printf("GL: shader family %s failed (%s)\n", name, path);
+#endif
     Glr_FreeProgram(&built);
     return 0;
 }
@@ -1597,19 +1658,15 @@ int Gl_FreeShaders(void)
     return 1;
 }
 
-/*
- * 0x0047CAF0: writes the info log of a shader or program to the match log.
- * Quirk: the original leaves the log size uninitialised (stack garbage) when
- * obj is neither a shader nor a program; here it is 0 then.
- */
-int Gl_LogInfo(unsigned int obj)
+/* Reads a log using a known object class (Vita namespaces can overlap). */
+static int Glr_LogObject(unsigned int obj, int is_shader)
 {
     int size = 0;
     int len = 0;
     char *log;
 
     if (obj == 0) return 0;
-    if (g_glewIsShader(obj)) {
+    if (is_shader) {
         g_glewGetShaderiv(obj, GLR_INFO_LOG_LENGTH, &size);
     } else {
         g_glewGetProgramiv(obj, GLR_INFO_LOG_LENGTH, &size);
@@ -1619,16 +1676,29 @@ int Gl_LogInfo(unsigned int obj)
     if (log == NULL) {
         return 0;
     }
-    if (g_glewIsShader(obj)) {
+    if (is_shader) {
         g_glewGetShaderInfoLog(obj, size, &len, log);
     } else {
         g_glewGetProgramInfoLog(obj, size, &len, log);
     }
     if (len > 0) {
         MatchLog_Printf(7, "%s\n", log);
+#ifdef MUGEN_VITA_GL
+        Log_Printf("GL: %s log: %s\n", is_shader ? "shader" : "program", log);
+#endif
     }
     free(log);
     return 1;
+}
+
+/*
+ * 0x0047CAF0: writes the info log of a shader or program to the match log.
+ * Quirk: the original leaves the log size uninitialised (stack garbage) when
+ * obj is neither a shader nor a program; here it is 0 then.
+ */
+int Gl_LogInfo(unsigned int obj)
+{
+    return Glr_LogObject(obj, obj != 0 && g_glewIsShader(obj));
 }
 
 /* 0x0047CBA0: the rest of f as a malloc'ed string; closes f. */

@@ -14,8 +14,8 @@
  *  2. sampler1D -> sampler2D, and texture1D(t, x) -> texture2D(t, vec2(x, 0.5)).
  *     The glsl_translator_hdr.h shim provides texture2D/textureCube/texture2DProj
  *     and nothing 1D, and the only sampler kinds vitaGL knows are 2D and cube.
- *     The 0.5 row coordinate samples the centre of the single row that
- *     glTexImage1D creates when vitaGL is built with UNPURE_TEXFORMATS.
+ *     The 0.5 row coordinate samples the centre of the single-row 2D
+ *     palette uploaded by the native Vita renderer.
  *
  *  3. #version 120 is dropped. vitaGL comments the directive out itself, so
  *     leaving it would be harmless; removing it keeps the file honest about

@@ -11,11 +11,9 @@
  *   3. src/glrender.c reads glad's feature flags (GLAD_GL_VERSION_2_0 and the
  *      per-extension flags) to decide whether the driver can run the renderer.
  *
- * None of that exists on the Vita. There is no libGL and no loader: VitaSDK's
- * SDL 1.2 OpenGL driver sits on **vitaGL**, which implements the GL 1.x/2.1
- * fixed-function pipeline over SceGxm and links its entry points directly into
- * the executable. So the entry points are resolved at link time and there is
- * nothing for glad to load.
+ * The Vita has no desktop loader. vita_video.c initializes vitaGL directly
+ * before this probe runs; SDL's separate 2D driver does not create that
+ * context. GL entry points are resolved at link time.
  *
  * What this file provides, therefore, is the third step only:
  *
@@ -38,10 +36,7 @@
  */
 #include <string.h>
 
-/* vitaGL's declarations; SDL.h pulls the same header through SDL_opengl.h. */
-#include <SDL.h>
-#include <SDL_opengl.h>
-
+/* mugen.h supplies vitaGL before SDL, and the owned-context interface. */
 #include "mugen.h"
 #include "vita_gl_shim.h"
 #include "vita_caps.h"
@@ -261,6 +256,10 @@ int VitaGl_Probe(void)
     MugenVitaCaps caps;
     int ok;
 
+    if (!VitaGl_HasContext()) {
+        Log_Printf("GL: no owned vitaGL context; probe rejected\n");
+        return 0;
+    }
     version = (const char *)glGetString(GL_VERSION);
     extensions = (const char *)glGetString(GL_EXTENSIONS);
 

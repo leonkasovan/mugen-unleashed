@@ -9,8 +9,8 @@
  *   gles (default): res/shaders/gles, the GLSL ES 1.00 dialect the Android
  *                   renderer loads from data/gles/.
  *   vita:           res/shaders/vita, the vitaGL dialect. Same four file
- *                   names; it supplies gl_ModelViewProjectionMatrix instead
- *                   of a u_mvp uniform and uses its own attribute/varying
+ *                   names; it supplies a uMvp uniform instead of u_mvp
+ *                   and uses its own attribute/varying
  *                   spelling, and vitaGL does not require a precision
  *                   statement in the fragment shader.
  */
@@ -40,13 +40,13 @@ static const Dialect gles_dialect = {
 };
 
 static const Dialect vita_dialect = {
-    "vita",
-    "attribute vec4 aPosition",
-    "attribute vec4 aTexCoord",
-    "varying vec4 vTexCoord",
-    "gl_ModelViewProjectionMatrix",
-    0,
-    0
+    .name = "vita",
+    .position = "attribute vec4 aPosition",
+    .texcoord = "attribute vec4 aTexCoord",
+    .varying = "varying vec4 vTexCoord",
+    .matrix = "uniform mat4 uMvp",
+    .needs_precision = 0,
+    .forbids_ffp_matrix = 1
 };
 
 static int failures;

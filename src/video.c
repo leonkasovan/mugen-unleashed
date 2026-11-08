@@ -162,6 +162,10 @@ int Video_Deinit(void)
     if (g_unusedSurface2 != NULL) {
         SDL_FreeSurface(g_unusedSurface2);
     }
+#ifdef MUGEN_VITA_GL
+    VitaGl_ReleaseDisplay();
+    g_videoSurface = g_screenSurface = NULL;
+#endif
     if (g_videoScratch != NULL) {
         free(g_videoScratch);
     }
@@ -243,6 +247,26 @@ int Video_SetMode(int game_width, int game_height, int width, int height, int de
     g_screenSurface = NULL;
     g_unused504230 = 0;
     g_unused504234 = 0;
+#ifdef MUGEN_VITA_GL
+    /* Port fix: SDL's Vita surface is not a vitaGL context. Own GL creation
+     * and presentation directly, without starting SDL's separate GXM driver. */
+    if (g_renderMode == RENDER_OPENGL || g_renderMode == RENDER_OPENGL_SCREEN) {
+        surface = VitaGl_CreateDisplay(sdl_width, sdl_height, depth);
+        if (surface == NULL) {
+            Log_Printf("video: VitaGL display failed: %s\n", SDL_GetError());
+            g_libraryError = LIBERR_VIDEO_MODE;
+            return 0;
+        }
+        sdl_flags = SDL_OPENGL | SDL_DOUBLEBUF | SDL_FULLSCREEN;
+        g_videoSurface = surface;
+        goto vita_surface_ready;
+    }
+    if (VitaGl_OwnsDisplay()) {
+        Log_Printf("video: restart required to switch from vitaGL to System\n");
+        g_libraryError = LIBERR_VIDEO_MODE;
+        return 0;
+    }
+#endif
 #ifdef ANDROID_PORT
     /*
      * M8: with the GLES backend compiled in, the GL modes get the GL window and
@@ -348,59 +372,10 @@ android_surface_ready:
     }
 #endif
 #ifdef MUGEN_VITA_GL
-    /*
-     * PS Vita port (port/psvita): a failed SDL_SetVideoMode is fatal here.
-     *
-     * Quirk of the original: the OpenGL paths do not check for a NULL surface
-     * (see the comment above Video_SetMode), so the engine carries on to
-     * Gl_Init with no GL context. On Windows and Linux that is survivable --
-     * the driver returns something and the glGetString calls report "no
-     * context" in the match log. On the Vita it is a hard crash (C2-12828-1)
-     * before the first frame, because glGetString has no context to read from.
-     *
-     * This is a port fix, not a fidelity change: it only converts an
-     * unrecoverable crash into the engine's normal failure path, which logs
-     * LIBERR_VIDEO_MODE and shows the error dialog. Windows and Linux keep the
-     * original behaviour unchanged.
-     */
+    /* The SDL presenter is used only by System on this platform. */
     if (surface == NULL) {
-        /*
-         * The Vita's SDL 1.2 GL driver accepts a narrower set of surface flags
-         * than the desktop drivers the engine was written for, and the flag
-         * combination the engine builds (HWSURFACE|HWACCEL, plus DOUBLEBUF and
-         * FULLSCREEN here) is not guaranteed to be one of them. Rather than
-         * abandon start-up over a surface hint, degrade one flag at a time and
-         * record which combination the driver took, together with the driver's
-         * own reason for each rejection.
-         *
-         * Every attempt keeps SDL_OPENGL and the 960x544 size, which are the
-         * two things vitaGL genuinely requires.
-         */
-        static const Uint32 k_drop[] = {
-            SDL_DOUBLEBUF,                       /* not all drivers honour it */
-            SDL_HWSURFACE | SDL_HWACCEL,         /* meaningless for a GL surface */
-            SDL_FULLSCREEN                        /* the panel is filled regardless */
-        };
-        Uint32 attempt = sdl_flags;
-        size_t k;
-
-        Log_Printf("video: %ix%ix%i flags 0x%X refused (%s)\n", sdl_width, sdl_height, depth, (unsigned)attempt,
-                   SDL_GetError());
-        for (k = 0; k < sizeof(k_drop) / sizeof(k_drop[0]) && surface == NULL; k++) {
-            attempt &= ~k_drop[k];
-            surface = SDL_SetVideoMode(sdl_width, sdl_height, depth, attempt);
-            g_videoSurface = surface;
-            if (surface != NULL) {
-                sdl_flags = attempt;
-                Log_Printf("video: driver accepted flags 0x%X\n", (unsigned)attempt);
-            } else {
-                Log_Printf("video: flags 0x%X refused (%s)\n", (unsigned)attempt, SDL_GetError());
-            }
-        }
-        if (surface == NULL) {
-            g_libraryError = LIBERR_VIDEO_MODE;
-            return 0;
-        }
+        g_libraryError = LIBERR_VIDEO_MODE;
+        return 0;
     }
 #else
     if (surface == NULL && g_renderMode != RENDER_OPENGL && g_renderMode != RENDER_OPENGL_SCREEN) {
@@ -426,6 +401,9 @@ android_surface_ready:
 
 #endif
 #endif /* ANDROID_PORT */
+#ifdef MUGEN_VITA_GL
+vita_surface_ready:
+#endif
     g_videoGameWidth = game_width;
     g_videoGameHeight = game_height;
     g_videoGamePixels = game_width * game_height;

@@ -9,11 +9,12 @@
 
 attribute vec4 aPosition;
 attribute vec4 aTexCoord;
+uniform mat4 uMvp;
 
 varying vec4 vTexCoord;
 
 void main()
 {
   vTexCoord = aTexCoord;
-  gl_Position = gl_ModelViewProjectionMatrix * aPosition;
+  gl_Position = uMvp * aPosition;
 }

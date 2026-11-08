@@ -335,24 +335,14 @@ void System_Init(void)
                        g->video_flags)) {
         Log_Printf("failed. ");
 #ifdef MUGEN_VITA_GL
-        /*
-         * PS Vita port (port/psvita): fall back to the software renderer
-         * instead of giving up.
-         *
-         * VitaSDK's SDL 1.2 has no OpenGL support: its Vita video driver
-         * (SDL_vitavideo.o) is a SceGxm 2D blitter that references no GL
-         * context API at all -- not vitaGL, not egl, nothing. SDL_OPENGL
-         * therefore yields a surface but no context, so Gl_Init's
-         * glGetString calls get NULL and the renderer cannot start. On the
-         * desktop a failure here means the machine genuinely cannot render;
-         * on the Vita it means the requested renderer is not available and a
-         * working one is.
-         *
-         * The System renderer needs nothing but an SDL surface to blit to,
-         * which is exactly what this video driver provides. config.c forces
-         * depth 16 and takes the game size for the System renderer, so those
-         * are mirrored here.
-         */
+        /* Port fix: vitaGL has process-lifetime GXM ownership. Starting SDL's
+         * GXM renderer after a partial GL startup would create a second owner. */
+        if (VitaGl_OwnsDisplay()) {
+            Log_Printf("VitaGL startup failed; exiting without a second GXM owner.\n");
+            Error_Exit();
+        }
+        /* A failure before vitaGL owns GXM (for example metadata allocation
+         * or unsupported mode) can still use SDL's System presenter. */
         if (g_renderMode != RENDER_SYSTEM) {
             Log_Printf("Falling back to the system renderer. ");
             g_renderMode = RENDER_SYSTEM;

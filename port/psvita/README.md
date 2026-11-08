@@ -218,13 +218,9 @@ FullScreen = 1          ; was 0
 
 The values above are what the build actually packs: `MUGEN_VITA_VIDEO_WIDTH`
 (480), `MUGEN_VITA_VIDEO_HEIGHT` (272), `MUGEN_VITA_FULLSCREEN` (ON) and
-`MUGEN_VITA_RENDERMODE` (`system`). Do not set `RenderMode = OpenGL` in a
-normal build: VitaSDK's SDL 1.2 has no GL support — its Vita video driver
-(`SDL_vitavideo.o`) is a SceGxm 2D blitter with no context API — and
-`src/system.c` falls back to `RENDER_SYSTEM` when the GL surface has no
-context. An `OpenGL` value in the packed config only costs a failed attempt on
-every launch. See "The OpenGL renderer" below for what `opengl` actually
-requires and what is still unimplemented.
+`MUGEN_VITA_RENDERMODE` (`system`). `RenderMode = OpenGL` now selects the native vitaGL display and
+programmable sprite path described below; SDL's separate video presenter is
+bypassed. System remains the default pending hardware qualification.
 
 `GameWidth`/`GameHeight` matter most. vitaGL has exactly **one** framebuffer —
 the Vita's 960x544 — and the engine asks for a GL surface of `GameWidth x
@@ -1053,289 +1049,92 @@ This is the number to quote when reporting a performance problem. The 10-second
 window is deliberate: a shorter one is dominated by loading hitches and menu
 transitions that say nothing about match performance.
 
-## The OpenGL renderer: why it is off, and what turning it on would take
+## The OpenGL renderer — native vitaGL display and shader quads
 
-The Vita build runs the **System (software)** renderer at 640x480. That is a
-per-pixel palette lookup and blend into an RGB565 surface on the ARM core
-(`SoftSprite_Blit` in `src/softrender.c`), which is the frame-rate ceiling on
-this hardware. The OpenGL renderer in `src/glrender.c` is fully implemented and
-already in the tree -- it just cannot get a context from VitaSDK's SDL 1.2.
+`RenderMode = OpenGL` now uses a display owned by the engine through
+`port/psvita/src/vita_video.c`. SDL remains responsible for events, input,
+audio and the System renderer. It does not create or swap the OpenGL display.
+The default remains System until the new path has been checked on hardware.
 
-Findings from reading the relevant sources, recorded because the obvious
-conclusion ("use the SDL-Vita `sdl12_gl` fork") is wrong:
+The supplied `mugen(2).log` stopped just after the FBO probe. Its matching
+core dump (`psp2core-1794169543-0x0001372211-eboot.bin.psp2dmp`) has a data
+abort in `SceGxm` with `r0 = 0`, fault address `0x1f0`, and a return address
+in the viewport path. SDL had supplied a surface, but vitaGL had never been
+initialized. `glGetString` and an FBO completeness result were not proof of a
+live GXM context.
 
-### VitaSDK's SDL 1.2 has no OpenGL
+### Implementation
 
-`SDL_vitavideo.o` in `libSDL.a` references no GL context API and never calls
-`vglInit`; `SDL_config_vita.h` defines no `SDL_VIDEO_OPENGL`, so
-`SDL_SetVideoMode(..., SDL_OPENGL)` cannot succeed. This is stock SDL 1.2 with a
-2D-only Vita backend.
-
-### The SDL-Vita `sdl12_gl` fork does not help either
-
-[Rinnegatamante/SDL-Vita](https://github.com/Rinnegatamante/SDL-Vita) branch
-`sdl12_gl` is SDL 1.2.15, and `sdl12_gl` is its default branch -- but the name
-means "2D blitter rewritten on top of vitaGL", not "SDL_OPENGL supported". The
-Vita driver is `src/video/psp2/SDL_psp2video.c`, which calls
-`vglInitExtended(...)` for its own blitting and contains **no** reference to
-`SDL_OPENGL`, `GL_SwapBuffers`, `GL_SetAttribute` or `gl_config`.
-`include/SDL_config_psp2.h` defines no `SDL_VIDEO_OPENGL`, so SDL's own
-`SDL_SetVideoMode` returns NULL with "OpenGL not available" before the driver is
-reached. (The `src/video/vgl/` directory there is the FreeBSD libVGL console
-driver, unrelated to vitaGL.)
-
-### What vitaGL itself provides
-
-`libvitaGL.a` has the fixed-function path this engine uses --
-`glBegin`/`glVertex2f`/`glTexSubImage2D`/`glUseProgram` -- plus a GLSL
-translator (`glsl_translator_process`) and framebuffer objects. Against the
-engine's four `Gl_Init` gates:
-
-| Gate | vitaGL | Verdict |
-|---|---|---|
-| GL >= 2.0 | `GL_VERSION` = `"OpenGL ES 2.0 VitaGL"` | string is not "N.M", so the probe's parse reads 0 |
-| `ARB_texture_non_power_of_two` | not advertised; `GL_OES_texture_npot` is | different name, same capability |
-| `EXT_framebuffer_object` | advertised | pass |
-| `ARB_fragment_program` | **not implemented** | but the engine never uses it |
-
-That last row is the important one: the engine checks for
-`ARB_fragment_program` because GLEW-era code did, while
-`data/indexed.frag` and `data/rgba.frag` are plain **GLSL `#version 120`**. The
-gate does not describe what the engine actually uses. `ARB_fragment_program`
-would only be needed by a driver without fragment shaders.
-
-Also absent from vitaGL and already shimmed in `port/psvita/src/vita_gl_shim.c`:
-`glBlendColor` (so constant-alpha blending is lost -- sprites using it blend
-additively), `glMultiTexCoord4f`, `glIsShader` and `glLogicOp`. Getting a context
-also needs `vglInitExtended` called directly, since SDL will not do it.
-
-### The 1D texture blocker, and the vitaGL build flags that fix it
-
-The engine draws every sprite through an **indexing shader**: SFF v1 sprites are
-8-bit palettised, so `data/indexed.frag` looks the pixel index up in a palette
-texture. `src/glrender.c` binds that palette as a **1D** texture:
-
-```c
-glBindTexture(GL_TEXTURE_1D, tex->id);
-glTexImage1D(GL_TEXTURE_1D, 0, GL_RGBA, width, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-```
-
-In VitaSDK's **stock** `libvitaGL.a` both are empty stubs:
-
-```
-00002aa4 <glTexImage1D>:
-    2aa4:	bx	lr          <- returns immediately
-```
-
-and vitaGL itself says why, in `source/textures.c`:
-
-```c
-#ifndef HAVE_UNPURE_TEXFORMATS
-	vgl_log("GL_TEXTURE_1D support is disabled. Compile vitaGL with "
-	        "UNPURE_TEXFORMATS=1 to enable it.\n");
-```
-
-So this is a **build-time** switch, not a missing feature. Rebuilding vitaGL
-with `UNPURE_TEXFORMATS=1` makes the call real:
-
-```c
-glTexImage2D(GL_TEXTURE_1D, level, internalFormat, width, 1, border, format, type, data);
-```
-
-(a 1D texture becomes a 1-pixel-high 2D texture), and `glTexImage1D` then
-compiles to an actual implementation instead of `bx lr`. **Verified by building
-it here:** `make UNPURE_TEXFORMATS=1 TEXTURES_SPEEDHACK=1` produces
-`libvitaGL.a`, and `glTexImage1D` in it is ~200 bytes of real code.
-
-### Every vitaGL build flag, against what this engine needs
-
-The engine's GL feature set, read from `src/glrender.c`/`gldetect.c`/`prim.c`:
-two texture units (`glActiveTexture` + `glBindTexture` to `GL_TEXTURE0` and
-`GL_TEXTURE1`), GLSL 1.20 shaders, immediate mode (`glBegin`/`glVertex2f`),
-`glMatrixMode`/`glOrtho`, `glTexEnvf(GL_REPLACE)`, `GL_CONSTANT_ALPHA`
-blending, `GL_LINES`/`GL_POINTS`, one `glReadPixels`, and 1D textures for
-palettes.
-
-**Required**
-
-| Flag | Why |
+| Component | Current path |
 |---|---|
-| `UNPURE_TEXFORMATS=1` | Enables `GL_TEXTURE_1D` -- the palette texture. Without it `glTexImage1D` is an empty stub. |
-| `HAVE_FFP_SHADER_SUPPORT=1` | Provides the GLSL 1.20 matrix built-ins. Confirmed in `custom_shaders.c`: `ffp_bind_names` = `gl_ModelViewProjectionMatrix`, `gl_ModelViewMatrix`, `gl_NormalMatrix`. Without it those are undefined identifiers. Costs a little shader-pipeline speed. |
-| `UNPURE_TEXCOORDS=1` | Makes multitexture legal with unit 0's `GL_TEXTURE_2D` **disabled**. `Gl_DrawQuadIndexed` binds unit 0, binds unit 1, and draws without ever calling `glEnable(GL_TEXTURE_2D)` -- the shader samples, the fixed-function enable state is never set. This is exactly the case the flag legalises. |
+| Context | `vglInitWithCustomSizes` before any GL probe or viewport call; no `SDL_SetVideoMode` in the GL path |
+| Memory | 16 MiB RAM and 64 MiB CDRAM pools; no MSAA; existing newlib heap unchanged |
+| Display size | Requested config dimensions, limited to 960x544; existing defaults unchanged |
+| Present and vsync | `vglSwapBuffers` and `vglWaitVblankStart`, including debug/vsync call sites |
+| Shader quads | Explicit `aPosition` and four-component `aTexCoord`, submitted with `glDrawArrays` |
+| Transform | `uMvp`, uploaded from the projection and modelview matrices; no optional vitaGL FFP shader built-ins |
+| Palette | Ordinary nearest-filtered 2D texture, height 1, for both stored and streamed palettes |
+| Projective Q | Preserved by the shared `GlQuad_Build`/`GlQuad_Interleave` helpers and the existing projective fragment sampling |
+| Calibration | Desktop legacy-shader calibration is bypassed; pixel offsets are zero and index sampling is Standard |
+| Shader errors | Explicit shader/program classification and info logs in `mugen.log`; interface validated after linking |
 
-**Useful**
+The programmable draw path matters: vitaGL's `glBegin`/`glEnd` uses its FFP
+programs and ignores the engine's palette shader. Calling `vglInit` alone
+would avoid the startup fault while still drawing sprites incorrectly.
+Fixed-function primitives retain their existing path. The desktop renderer
+retains its original calibration and immediate-mode sprite submission.
 
-| Flag | Why |
-|---|---|
-| `HAVE_HIGH_FFP_TEXUNITS=1` | More than 2 texunits in the fixed-function path. Not needed (the engine uses exactly 2), harmless. |
-| `TEXTURES_SPEEDHACK=1` | Slightly faster texture binds. Verified compatible; must not be combined with `HAVE_TEXTURE_CACHE=1`. |
-| `HAVE_WVP_ON_GPU=1` | Moves the WVP matrix to the GPU: less CPU work, more GPU. Relevant because this port is CPU-bound. |
-| `LOG_ERRORS=1`, `HAVE_SHARK_LOG=1`, `DEBUG_GLSL_TRANSLATOR=1` | For bringing the shaders up. `DEBUG_GLSL_TRANSLATOR` prints translator input and output, which is the tool for the `gl_TexCoord` problem below. |
+The native sprite path no longer needs `UNPURE_TEXFORMATS`,
+`HAVE_FFP_SHADER_SUPPORT`, or `UNPURE_TEXCOORDS`: it supplies 2D palettes,
+an explicit MVP, and programmable vertex attributes. The optional vendored
+vitaGL build remains available; the prebuilt SDK library is sufficient for
+these interfaces. The runtime shader compiler still needs to be available on
+the device. A shader build failure must be diagnosed from the new log rather
+than treated as a successful OpenGL initialization.
 
-**Deliberately avoided**
-
-| Flag | Why not |
-|---|---|
-| `NO_TEX_COMBINER=1` | Faster FFP, but the engine sets `glTexEnvf(GL_TEXTURE_ENV_MODE, GL_REPLACE)` on the screen-texture path. |
-| `PRIMITIVES_SPEEDHACK=1` | Documented to glitch `GL_LINES`/`GL_POINTS`, and the engine draws both (debug lines, the console cursor). |
-| `SAMPLERS_SPEEDHACK=1` | "May cause glitches" in sampler resolution -- the palette sampler is the one that must be exact. |
-| `MATH_SPEEDHACK=1`, `DRAW_SPEEDHACK=*`, `BUFFERS_SPEEDHACK=1`, `INDICES_*_SPEEDHACK`, `TEXTURE_UPLOADS_SPEEDHACK=1`, `READBACKS_SPEEDHACK=1` | All documented as potentially crashing or glitching. This port needs correctness of the palette lookup more than it needs a few percent. |
-| `ENABLE_LEGACY_PIPELINE=1`, `HAVE_FIXED_ATTRIBUTES=1`, `STORE_DEPTH_STENCIL=1`, `SAFE_ETC1=1`, `HAVE_DISPLAY_LISTS=1` | `ENABLE_LEGACY_PIPELINE` is not in the `Makefile` at all; the rest are irrelevant to this engine. |
-
-A working build line for the flags that are needed:
+### Build and test
 
 ```sh
-make -f Makefile UNPURE_TEXFORMATS=1 HAVE_FFP_SHADER_SUPPORT=1 \
-     UNPURE_TEXCOORDS=1 TEXTURES_SPEEDHACK=1 HAVE_WVP_ON_GPU=1
+cmake -S port/psvita -B build/psvita-gl \
+  -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" \
+  -DMUGEN_VITA_RENDERMODE=opengl \
+  -DMUGEN_VITA_DATA_DIR="$PWD/install"
+cmake --build build/psvita-gl
+bash tools/test_vita_video.sh
 ```
 
-(`UNPURE_TEXFORMATS=1 TEXTURES_SPEEDHACK=1` was built and verified here: the
-resulting `glTexImage1D` is real code, not `bx lr`.)
+Keep `[Misc] Precache = 0` in the configuration used for the hardware test.
+The precache stack issue is separate. The build patches a copy of the selected
+configuration; check `build/psvita-gl/vita-mugen.cfg` before installing.
 
-### What still blocks the GL renderer, after the flags
+A Linux VitaSDK cross build completed through ELF, SELF and VPK. Host tests
+check the actual adapter with mocked calls: creation and allocation failures,
+context ownership, one swap per call, vsync, repeated release, reuse of the
+same context, matrix upload and projective texture coordinates. Existing MVP
+and Vita shader dialect gates pass. They do not execute GXM or the Vita shader
+compiler and do not prove displayed pixels, performance or blending parity.
 
-`UNPURE_TEXFORMATS` fixes the *texture*, not the *shader*. The README is explicit
-that "tex2D is still required in shader code", and vitaGL's GLSL compatibility
-header (`source/shaders/glsl_translator_hdr.h`) provides `texture2D`,
-`texture2DProj`, `texture2DLod`, `textureCube`, `textureCubeLod` -- and **no
-`texture1D` and no `sampler1D`**. The engine's shader uses both:
+Hardware verification remains required: startup, menu/selection, KFM match,
+RGBA and indexed sprites, transparency/PalFX, FBO orientation, screenshot,
+repeated matches and exit. The supplied test VPK preserves the previous
+480x272 config; no resolution change is part of this fix.
 
-```glsl
-uniform sampler1D texunit1;
-...
-vec4 color = texture1D(texunit1, index_correction(idx));
-```
+### Ownership and limitations
 
-So `data/indexed.frag` needs two mechanical edits:
+The pinned vitaGL exposes no public context teardown (`eglTerminate` is a
+no-op). GPU context ownership therefore lasts until process exit. Engine GL
+objects and the metadata surface are released, but switching to SDL's separate
+GXM System driver after GL initialization is rejected. On a GL startup failure
+after ownership, the game logs the failure and exits; select System in the
+config and restart to recover. Reusing the same GL display dimensions is
+supported; changing dimensions requires restart.
 
-1. `sampler1D texunit1` -> `sampler2D texunit1`
-2. `texture1D(texunit1, x)` -> `texture2D(texunit1, vec2(x, 0.5))` (sample the
-   single row's centre)
-
-plus `vglOverrideTexFormat(GL_TEXTURE_1D)` called before compiling, so vitaGL
-routes 1D-bound textures to the 2D slot (`tex2d_override` in
-`custom_shaders.c`; public API, declared in `vitaGL.h`).
-
-### What has been built: the vendored vitaGL
-
-`third_party/vitagl/` holds a **pinned** copy of vitaGL
-(`9bf3e3f`, 2026-10-30, LGPL), and `port/psvita/cmake/VitaGl.cmake` builds it
-through CMake with the three required flags plus `TEXTURES_SPEEDHACK`.
-
-Restore the source (it is not committed — ~2.4 MB) and build the library:
-
-```sh
-tools/psvita/fetch_vitagl.sh
-cmake -S port/psvita -B build/psvita-gl -G Ninja \
-      -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" \
-      -DMUGEN_VITA_BUILD_VITAGL=ON
-cmake --build build/psvita-gl --target vitagl_vita
-```
-
-**Verified:** the build succeeds, and `glTexImage1D` in the result is real code
-— against `bx lr` in VitaSDK's prebuilt library. So `UNPURE_TEXFORMATS` does what
-its description claims.
-
-`MUGEN_VITA_BUILD_VITAGL` is **off by default**. The software renderer remains
-the shipping path: this library is the prerequisite for the OpenGL work, not a
-working renderer by itself, for the reason in the next section.
-
-### The shaders have been rewritten
-
-`res/shaders/vita/` holds vitaGL-compatible versions of all four renderer
-shaders, substituted into the VPK in place of `data/indexed.{vert,frag}` and
-`data/rgba.{vert,frag}`. `install/` stays pristine and the Windows/Linux builds
-keep the originals.
-
-The **PalFX maths is byte-for-byte unchanged** -- add/mul/invertall/colorbal
-order, the `PREMUL` variants and the `INDEX_*` corrections are exactly as
-shipped. Only what vitaGL cannot process was changed:
-
-| Original | Rewritten | Why |
-|---|---|---|
-| `gl_TexCoord[0]` | `varying vec4 vTexCoord` | vitaGL's translator has no handling for `gl_TexCoord` |
-| `gl_MultiTexCoord0` | `attribute vec4 aTexCoord` | same, for `gl_MultiTexCoordN` |
-| `gl_Vertex` | `attribute vec4 aPosition` | same, for `gl_Vertex` |
-| `uniform sampler1D texunit1` | `uniform sampler2D texunit1` | vitaGL knows only 2D and cube samplers |
-| `texture1D(t, x)` | `texture2D(t, vec2(x, 0.5))` | the single row `glTexImage1D` creates under `UNPURE_TEXFORMATS`; `0.5` samples its centre |
-| `#version 120` | dropped | vitaGL comments the directive out itself |
-| `////*EB_DEFINES*////` | **kept** | `Gl_InsertDefines` replaces it with the engine's `#define` block; every variant depends on it |
-
-Verified: the four rewritten files are what the VPK now carries
-(`unzip -p .../mugen-psvita.vpk data/indexed.frag | grep "vitaGL build"`), and the diff
-against the originals is only the lines above.
-
-### The remaining blocker is not the shaders: it is the draw path
-
-Rewriting the shaders is necessary but **not sufficient**, and the reason is in
-vitaGL's source rather than in the shaders:
-
-* `glEnd` (`source/ffp.c`) calls `sceGxmDraw` directly against the legacy vertex
-  pool, using vitaGL's own fixed-function shaders. It contains **no reference to
-  a bound program.**
-* `_glDrawArrays_FixedFunctionIMPL` begins with `reload_ffp_shaders(...)`.
-
-So for `glBegin`/`glEnd` -- which is how `src/glrender.c` draws every sprite --
-vitaGL **ignores `glUseProgram` entirely**. The engine's palette and PalFX
-shaders cannot take effect on that path no matter what the shader text says.
-
-Using them requires the renderer to draw through the *programmable* path instead:
-vertex buffers plus `glVertexAttribPointer`/`glDrawArrays`, so that `aPosition`
-and `aTexCoord` are supplied as named attributes rather than by immediate mode.
-That is a rewrite of `Gl_DrawQuadIndexed`/`Gl_DrawQuadRgba` and the callers in
-`Gl_DrawSprite`, not a shader edit -- and it has to keep the x87 float ordering
-of the quad maths intact, as `PLANS.md` requires.
-
-
-
-Checked against `source/shaders/glsl_translator_hdr.h` and
-`source/utils/glsl_utils.c`, vitaGL's translator handles `gl_VertexID`,
-`gl_FragCoord`, `gl_FragDepth`, `gl_PointCoord`, `gl_PointSize`,
-`gl_FrontColor`, `gl_FrontFacing` and -- with `HAVE_FFP_SHADER_SUPPORT` -- the
-three matrices. It has **no handling at all** for `gl_Vertex`,
-`gl_MultiTexCoord0..n` or `gl_TexCoord[0]`.
-
-The engine's shaders depend on all three:
-
-```glsl
-// indexed.vert
-gl_TexCoord[0] = gl_MultiTexCoord0;
-gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;
-// indexed.frag
-vec4 idxv = texture2D(texunit0, gl_TexCoord[0].st);
-```
-
-The version directive is not an issue -- the translator comments `#version`
-out on purpose. The built-in *names* are the issue. Rewriting these shaders for
-vitaGL therefore means converting them to modern GLSL (`in`/`out` varyings,
-explicit `attribute`/`varying` declarations), not a two-line edit. That is a real
-rewrite of `indexed.vert`, `indexed.frag`, `rgba.vert` and `rgba.frag`, which
-are **game content** shipping with M.U.G.E.N 1.1b1.
-
-### Summary of what the GL path needs
-
-| Item | Effort | State |
-|---|---|---|
-| Custom vitaGL build (`UNPURE_TEXFORMATS`, `HAVE_FFP_SHADER_SUPPORT`, `UNPURE_TEXCOORDS`) | small | flags identified; build verified to work |
-| `vglInitExtended` instead of `SDL_OPENGL`, `vglSwapBuffers` to present | small | not written |
-| Probe: accept `"OpenGL ES 2.0 VitaGL"`, `GL_OES_texture_npot`, drop `ARB_fragment_program` | small | not written |
-| `sampler1D`/`texture1D` -> 2D in `indexed.frag` | small | done in the packaged shaders (`sampler2D`/`texture2D`); draw-path verification open |
-| Rewrite all four shaders for `in`/`out` instead of `gl_TexCoord`/`gl_MultiTexCoord` | **substantial** | written, packaged, runtime verification open |
-| `glBlendColor` absent -> constant-alpha blending becomes additive | accepted loss | documented |
-
-The shader rewrite is done as source (four assets in `res/shaders/vita/`,
-selected at packaging by `port/psvita/CMakeLists.txt`), but it is not verified:
-compiling, linking, drawing actual geometry and reading pixels back on hardware
-are all still open -- present shaders are not proof of working rendering. The
-remaining blocker is the draw path itself (explicit attributes, FBO handling,
-constant-alpha blending, texcoord Q), not the shader text. The rewrite also
-changes shipped game content rather than port code.
-
-Point 1 and 2 change **game content**, not port code -- `data/indexed.frag` ships
-with M.U.G.E.N, so editing it means the VPK carries a modified shader. That is
-acceptable for a port (the file is part of the runtime, not the original binary)
-but it should be stated in the build, and it must not alter the Windows build.
+`OpenGLScreen` is not qualified by this change: its 16-bit display request is
+rejected before vitaGL ownership and follows the existing System fallback.
+The native path here is `RenderMode = OpenGL` (32-bit GL sprite rendering).
+Constant-alpha blend support remains unavailable, and shader/geometry changes
+do not establish parity for those blend modes. Prior rendering crashes and
+calibration differences remain open until their own cases are retested.
 
 ### What was tried instead
 

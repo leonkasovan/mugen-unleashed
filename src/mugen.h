@@ -292,5 +292,8 @@ static inline int Sdl2_putenv_inline(const char *kv)
 #include "spritecodec.h"
 
 #include "symbols.h"
+#ifdef MUGEN_VITA_GL
+#include "vita_video.h"
+#endif
 
 #endif /* MUGEN_H */

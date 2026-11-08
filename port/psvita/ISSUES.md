@@ -423,6 +423,56 @@ menu. Its own log confirmed the driver's report exactly
 
 ---
 
+## OpenGL startup — NULL vitaGL GXM context (hardware retest pending)
+
+`mugen(2).log` reaches the Vita FBO probe and then stops. The supplied dump
+`psp2core-1794169543-0x0001372211-eboot.bin.psp2dmp` establishes:
+
+| Field | Value |
+|---|---|
+| Faulting thread | Main `MSDK00001`, data abort `0x30004` |
+| PC | `0xe006fb5c`, `SceGxm` text + `0xaa2c` |
+| Context argument `r0` | `0` |
+| Data fault address | `0x1f0` |
+| LR | `0x811188a5`, `mugen` text + `0xa18a5` |
+| Main stack | `0x81681000`–`0x816c1000`; SP `0x816c0e80`, inside range |
+| Executable module NID | `0xf3342a59`, matching the uploaded VPK |
+
+Disassembly of that matching SELF and of the shipped `libvitaGL.a` identifies
+the return site in `glViewport`, immediately after the call into GXM using
+vitaGL's uninitialized `gxm_context`. This is separate from the 4 KiB precache
+worker overflow: the user confirmed that `Precache = 0` avoids that earlier
+failure, and this dump crashes during graphics initialization.
+
+**Cause.** SDL's Vita video backend initializes its own GXM presenter on
+`SDL_SetVideoMode`, not vitaGL's context. Static GL version strings and a
+successful FBO attachment check did not qualify the context: the next viewport
+call used a NULL context. Separately, vitaGL's immediate-mode submission uses
+FFP programs, so merely initializing vitaGL would still bypass the engine's
+palette/PalFX shader.
+
+**Source changes.** `vita_video.c` owns native context creation before probing,
+swapping and vsync. SDL's presenter is bypassed for OpenGL. Shader quads use
+explicit attributes and `uMvp`, sharing the tested CPU vertex/matrix helpers
+and preserving Q. Stored and streamed palettes use the same 2D sampler layout.
+Desktop legacy calibration is bypassed on Vita. Shader/program logs use their
+known object classes (their Vita integer IDs can overlap) and reach mugen.log.
+
+The pinned vitaGL has no real public shutdown API. Ownership is process-long;
+a startup failure after ownership logs and exits instead of initializing SDL's
+second GXM driver. Switching from an already active SDL presenter to vitaGL is
+also rejected before initialization. Select the desired renderer and restart.
+
+**Evidence and limits.** A Linux-hosted VitaSDK ARM build produces ELF, SELF
+and VPK. Host adapter tests check normal creation, allocation/init failures,
+conflicting ownership, context reuse, swap/vsync, MVP multiplication and Q
+submission. Mutants removing presentation, reversing MVP order or dropping Q
+fail runtime assertions. The MVP and both shader-dialect gates pass. These
+checks do not run the Vita GPU or runtime shader compiler. Retest startup,
+menus, character selection, indexed/RGBA transparency, PalFX, FBO orientation,
+matches and exit on hardware before closing this issue. Keep `Precache = 0`.
+The old moving rendering fault signatures below have not been reclassified.
+
 ## OPEN — crash in the character preview
 
 **Symptom** Selecting a character, then the standing-animation preview, faults.
