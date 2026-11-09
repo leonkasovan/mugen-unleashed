@@ -15,7 +15,8 @@ uniform sampler2D texunit0;
 uniform bool mask;
 
 uniform vec3 add;
-uniform vec3 mul;
+/* Port fix: Cg reserves mul; the Vita binding uses uPalMul. */
+uniform vec3 uPalMul;
 uniform bool invertall;
 uniform float colorbal;
 uniform float src_alphamul;
@@ -63,9 +64,9 @@ void palfx(inout vec4 color)
 #endif
     
 #if !defined(PREMUL)
-  color.rgb = (color.rgb + add) * mul;
+  color.rgb = (color.rgb + add) * uPalMul;
 #else
-  color.rgb = (color.rgb + color.a * add) * mul;
+  color.rgb = (color.rgb + color.a * add) * uPalMul;
 #endif
   
   //Clamp:Required//color = clamp(color, 0.0, 1.0);

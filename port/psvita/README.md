@@ -1212,6 +1212,33 @@ The earlier generic `0x502` log cannot distinguish invalid contents, a loader
 restriction or another native loading failure. This is a diagnostic improvement,
 not proof that runtime compilation or on-device gameplay now succeeds.
 
+### Hardware diagnostic: compiler loads, but `mul` conflicts with Cg
+
+The standalone diagnostic log `VGL-DIAG-20261109-R1` from the Vita reports a
+successful native load of `ur0:/data/libshacccg.suprx`, loaded module
+`SceShaccCg`, successful minimal vertex/fragment compilation and linking, and
+triangle readback `(25,229,51,255)`. The MUGEN indexed vertex also compiles.
+Its fragment shader fails with `A value with the identifier 'mul' has already
+been declared` and a prior builtin declaration. Both test runs reproduce it.
+This establishes a shader-source problem in that run, rather than a missing
+compiler file. It does not explain the earlier MUGEN executable's vertex
+`0x502` failure by itself.
+
+The Vita indexed and RGBA fragment shaders now name the PalFX multiplier
+`uPalMul`; the `MUGEN_VITA_GL` uniform lookup uses that name. Desktop/GLES
+shaders and uniform names stay as before. Rebuild the executable **and deploy
+the updated Vita shaders together**: changing only the shader or only the
+binding breaks PalFX. The PalFX arithmetic and original struct field remain
+unchanged.
+
+R1 also had a diagnostic bug: a successful kernel framebuffer query returned
+an empty descriptor. It reported a false display failure and wrote a 54-byte,
+0x0 BMP. R2 queries the owned vitaGL surface dimensions, takes the real buffer
+from vitaGL's display callback, validates bounds/pitch before capture, and
+tests all 18 indexed/RGBA shader variants with the engine's defines. R2 and
+full MUGEN gameplay still require on-device verification; the R1 pixel success
+does not qualify all rendering modes or shaders.
+
 ### Build and test
 
 ```sh

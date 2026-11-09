@@ -195,7 +195,18 @@ static void APIENTRY link_program(GLuint p)
 #endif
 static void APIENTRY del_shader(GLuint p) { deleted_shaders++; }
 static void APIENTRY del_program(GLuint p) { deleted_programs++; }
-static GLint APIENTRY uniform_location(GLuint p, const GLchar *name) { return !strcmp(name,"u_color") ? color_location : 1; }
+static GLint APIENTRY uniform_location(GLuint p, const GLchar *name)
+{
+#ifdef TEST_VITA
+    /* A mock must distinguish the Cg-safe uniform from the desktop spelling. */
+    if (!strcmp(name, "mul")) return -1;
+    if (!strcmp(name, "uPalMul")) return 73;
+#else
+    if (!strcmp(name, "mul")) return 74;
+    if (!strcmp(name, "uPalMul")) return -1;
+#endif
+    return !strcmp(name,"u_color") ? color_location : 1;
+}
 static void APIENTRY attrib_location(GLuint p, GLuint a, const GLchar *name) {}
 static void APIENTRY enum_noop(GLenum p) {}
 static void APIENTRY two_enums(GLenum p, GLenum q) {}
@@ -433,6 +444,10 @@ static void test_programs_lifetime(void)
       assert(deleted_shaders == n+2);fail_compile_at=0;
       assert(program_creations == before_programs && attachments == before_attachments);
       assert(Gl_LoadShaders() && links == before_links+2*GL_PROGRAM_COUNT);
+      for (int j=0; j<GL_PROGRAM_COUNT; j++) {
+          assert(g_glProgramsIndexed[j].mul == 73);
+          assert(g_glProgramsRgba[j].mul == 73);
+      }
       { unsigned old_program=g_glProgramsIndexed[0].program; int old_compiles=compile_calls;
         preflight_failure=1;
         assert(!Gl_LoadShaders() && compile_calls == old_compiles);
@@ -452,6 +467,11 @@ static void test_programs_lifetime(void)
     shader_ok=0; n=deleted_shaders;assert(!Gl_LoadShader(defs,&p,"rgba"));assert(deleted_shaders == n+1 && p.program == 0);
     shader_ok=1;link_ok=0;n=deleted_programs;assert(!Gl_LoadShader(defs,&p,"rgba"));assert(deleted_programs == n+1);
     link_ok=1;assert(Gl_LoadShader(defs,&p,"rgba"));
+#ifdef TEST_VITA
+    assert(p.mul == 73);
+#else
+    assert(p.mul == 74);
+#endif
     { unsigned id=p.program; shader_ok=0;assert(!Gl_LoadShader(defs,&p,"rgba") && p.program == id);shader_ok=1; }
     Glr_FreeProgram(&p);
     assert(remove("data/rgba.frag") == 0);assert(!Gl_LoadShaders());

@@ -1610,7 +1610,13 @@ int Gl_LoadShader(const char **defines, GlProgram *prog, const char *name)
 #endif
 #define GLR_UNIFORM(field) built.field = g_glewGetUniformLocation(built.program, #field)
     GLR_UNIFORM(texunit0); GLR_UNIFORM(texunit1); GLR_UNIFORM(mask);
-    GLR_UNIFORM(add); GLR_UNIFORM(mul); GLR_UNIFORM(invertall);
+    GLR_UNIFORM(add); GLR_UNIFORM(invertall);
+#ifdef MUGEN_VITA_GL
+    /* Port fix: mul is a Cg built-in, so Vita shaders use an alias. */
+    built.mul = g_glewGetUniformLocation(built.program, "uPalMul");
+#else
+    GLR_UNIFORM(mul);
+#endif
     GLR_UNIFORM(colorbal); GLR_UNIFORM(texsize); GLR_UNIFORM(src_alphamul);
 #undef GLR_UNIFORM
     Glr_FreeProgram(prog);
