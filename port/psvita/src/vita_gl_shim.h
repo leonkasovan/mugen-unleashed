@@ -29,6 +29,10 @@ extern "C" {
  */
 int VitaGl_Probe(void);
 
+/* Initialize vitaShaRK with vitaGL's allocators before creating shaders.
+ * Logs both paths' file headers and unmasked native loader results. */
+int VitaGl_InitShaderCompiler(void);
+
 /*
  * The three GL entry points vitaGL does not provide, defined in vita_gl_shim.c
  * with the semantics the desktop driver has. src/symbols.h maps the original's

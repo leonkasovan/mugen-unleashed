@@ -1181,6 +1181,37 @@ without opening SDL's message box: that box starts a separate GXM presenter.
 The System renderer retains its existing error dialog. A compiler failure is
 not a successful OpenGL startup and does not fall back to a second presenter.
 
+### The compiler file exists, but startup still reports `0x502`
+
+`mugen(6).log` still fails at the first vertex shader after the user reports
+that `ur0:/data/libshacccg.suprx` exists. `0x502` is GL_INVALID_OPERATION;
+vitaGL uses it when runtime compiler initialization fails and hides the native
+module loader's result. Existence alone does not identify why loading failed.
+
+The port now initializes vitaShaRK explicitly before building shader variants,
+using the same vitaGL allocators and the public, idempotent `shark_init` API.
+For each attempted path it records the file size, leading header information,
+and the full native initialization result, for example:
+
+```text
+GL: compiler file ur0:/data/libshacccg.suprx: size=..., header bytes=16, read error=0
+GL: compiler SCE header: sdk_type=0x...., header_type=0x....
+GL: shark_init(ur0:/data/libshacccg.suprx) -> 0x........
+```
+
+If the primary path fails, the external path is also attempted. Both results
+are retained in the final error: a missing fallback cannot hide a different
+failure at the primary path. Failed initialization stops before any shader is
+created, attached or linked. Successful initialization is reused; it does not
+unload an existing module or change display ownership. An SCE header is not
+proof of decryption or compatibility. A raw ELF header is diagnosed explicitly;
+renaming `.elf` to `.suprx` does not create a loadable module.
+
+For this case, retain the new `mugen.log`, particularly the `shark_init` lines.
+The earlier generic `0x502` log cannot distinguish invalid contents, a loader
+restriction or another native loading failure. This is a diagnostic improvement,
+not proof that runtime compilation or on-device gameplay now succeeds.
+
 ### Build and test
 
 ```sh
@@ -1214,6 +1245,13 @@ checks missing compiler, fragment compile failure, GL error despite positive
 status, no program creation/attachment/link on failure, all 18 program
 variants, replacement cleanup, and suppression of SDL's dialog only under
 native display ownership. Desktop and GLES cases remain in that same suite.
+
+`bash tools/test_vita_shader.sh` exercises the real compiler preflight with
+mocked context, file selection and vitaShaRK boundaries: primary success,
+fallback success, distinct native load errors, raw ELF and short headers,
+denied file access, no context, and reuse after success. The GL error suite
+checks that failed preflight creates no shaders/programs and retains previously
+working programs. These host tests do not execute the Vita module loader.
 
 Hardware verification remains required: startup, menu/selection, KFM match,
 RGBA and indexed sprites, transparency/PalFX, FBO orientation, screenshot,

@@ -459,6 +459,41 @@ ABI and Vita-video regression suites. No Windows converter run was performed.
 If `0xc0000374` persists, preserve `build/psvita/mugen` and the verbose
 `vita-elf-create -vv` output described in README.md before another rebuild.
 
+## Compiler file present — native load failure hidden behind `0x502` (OPEN)
+
+**Symptom.** `mugen(6).log` still reports a failed first vertex shader with
+GL_INVALID_OPERATION after the user confirms a compiler file at
+`ur0:/data/libshacccg.suprx`. Display initialization and the FBO probe succeed.
+Earlier the user identified a manually copied file as the original module from
+`ux0:/patch/PCSI00011/module/`; that is the extractor's input. The current file's
+contents and native load result have not been established from the supplied log.
+
+**Diagnostic defect.** vitaGL's `start_shader_compiler` collapses the results of
+two `shark_init` attempts into one boolean. `glCompileShader` then exposes only
+`GL_INVALID_OPERATION`. Repeating runtime installation or assuming another
+missing file does not follow from that error once a file is present.
+
+**Change.** Before creating shader variants, the port calls public vitaShaRK
+initialization with vitaGL's own allocators. It records file size/header/read
+status and each path's native return code. The explicit fallback preserves the
+primary result, and failed initialization stops before shader/program creation.
+Initialization success is cached, failure does not discard working programs,
+and the port never unloads an independently owned module. The header probe is
+diagnostic only; the native loader decides whether the file is usable.
+
+**Still open.** The actual code returned on this device, whether the current
+file is a valid generated SELF, and on-device shader compilation/rendering.
+The new `shark_init(...) -> 0x........` lines are needed to identify the failure.
+Host tests cover the preflight behavior and the shader caller's failure path;
+they do not establish that this device's module can load.
+
+Validation: Linux-hosted VitaSDK GCC 15.2.0 with the pinned SDK dependency
+archives built ELF, SELF and VPK. Seven preflight scenarios, the GL error suite
+(including ASan/UBSan with unavailable leak scanning disabled), the display
+adapter suite and nine build tests pass. Mutations accepting a negative load
+result, masking the primary error with the fallback result, and ignoring
+failed preflight each fail at runtime. Hardware loader results remain OPEN.
+
 ## OpenGL startup — deferred shader compilation passes a NULL program to GXM
 
 **Symptom.** `mugen(3).log` records splash handoff, display ownership and a

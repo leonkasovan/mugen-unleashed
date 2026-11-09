@@ -15,6 +15,7 @@
 enum { VGL_MODE_SHADER_PAIR, VGL_MODE_GLOBAL, VGL_MODE_POSTPONED };
 void vglSetSemanticBindingMode(GLenum mode);
 int VitaGl_Probe(void);
+int VitaGl_InitShaderCompiler(void);
 int VitaGl_OwnsDisplay(void);
 void SDL_VITA_ShowMessageBox(const char *text);
 void VitaGl_DrawQuad(GLuint program, const float *v, int special,
@@ -87,9 +88,11 @@ static int shader_ok = 1, link_ok = 1, fail_compile_at, compile_calls, color_loc
 #ifdef TEST_VITA
 static GLenum semantic_mode = VGL_MODE_POSTPONED;
 static int compiler_missing, compile_error_only, links, compiler_hints;
+static int preflight_failure;
 static int native_display_owned, sdl_dialogs, attachments, program_creations;
 void vglSetSemanticBindingMode(GLenum mode) { semantic_mode = mode; }
 int VitaGl_Probe(void) { return 1; }
+int VitaGl_InitShaderCompiler(void) { return !preflight_failure; }
 int VitaGl_OwnsDisplay(void) { return native_display_owned; }
 void SDL_VITA_ShowMessageBox(const char *text) { assert(text); sdl_dialogs++; }
 void VitaGl_DrawQuad(GLuint program, const float *v, int special,
@@ -414,6 +417,10 @@ static void test_programs_lifetime(void)
      * positive status must all stop before program creation/attachment/link. */
     { int before_links=links, before_hints=compiler_hints;
       int before_programs=program_creations, before_attachments=attachments;
+      preflight_failure=1;n=compile_calls;
+      assert(!Gl_LoadShaders() && compile_calls == n && links == before_links);
+      assert(program_creations == before_programs && attachments == before_attachments);
+      preflight_failure=0;
       semantic_mode=VGL_MODE_POSTPONED;compiler_missing=1;n=deleted_shaders;
       assert(!Gl_LoadShader(defs,&p,"rgba"));
       assert(links == before_links);
@@ -426,6 +433,12 @@ static void test_programs_lifetime(void)
       assert(deleted_shaders == n+2);fail_compile_at=0;
       assert(program_creations == before_programs && attachments == before_attachments);
       assert(Gl_LoadShaders() && links == before_links+2*GL_PROGRAM_COUNT);
+      { unsigned old_program=g_glProgramsIndexed[0].program; int old_compiles=compile_calls;
+        preflight_failure=1;
+        assert(!Gl_LoadShaders() && compile_calls == old_compiles);
+        assert(g_glProgramsIndexed[0].program == old_program);
+        preflight_failure=0;
+      }
       Gl_FreeShaders();
       native_display_owned=1;
       assert(Error_ShowDialog("compiler failed","Error") == 0 && sdl_dialogs == 0);

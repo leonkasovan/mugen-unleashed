@@ -1634,6 +1634,10 @@ int Gl_LoadShaders(void)
     const char *mode = g_glIndexMode == 0 ? "INDEX_STANDARD" : (g_glIndexMode == 1 ? "INDEX_GEFORCE7" : "INDEX_SAFE");
     GlProgram indexed[GL_PROGRAM_COUNT] = {{0}}, rgba[GL_PROGRAM_COUNT] = {{0}};
     int i;
+#ifdef MUGEN_VITA_GL
+    /* Port fix: GL_INVALID_OPERATION hides the native module loader's error. */
+    if (!VitaGl_InitShaderCompiler()) return 0;
+#endif
     for (i = 0; i < GL_PROGRAM_COUNT; i++) {
         const char **defines = g_glShaderDefines[i];
         defines[0] = mode;

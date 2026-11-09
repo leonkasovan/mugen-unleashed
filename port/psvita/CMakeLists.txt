@@ -350,6 +350,7 @@ add_executable(mugen
   ${MUGEN_ENGINE_SOURCES}
   src/vita_gl_shim.c
   src/vita_video.c
+  src/vita_shader.c
   src/vita_caps.c
   src/vita_fps.c
   src/vita_newlib.c
