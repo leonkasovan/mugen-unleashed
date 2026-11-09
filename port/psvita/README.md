@@ -1239,6 +1239,31 @@ tests all 18 indexed/RGBA shader variants with the engine's defines. R2 and
 full MUGEN gameplay still require on-device verification; the R1 pixel success
 does not qualify all rendering modes or shaders.
 
+### R2 hardware result: perspective swizzles and display submission
+
+The R2 log confirms the `uPalMul` correction: indexed variants 1–3 compile
+and link, and the active PalFX variants expose the new uniform. Variant 4
+fails with `'q' is not a valid swizzle component`. Cg does not accept that
+GLSL texture-coordinate alias. The Vita fragment shaders now use `xyzw`
+swizzles (`xy`, `x`, `y`, `w`) with the same coordinate and perspective maths.
+
+R2's valid 640x480 BMP contains the status panel and green triangle, but the
+user sees a black screen. Its `display=1` was **not** evidence of successful
+scanout: it only observed vitaGL's CPU display callback, which runs before
+`sceDisplaySetFrameBuf`, and the library ignored that API's return value.
+VitaSDK documents native 960x544 and scaled 720x408, 640x368, 480x272 modes;
+640x480 is not a documented scanout mode. A maximum-size check alone does
+not validate the output mode.
+
+The separate R3 diagnostic keeps a 640x480 logical canvas within native
+960x544 output, logs actual display submission results, checks the active
+framebuffer after submission, and probes/restores the old scanout request.
+It does not change MUGEN's configured 480x272 output. Its native presentation
+and all 18 corrected shader programs still need device verification. The
+engine's owned-display path continues to use the configured output size;
+arbitrary output sizes require a supported scanout plus a separate logical
+render target, not merely passing the size through to vitaGL.
+
 ### Build and test
 
 ```sh

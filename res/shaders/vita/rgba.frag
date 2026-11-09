@@ -23,6 +23,7 @@ uniform float src_alphamul;
 
 uniform vec2 texsize;
 
+/* Port fix: Cg accepts xyzw swizzles; GLSL texture alias q is not supported. */
 varying vec4 vTexCoord;
 
 /*
@@ -78,11 +79,11 @@ void palfx(inout vec4 color)
 vec4 texcol()
 {
 #if defined(PERSPECTIVE_NONE)
-  vec4 color = texture2D(texunit0, vTexCoord.st);
+  vec4 color = texture2D(texunit0, vTexCoord.xy);
 #elif defined(PERSPECTIVE_STANDARD)
-  vec4 color = texture2D(texunit0, vTexCoord.st / vTexCoord.q);
+  vec4 color = texture2D(texunit0, vTexCoord.xy / vTexCoord.w);
 #else // PERSPECTIVE_EVEN
-  vec4 color = texture2D(texunit0, vec2(vTexCoord.s / vTexCoord.q, vTexCoord.t));
+  vec4 color = texture2D(texunit0, vec2(vTexCoord.x / vTexCoord.w, vTexCoord.y));
 #endif
 
   // Non-masked forces alpha to 1
