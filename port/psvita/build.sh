@@ -13,6 +13,7 @@
 #   port/psvita/build.sh --no-data      pack no game data (engine only)
 #   port/psvita/build.sh --titleid ID   nine-character title id (MSDK00001)
 #   port/psvita/build.sh --renderer MODE  system | opengl | openglscreen
+#   port/psvita/build.sh --gl-selftest    startup GL smoke + frame-60 capture
 #   port/psvita/build.sh --precache N     0 | 1 (Vita default: 0)
 #   port/psvita/build.sh --env          print the exports, build nothing
 #
@@ -108,6 +109,7 @@ DATA_SET=0
 DATA_DIR=""
 RENDERER=""
 PRECACHE=""
+GL_SELFTEST=OFF
 
 say()  { printf '\n==> %s\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
@@ -124,6 +126,7 @@ while [ $# -gt 0 ]; do
         --clean) CLEAN=1 ;;
         --offline) OFFLINE=1 ;;
         --debug) BUILD_TYPE=Debug ;;
+        --gl-selftest) GL_SELFTEST=ON ;;
         --jobs) JOBS="${2:-}"; shift ;;
         --jobs=*) JOBS="${1#*=}" ;;
         --data) DATA_DIR="${2:-}"; DATA_SET=1; shift ;;
@@ -544,6 +547,7 @@ cmake_args=(
     "-DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN_FILE_WIN"
     "-DCMAKE_BUILD_TYPE=$BUILD_TYPE"
     "-DMUGEN_VITA_DATA_DIR=$DATA_WIN"
+    "-DMUGEN_VITA_GL_SELFTEST=$GL_SELFTEST"
 )
 if [ -n "${TITLEID:-}" ]; then
     cmake_args+=("-DMUGEN_VITA_TITLEID=$TITLEID")
@@ -555,6 +559,13 @@ if [ -n "$PRECACHE" ]; then
     cmake_args+=("-DMUGEN_VITA_PRECACHE=$PRECACHE")
 fi
 
+if [ "$GL_SELFTEST" = ON ]; then
+    cmake_args+=("-DMUGEN_VITA_BUILD_VITAGL=ON")
+    if [ ! -f "$ROOT/third_party/vitagl/src/source/vgl.c" ]; then
+        [ "$OFFLINE" = 0 ] || fail "--gl-selftest needs the pinned vitaGL source; fetch it before an offline build"
+        "$ROOT/tools/psvita/fetch_vitagl.sh"
+    fi
+fi
 cmake "${cmake_args[@]}"
 
 say "Building"

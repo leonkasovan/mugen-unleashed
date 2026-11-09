@@ -15,7 +15,7 @@ mkdir -p "$OUT/tmp" "$OUT/data/gles"
 export TMPDIR="$OUT/tmp"
 FLAGS="$TARGET_FLAGS ${CFLAGS:-} -std=gnu11 -O1 -g -UNDEBUG -Wall -Wextra -Wno-unused-parameter -ffunction-sections -fdata-sections"
 FLAGS="$FLAGS -fno-asynchronous-unwind-tables -D_SDL_config_h -DSTDC_HEADERS=1 -DHAVE_STDINT_H=1"
-FLAGS="$FLAGS -Isrc -Ithird_party/sdk/include/SDL -idirafter third_party/sdk/include"
+FLAGS="$FLAGS -Iport/psvita/src -Isrc -Ithird_party/sdk/include/SDL -idirafter third_party/sdk/include"
 FLAGS="$FLAGS -Ithird_party/glad-2.1 -Ithird_party/minizip-0.15 -Ithird_party/libpng-1.2.38"
 FLAGS="$FLAGS -Ithird_party/lua-5.1.4/src -Ithird_party/libresample/include"
 case "$($CC -dumpmachine)" in *mingw*) FLAGS="$FLAGS -flto=auto" ;; esac

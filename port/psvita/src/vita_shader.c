@@ -50,6 +50,7 @@ int VitaGl_InitShaderCompiler(void)
     int results[2];
     int i;
 
+    Log_Printf("GL: compiler preflight entered (cached=%i)\n",compiler_ready);
     if (compiler_ready) return 1;
     if (!VitaGl_HasContext()) {
         Log_Printf("GL: runtime compiler requires an owned vitaGL context\n");

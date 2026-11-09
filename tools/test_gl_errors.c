@@ -17,6 +17,7 @@ void vglSetSemanticBindingMode(GLenum mode);
 int VitaGl_Probe(void);
 int VitaGl_InitShaderCompiler(void);
 int VitaGl_OwnsDisplay(void);
+void VitaDiag_Log(const char *format, ...);
 void SDL_VITA_ShowMessageBox(const char *text);
 void VitaGl_DrawQuad(GLuint program, const float *v, int special,
                      float top, float bottom, const DrawParams *dp);
@@ -88,9 +89,10 @@ static int shader_ok = 1, link_ok = 1, fail_compile_at, compile_calls, color_loc
 #ifdef TEST_VITA
 static GLenum semantic_mode = VGL_MODE_POSTPONED;
 static int compiler_missing, compile_error_only, links, compiler_hints;
-static int preflight_failure;
+static int preflight_failure, missing_vita_mul;
 static int native_display_owned, sdl_dialogs, attachments, program_creations;
 void vglSetSemanticBindingMode(GLenum mode) { semantic_mode = mode; }
+void VitaDiag_Log(const char *format, ...) { (void)format; }
 int VitaGl_Probe(void) { return 1; }
 int VitaGl_InitShaderCompiler(void) { return !preflight_failure; }
 int VitaGl_OwnsDisplay(void) { return native_display_owned; }
@@ -200,7 +202,7 @@ static GLint APIENTRY uniform_location(GLuint p, const GLchar *name)
 #ifdef TEST_VITA
     /* A mock must distinguish the Cg-safe uniform from the desktop spelling. */
     if (!strcmp(name, "mul")) return -1;
-    if (!strcmp(name, "uPalMul")) return 73;
+    if (!strcmp(name, "uPalMul")) return missing_vita_mul ? -1 : 73;
 #else
     if (!strcmp(name, "mul")) return 74;
     if (!strcmp(name, "uPalMul")) return -1;
@@ -453,6 +455,14 @@ static void test_programs_lifetime(void)
         assert(!Gl_LoadShaders() && compile_calls == old_compiles);
         assert(g_glProgramsIndexed[0].program == old_program);
         preflight_failure=0;
+        missing_vita_mul=1;
+        assert(!Gl_LoadShaders());
+        assert(g_glProgramsIndexed[0].program == old_program);
+        { const char *disabled[]={"PALFX_DISABLE",NULL}; GlProgram optimized={0};
+          assert(Gl_LoadShader(disabled,&optimized,"rgba") && optimized.mul == -1);
+          Glr_FreeProgram(&optimized);
+        }
+        missing_vita_mul=0;
       }
       Gl_FreeShaders();
       native_display_owned=1;

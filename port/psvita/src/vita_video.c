@@ -65,6 +65,7 @@ SDL_Surface *VitaGl_CreateDisplay(int width, int height, int depth)
         vglWaitVblankStart(vsync ? GL_TRUE : GL_FALSE);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glFinish();
         vglSwapBuffers(GL_FALSE);
         glGetIntegerv(GL_VIEWPORT, viewport);
         if (viewport[0] != 0 || viewport[1] != 0 ||
@@ -76,6 +77,10 @@ SDL_Surface *VitaGl_CreateDisplay(int width, int height, int depth)
                        (int)resolution_fallback);
             return NULL;
         }
+        if (!VitaDiag_CheckPresentation(width,height,"create")) {
+            SDL_FreeSurface(surface);
+            return NULL;
+        }
         ready = 1;
         display_width = width;
         display_height = height;
@@ -84,6 +89,12 @@ SDL_Surface *VitaGl_CreateDisplay(int width, int height, int depth)
         Log_Printf("GL: vitaGL owns %ix%i display (SDL presenter bypassed)\n", width, height);
     }
     display = surface;
+    if (!VitaDiag_StartupSmoke(width,height)) {
+        display = NULL;
+        ready = 0;
+        SDL_FreeSurface(surface);
+        return NULL;
+    }
     return display;
 }
 
@@ -95,7 +106,10 @@ void VitaGl_ReleaseDisplay(void)
 
 void VitaGl_SwapBuffers(void)
 {
-    if (ready && display != NULL) vglSwapBuffers(GL_FALSE);
+    if (ready && display != NULL) {
+        vglSwapBuffers(GL_FALSE);
+        VitaDiag_GamePresent(display_width,display_height);
+    }
 }
 
 int VitaGl_SetAttribute(SDL_GLattr attribute, int value)

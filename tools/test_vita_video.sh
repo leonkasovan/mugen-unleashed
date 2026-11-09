@@ -12,3 +12,6 @@ ${CC:-gcc} ${CFLAGS:-} -std=c11 -Wall -Wextra -Werror -O1 -Isrc \
 "$out/probe" invalid-viewport
 "$out/probe" resolution-fallback
 "$out/probe" sdl-owned
+
+"$out/probe" present-fail
+"$out/probe" smoke-fail

@@ -1264,6 +1264,60 @@ engine's owned-display path continues to use the configured output size;
 arbitrary output sizes require a supported scanout plus a separate logical
 render target, not merely passing the size through to vitaGL.
 
+### Applying the R4 device tests to MUGEN
+
+The user's `vita-gl-diag-r4.log` now establishes native compiler loading,
+successful compilation/linking of all 18 MUGEN indexed/RGBA programs, valid
+active 960x544 scanout, `(25,229,51,255)` triangle readback, continued frame
+submission and automatic capture. That qualifies the isolated baseline, not
+the full game renderer or gameplay.
+
+The game now retains native load/submission tracing in the separate
+`ux0:/data/mugen-vita-gl.log` journal (fallback: `ur0:/data/mugen-vita-gl.log`).
+It records a compiled build marker and executing module path before normal
+engine initialization, checks actual native presentation during GL creation,
+and logs the real game's shader set as it is loaded. Active PalFX programs
+must expose `uPalMul`; an incompatible deployed shader is rejected.
+
+Enable the optional startup triangle/pixel test and actual game-frame capture:
+
+```sh
+port/psvita/build.sh --renderer opengl --precache 0 --gl-selftest
+```
+
+Or configure with `-DMUGEN_VITA_BUILD_VITAGL=ON` and
+`-DMUGEN_VITA_GL_SELFTEST=ON`. The script selects/fetches pinned vitaGL for this
+mode; offline builds require the source to be present. The self-test is OFF
+by default and the script resets that option on an ordinary build.
+
+The smoke test runs once before `Gl_Init` establishes engine state. It checks
+real eager compilation/linking, the green pixel and accepted native scanout,
+then clears/releases its objects. Failure stops startup while preserving the
+single GXM owner. The normal engine still owns frame timing and presentation;
+there is no second diagnostic loop or overlay during gameplay.
+
+After 60 calls from the real game presentation path, a self-test build saves
+`ux0:/data/mugen-vita-frame60.bmp` from the active native framebuffer. Startup
+swaps do not count as game frames. Invalid metadata or rejected native
+presentation cannot produce a successful capture report. The screenshot
+contains actual engine output (possibly still a splash/title screen), not the
+smoke-test triangle. Frames 1/60 and periodic
+submissions are journaled without synchronizing/logging every game frame.
+
+Collect that BMP, the dedicated journal, and the normal `mugen.log`. The new
+host tests inject native submission failure, shader failure and wrong pixels,
+and verify that only the 60th game presentation captures the real buffer.
+A native build and these host tests do not establish that the full MUGEN game
+has run on a Vita; the integrated package still needs that device test.
+
+Integration verification (2026-11-09): the ARM/Vita game VPK built with the
+self-test enabled; the diagnostic module also compiled with it disabled.
+`test_vita_video.sh`, `test_vita_shader.sh`, `test_vita_diagnostics.sh` and
+`test_gl_errors.sh` passed, including missing-active-uniform rejection and
+preservation of the previous shader set. Diagnostic-module tests also passed
+ASan/UBSan. The packaged SELF contains the integration marker, has the same
+UNSAFE authid as the working R4 app, and includes the matching four Vita shaders.
+
 ### Build and test
 
 ```sh

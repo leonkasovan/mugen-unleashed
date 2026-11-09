@@ -34,6 +34,9 @@
  */
 
 #include "mugen.h"
+#ifdef MUGEN_VITA_GL
+#include "vita_diagnostics.h"
+#endif
 #include "shader_src.h"
 #include "gl_size.h"
 
@@ -1527,6 +1530,7 @@ static unsigned int Glr_CompileShader(unsigned int type, char *src)
 #ifdef MUGEN_VITA_GL
     compile_error = Glr_LastError();
     if (compile_error != GL_NO_ERROR) compiled = 0;
+    VitaDiag_Log("GAME COMPILE type=0x%X ok=%i error=0x%X\n",type,(int)compiled,(unsigned)compile_error);
     if (!compiled) {
         Log_Printf("GL: Vita %s shader compilation failed (GL error 0x%X)\n",
                    type == GLR_VERTEX_SHADER ? "vertex" : "fragment", (unsigned)compile_error);
@@ -1554,6 +1558,9 @@ int Gl_LoadShader(const char **defines, GlProgram *prog, const char *name)
     FILE *f;
     char *text, *src;
     GlProgram built = {0};
+#ifdef MUGEN_VITA_GL
+    int vita_palfx_disabled = 0;
+#endif
     if (defines == NULL || prog == NULL || name == NULL) return 0;
 #ifdef MUGEN_VITA_GL
     /* Port fix: default POSTPONED reports compile success before compilation.
@@ -1564,6 +1571,9 @@ int Gl_LoadShader(const char **defines, GlProgram *prog, const char *name)
 #endif
     defs[0] = '\0';
     for (; *defines != NULL; defines++) {
+#ifdef MUGEN_VITA_GL
+        if (strcmp(*defines,"PALFX_DISABLE")==0) vita_palfx_disabled = 1;
+#endif
         wrote = snprintf(defs + n, sizeof(defs) - n, "#define %s\n", *defines);
         if (wrote < 0 || (size_t)wrote >= sizeof(defs) - n) return 0;
         n += (size_t)wrote;
@@ -1614,17 +1624,25 @@ int Gl_LoadShader(const char **defines, GlProgram *prog, const char *name)
 #ifdef MUGEN_VITA_GL
     /* Port fix: mul is a Cg built-in, so Vita shaders use an alias. */
     built.mul = g_glewGetUniformLocation(built.program, "uPalMul");
+    if (!vita_palfx_disabled && built.mul < 0) {
+        VitaDiag_Log("GAME SHADER REJECTED family=%s: active uPalMul missing\n",name);
+        goto fail;
+    }
 #else
     GLR_UNIFORM(mul);
 #endif
     GLR_UNIFORM(colorbal); GLR_UNIFORM(texsize); GLR_UNIFORM(src_alphamul);
 #undef GLR_UNIFORM
+#ifdef MUGEN_VITA_GL
+    VitaDiag_Log("GAME SHADER READY family=%s program=%u mul_location=%i\n",name,built.program,built.mul);
+#endif
     Glr_FreeProgram(prog);
     *prog = built;
     return 1;
 fail:
 #ifdef MUGEN_VITA_GL
     Log_Printf("GL: shader family %s failed (%s)\n", name, path);
+    VitaDiag_Log("GAME SHADER FAILED family=%s path=%s\n",name,path);
 #endif
     Glr_FreeProgram(&built);
     return 0;
@@ -1649,6 +1667,7 @@ int Gl_LoadShaders(void)
         defines[0] = mode;
 #ifdef MUGEN_VITA_GL
         Log_Printf("GL: loading Vita shader variant %i/%i\n", i + 1, GL_PROGRAM_COUNT);
+        VitaDiag_Log("GAME VARIANT %i/%i\n",i+1,GL_PROGRAM_COUNT);
 #endif
         if (!Gl_LoadShader(defines, &indexed[i], "indexed") || !Gl_LoadShader(defines, &rgba[i], "rgba")) {
             MatchLog_Printf(3, "Unable to load GL shader variant %i\n", i);
@@ -1658,6 +1677,9 @@ int Gl_LoadShaders(void)
     Gl_FreeShaders();
     memcpy(g_glProgramsIndexed, indexed, sizeof(indexed));
     memcpy(g_glProgramsRgba, rgba, sizeof(rgba));
+#ifdef MUGEN_VITA_GL
+    VitaDiag_Log("GAME SHADERS PASS %i/%i programs loaded by the real renderer\n",2*GL_PROGRAM_COUNT,2*GL_PROGRAM_COUNT);
+#endif
     return 1;
 fail:
     for (i = 0; i < GL_PROGRAM_COUNT; i++) {
@@ -1724,6 +1746,7 @@ static int Glr_LogObject(unsigned int obj, int is_shader)
         MatchLog_Printf(7, "%s\n", log);
 #ifdef MUGEN_VITA_GL
         Log_Printf("GL: %s log: %s\n", is_shader ? "shader" : "program", log);
+        VitaDiag_Log("GAME %s INFO %s\n",is_shader ? "SHADER" : "PROGRAM",log);
 #endif
     }
     free(log);

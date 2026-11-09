@@ -21,6 +21,11 @@ enum { GL_FALSE, GL_TRUE, GL_PROJECTION_MATRIX, GL_MODELVIEW_MATRIX,
 static int allocations, frees, inits, swaps, draws, enables, disables;
 static int allocation_failure, invalid_viewport, resolution_fallback, missing_attribute, last_vsync = -1;
 static int splash_active, clears;
+static int presentation_failure, smoke_failure, game_presents;
+static void glFinish(void) {}
+int VitaDiag_CheckPresentation(int w,int h,const char *phase) { (void)w;(void)h;(void)phase;return !presentation_failure; }
+int VitaDiag_StartupSmoke(int w,int h) { (void)w;(void)h;return !smoke_failure; }
+void VitaDiag_GamePresent(int w,int h) { assert(w==640 && h==480);game_presents++; }
 static SDL_Surface *sdl_display;
 static const float *position_pointer, *texcoord_pointer;
 static float uploaded_mvp[16], submitted[24];
@@ -97,6 +102,8 @@ int main(int argc, char **argv)
     SDL_Surface *s;
     DrawParams dp = { .top_offset = 0, .bottom_offset = 0, .width_ratio = 2 };
     float corners[8] = {0,0,10,0,0,20,10,20};
+    if (argc > 1 && strcmp(argv[1], "present-fail") == 0) presentation_failure = 1;
+    if (argc > 1 && strcmp(argv[1], "smoke-fail") == 0) smoke_failure = 1;
     if (argc > 1 && strcmp(argv[1], "alloc-fail") == 0) allocation_failure = 1;
     if (argc > 1 && strcmp(argv[1], "invalid-viewport") == 0) invalid_viewport = 1;
     if (argc > 1 && strcmp(argv[1], "resolution-fallback") == 0) resolution_fallback = 1;
@@ -119,7 +126,7 @@ int main(int argc, char **argv)
         assert(!s && !inits && !VitaGl_OwnsDisplay());
         allocation_failure = 0; s = VitaGl_CreateDisplay(640,480,32); assert(s);
     }
-    if (invalid_viewport || resolution_fallback) {
+    if (invalid_viewport || resolution_fallback || presentation_failure || smoke_failure) {
         assert(!s && inits == 1 && allocations == frees);
         assert(!splash_active && clears == 1 && swaps == 1);
         assert(VitaGl_OwnsDisplay() && !VitaGl_HasContext());
@@ -130,7 +137,7 @@ int main(int argc, char **argv)
     assert(!splash_active && clears == 1 && swaps == 1);
     assert(VitaGl_CreateDisplay(640,480,32) == s && inits == 1);
     assert(!VitaGl_CreateDisplay(480,272,32));
-    VitaGl_SwapBuffers(); assert(swaps == 2);
+    VitaGl_SwapBuffers(); assert(swaps == 2 && game_presents == 1);
     VitaGl_SetAttribute(SDL_GL_SWAP_CONTROL, 1); assert(last_vsync == 1);
     VitaGl_DrawQuad(7,corners,1,2,1,&dp);
     assert(draws == 1 && enables == 2 && disables == 2);

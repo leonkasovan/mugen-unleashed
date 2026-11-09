@@ -351,6 +351,7 @@ add_executable(mugen
   src/vita_gl_shim.c
   src/vita_video.c
   src/vita_shader.c
+  src/vita_diagnostics.c
   src/vita_caps.c
   src/vita_fps.c
   src/vita_newlib.c
@@ -373,6 +374,16 @@ target_compile_options(mugen PRIVATE
 
 # LIBRESAMPLE_STATIC drops __declspec(dllimport) from libresample.h, which is
 # meaningless (and rejected) off Windows.
+# Port addition: enable the R4 smoke/pixel test and real frame-60 capture only
+# for a diagnostic build. Native load/presentation logging is always retained.
+option(MUGEN_VITA_GL_SELFTEST "Run Vita GL smoke test and capture game frame 60" OFF)
+if(MUGEN_VITA_GL_SELFTEST)
+  target_compile_definitions(mugen PRIVATE MUGEN_VITA_GL_SELFTEST=1)
+  if(TARGET vitagl_vita)
+    target_compile_definitions(vitagl_vita PRIVATE HAVE_SHARK_LOG=1)
+  endif()
+endif()
+
 target_compile_definitions(mugen PRIVATE
   LIBRESAMPLE_STATIC
   MUGEN_VITA
@@ -578,6 +589,7 @@ set(MUGEN_VITA_STUBS
   SceLibKernel_stub
   # The DMA controller vitaGL uses to upload vertex/texture data.
   SceKernelDmacMgr_stub
+  SceKernelModulemgr_stub
   # taiHEN: vitaGL hooks the system shader compiler in memory at start-up
   # (vitaShaRK's approach). Linking taihen_stub is what makes that legal for a
   # homebrew; vita_create_self below marks the SELF UNSAFE for the same reason.
@@ -618,6 +630,8 @@ target_link_libraries(mugen PRIVATE
 # as a DLL/.so, where the collision cannot occur at link time.
 target_link_options(mugen PRIVATE
   -Wl,--gc-sections
+  -Wl,--wrap=sceDisplaySetFrameBuf
+  -Wl,--wrap=sceKernelLoadStartModule
   # VitaSDK's linker reserves this gap for the SCE metadata appended by
   # vita-elf-create. Without it, small code-size changes can overlap LOAD
   # segments. Supported upstream workaround: vita-toolchain issue #303.

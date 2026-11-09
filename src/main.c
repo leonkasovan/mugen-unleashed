@@ -51,6 +51,10 @@ int main(int argc, char *argv[])
         (void)0;
     }
 #endif
+#ifdef MUGEN_VITA_GL
+    /* Port addition: identify the executing build before engine initialization. */
+    VitaDiag_Boot();
+#endif
     g_cmdline = malloc(sizeof(CmdLineArgs));
     if (g_cmdline == NULL) {
         return 0;
