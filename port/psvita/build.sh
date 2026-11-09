@@ -13,6 +13,8 @@
 #   port/psvita/build.sh --no-data      pack no game data (engine only)
 #   port/psvita/build.sh --titleid ID   nine-character title id (MSDK00001)
 #   port/psvita/build.sh --renderer MODE  system | opengl | openglscreen
+#   port/psvita/build.sh --resolution WxH  render/output size (default: 960x544)
+#   port/psvita/build.sh --shader-compiler FILE  bundle your libshacccg.suprx
 #   port/psvita/build.sh --gl-selftest    startup GL smoke + frame-60 capture
 #   port/psvita/build.sh --precache N     0 | 1 (Vita default: 0)
 #   port/psvita/build.sh --env          print the exports, build nothing
@@ -110,6 +112,8 @@ DATA_DIR=""
 RENDERER=""
 PRECACHE=""
 GL_SELFTEST=OFF
+RESOLUTION=960x544
+SHADER_COMPILER=""
 
 say()  { printf '\n==> %s\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
@@ -127,6 +131,13 @@ while [ $# -gt 0 ]; do
         --offline) OFFLINE=1 ;;
         --debug) BUILD_TYPE=Debug ;;
         --gl-selftest) GL_SELFTEST=ON ;;
+        --resolution) RESOLUTION="${2:-}"; shift
+            [ -n "$RESOLUTION" ] || fail "--resolution requires WIDTHxHEIGHT" ;;
+        --resolution=*) RESOLUTION="${1#*=}" ;;
+        --shader-compiler) SHADER_COMPILER="${2:-}"; shift
+            [ -n "$SHADER_COMPILER" ] || fail "--shader-compiler requires a file" ;;
+        --shader-compiler=*) SHADER_COMPILER="${1#*=}"
+            [ -n "$SHADER_COMPILER" ] || fail "--shader-compiler requires a file" ;;
         --jobs) JOBS="${2:-}"; shift ;;
         --jobs=*) JOBS="${1#*=}" ;;
         --data) DATA_DIR="${2:-}"; DATA_SET=1; shift ;;
@@ -147,6 +158,13 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+if [[ ! "$RESOLUTION" =~ ^([1-9][0-9]{0,2})x([1-9][0-9]{0,2})$ ]]; then
+    fail "--resolution requires WIDTHxHEIGHT (default: 960x544)"
+fi
+VIDEO_WIDTH="${BASH_REMATCH[1]}"
+VIDEO_HEIGHT="${BASH_REMATCH[2]}"
+[ "$VIDEO_WIDTH" -le 960 ] && [ "$VIDEO_HEIGHT" -le 544 ] || fail "resolution exceeds the 960x544 Vita panel"
 
 if [ "$OFFLINE" = 1 ] && [ "$DO_SETUP" = 1 ]; then
     fail "--offline cannot be combined with --setup"
@@ -548,6 +566,10 @@ cmake_args=(
     "-DCMAKE_BUILD_TYPE=$BUILD_TYPE"
     "-DMUGEN_VITA_DATA_DIR=$DATA_WIN"
     "-DMUGEN_VITA_GL_SELFTEST=$GL_SELFTEST"
+    "-DMUGEN_VITA_VIDEO_WIDTH=$VIDEO_WIDTH"
+    "-DMUGEN_VITA_VIDEO_HEIGHT=$VIDEO_HEIGHT"
+    # Explicitly clear a previous private compiler path on an ordinary build.
+    "-DMUGEN_VITA_SHADER_COMPILER=$(win_path "$(shell_path "$SHADER_COMPILER")")"
 )
 if [ -n "${TITLEID:-}" ]; then
     cmake_args+=("-DMUGEN_VITA_TITLEID=$TITLEID")

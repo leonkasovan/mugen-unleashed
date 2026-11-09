@@ -195,7 +195,7 @@ chooses Ninja, then Unix Makefiles, for exactly this reason.
 ### The packed `mugen.cfg` comes from `port/psvita/mugen.cfg`
 
 `port/psvita/mugen.cfg` is the Vita's own config: `RenderMode = System`,
-`GameWidth/GameHeight = 640x480` (the render size, not the 960x544 panel),
+`GameWidth/GameHeight = 960x544` and explicit video `Width/Height = 960x544`,
 `FullScreen = 1`, and `[P1 Joystick]` bound to the Vita driver's engine codes
 (Triangle 9, Circle 10, Cross 11, Square 12, L 13, R 14, Down 15, Left 16,
 Up 17, Right 18, Select 19, Start 20). `MUGEN_VITA_CFG` overrides the template;
@@ -452,11 +452,12 @@ RenderMode = opengl
 blitmode   = hardware
 ```
 
-`640x480` is the default: it is the engine's standard-definition target, and on
-the software renderer the render size is the frame-rate lever (see "The OpenGL
-renderer" below). The engine scales it up to the panel, which is what
-`keepaspect` controls. `960x544` is the panel's own resolution and would be the
-right choice only if a GPU renderer were in use.
+`960x544` is now the native output/render default. Both `[Config]`
+`GameWidth/GameHeight` and active `[Video]` `Width/Height` are patched together.
+For an explicit smaller software target use `--resolution 480x272` (manual
+CMake: `-DMUGEN_VITA_VIDEO_WIDTH=480 -DMUGEN_VITA_VIDEO_HEIGHT=272`). Native
+resolution performance must be measured on hardware; the successful game run
+reported below used 480x272.
 
 **Do not set `vretrace` too high.** The engine's frame pacing assumes a 60 Hz
 display; the Vita panel is 60 Hz, so the default is right.
@@ -1307,8 +1308,8 @@ submissions are journaled without synchronizing/logging every game frame.
 Collect that BMP, the dedicated journal, and the normal `mugen.log`. The new
 host tests inject native submission failure, shader failure and wrong pixels,
 and verify that only the 60th game presentation captures the real buffer.
-A native build and these host tests do not establish that the full MUGEN game
-has run on a Vita; the integrated package still needs that device test.
+The initial native build/host checks did not establish device operation. The
+subsequent supplied hardware results are recorded in the next section.
 
 Integration verification (2026-11-09): the ARM/Vita game VPK built with the
 self-test enabled; the diagnostic module also compiled with it disabled.
@@ -1317,6 +1318,55 @@ self-test enabled; the diagnostic module also compiled with it disabled.
 preservation of the previous shader set. Diagnostic-module tests also passed
 ASan/UBSan. The packaged SELF contains the integration marker, has the same
 UNSAFE authid as the working R4 app, and includes the matching four Vita shaders.
+
+### Native output and an optional bundled compiler
+
+The supplied integrated game logs establish successful compiler loading,
+`SMOKE RESULT PASS`, all 18 real shader programs, accepted presentation through
+frame 1800, a 480x272 frame-60 capture of the mode menu, and successful program
+termination after 1896 frames. They establish startup/menu/character-select
+and match operation: 726 match frames in 12.12 seconds, reported average game
+rate 59.90 and average drawn frame rate 59.74. Native 960x544 output and an
+app-local compiler load still require their own device run.
+
+The template and new CMake defaults now use native 960x544 for both game and
+video dimensions. `build.sh` explicitly passes those dimensions so a cached
+480x272 configure cannot silently retain the old size. Manual CMake users with
+an existing build should pass both `MUGEN_VITA_VIDEO_WIDTH=960` and
+`MUGEN_VITA_VIDEO_HEIGHT=544` explicitly.
+
+A compiler supplied by the builder can be included privately in the VPK:
+
+```sh
+port/psvita/build.sh --renderer opengl --precache 0 --resolution 960x544 \
+  --gl-selftest --shader-compiler "C:/Vita/libshacccg.suprx"
+```
+
+Manual CMake accepts
+`-DMUGEN_VITA_SHADER_COMPILER=/path/to/libshacccg.suprx`. The input must exist
+and have an SCE container header; this is not proof that it is decrypted or
+loadable. The VPK contains `module/libshacccg.suprx`, loaded from
+`app0:/module/libshacccg.suprx`. The native-load wrapper covers vitaGL's early
+internal initialization as well as the later public preflight, so placing the
+file in the VPK is sufficient to make that path eligible. A missing/rejected
+bundle retains the existing `ur0:/data/` and `ur0:/data/external/` fallback.
+The dedicated journal records the actual path and native result; verify an
+`app0:/module/` load succeeds on the next device run before claiming the bundle
+works independently of the system copy.
+
+The module is a user-supplied binary input; the project does not download it or
+store it in source control. Ordinary script builds clear a previously cached
+compiler path. `libvitashark`, `SceShaccCgExt` and taiHEN are linked dependencies,
+not additional `.suprx` files to pack. `.gxp` files are optional generated shader
+caches; no `.spr` dependency was found in the pinned vitaGL sources.
+
+Verification (2026-11-10): the ARM/Vita native-resolution VPK built with the
+supplied compiler. Package inspection confirmed all four 960x544 keys,
+OpenGL/Precache=0, the exact input module bytes and current shaders. The nine
+compiler-selection cases, six diagnostic cases (also ASan/UBSan), display/GL
+regressions and eleven host build/input tests passed. Native compilation with
+the self-test disabled also passed. These checks do not substitute for native
+960x544 gameplay or a successful app-local module load on hardware.
 
 ### Build and test
 
@@ -1415,9 +1465,9 @@ calibration differences remain open until their own cases are retested.
 
 **The software renderer, at a smaller framebuffer.** The cost is per pixel
 (`SoftSprite_Blit`, a palette lookup plus blend on the ARM core), so the render
-size is the frame-rate lever. The packed `mugen.cfg` now defaults to
-**640x480**, the engine's own standard-definition target and the resolution the
-M.U.G.E.N motif is designed around:
+size is the frame-rate lever. Earlier software builds used 640x480 and then
+480x272. The current native-output default is 960x544; the older measurements
+below describe the smaller software configurations:
 
 Measured on hardware: **25-30 fps at 640x480**. The blitter cost is per pixel,
 so the render size is a direct lever:
@@ -1426,19 +1476,20 @@ so the render size is a direct lever:
 |---|---|---|---|
 | 960x544 | 522,240 | -- | -- |
 | 640x480 | 307,200 | -41% | **25-30 fps (measured)** |
-| **480x272 (default)** | **130,560** | **-75%** | 2.35x fewer pixels than 640x480 |
+| 480x272 (previous software default) | **130,560** | **-75%** | 2.35x fewer pixels than 640x480 |
 | 320x240 | 76,800 | -85% | motif's own localcoord |
 
 480x272 is the panel's exact half, so the upscale is a clean 2x integer stretch
-with no resampling artefacts. That is why it is the default rather than some
-other small size.
+with no resampling artefacts. It remains an explicit lower-resolution option,
+not the current native-output default.
 
 ### Scaling the smaller surface onto the panel
 
 For the System renderer the engine opens a surface of the *game* size
 (`Video_SetMode` sets `width = game_width`), while the SDL video surface is
 requested at the panel size. The engine already separates the two:
-`g_game->screen` is the render target (sized from `game_coord`, 480x272) and
+`g_game->screen` is the render target (sized from `game_coord`, 480x272 in
+those earlier lower-resolution tests) and
 `g_screenSurface`/`g_videoSurface` is what the driver blits, one-to-one, to the
 panel. `g_targetWidth`/`g_targetHeight` stay at the game size because every clip
 rect and draw coordinate uses them; `g_videoWidth`/`g_videoHeight` are the
@@ -1450,7 +1501,7 @@ Three approaches were tried, and only the third is viable:
 |---|---|
 | `SDL_VITA_SetVideoModeScaling` | **Black screen.** It writes a scale into the driver's video struct that only its software-blit path reads; `VITA_UpdateRects` is an empty stub and `VITA_FlipHWSurface` passes no scale, so the frame was never drawn. |
 | `zoomSurface` per frame | **4.4 fps** (down from 60). It allocates a fresh panel-sized surface and runs generic nearest-neighbour code on every call. |
-| `Vita_ScaleToVideo` (`src/gfx.c`) | Writes pixels straight into the video surface: an exact-2x `uint16` fast path (the default 480x272 -> 960x544), a cached-column-map nearest-neighbour path for other ratios, and `zoomSurface` only as a fallback for mismatched pixel formats. No per-frame allocation. |
+| `Vita_ScaleToVideo` (`src/gfx.c`) | Writes pixels straight into the video surface: an exact-2x `uint16` fast path (the earlier 480x272 -> 960x544 setup), a cached-column-map nearest-neighbour path for other ratios, and `zoomSurface` only as a fallback for mismatched pixel formats. No per-frame allocation. |
 
 `SDL_MUSTLOCK` is false for this surface (its flags are
 `FULLSCREEN|DOUBLEBUF|NOFRAME`, with no `HWSURFACE`/`ASYNCBLIT`/`RLEACCEL`), so
@@ -1460,7 +1511,7 @@ The 2x path is verified by a host test that scales 480x272 to 960x544 with
 padded pitches and checks every source pixel appears as a 2x2 block: 0
 mismatches over 130,560 source pixels.
 
-Nearest neighbour is the correct filter: the default scale is an exact integer,
+Nearest neighbour preserves sharp pixels for the earlier exact-2x configuration,
 where smoothing would only cost time and soften the image.
 
 

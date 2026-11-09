@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Host tests of Vita build arguments and the production ELF layout check."""
 import importlib.util
+import os
 from pathlib import Path
+import shutil
 import struct
 import subprocess
 import sys
@@ -27,6 +29,8 @@ class VitaBuildTests(unittest.TestCase):
 HERE=/project/port/psvita; OUT=/project/build/psvita; GENERATOR=Ninja
 TOOLCHAIN_FILE_WIN=C:/vitasdk/share/vita.toolchain.cmake
 DATA_WIN="$DATA_DIR"
+shell_path() { printf '%s' "$1"; }
+win_path() { printf '%s' "$1"; }
 cmake() { printf '%s\\0' "$@"; }
 ''' + configure
         return subprocess.run(['bash', '-c', body, 'probe', *args], cwd=ROOT, capture_output=True)
@@ -55,6 +59,46 @@ cmake() { printf '%s\\0' "$@"; }
         for args in [('--renderer',), ('--precache',), ('--renderer=wrong',), ('--precache=2',)]:
             with self.subTest(args=args):
                 self.assertNotEqual(self.arguments(*args).returncode, 0)
+
+    def test_native_resolution_and_optional_compiler(self):
+        result = self.arguments()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(b'-DMUGEN_VITA_VIDEO_WIDTH=960\0', result.stdout)
+        self.assertIn(b'-DMUGEN_VITA_VIDEO_HEIGHT=544\0', result.stdout)
+        self.assertIn(b'-DMUGEN_VITA_SHADER_COMPILER=\0', result.stdout)
+        result = self.arguments('--resolution=480x272', '--shader-compiler', 'C:/My Files/libshacccg.suprx')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(b'-DMUGEN_VITA_VIDEO_WIDTH=480\0', result.stdout)
+        self.assertIn(b'-DMUGEN_VITA_VIDEO_HEIGHT=272\0', result.stdout)
+        self.assertIn(b'-DMUGEN_VITA_SHADER_COMPILER=C:/My Files/libshacccg.suprx\0', result.stdout)
+        for args in [('--resolution',), ('--resolution=0x544',), ('--resolution=0960x544',),
+                     ('--resolution=961x544',), ('--resolution=960x545',),
+                     ('--shader-compiler',), ('--shader-compiler=',)]:
+            with self.subTest(args=args):
+                self.assertNotEqual(self.arguments(*args).returncode, 0)
+
+    @unittest.skipUnless(os.environ.get('CMAKE') or shutil.which('cmake'), 'CMake unavailable')
+    def test_supplied_compiler_input(self):
+        source = (ROOT / 'port/psvita/CMakeLists.txt').read_text()
+        start = source.index('set(MUGEN_VITA_SHADER_COMPILER "" CACHE FILEPATH')
+        end = source.index('set(_mugen_vpk_args', start)
+        work = ROOT / 'build/tmp/vita-build-inputs'
+        work.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=work) as tmp:
+            tmp = Path(tmp)
+            script = tmp / 'check.cmake'
+            script.write_text(source[start:end])
+            module = tmp / 'private module.suprx'
+            raw = tmp / 'raw.elf'
+            module.write_bytes(b'SCE\0' + bytes(12))
+            raw.write_bytes(b'\x7fELF' + bytes(12))
+            for path, expected in [('', 0), (str(module), 0), (str(raw), 1),
+                                   (str(tmp / 'missing.suprx'), 1), (str(tmp), 1)]:
+                with self.subTest(path=path):
+                    result = subprocess.run([os.environ.get('CMAKE') or shutil.which('cmake'),
+                                             '-DMUGEN_VITA_SHADER_COMPILER=' + path,
+                                             '-P', str(script)], capture_output=True)
+                    self.assertEqual(result.returncode, expected, result.stderr)
 
     def test_failed_build_preserves_status_and_stops(self):
         source = (ROOT / 'port/psvita/build.sh').read_text()

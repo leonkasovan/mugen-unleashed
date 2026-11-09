@@ -137,31 +137,14 @@ set(MUGEN_VITA_DATA_DIR "" CACHE PATH
 #
 # Both are rewritten when the game tree is packed, in a copy that goes into the
 # VPK. The tree on disk is never modified -- install/ is the pristine reference.
-# GameWidth / GameHeight: the size the engine renders at, before scaling to the
-# panel.
-#
-# 640x480, not the panel's 960x544. The software renderer costs work per pixel
-# on the ARM core (`SoftSprite_Blit` in src/softrender.c: a palette lookup and a
-# blend for every pixel of every sprite), so this is the frame-rate lever:
-#
-#     960x544 = 522,240 px      640x480 = 307,200 px   (-41%)
-#                               480x272 = 130,560 px   (-75%)
-#
-# 640x480 is the engine's own standard-definition target and the resolution the
-# M.U.G.E.N motif is designed around, so nothing is lost in layout -- the engine
-# scales 640x480 up to the panel. Try -DMUGEN_VITA_VIDEO_WIDTH=480
-# -DMUGEN_VITA_VIDEO_HEIGHT=272 if matches are still short of 60 fps.
-#
-# (With the OpenGL renderer, if it is ever enabled, 960x544 would be the right
-# choice again: the GPU does not pay this per-pixel cost.)
-# 480x272 is the Vita panel's exact half, so the upscale is a clean 2x with no
-# resampling artifacts, and it is 2.35x fewer pixels than 640x480. Measured on
-# hardware: 640x480 gives 25-30 fps, and the software cost is per pixel, so this
-# is the step that reaches 60. Raise it to 640x480 if this proves too soft.
-set(MUGEN_VITA_VIDEO_WIDTH  "480" CACHE STRING
-    "GameWidth written into the packed data/mugen.cfg (render size, not panel size)")
-set(MUGEN_VITA_VIDEO_HEIGHT "272" CACHE STRING
-    "GameHeight written into the packed data/mugen.cfg (render size, not panel size)")
+# Port addition: native Vita output is the default for the now-working GL path.
+# GameWidth/GameHeight also select the actual vitaGL scanout dimensions.
+# System rendering at native size costs more CPU work; an explicit 480x272
+# build remains available when a lower-resolution software target is wanted.
+set(MUGEN_VITA_VIDEO_WIDTH  "960" CACHE STRING
+    "GameWidth written into the packed data/mugen.cfg")
+set(MUGEN_VITA_VIDEO_HEIGHT "544" CACHE STRING
+    "GameHeight written into the packed data/mugen.cfg")
 set(MUGEN_VITA_FULLSCREEN   "ON"  CACHE BOOL
     "Write FullScreen = 1 into the packed data/mugen.cfg")
 
@@ -755,6 +738,15 @@ if(MUGEN_VITA_DATA_DIR)
       "([Gg][Aa][Mm][Ee][Hh][Ee][Ii][Gg][Hh][Tt][ \t]*=[ \t]*)[0-9]+"
       "\\1${MUGEN_VITA_VIDEO_HEIGHT}" _cfg "${_cfg}")
 
+    # Keep explicit [Video] dimensions in step with the render target. Commented
+    # Width/Height entries remain comments and therefore inherit GameWidth/Height.
+    string(REGEX REPLACE
+      "\n([Ww][Ii][Dd][Tt][Hh][ \t]*=[ \t]*)[0-9]+"
+      "\n\\1${MUGEN_VITA_VIDEO_WIDTH}" _cfg "${_cfg}")
+    string(REGEX REPLACE
+      "\n([Hh][Ee][Ii][Gg][Hh][Tt][ \t]*=[ \t]*)[0-9]+"
+      "\n\\1${MUGEN_VITA_VIDEO_HEIGHT}" _cfg "${_cfg}")
+
     if(MUGEN_VITA_FULLSCREEN)
       string(REGEX REPLACE
         "([Ff][Uu][Ll][Ll][Ss][Cc][Rr][Ee][Ee][Nn][ \t]*=[ \t]*)[0-9]+"
@@ -937,6 +929,22 @@ add_custom_command(
   COMMENT "Generating param.sfo for mugen-psvita.vpk"
   VERBATIM)
 
+# Port addition: privately bundle a compiler supplied by the person building.
+# This is a path input, not a downloaded or repository-owned runtime binary.
+set(MUGEN_VITA_SHADER_COMPILER "" CACHE FILEPATH
+    "Optional libshacccg.suprx to pack as module/libshacccg.suprx")
+if(MUGEN_VITA_SHADER_COMPILER)
+  if(NOT EXISTS "${MUGEN_VITA_SHADER_COMPILER}" OR IS_DIRECTORY "${MUGEN_VITA_SHADER_COMPILER}")
+    message(FATAL_ERROR "MUGEN_VITA_SHADER_COMPILER must name an existing libshacccg.suprx file")
+  endif()
+  file(READ "${MUGEN_VITA_SHADER_COMPILER}" _compiler_magic LIMIT 4 HEX)
+  if(NOT _compiler_magic STREQUAL "53434500")
+    message(FATAL_ERROR "MUGEN_VITA_SHADER_COMPILER is not an SCE container; supply the .suprx, not a raw .elf")
+  endif()
+  # The header check does not establish that the native loader will accept it.
+  message(STATUS "Bundling supplied shader compiler as module/libshacccg.suprx")
+endif()
+
 set(_mugen_vpk_args
   -s ${MUGEN_VITA_SFO}
   -b ${MUGEN_VITA_EBOOT}
@@ -944,6 +952,10 @@ set(_mugen_vpk_args
   -a ${MUGEN_VITA_BG_PNG}=sce_sys/livearea/contents/bg.png
   -a ${MUGEN_VITA_STARTUP_PNG}=sce_sys/livearea/contents/startup.png
   -a ${MUGEN_VITA_SCE_SYS}/livearea/contents/template.xml=sce_sys/livearea/contents/template.xml)
+
+if(MUGEN_VITA_SHADER_COMPILER)
+  list(APPEND _mugen_vpk_args -a "${MUGEN_VITA_SHADER_COMPILER}=module/libshacccg.suprx")
+endif()
 
 if(MUGEN_VITA_DATA_DIR)
   # Each top-level entry of the game tree is added by name, so that the tree's
@@ -982,6 +994,18 @@ if(MUGEN_VITA_DATA_DIR)
   file(GLOB _mugen_data_entries RELATIVE "${MUGEN_VITA_DATA_DIR}"
        "${MUGEN_VITA_DATA_DIR}/*")
   foreach(_entry IN LISTS _mugen_data_entries)
+    if(_entry STREQUAL "module" AND MUGEN_VITA_SHADER_COMPILER)
+      # Preserve other supplied modules, replacing only this explicit compiler.
+      file(GLOB _mugen_module_files RELATIVE "${MUGEN_VITA_DATA_DIR}/module"
+           "${MUGEN_VITA_DATA_DIR}/module/*")
+      foreach(_module IN LISTS _mugen_module_files)
+        if(NOT _module STREQUAL "libshacccg.suprx")
+          list(APPEND _mugen_vpk_args
+               -a "${MUGEN_VITA_DATA_DIR}/module/${_module}=module/${_module}")
+        endif()
+      endforeach()
+      continue()
+    endif()
     if(_entry IN_LIST _mugen_data_exclude)
       message(STATUS "  not packing ${_entry} (this project's own build output)")
       continue()
@@ -1010,7 +1034,7 @@ add_custom_command(
   COMMAND ${VITA_PACK_VPK} ${_mugen_vpk_args} ${MUGEN_VITA_VPK}
   DEPENDS ${MUGEN_VITA_SFO} ${MUGEN_VITA_EBOOT} mugen-psvita.self
           ${MUGEN_VITA_ICON_PNG} ${MUGEN_VITA_BG_PNG} ${MUGEN_VITA_STARTUP_PNG}
-          ${MUGEN_VITA_CFG_OUT}
+          ${MUGEN_VITA_CFG_OUT} ${MUGEN_VITA_SHADER_COMPILER}
           "${MUGEN_VITA_SCE_SYS}/livearea/contents/template.xml"
           ${MUGEN_VITA_SHADER_indexed.vert} ${MUGEN_VITA_SHADER_indexed.frag}
           ${MUGEN_VITA_SHADER_rgba.vert} ${MUGEN_VITA_SHADER_rgba.frag}

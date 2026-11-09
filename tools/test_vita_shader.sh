@@ -8,6 +8,6 @@ trap 'rm -f "$out/probe" "$out/compiler-fixture.bin"; rmdir "$out" 2>/dev/null |
 export TMPDIR="$out"
 ${CC:-cc} ${CFLAGS:-} -UNDEBUG -std=c11 -Wall -Wextra -Werror -O1 -Isrc \
     tools/test_vita_shader.c -o "$out/probe"
-for scenario in success fallback load-failure raw-elf short-header open-denied no-context; do
+for scenario in success bundled bundled-invalid fallback load-failure raw-elf short-header open-denied no-context; do
     (cd "$out"; ./probe "$scenario")
 done

@@ -10,6 +10,7 @@
 
 #define MUGEN_H
 static int context_ready = 1, primary_exists = 1, fallback_exists;
+static int bundled_exists, bundled_result = (int32_t)0x80010002u;
 static int primary_result, fallback_result = (int32_t)0x80010002u;
 static int loads, opens, allocator_sets, open_denied;
 static char logs[8192], error_text[256];
@@ -37,17 +38,21 @@ static void shark_set_allocators(void *(*alloc)(size_t), void (*release)(void *)
 static int shark_init(const char *path)
 {
     assert(allocator_sets == 1); loads++;
-    if (strcmp(path, "ur0:/data/libshacccg.suprx") == 0) {
-        assert(loads == 1); return primary_result;
+    if (strcmp(path, "app0:/module/libshacccg.suprx") == 0) {
+        assert(loads == 1); return bundled_result;
     }
-    assert(strcmp(path, "ur0:/data/external/libshacccg.suprx") == 0 && loads == 2);
+    if (strcmp(path, "ur0:/data/libshacccg.suprx") == 0) {
+        assert(loads == 2); return primary_result;
+    }
+    assert(strcmp(path, "ur0:/data/external/libshacccg.suprx") == 0 && loads == 3);
     return fallback_result;
 }
 static FILE *Test_Open(const char *path, const char *mode)
 {
     int exists;
     assert(strcmp(mode, "rb") == 0); opens++;
-    if (strcmp(path, "ur0:/data/libshacccg.suprx") == 0) exists = primary_exists;
+    if (strcmp(path, "app0:/module/libshacccg.suprx") == 0) exists = bundled_exists;
+    else if (strcmp(path, "ur0:/data/libshacccg.suprx") == 0) exists = primary_exists;
     else {
         assert(strcmp(path, "ur0:/data/external/libshacccg.suprx") == 0);
         exists = fallback_exists;
@@ -66,7 +71,11 @@ int main(int argc, char **argv)
     int expected_ready = 1;
     FILE *f;
     assert(argc == 2);
-    if (!strcmp(argv[1], "fallback")) {
+    if (!strcmp(argv[1], "bundled")) {
+        bundled_exists = 1; bundled_result = 0; primary_exists = 0;
+    } else if (!strcmp(argv[1], "bundled-invalid")) {
+        bundled_exists = 1; bundled_result = (int32_t)0x8002d003u;
+    } else if (!strcmp(argv[1], "fallback")) {
         primary_exists = 0; primary_result = (int32_t)0x80010002u;
         fallback_exists = 1; fallback_result = 0;
     } else if (!strcmp(argv[1], "load-failure")) {
@@ -93,10 +102,12 @@ int main(int argc, char **argv)
         assert(VitaGl_InitShaderCompiler() && loads == before_loads && opens == before_opens);
         assert(allocator_sets == 1);
         if (fallback_exists) {
-            assert(loads == 2 && strstr(logs, "0x80010002"));
-        } else assert(loads == 1);
+            assert(loads == 3 && strstr(logs, "0x80010002"));
+        } else if (bundled_result >= 0) assert(loads == 1);
+        else assert(loads == 2);
+        assert(strstr(logs,"app0:/module/libshacccg.suprx"));
     } else {
-        assert(!compiler_ready && loads == 2 && opens == 2 && error_text[0]);
+        assert(!compiler_ready && loads == 3 && opens == 3 && error_text[0]);
         assert(strstr(logs, "ur0:/data/libshacccg.suprx"));
         assert(strstr(logs, "ur0:/data/external/libshacccg.suprx"));
         assert(strstr(logs, "fallback 0x80010002") && strstr(error_text, "fallback 0x80010002"));

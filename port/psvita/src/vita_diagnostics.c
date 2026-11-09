@@ -20,7 +20,7 @@
 #include <unistd.h>
 
 #ifndef MUGEN_VITA_DIAG_BUILD
-#define MUGEN_VITA_DIAG_BUILD "mugen-r4-integration-v1"
+#define MUGEN_VITA_DIAG_BUILD "mugen-native-bundle-v1"
 #endif
 static const char *journal_path = "ux0:/data/mugen-vita-gl.log";
 static SceUID journal = -1;
@@ -75,14 +75,31 @@ void VitaDiag_Boot(void)
                  (unsigned)id,(unsigned)result,info.module_name,info.path);
 }
 
-/* Linker wrappers preserve native behavior and exact results, including the
- * compiler load made internally by vitaGL before our public preflight runs. */
+/* Port addition: vitaGL starts its compiler before our public preflight.
+ * Prefer a supplied app-local module even for that internal native load.
+ * Failed/missing bundles retain the existing system-path fallback and errors. */
 int __real_sceKernelLoadStartModule(const char *, SceSize, void *, int, SceKernelLMOption *, int *);
 int __wrap_sceKernelLoadStartModule(const char *path, SceSize size, void *args,
                                    int flags, SceKernelLMOption *option, int *status)
 {
     int result;
     int compiler = path != NULL && strstr(path,"libshacccg") != NULL;
+    const char *bundled = "app0:/module/libshacccg.suprx";
+    if (path != NULL &&
+        (strcmp(path,"ur0:/data/libshacccg.suprx")==0 ||
+         strcmp(path,"ur0:data/libshacccg.suprx")==0 ||
+         strcmp(path,"ur0:/data/external/libshacccg.suprx")==0 ||
+         strcmp(path,"ur0:data/external/libshacccg.suprx")==0)) {
+        SceUID file = sceIoOpen(bundled,SCE_O_RDONLY,0);
+        if (file >= 0) {
+            sceIoClose(file);
+            VitaDiag_Log("NATIVE LOAD BEGIN %s (bundled compiler)\n",bundled);
+            result = __real_sceKernelLoadStartModule(bundled,size,args,flags,option,status);
+            VitaDiag_Log("NATIVE LOAD END %s result=0x%08X (%d)\n",bundled,(unsigned)result,result);
+            if (result >= 0) return result;
+            VitaDiag_Log("BUNDLED COMPILER FAILED: trying original path %s\n",path);
+        }
+    }
     if (compiler) VitaDiag_Log("NATIVE LOAD BEGIN %s\n",path);
     result = __real_sceKernelLoadStartModule(path,size,args,flags,option,status);
     if (compiler) VitaDiag_Log("NATIVE LOAD END %s result=0x%08X (%d)\n",path,(unsigned)result,result);

@@ -13,6 +13,7 @@ static FILE *files[8];static uint32_t *buffer;static SceDisplayFrameBuf active;
 static int draws,swaps,compiles,captures,drew;
 static GLuint program,shaders,programs;static GLint view[4];
 static int native_fail, shader_fail, pixel_fail, links;
+static int bundled_exists, bundled_fail, bundle_loads, system_loads, other_loads;
 static char last_error[256];
 static void SDL_SetError(const char *format, ...) { (void)format;strcpy(last_error,"set"); }
 static int VitaGl_InitShaderCompiler(void) { return 1; }
@@ -20,7 +21,7 @@ int __wrap_sceKernelLoadStartModule(const char *,SceSize,void *,int,SceKernelLMO
 
 SceUID sceIoOpen(const char *p,int f,int mode) {
  if (f&SCE_O_WRONLY) {int fd=strstr(p,".bmp") ? 4 : 3;assert(strstr(p,"mugen-vita-"));files[fd]=fopen(fd==4 ? "host-capture.bmp" : "host.log","wb");assert(files[fd]);if(fd==4)captures++;return fd;}
- return strstr(p,"external/") ? -2 : 6;
+ return bundled_exists && !strcmp(p,"app0:/module/libshacccg.suprx") ? 6 : -2;
 }
 int sceIoClose(SceUID fd){if(fd<6 && files[fd]){fclose(files[fd]);files[fd]=NULL;}return 0;}
 int sceIoWrite(SceUID fd,const void *p,unsigned int n){assert(files[fd]);return (int)fwrite(p,1,n,files[fd]);}
@@ -30,7 +31,12 @@ int sceKernelGetModuleInfo(SceUID id,SceKernelModuleInfo *p){strcpy(p->module_na
 int sceDisplayGetFrameBuf(SceDisplayFrameBuf *p,SceDisplaySetBufSync s){*p=active;return 0;}
 void sceGxmDisplayQueueFinish(void){}
 int __real_sceDisplaySetFrameBuf(const SceDisplayFrameBuf *p,SceDisplaySetBufSync s){assert(p && p->width==960 && p->height==544);if(native_fail)return -7;active=*p;return 0;}
-int __real_sceKernelLoadStartModule(const char *p,SceSize n,void *a,int f,SceKernelLMOption *o,int *s){return 2;}
+int __real_sceKernelLoadStartModule(const char *p,SceSize n,void *a,int f,SceKernelLMOption *o,int *s){
+ assert(n==0 && !a && f==0 && !o && !s);
+ if(!strcmp(p,"app0:/module/libshacccg.suprx")){bundle_loads++;return bundled_fail ? -8 : 2;}
+ if(!strcmp(p,"ur0:/data/libshacccg.suprx")){system_loads++;return 2;}
+ assert(!strcmp(p,"app0:/module/unrelated.suprx"));other_loads++;return 2;
+}
 GLboolean vglInitWithCustomSizes(int pool,int w,int h,int ram,int cdram,int phy,int dialog,int msaa){assert(w==960 && h==544);buffer=calloc((size_t)w*h,4);assert(buffer);view[2]=w;view[3]=h;__wrap_sceKernelLoadStartModule("ur0:/data/libshacccg.suprx",0,NULL,0,NULL,NULL);return GL_FALSE;}
 void vglWaitVblankStart(GLboolean b){}void vglSetSemanticBindingMode(GLenum m){}
 void vglSwapBuffers(GLboolean b){SceDisplayFrameBuf fb={sizeof(fb),buffer,960,0,960,544};swaps++;__wrap_sceDisplaySetFrameBuf(&fb,SCE_DISPLAY_SETBUF_NEXTFRAME);}
@@ -58,8 +64,14 @@ int main(int argc,char **argv)
     native_fail=!strcmp(argv[1],"native-fail");
     shader_fail=!strcmp(argv[1],"shader-fail");
     pixel_fail=!strcmp(argv[1],"pixel-fail");
+    bundled_exists=!strcmp(argv[1],"bundle-success") || !strcmp(argv[1],"bundle-fail");
+    bundled_fail=!strcmp(argv[1],"bundle-fail");
     VitaDiag_Boot();
     vglInitWithCustomSizes(0,960,544,0,0,0,0,0);
+    assert(bundle_loads==bundled_exists);
+    assert(system_loads==(!bundled_exists || bundled_fail));
+    assert(__wrap_sceKernelLoadStartModule("app0:/module/unrelated.suprx",0,NULL,0,NULL,NULL)==2);
+    assert(other_loads==1 && bundle_loads==bundled_exists);
     glClear(GL_COLOR_BUFFER_BIT);vglSwapBuffers(GL_FALSE);
     ok=VitaDiag_CheckPresentation(960,544,"create");
     assert(ok==!native_fail);

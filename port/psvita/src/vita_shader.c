@@ -44,10 +44,11 @@ static void VitaShader_LogFile(const char *path)
 
 int VitaGl_InitShaderCompiler(void)
 {
-    static const char *paths[2] = {
+    static const char *paths[3] = {
+        "app0:/module/libshacccg.suprx",
         "ur0:/data/libshacccg.suprx", "ur0:/data/external/libshacccg.suprx"
     };
-    int results[2];
+    int results[3];
     int i;
 
     Log_Printf("GL: compiler preflight entered (cached=%i)\n",compiler_ready);
@@ -60,7 +61,7 @@ int VitaGl_InitShaderCompiler(void)
     /* Match vitaGL's start_shader_compiler allocator setup. shark_init is
      * idempotent; vitaGL can subsequently call it to set its own ready flag. */
     shark_set_allocators(vglMalloc, vglFree);
-    for (i = 0; i < 2; i++) {
+    for (i = 0; i < 3; i++) {
         VitaShader_LogFile(paths[i]);
         results[i] = shark_init(paths[i]);
         Log_Printf("GL: shark_init(%s) -> 0x%08X\n", paths[i], (unsigned)results[i]);
@@ -70,11 +71,11 @@ int VitaGl_InitShaderCompiler(void)
             return 1;
         }
     }
-    /* Keep both results: an absent fallback must not hide the primary file's
+    /* Keep all results: an absent fallback must not hide the primary file's
      * actual module-loader failure. Do not unload somebody else's module. */
-    SDL_SetError("Vita shader compiler load failed (primary 0x%08X, fallback 0x%08X)",
-                 (unsigned)results[0], (unsigned)results[1]);
-    Log_Printf("GL: runtime compiler unavailable (primary 0x%08X, fallback 0x%08X)\n",
-               (unsigned)results[0], (unsigned)results[1]);
+    SDL_SetError("Vita shader compiler load failed (bundled 0x%08X, primary 0x%08X, fallback 0x%08X)",
+                 (unsigned)results[0], (unsigned)results[1], (unsigned)results[2]);
+    Log_Printf("GL: runtime compiler unavailable (bundled 0x%08X, primary 0x%08X, fallback 0x%08X)\n",
+               (unsigned)results[0], (unsigned)results[1], (unsigned)results[2]);
     return 0;
 }
