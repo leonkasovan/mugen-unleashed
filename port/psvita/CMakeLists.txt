@@ -485,8 +485,10 @@ pkg_check_modules(MUGEN_VITA_PKGS REQUIRED
 # through a .pc file:
 #   libvitaGL.a        GL 2.1 over SceGxm
 #   libvitashark.a     runtime shader compiler front end (vitaShaRK package)
-#   libSceShaccCgExt.a the ShaccCg shader compiler itself
+#   libSceShaccCgExt.a extensions for the device's ShaccCg shader compiler
 #   libmathneon.a      NEON vector maths
+# These are build-time dependencies. Runtime GLSL compilation also requires
+# the decrypted libshacccg.suprx installed on the Vita; see README.md.
 #
 # Each name below is checked, so a VitaSDK update that renames one fails here
 # with a readable message rather than as a wall of undefined Sce*/shark_* at

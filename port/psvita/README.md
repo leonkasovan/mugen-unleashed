@@ -1150,6 +1150,37 @@ these interfaces. The runtime shader compiler still needs to be available on
 the device. A shader build failure must be diagnosed from the new log rather
 than treated as a successful OpenGL initialization.
 
+### Required on the Vita: the runtime shader compiler
+
+The static SDK libraries used to build the VPK do **not** install the device's
+shader compiler. vitaGL requires an extracted, decrypted `libshacccg.suprx`;
+see [vitaGL's prerequisites](https://github.com/Rinnegatamante/vitaGL#prerequisites).
+Check with VitaShell for `ur0:/data/libshacccg.suprx`. The linked library also
+tries `ur0:/data/external/libshacccg.suprx` if the default path cannot load.
+An encrypted, corrupt or incompatible file can fail even when the path exists.
+The [upstream ShaRKBR33D installer](https://github.com/Rinnegatamante/ShaRKBR33D)
+can extract/install the compiler. Restart the game after installation.
+
+The supplied `mugen(3).log` confirms successful splash handoff, context creation
+and FBO probing, then stops at shader loading. Its crash dump places a NULL
+vertex program in `glLinkProgram`'s `sceGxmProgramGetParameterCount` call. No
+`SceShaccCg` module is loaded in the dump, consistent with runtime compiler
+load failure; the dump does not establish whether the file is absent or bad.
+
+This also exposed an engine integration bug: vitaGL's default
+`VGL_MODE_POSTPONED` reports shader compile success before compilation runs.
+If the deferred compilation fails, the SDK linker can query a NULL GXM
+program. The engine now selects `VGL_MODE_SHADER_PAIR` before each family,
+compiles vertex then fragment, checks their actual status and GL errors, and
+only creates/attaches/links a program after both succeed. Failed replacement
+keeps the previous program. New logs identify the variant and shader stage,
+and `GL_INVALID_OPERATION` includes the runtime compiler paths to check.
+
+After native vitaGL takes display ownership, fatal errors are logged and exit
+without opening SDL's message box: that box starts a separate GXM presenter.
+The System renderer retains its existing error dialog. A compiler failure is
+not a successful OpenGL startup and does not fall back to a second presenter.
+
 ### Build and test
 
 ```sh
@@ -1165,9 +1196,10 @@ Keep `[Misc] Precache = 0` in the configuration used for the hardware test.
 The precache stack issue is separate. The build patches a copy of the selected
 configuration; check `build/psvita-gl/vita-mugen.cfg` before installing.
 
-A Linux VitaSDK cross build of the preceding adapter completed through ELF,
-SELF and VPK. The splash correction below is host-tested; its full Vita build
-and device verification remain pending. Host tests check the actual adapter
+A Linux-hosted VitaSDK GCC 15.2.0 cross build, using the pinned SDK's dependency
+archives, completed through ELF, SELF and VPK with the splash, shader and
+error-path corrections. Actual device verification remains pending. Host tests
+check the actual adapter
 with mocked calls: normal `GL_FALSE` initialization, allocation failure,
 invalid/fallback viewport rejection, splash handoff before presentation,
 context ownership, one bootstrap presentation and one swap per subsequent
@@ -1175,6 +1207,13 @@ call, vsync, repeated release, reuse of the same context, matrix upload and
 projective texture coordinates. Existing MVP
 and Vita shader dialect gates pass. They do not execute GXM or the Vita shader
 compiler and do not prove displayed pixels, performance or blending parity.
+
+`bash tools/test_gl_errors.sh` also selects the actual Vita shader-loader
+branches against a mock driver with vitaGL's deferred-status behavior. It
+checks missing compiler, fragment compile failure, GL error despite positive
+status, no program creation/attachment/link on failure, all 18 program
+variants, replacement cleanup, and suppression of SDL's dialog only under
+native display ownership. Desktop and GLES cases remain in that same suite.
 
 Hardware verification remains required: startup, menu/selection, KFM match,
 RGBA and indexed sprites, transparency/PalFX, FBO orientation, screenshot,

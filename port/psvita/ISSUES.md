@@ -459,6 +459,72 @@ ABI and Vita-video regression suites. No Windows converter run was performed.
 If `0xc0000374` persists, preserve `build/psvita/mugen` and the verbose
 `vita-elf-create -vv` output described in README.md before another rebuild.
 
+## OpenGL startup — deferred shader compilation passes a NULL program to GXM
+
+**Symptom.** `mugen(3).log` records splash handoff, display ownership and a
+complete FBO probe, then stops at `explicit Vita quad path`. The new dump is
+`psp2core-1794181858-0x0000063a1b-eboot.bin.psp2dmp`.
+
+| Evidence | Value |
+|---|---|
+| Main thread | `MSDK00001`, data abort `0x30004` |
+| Fault PC | `0xe0079aa4`, `SceGxm` text + `0x135c4` |
+| Argument `r0` / fault address | `NULL` / `0x24` |
+| Saved LR | `0x810aba83`, engine text + `0x8ea83` |
+| Engine caller on stack | `0x81047139`, engine text + `0x2a139` |
+| Main stack | `0x81381000`–`0x813c1000`; SP `0x813be978`, inside range |
+| Runtime compiler | No loaded `SceShaccCg` module in `MODULE_INFO` |
+
+**Trace.** Relinking the parent `c4969be` sources with GCC 15.2.0 and the
+pinned SDK archives reproduces the relevant code offsets. Rebasing the saved
+LR gives `0x8108ea83`: the Thumb return immediately after `glLinkProgram`
+calls `sceGxmProgramGetParameterCount`. The engine caller rebases to
+`0x8102a139`: the return immediately after `Gl_LoadShader` calls
+`glLinkProgram`. These are two matching call sites, rather than symbols taken
+from the older uploaded VPK. The NULL value is a compiled vertex program,
+not the GXM context from the earlier startup crash.
+
+**Cause.** The linked vitaGL defaults to `VGL_MODE_POSTPONED`:
+
+1. `glCompileShader` tries to initialize the runtime compiler, but GLSL
+   compilation itself is postponed until linking.
+2. `glGetShaderiv(GL_COMPILE_STATUS)` returns `GL_TRUE` in postponed mode,
+   including when compiler startup just returned `GL_INVALID_OPERATION`.
+3. Our loader trusted that status without checking the GL error. The linker
+   then compiles the pair and reaches default attribute binding without
+   rechecking that a GXM program was produced. It queries the NULL vertex
+   program seen in the dump.
+
+The absent `SceShaccCg` module is evidence of unavailable runtime compilation.
+It does not prove the on-disk file is missing: bad, encrypted or incompatible
+files can fail to load too. Build-time `libvitashark.a` and
+`libSceShaccCgExt.a` are not substitutes for the device's decrypted
+`ur0:/data/libshacccg.suprx` (fallback: `ur0:/data/external/libshacccg.suprx`).
+See the runtime compiler instructions in README.md.
+
+**Fix.** Select `VGL_MODE_SHADER_PAIR` before loading each family so the
+existing vertex-then-fragment order compiles immediately. Check both actual
+compile status and GL errors, logging stage/variant and a compiler-path hint
+on `GL_INVALID_OPERATION`. Do not create, attach or link a program after
+either shader fails; preserve transactional replacement and cleanup. Native
+GL fatal errors also bypass SDL's message box, whose linked implementation
+calls `gxm_init_for_common_dialog` and starts a competing SDL GXM presenter.
+The System path still shows its dialog. Resolution and `Precache` are unchanged.
+
+**Validation.** A Linux-hosted VitaSDK GCC 15.2.0 build completed ELF → SELF →
+VPK with the pinned dependency archives. Host tests exercise the actual Vita
+loader branch against deferred-status mocks, including compiler load failure,
+fragment failure, positive status with a GL error, no premature program
+creation/attachment/link, all 18 variants, old-program retention and cleanup.
+The error UI test verifies no SDL dialog after native ownership and normal
+System dialog behavior. Mutations leaving deferred mode enabled, ignoring a
+compile GL error or opening SDL's dialog after ownership each fail at runtime.
+ASan/UBSan passes with LeakSanitizer disabled because this host cannot inspect
+`/proc` for its leak scan; leak-scan coverage is not claimed. Hardware startup,
+runtime compilation and displayed
+pixels remain unverified; installing the missing/unloadable runtime is a
+required device step, not something this source change can replace.
+
 ## OpenGL startup — rotating vitaGL splash, no input response
 
 **Symptom.** After successful build and installation, the user sees a rotating

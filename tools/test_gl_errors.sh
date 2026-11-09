@@ -1,5 +1,5 @@
 #!/bin/sh
-# Production desktop/GLES GL boundaries with a deterministic mock driver.
+# Production desktop/GLES/Vita GL boundaries with a deterministic mock driver.
 # No window/SDL library needed. CC/CFLAGS/RUNNER select an ABI; SANITIZE=1
 # enables ASan/UBSan. This does not qualify an Android/Vita GPU or SDK build.
 set -eu
@@ -24,11 +24,12 @@ if [ "${SANITIZE:-0}" = 1 ]; then SAN="-fsanitize=address,undefined -fno-omit-fr
 # globals.c has legacy decoder function-pointer casts outside this test.
 $CC $FLAGS -Wno-cast-function-type -c src/globals.c -o "$OUT/globals.o"
 $CC $FLAGS -c third_party/glad-2.1/glad.c -o "$OUT/glad.o"
-for backend in desktop gles linux-gles; do
+for backend in desktop gles linux-gles vita; do
     DEFS=""
     case "$backend" in
         gles) DEFS="-DTEST_GLES=1" ;;
         linux-gles) DEFS="-DTEST_GLES=1 -DTEST_LINUX_GLES=1" ;;
+        vita) DEFS="-DTEST_VITA=1" ;;
     esac
     $CC $FLAGS $SAN $DEFS tools/test_gl_errors.c src/gl_mvp.c "$OUT/globals.o" "$OUT/glad.o" \
         -Wl,--gc-sections ${LDFLAGS:-} -lm -o "$OUT/test_$backend"

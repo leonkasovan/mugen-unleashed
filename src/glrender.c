@@ -1504,8 +1504,15 @@ static void Glr_ShaderPath(char *path, const char *name, const char *ext)
 static unsigned int Glr_CompileShader(unsigned int type, char *src)
 {
     const char *p = src;
-    unsigned int shader = g_glewCreateShader(type);
+    unsigned int shader;
     GLint compiled = 0;
+#ifdef MUGEN_VITA_GL
+    GLenum compile_error;
+    /* Port fix: distinguish a missing runtime compiler from shader errors. */
+    Glr_ClearErrors();
+    Log_Printf("GL: compiling Vita %s shader\n", type == GLR_VERTEX_SHADER ? "vertex" : "fragment");
+#endif
+    shader = g_glewCreateShader(type);
     if (shader != 0) {
         g_glewShaderSource(shader, 1, &p, NULL);
         g_glewCompileShader(shader);
@@ -1517,6 +1524,18 @@ static unsigned int Glr_CompileShader(unsigned int type, char *src)
         Gl_LogInfo(shader);
 #endif
     }
+#ifdef MUGEN_VITA_GL
+    compile_error = Glr_LastError();
+    if (compile_error != GL_NO_ERROR) compiled = 0;
+    if (!compiled) {
+        Log_Printf("GL: Vita %s shader compilation failed (GL error 0x%X)\n",
+                   type == GLR_VERTEX_SHADER ? "vertex" : "fragment", (unsigned)compile_error);
+        if (compile_error == GL_INVALID_OPERATION) {
+            Log_Printf("GL: runtime compiler unavailable or rejected the operation; check "
+                       "ur0:/data/libshacccg.suprx (or ur0:/data/external/libshacccg.suprx)\n");
+        }
+    }
+#endif
     free(src);
     if (!compiled) {
         if (shader != 0) g_glewDeleteShader(shader);
@@ -1536,6 +1555,13 @@ int Gl_LoadShader(const char **defines, GlProgram *prog, const char *name)
     char *text, *src;
     GlProgram built = {0};
     if (defines == NULL || prog == NULL || name == NULL) return 0;
+#ifdef MUGEN_VITA_GL
+    /* Port fix: default POSTPONED reports compile success before compilation.
+     * Its linker can query a NULL GXM program after runtime/compiler failure.
+     * We compile vertex then fragment as a pair and check each real result
+     * before attaching either shader. Desktop compilation is unchanged. */
+    vglSetSemanticBindingMode(VGL_MODE_SHADER_PAIR);
+#endif
     defs[0] = '\0';
     for (; *defines != NULL; defines++) {
         wrote = snprintf(defs + n, sizeof(defs) - n, "#define %s\n", *defines);
@@ -1611,6 +1637,9 @@ int Gl_LoadShaders(void)
     for (i = 0; i < GL_PROGRAM_COUNT; i++) {
         const char **defines = g_glShaderDefines[i];
         defines[0] = mode;
+#ifdef MUGEN_VITA_GL
+        Log_Printf("GL: loading Vita shader variant %i/%i\n", i + 1, GL_PROGRAM_COUNT);
+#endif
         if (!Gl_LoadShader(defines, &indexed[i], "indexed") || !Gl_LoadShader(defines, &rgba[i], "rgba")) {
             MatchLog_Printf(3, "Unable to load GL shader variant %i\n", i);
             goto fail;

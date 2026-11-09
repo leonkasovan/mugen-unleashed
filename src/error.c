@@ -276,6 +276,15 @@ int Error_ShowDialog(const char *text, const char *title)
     }
     return 0;
 #elif defined(MUGEN_VITA_GL)
+    /* Port fix: SDL's dialog starts its own GXM presenter. After native
+     * vitaGL ownership that can collide with the live context and hide the
+     * original startup failure. Log and return so Error_Exit can finish. */
+    if (VitaGl_OwnsDisplay()) {
+        Log_Printf("VitaGL error (see mugen.log): %s: %s\n",
+                   title != NULL ? title : "Error",
+                   text != NULL ? text : "");
+        return 0;
+    }
     /*
      * PS Vita port (port/psvita): there is no console and no stderr to read, so
      * an error that only went to stderr was completely invisible -- it looked

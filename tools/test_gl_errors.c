@@ -8,6 +8,19 @@
 #include <assert.h>
 #include <stdarg.h>
 
+#ifdef TEST_VITA
+/* Select the actual Vita shader-loader branches while retaining the host's
+ * GL declarations/driver injection. GXM and runtime compilation are mocked. */
+#define MUGEN_VITA_GL 1
+enum { VGL_MODE_SHADER_PAIR, VGL_MODE_GLOBAL, VGL_MODE_POSTPONED };
+void vglSetSemanticBindingMode(GLenum mode);
+int VitaGl_Probe(void);
+int VitaGl_OwnsDisplay(void);
+void SDL_VITA_ShowMessageBox(const char *text);
+void VitaGl_DrawQuad(GLuint program, const float *v, int special,
+                     float top, float bottom, const DrawParams *dp);
+#endif
+
 #ifdef TEST_GLES
 /* The host uses the vendored desktop GL declarations for common GL calls.
  * Core FBO calls in GLES have the same signatures as GL2.1's EXT entry points.
@@ -50,6 +63,19 @@ void Test_DrawGL(SpriteSet *set,int s,const DrawParams *dp);
 #include "../src/gldetect.c"
 #undef Sprite_DrawGL
 #endif
+#ifdef TEST_VITA
+/* Types were loaded for the host above; select the real Vita error UI branch
+ * even when this mock harness itself is cross-built for Windows. */
+#ifdef _WIN32
+#define TEST_VITA_HOST_WIN32 1
+#undef _WIN32
+#endif
+#include "../src/error.c"
+#ifdef TEST_VITA_HOST_WIN32
+#define _WIN32 1
+#endif
+#undef MUGEN_VITA_GL /* gfx.c's System scaler is outside the shader test. */
+#endif
 #include "../src/gfx.c"
 
 static GLenum pending;
@@ -58,6 +84,17 @@ static int image_calls, sub_calls, fail_image, fail_read, fail_depth, fail_fbo;
 static int gen_calls, fail_gen_at;
 static int deleted_textures, deleted_depth, deleted_fbos, deleted_shaders, deleted_programs;
 static int shader_ok = 1, link_ok = 1, fail_compile_at, compile_calls, color_location = 3;
+#ifdef TEST_VITA
+static GLenum semantic_mode = VGL_MODE_POSTPONED;
+static int compiler_missing, compile_error_only, links, compiler_hints;
+static int native_display_owned, sdl_dialogs, attachments, program_creations;
+void vglSetSemanticBindingMode(GLenum mode) { semantic_mode = mode; }
+int VitaGl_Probe(void) { return 1; }
+int VitaGl_OwnsDisplay(void) { return native_display_owned; }
+void SDL_VITA_ShowMessageBox(const char *text) { assert(text); sdl_dialogs++; }
+void VitaGl_DrawQuad(GLuint program, const float *v, int special,
+                     float top, float bottom, const DrawParams *dp) {}
+#endif
 static int last_color_location, read_mode;
 #ifdef TEST_GLES
 static int overlays, swaps;
@@ -65,7 +102,13 @@ static int overlays, swaps;
 static GLint viewport[4] = {0,0,640,480}, scissor[4];
 static const char *version = "OpenGL ES 3.0 mock";
 
-void Log_Printf(const char *fmt, ...) { (void)fmt; }
+void Log_Printf(const char *fmt, ...)
+{
+#ifdef TEST_VITA
+    if (strstr(fmt, "libshacccg.suprx") != NULL) compiler_hints++;
+#endif
+    (void)fmt;
+}
 void MatchLog_Printf(int level, const char *fmt, ...) { (void)level; (void)fmt; }
 static GLenum APIENTRY error_get(void) { GLenum e = pending; pending = 0; return e; }
 static void APIENTRY gen(GLsizei n, GLuint *p)
@@ -104,16 +147,49 @@ static void APIENTRY read_pixels(GLint x, GLint y, GLsizei w, GLsizei h, GLenum 
         (read_mode == 2 ? 0xFFFFFFFFu : ((i & 1) ? 0xFF000000u : 0xFFFFFFFFu));
 }
 static GLuint APIENTRY create_shader(GLenum t) { return next_id++; }
-static GLuint APIENTRY create_program(void) { return next_id++; }
+static GLuint APIENTRY create_program(void)
+{
+#ifdef TEST_VITA
+    program_creations++;
+#endif
+    return next_id++;
+}
 static void APIENTRY source(GLuint s, GLsizei n, const GLchar *const *text, const GLint *len) {}
-static void APIENTRY compile(GLuint s) { compile_calls++; }
+static void APIENTRY compile(GLuint s)
+{
+    compile_calls++;
+#ifdef TEST_VITA
+    if (compiler_missing || compile_error_only) pending = GL_INVALID_OPERATION;
+#endif
+}
 static void APIENTRY shader_iv(GLuint s, GLenum p, GLint *v)
-{ *v = p == GL_COMPILE_STATUS ? shader_ok && compile_calls != fail_compile_at : 0; }
+{
+#ifdef TEST_VITA
+    /* Actual vitaGL contract: deferred status is true without a GXM program. */
+    if (p == GL_COMPILE_STATUS && semantic_mode == VGL_MODE_POSTPONED) { *v = GL_TRUE; return; }
+    if (compiler_missing) { *v = 0; return; }
+#endif
+    *v = p == GL_COMPILE_STATUS ? shader_ok && compile_calls != fail_compile_at : 0;
+}
 static void APIENTRY program_iv(GLuint s, GLenum p, GLint *v) { *v = p == GL_LINK_STATUS ? link_ok : 0; }
 static GLboolean APIENTRY is_shader(GLuint s) { return GL_TRUE; }
 static void APIENTRY shader_log(GLuint s, GLsizei n, GLsizei *len, GLchar *p) { if (len) *len = 0; if (n) *p = 0; }
-static void APIENTRY attach_shader(GLuint p, GLuint s) {}
+static void APIENTRY attach_shader(GLuint p, GLuint s)
+{
+#ifdef TEST_VITA
+    attachments++;
+#endif
+}
 static void APIENTRY object_noop(GLuint p) {}
+#ifdef TEST_VITA
+static void APIENTRY link_program(GLuint p)
+{
+    /* Real deferred vitaGL can dereference a NULL program in this situation. */
+    assert(shader_ok && !compiler_missing && !compile_error_only);
+    assert(compile_calls != fail_compile_at);
+    links++;
+}
+#endif
 static void APIENTRY del_shader(GLuint p) { deleted_shaders++; }
 static void APIENTRY del_program(GLuint p) { deleted_programs++; }
 static GLint APIENTRY uniform_location(GLuint p, const GLchar *name) { return !strcmp(name,"u_color") ? color_location : 1; }
@@ -160,6 +236,9 @@ static void install(void)
     SET(GetShaderiv,shader_iv); SET(GetProgramiv,program_iv); SET(IsShader,is_shader);
     SET(GetShaderInfoLog,shader_log); SET(GetProgramInfoLog,shader_log); SET(AttachShader,attach_shader);
     SET(LinkProgram,object_noop); SET(DeleteShader,del_shader); SET(DeleteProgram,del_program);
+#ifdef TEST_VITA
+    SET(LinkProgram,link_program); SET(GetAttribLocation,uniform_location);
+#endif
     SET(GetUniformLocation,uniform_location); SET(UseProgram,object_noop); SET(BindAttribLocation,attrib_location);
     SET(Enable,enum_noop); SET(Disable,enum_noop); SET(BlendEquation,enum_noop); SET(BlendFunc,two_enums);
     SET(Viewport,view); SET(Scissor,clip); SET(Uniform4f,uniform4); SET(Uniform1i,uniform1i); SET(Uniform1f,uniform1f);
@@ -330,6 +409,33 @@ Uint32 SDL_MapRGB(const SDL_PixelFormat *f, Uint8 r, Uint8 g, Uint8 b) { return 
 static void test_programs_lifetime(void)
 {
     GlProgram p = {0};const char *defs[]={NULL};int n;
+#ifdef TEST_VITA
+    /* Missing runtime module, shader syntax failure and an error despite a
+     * positive status must all stop before program creation/attachment/link. */
+    { int before_links=links, before_hints=compiler_hints;
+      int before_programs=program_creations, before_attachments=attachments;
+      semantic_mode=VGL_MODE_POSTPONED;compiler_missing=1;n=deleted_shaders;
+      assert(!Gl_LoadShader(defs,&p,"rgba"));
+      assert(links == before_links);
+      assert(deleted_shaders == n+1 && compiler_hints == before_hints+1);
+      compiler_missing=0;compile_error_only=1;
+      assert(!Gl_LoadShader(defs,&p,"rgba") && links == before_links);
+      compile_error_only=0;
+      fail_compile_at=compile_calls+2;n=deleted_shaders;
+      assert(!Gl_LoadShader(defs,&p,"rgba") && links == before_links);
+      assert(deleted_shaders == n+2);fail_compile_at=0;
+      assert(program_creations == before_programs && attachments == before_attachments);
+      assert(Gl_LoadShaders() && links == before_links+2*GL_PROGRAM_COUNT);
+      Gl_FreeShaders();
+      native_display_owned=1;
+      assert(Error_ShowDialog("compiler failed","Error") == 0 && sdl_dialogs == 0);
+      assert(Error_ShowDialog(NULL,NULL) == 0 && sdl_dialogs == 0);
+      native_display_owned=0;
+      assert(Error_ShowDialog("System error","Error") == 0 && sdl_dialogs == 1);
+      assert(Error_ShowDialog(NULL,"Error") == 0 && sdl_dialogs == 2);
+    }
+    puts("ok: Vita eager compile, missing compiler, GL error, fragment failure and all variants");
+#endif
     shader_ok=0; n=deleted_shaders;assert(!Gl_LoadShader(defs,&p,"rgba"));assert(deleted_shaders == n+1 && p.program == 0);
     shader_ok=1;link_ok=0;n=deleted_programs;assert(!Gl_LoadShader(defs,&p,"rgba"));assert(deleted_programs == n+1);
     link_ok=1;assert(Gl_LoadShader(defs,&p,"rgba"));
