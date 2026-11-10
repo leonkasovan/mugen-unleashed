@@ -19,7 +19,7 @@ enum { GL_FALSE, GL_TRUE, GL_PROJECTION_MATRIX, GL_MODELVIEW_MATRIX,
 #define SDL_SWSURFACE 0
 #define SCE_GXM_MULTISAMPLE_NONE 0
 static int allocations, frees, inits, swaps, draws, enables, disables;
-static int allocation_failure, invalid_viewport, resolution_fallback, missing_attribute, last_vsync = -1;
+static int allocation_failure, invalid_viewport, resolution_fallback, last_vsync = -1;
 static int splash_active, clears;
 static int presentation_failure, smoke_failure, game_presents;
 static void glFinish(void) {}
@@ -66,10 +66,6 @@ static void glGetIntegerv(int name, int *v)
     v[2] = invalid_viewport ? 0 : (resolution_fallback ? 320 : 640);
     v[3] = invalid_viewport ? 0 : (resolution_fallback ? 240 : 480);
 }
-static GLint glGetAttribLocation(GLuint p, const char *name)
-{ assert(p == 7); return missing_attribute ? -1 : (strcmp(name, "aPosition") == 0 ? 2 : 5); }
-static GLint glGetUniformLocation(GLuint p, const char *name)
-{ assert(p == 7 && strcmp(name, "uMvp") == 0); return 9; }
 static void glGetFloatv(int name, float *m)
 {
     int i;
@@ -100,6 +96,7 @@ static void glDrawArrays(int mode, int first, int count)
 int main(int argc, char **argv)
 {
     SDL_Surface *s;
+    VitaGlVertexInterface vertex = {2, 5, 9};
     DrawParams dp = { .top_offset = 0, .bottom_offset = 0, .width_ratio = 2 };
     float corners[8] = {0,0,10,0,0,20,10,20};
     if (argc > 1 && strcmp(argv[1], "present-fail") == 0) presentation_failure = 1;
@@ -116,7 +113,7 @@ int main(int argc, char **argv)
     }
     assert(!VitaGl_OwnsDisplay() && !VitaGl_HasContext());
     VitaGl_SwapBuffers(); assert(!swaps);
-    VitaGl_DrawQuad(7, corners, 0, 1, 1, &dp); assert(!draws);
+    VitaGl_DrawQuad(&vertex, corners, 0, 1, 1, &dp); assert(!draws);
     assert(!VitaGl_CreateDisplay(0, 480, 32));
     assert(!VitaGl_CreateDisplay(640, 480, 16));
     assert(!inits && !VitaGl_OwnsDisplay());
@@ -139,7 +136,7 @@ int main(int argc, char **argv)
     assert(!VitaGl_CreateDisplay(480,272,32));
     VitaGl_SwapBuffers(); assert(swaps == 2 && game_presents == 1);
     VitaGl_SetAttribute(SDL_GL_SWAP_CONTROL, 1); assert(last_vsync == 1);
-    VitaGl_DrawQuad(7,corners,1,2,1,&dp);
+    VitaGl_DrawQuad(&vertex,corners,1,2,1,&dp);
     assert(draws == 1 && enables == 2 && disables == 2);
     assert(uploaded_mvp[0] == 2 && uploaded_mvp[5] == 3);
     assert(uploaded_mvp[12] == 8 && uploaded_mvp[13] == 15);
@@ -147,9 +144,13 @@ int main(int argc, char **argv)
     assert(submitted[2] == -0.5f && submitted[8] == 1.5f);
     assert(submitted[17] == 1 && submitted[23] == 1); /* Q = (2/1)/2 */
     dp.width_ratio = 1;
-    VitaGl_DrawQuad(7,corners,1,2,1,&dp);
+    VitaGl_DrawQuad(&vertex,corners,1,2,1,&dp);
     assert(submitted[17] == 2 && submitted[23] == 2); /* Q survives submission */
-    missing_attribute = 1; VitaGl_DrawQuad(7,corners,0,1,1,&dp); assert(draws == 2);
+    vertex.position = -1; VitaGl_DrawQuad(&vertex,corners,0,1,1,&dp); assert(draws == 2);
+    vertex.position = 2;
+    VitaGl_DrawQuad(NULL,corners,0,1,1,&dp);
+    VitaGl_DrawQuad(&vertex,NULL,0,1,1,&dp);
+    VitaGl_DrawQuad(&vertex,corners,0,1,1,NULL); assert(draws == 2);
     VitaGl_ReleaseDisplay(); VitaGl_ReleaseDisplay(); assert(allocations == frees);
     VitaGl_SwapBuffers(); assert(swaps == 2);
     assert(!VitaGl_CreateDisplay(480,272,32));

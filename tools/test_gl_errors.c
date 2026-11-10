@@ -12,6 +12,7 @@
 /* Select the actual Vita shader-loader branches while retaining the host's
  * GL declarations/driver injection. GXM and runtime compilation are mocked. */
 #define MUGEN_VITA_GL 1
+#include "../port/psvita/src/vita_vertex_interface.h"
 enum { VGL_MODE_SHADER_PAIR, VGL_MODE_GLOBAL, VGL_MODE_POSTPONED };
 void vglSetSemanticBindingMode(GLenum mode);
 int VitaGl_Probe(void);
@@ -19,7 +20,7 @@ int VitaGl_InitShaderCompiler(void);
 int VitaGl_OwnsDisplay(void);
 void VitaDiag_Log(const char *format, ...);
 void SDL_VITA_ShowMessageBox(const char *text);
-void VitaGl_DrawQuad(GLuint program, const float *v, int special,
+void VitaGl_DrawQuad(const VitaGlVertexInterface *vertex, const float *v, int special,
                      float top, float bottom, const DrawParams *dp);
 #endif
 
@@ -89,18 +90,24 @@ static int shader_ok = 1, link_ok = 1, fail_compile_at, compile_calls, color_loc
 #ifdef TEST_VITA
 static GLenum semantic_mode = VGL_MODE_POSTPONED;
 static int compiler_missing, compile_error_only, links, compiler_hints;
-static int preflight_failure, missing_vita_mul;
-static int native_display_owned, sdl_dialogs, attachments, program_creations;
+static int preflight_failure, missing_vita_mul, missing_vertex_attribute;
+static int native_display_owned, sdl_dialogs, attachments, program_creations, vita_quad_draws;
 void vglSetSemanticBindingMode(GLenum mode) { semantic_mode = mode; }
 void VitaDiag_Log(const char *format, ...) { (void)format; }
 int VitaGl_Probe(void) { return 1; }
 int VitaGl_InitShaderCompiler(void) { return !preflight_failure; }
 int VitaGl_OwnsDisplay(void) { return native_display_owned; }
 void SDL_VITA_ShowMessageBox(const char *text) { assert(text); sdl_dialogs++; }
-void VitaGl_DrawQuad(GLuint program, const float *v, int special,
-                     float top, float bottom, const DrawParams *dp) {}
+void VitaGl_DrawQuad(const VitaGlVertexInterface *vertex, const float *v, int special,
+                     float top, float bottom, const DrawParams *dp)
+{ assert(vertex && vertex->position == 2 && vertex->texcoord == 5 && vertex->matrix == 9); vita_quad_draws++; }
 #endif
 static int last_color_location, read_mode;
+static int parameter_calls, uniform_calls;
+#ifdef TEST_VITA
+static int vertex_lookups;
+#endif
+static unsigned forced_program_id;
 #ifdef TEST_GLES
 static int overlays, swaps;
 #endif
@@ -122,7 +129,8 @@ static void APIENTRY del_tex(GLsizei n, const GLuint *p) { deleted_textures += n
 static void APIENTRY del_depth(GLsizei n, const GLuint *p) { deleted_depth += n; }
 static void APIENTRY del_fbo(GLsizei n, const GLuint *p) { deleted_fbos += n; }
 static void APIENTRY bind_tex(GLenum t, GLuint id) {}
-static void APIENTRY parameter(GLenum t, GLenum p, GLint v) {}
+static void APIENTRY parameter(GLenum t, GLenum p, GLint v)
+{ parameter_calls++; if (v == -123) pending = GL_INVALID_ENUM; }
 static void APIENTRY pixel_store(GLenum t, GLint v) {}
 static void APIENTRY image(GLenum t, GLint l, GLint i, GLsizei w, GLsizei h, GLint b, GLenum f, GLenum ty, const void *p)
 { image_calls++; if (fail_image) { fail_image = 0; pending = GL_OUT_OF_MEMORY; } }
@@ -157,7 +165,7 @@ static GLuint APIENTRY create_program(void)
 #ifdef TEST_VITA
     program_creations++;
 #endif
-    return next_id++;
+    return forced_program_id ? forced_program_id : next_id++;
 }
 static void APIENTRY source(GLuint s, GLsizei n, const GLchar *const *text, const GLint *len) {}
 static void APIENTRY compile(GLuint s)
@@ -200,6 +208,9 @@ static void APIENTRY del_program(GLuint p) { deleted_programs++; }
 static GLint APIENTRY uniform_location(GLuint p, const GLchar *name)
 {
 #ifdef TEST_VITA
+    if (!strcmp(name, "aPosition")) { vertex_lookups++; return missing_vertex_attribute ? -1 : 2; }
+    if (!strcmp(name, "aTexCoord")) { vertex_lookups++; return 5; }
+    if (!strcmp(name, "uMvp")) { vertex_lookups++; return 9; }
     /* A mock must distinguish the Cg-safe uniform from the desktop spelling. */
     if (!strcmp(name, "mul")) return -1;
     if (!strcmp(name, "uPalMul")) return missing_vita_mul ? -1 : 73;
@@ -216,10 +227,10 @@ static void APIENTRY view(GLint x, GLint y, GLsizei w, GLsizei h) { viewport[0]=
 static void APIENTRY clip(GLint x, GLint y, GLsizei w, GLsizei h) { scissor[0]=x;scissor[1]=y;scissor[2]=w;scissor[3]=h; }
 static void APIENTRY four_floats(GLfloat a, GLfloat b, GLfloat c, GLfloat d) {}
 static void APIENTRY uniform4(GLint loc, GLfloat a, GLfloat b, GLfloat c, GLfloat d) { last_color_location = loc; }
-static void APIENTRY uniform1i(GLint loc, GLint a) {}
-static void APIENTRY uniform1f(GLint loc, GLfloat a) {}
-static void APIENTRY uniform2(GLint loc, GLfloat a, GLfloat b) {}
-static void APIENTRY uniform3(GLint loc, GLfloat a, GLfloat b, GLfloat c) {}
+static void APIENTRY uniform1i(GLint loc, GLint a) { uniform_calls++; }
+static void APIENTRY uniform1f(GLint loc, GLfloat a) { uniform_calls++; }
+static void APIENTRY uniform2(GLint loc, GLfloat a, GLfloat b) { uniform_calls++; }
+static void APIENTRY uniform3(GLint loc, GLfloat a, GLfloat b, GLfloat c) { uniform_calls++; }
 static void APIENTRY matrix(GLint loc, GLsizei n, GLboolean t, const GLfloat *p) {}
 static void APIENTRY buffer_data(GLenum t, GLsizeiptr n, const void *p, GLenum usage) {}
 static void APIENTRY buffer_sub(GLenum t, GLintptr off, GLsizeiptr n, const void *p) {}
@@ -508,6 +519,137 @@ static void test_programs_lifetime(void)
 }
 #endif
 
+#if defined(TEST_VITA) && MUGEN_VITA_RENDER_CACHE
+/* Exercise production caches through real shader load, quad and upload paths.
+ * This observes GL traffic and invalidation, not GPU timing or pixel output. */
+static void test_vita_render_cache(void)
+{
+    const char *defs[] = {NULL};
+    GlProgram p = {0}, q = {0}, stress[4 * GL_PROGRAM_COUNT + 1] = {{0}};
+    GlTex tex = {0}, sampler_stress[65] = {{0}};
+    PalFx fx = {0};
+    GlrFx terms = {0};
+    DrawParams dp = {0};
+    unsigned char pixels[16] = {0};
+    unsigned saved_id, saved_next;
+    int before, lookups, i, quads;
+    FILE *file = fopen("data/rgba.frag", "wb");
+    assert(file); fputs("void main(){}\n", file); fclose(file);
+    assert(Gl_LoadShader(defs, &p, "rgba"));
+    assert(Gl_LoadShader(defs, &q, "rgba"));
+    assert(GlTex_Init(&tex) && GlTex_Upload(&tex, 2, GL_RGBA, 2, GL_RGBA, pixels));
+    before = uniform_calls; lookups = vertex_lookups;
+    Glr_UseProgram(p.program);
+    Glr_SetUniforms(&p, &fx, &terms, &tex, &dp, 0);
+    assert(uniform_calls == before + 9 && vertex_lookups == lookups);
+    before = uniform_calls;
+    Glr_SetUniforms(&p, &fx, &terms, &tex, &dp, 0);
+    assert(uniform_calls == before);
+    dp.alpha_src = -0.0f; /* No epsilon comparison: preserve submitted bits. */
+    Glr_SetUniforms(&p, &fx, &terms, &tex, &dp, 0);
+    assert(uniform_calls == before + 7); /* Samplers still initialized once. */
+    before = uniform_calls;
+    Glr_UseProgram(q.program); Glr_SetUniforms(&q, &fx, &terms, &tex, &dp, 0);
+    assert(uniform_calls == before + 9);
+    before = uniform_calls;
+    Glr_UseProgram(p.program); Glr_SetUniforms(&p, &fx, &terms, &tex, &dp, 0);
+    assert(uniform_calls == before); /* Cache is per program, not global. */
+    shader_ok = 0;
+    assert(!Gl_LoadShader(defs, &p, "rgba")); shader_ok = 1;
+    Glr_SetUniforms(&p, &fx, &terms, &tex, &dp, 0);
+    assert(uniform_calls == before); /* Failed replacement retains state. */
+    missing_vertex_attribute = 1;
+    assert(!Gl_LoadShader(defs, &p, "rgba")); missing_vertex_attribute = 0;
+    Glr_SetUniforms(&p, &fx, &terms, &tex, &dp, 0);
+    assert(uniform_calls == before); /* Invalid interface also retains old state. */
+    assert(Gl_LoadShader(defs, &p, "rgba"));
+    before = uniform_calls; Glr_UseProgram(p.program);
+    Glr_SetUniforms(&p, &fx, &terms, &tex, &dp, 0);
+    assert(uniform_calls == before + 9);
+    saved_id = p.program; Glr_FreeProgram(&p);
+    forced_program_id = saved_id;
+    lookups = vertex_lookups; assert(Gl_LoadShader(defs, &p, "rgba"));
+    forced_program_id = 0; assert(vertex_lookups == lookups + 3);
+    before = uniform_calls; Glr_UseProgram(p.program);
+    Glr_SetUniforms(&p, &fx, &terms, &tex, &dp, 0);
+    assert(uniform_calls == before + 9); /* Reused numeric name is fresh. */
+    for (i = 0; i < 4 * GL_PROGRAM_COUNT + 1; i++) assert(Gl_LoadShader(defs, &stress[i], "rgba"));
+    before = uniform_calls; lookups = vertex_lookups;
+    Glr_UseProgram(p.program); Glr_SetUniforms(&p, &fx, &terms, &tex, &dp, 0);
+    assert(uniform_calls == before + 9 && vertex_lookups == lookups + 3);
+    for (i = 0; i < 4 * GL_PROGRAM_COUNT + 1; i++) Glr_FreeProgram(&stress[i]);
+    Glr_FreeProgram(&p); Glr_FreeProgram(&q);
+
+    g_glProgramsRgba[0] = (GlProgram){0};
+    assert(Gl_LoadShader(defs, &g_glProgramsRgba[0], "rgba"));
+    fx.color = 256; fx.mul[0] = fx.mul[1] = fx.mul[2] = 256;
+    dp.top_stretch = dp.bottom_stretch = dp.width_ratio = 1.0f;
+    before = parameter_calls; lookups = vertex_lookups; quads = vita_quad_draws;
+    Gl_DrawQuadRgba(&fx, &tex, 0,0,1,0,0,1,1,1, &dp);
+    assert(parameter_calls == before + 4);
+    before = parameter_calls;
+    Gl_DrawQuadRgba(&fx, &tex, 0,0,1,0,0,1,1,1, &dp);
+    assert(parameter_calls == before && vertex_lookups == lookups && vita_quad_draws == quads + 2);
+    /* Upload resets LINEAR/CLAMP_TO_EDGE sampling to NEAREST/CLAMP. */
+    assert(GlTex_Upload(&tex, 2, GL_RGBA, 2, GL_RGBA, pixels));
+    assert(parameter_calls == before + 4);
+    before = parameter_calls;
+    Gl_DrawQuadRgba(&fx, &tex, 0,0,1,0,0,1,1,1, &dp);
+    assert(parameter_calls == before + 4);
+    /* External calibration mutation participates in the same cache. */
+    GlTex_SetParameter(&tex, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    before = parameter_calls;
+    Gl_DrawQuadRgba(&fx, &tex, 0,0,1,0,0,1,1,1, &dp);
+    assert(parameter_calls == before + 1);
+    saved_id = tex.id; assert(GlTex_Delete(&tex));
+    saved_next = next_id; next_id = saved_id;
+    assert(GlTex_Init(&tex) && tex.id == saved_id); next_id = saved_next;
+    before = parameter_calls;
+    GlTex_SetParameter(&tex, GL_TEXTURE_WRAP_S, GLR_CLAMP_TO_EDGE);
+    assert(parameter_calls == before + 1);
+    for (i = 0; i < 65; i++) {
+        assert(GlTex_Init(&sampler_stress[i]));
+        glBindTexture(GL_TEXTURE_2D, sampler_stress[i].id);
+        GlTex_SetParameter(&sampler_stress[i], GL_TEXTURE_WRAP_S, GL_REPEAT);
+    }
+    before = parameter_calls; glBindTexture(GL_TEXTURE_2D, tex.id);
+    GlTex_SetParameter(&tex, GL_TEXTURE_WRAP_S, GLR_CLAMP_TO_EDGE);
+    assert(parameter_calls == before + 1); /* Bounded texture cache eviction. */
+    GlTex_SetParameter(&tex, GL_TEXTURE_WRAP_S, -123); /* Driver handles invalid input. */
+    assert(glGetError() == GL_INVALID_ENUM);
+    GlTex_SetParameter(&tex, GL_TEXTURE_WRAP_S, -123);
+    assert(glGetError() == GL_INVALID_ENUM); /* Invalid repeats must not be cached. */
+    before = parameter_calls;
+    GlTex_SetParameter(&tex, GL_TEXTURE_WRAP_S, GLR_CLAMP_TO_EDGE);
+    assert(parameter_calls == before + 1);
+    for (i = 0; i < 65; i++) assert(GlTex_Delete(&sampler_stress[i]));
+    assert(GlTex_Delete(&tex)); Gl_FreeShaders();
+    puts("ok: Vita cache hits, exact float bits, reload/failure/ID reuse, eviction and upload sampling");
+}
+#elif defined(TEST_VITA)
+static void test_vita_render_cache(void)
+{
+    const char *defs[] = {NULL};
+    GlTex tex = {0};
+    PalFx fx = {0};
+    DrawParams dp = {0};
+    int parameters, uniforms, lookups, quads;
+    FILE *file = fopen("data/rgba.frag", "wb");
+    assert(file); fputs("void main(){}\n", file); fclose(file);
+    assert(Gl_LoadShader(defs, &g_glProgramsRgba[0], "rgba"));
+    assert(GlTex_Init(&tex) && GlTex_Upload(&tex, 2, GL_RGBA, 2, GL_RGBA, NULL));
+    fx.color = 256; fx.mul[0] = fx.mul[1] = fx.mul[2] = 256;
+    dp.top_stretch = dp.bottom_stretch = dp.width_ratio = 1.0f;
+    parameters = parameter_calls; uniforms = uniform_calls; lookups = vertex_lookups; quads = vita_quad_draws;
+    Gl_DrawQuadRgba(&fx, &tex, 0,0,1,0,0,1,1,1, &dp);
+    Gl_DrawQuadRgba(&fx, &tex, 0,0,1,0,0,1,1,1, &dp);
+    assert(parameter_calls == parameters + 8);
+    assert(uniform_calls == uniforms + 18 && vertex_lookups == lookups + 6 && vita_quad_draws == quads + 2);
+    assert(GlTex_Delete(&tex)); Gl_FreeShaders();
+    puts("ok: uncached Vita baseline repeats parameters, uniforms and interface lookups");
+}
+#endif
+
 int main(void)
 {
 #ifdef TEST_EXPECT_BITS
@@ -515,6 +657,9 @@ int main(void)
 #endif
     printf("abi: %u-bit build\n",(unsigned)(sizeof(void *)*8));
     install();test_sizes_uploads();test_targets_capture();test_programs_lifetime();
+#ifdef TEST_VITA
+    test_vita_render_cache();
+#endif
     puts("ok: GL error regression tests passed");
     return 0;
 }

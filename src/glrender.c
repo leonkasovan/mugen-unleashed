@@ -36,6 +36,7 @@
 #include "mugen.h"
 #ifdef MUGEN_VITA_GL
 #include "vita_diagnostics.h"
+#include "vita_vertex_interface.h"
 #endif
 #include "shader_src.h"
 #include "gl_size.h"
@@ -77,6 +78,125 @@ static int Glr_TextureSize(int w, int h)
 
 /* Size of the #define text of a program. */
 #define GLR_DEFINES_SIZE 0x1FA0
+
+#ifdef MUGEN_VITA_GL
+#ifndef MUGEN_VITA_RENDER_CACHE
+#define MUGEN_VITA_RENDER_CACHE 1
+#endif
+/* Port optimization: bounded sidecars preserve GlProgram/GlTex's original
+ * layout. Eviction only loses an optimization; the next use rebuilds state.
+ * Two full shader sets can coexist during transactional replacement. */
+typedef struct GlrVitaUniforms {
+    float add[3], mul[3], colorbal, texsize[2], alpha;
+    int mask, invert;
+} GlrVitaUniforms;
+typedef struct GlrVitaProgram {
+    unsigned int id;
+    VitaGlVertexInterface vertex;
+    int samplers_valid, uniforms_valid;
+    GlrVitaUniforms uniforms;
+} GlrVitaProgram;
+typedef struct GlrVitaSampler {
+    const GlTex *owner;
+    unsigned int id, valid;
+    int value[4];
+} GlrVitaSampler;
+static GlrVitaProgram g_vitaPrograms[4 * GL_PROGRAM_COUNT];
+static GlrVitaSampler g_vitaSamplers[64];
+static unsigned int g_vitaProgramNext, g_vitaSamplerNext;
+static GlrVitaProgram *g_vitaLastProgram;
+static GlrVitaSampler *g_vitaLastSampler;
+static unsigned long long g_vitaUniformSkips, g_vitaParameterSkips;
+
+static GlrVitaProgram *Glr_VitaProgram(unsigned int id)
+{
+    size_t i;
+    GlrVitaProgram *slot = NULL;
+    if (id == 0) return NULL;
+    if (MUGEN_VITA_RENDER_CACHE) {
+        if (g_vitaLastProgram != NULL && g_vitaLastProgram->id == id) return g_vitaLastProgram;
+        for (i = 0; i < sizeof(g_vitaPrograms) / sizeof(g_vitaPrograms[0]); i++) {
+            if (g_vitaPrograms[i].id == id) return g_vitaLastProgram = &g_vitaPrograms[i];
+            if (g_vitaPrograms[i].id == 0 && slot == NULL) slot = &g_vitaPrograms[i];
+        }
+    }
+    if (slot == NULL) slot = &g_vitaPrograms[g_vitaProgramNext++ % (4 * GL_PROGRAM_COUNT)];
+    memset(slot, 0, sizeof(*slot));
+    slot->id = id;
+    slot->vertex.position = glGetAttribLocation(id, "aPosition");
+    slot->vertex.texcoord = glGetAttribLocation(id, "aTexCoord");
+    slot->vertex.matrix = glGetUniformLocation(id, "uMvp");
+    return g_vitaLastProgram = slot;
+}
+
+static void Glr_VitaForgetProgram(unsigned int id)
+{
+    size_t i;
+    if (id == 0) return;
+    for (i = 0; i < sizeof(g_vitaPrograms) / sizeof(g_vitaPrograms[0]); i++) {
+        if (g_vitaPrograms[i].id == id) memset(&g_vitaPrograms[i], 0, sizeof(g_vitaPrograms[i]));
+    }
+    g_vitaLastProgram = NULL;
+}
+
+static void Glr_VitaForgetSampler(const GlTex *tex)
+{
+    size_t i;
+    g_vitaLastSampler = NULL;
+    for (i = 0; i < sizeof(g_vitaSamplers) / sizeof(g_vitaSamplers[0]); i++) {
+        if (g_vitaSamplers[i].owner == tex) memset(&g_vitaSamplers[i], 0, sizeof(g_vitaSamplers[i]));
+    }
+}
+#endif
+
+/* Port optimization: callers bind tex's GL_TEXTURE_2D first. All engine
+ * mutations of those sampling parameters pass here, including calibration.
+ * Raw GL calls on unrelated probe textures cannot poison this cache. */
+void GlTex_SetParameter(const GlTex *tex, int name, int value)
+{
+#if defined(MUGEN_VITA_GL) && MUGEN_VITA_RENDER_CACHE
+    size_t i;
+    GlrVitaSampler *slot = NULL;
+    unsigned int bit;
+    int field;
+    switch (name) {
+    case GL_TEXTURE_WRAP_S: field = 0; break;
+    case GL_TEXTURE_WRAP_T: field = 1; break;
+    case GL_TEXTURE_MIN_FILTER: field = 2; break;
+    case GL_TEXTURE_MAG_FILTER: field = 3; break;
+    default: glTexParameteri(GL_TEXTURE_2D, name, value); return;
+    }
+    if (tex == NULL || tex->id == 0) { glTexParameteri(GL_TEXTURE_2D, name, value); return; }
+    /* Other legal values and invalid input keep the driver's own semantics;
+     * do not remember a parameter call which the driver might reject. */
+    if ((field < 2 && value != GL_CLAMP && value != GLR_CLAMP_TO_EDGE && value != GL_REPEAT) ||
+        (field >= 2 && value != GL_NEAREST && value != GL_LINEAR)) {
+        Glr_VitaForgetSampler(tex);
+        glTexParameteri(GL_TEXTURE_2D, name, value); return;
+    }
+    if (g_vitaLastSampler != NULL && g_vitaLastSampler->owner == tex && g_vitaLastSampler->id == tex->id) {
+        slot = g_vitaLastSampler;
+    } else {
+        for (i = 0; i < sizeof(g_vitaSamplers) / sizeof(g_vitaSamplers[0]); i++) {
+            if (g_vitaSamplers[i].owner == tex && g_vitaSamplers[i].id == tex->id) {
+                slot = &g_vitaSamplers[i]; break;
+            }
+        }
+    }
+    if (slot == NULL) {
+        slot = &g_vitaSamplers[g_vitaSamplerNext++ % 64];
+        memset(slot, 0, sizeof(*slot)); slot->owner = tex; slot->id = tex->id;
+    }
+    g_vitaLastSampler = slot;
+    bit = 1u << field;
+    if ((slot->valid & bit) && slot->value[field] == value) { g_vitaParameterSkips++; return; }
+    glTexParameteri(GL_TEXTURE_2D, name, value);
+    slot->value[field] = value; slot->valid |= bit;
+#else
+    (void)tex;
+    glTexParameteri(GL_TEXTURE_2D, name, value);
+#endif
+}
 
 /* Drains the GL error queue. */
 static void Glr_ClearErrors(void)
@@ -151,6 +271,9 @@ int GlTex_Init(GlTex *tex)
 {
     if (tex == NULL) return 0;
     Glr_ForgetFormat(tex);
+#ifdef MUGEN_VITA_GL
+    Glr_VitaForgetSampler(tex);
+#endif
     Glr_ClearErrors();
     tex->id = 0;
     tex->w = 0;
@@ -177,6 +300,9 @@ int GlTex_Delete(GlTex *tex)
         g_glewDeleteRenderbuffersEXT(1, &tex->depth);
     }
     tex->depth = 0;
+#ifdef MUGEN_VITA_GL
+    Glr_VitaForgetSampler(tex);
+#endif
     if (tex->id != 0) {
         if (g_attachedTexture == tex->id) {
             g_attachedTexture = g_attachedDepth = 0;
@@ -374,10 +500,10 @@ int GlTex_Upload(GlTex *tex, int h, int internal_format, int w, int format, cons
     reuse = pixels != NULL && tex->w == w && tex->h == h && *stored == internal_format;
     Glr_ClearErrors();
     glBindTexture(GL_TEXTURE_2D, tex->id);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+    GlTex_SetParameter(tex, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    GlTex_SetParameter(tex, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    GlTex_SetParameter(tex, GL_TEXTURE_WRAP_S, GL_CLAMP);
+    GlTex_SetParameter(tex, GL_TEXTURE_WRAP_T, GL_CLAMP);
     if (reuse) {
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, format, GL_UNSIGNED_BYTE, pixels);
     } else {
@@ -408,10 +534,10 @@ int GlTex_Upload1D(GlTex *tex, int width, const void *pixels)
 #ifdef MUGEN_VITA_GL
     /* Port fix: stored and streamed palettes both match the Vita 2D sampler. */
     glBindTexture(GL_TEXTURE_2D, tex->id);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GLR_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GLR_CLAMP_TO_EDGE);
+    GlTex_SetParameter(tex, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    GlTex_SetParameter(tex, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    GlTex_SetParameter(tex, GL_TEXTURE_WRAP_S, GLR_CLAMP_TO_EDGE);
+    GlTex_SetParameter(tex, GL_TEXTURE_WRAP_T, GLR_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
 #else
     glBindTexture(GL_TEXTURE_1D, tex->id);
@@ -462,10 +588,10 @@ int GlScreen_Upload(int h, int w, const void *pixels)
 
     Glr_ClearErrors();
     glBindTexture(GL_TEXTURE_2D, tex->id);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+    GlTex_SetParameter(tex, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    GlTex_SetParameter(tex, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    GlTex_SetParameter(tex, GL_TEXTURE_WRAP_S, GL_CLAMP);
+    GlTex_SetParameter(tex, GL_TEXTURE_WRAP_T, GL_CLAMP);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
     err = Glr_LastError();
     g_glScreenUploadW = w;
@@ -772,6 +898,16 @@ int Gl_Deinit(void)
     g_attachedTexture = g_attachedDepth = 0;
     memset(g_texFormatTex, 0, sizeof(g_texFormatTex));
     memset(g_texFormat, 0, sizeof(g_texFormat));
+#ifdef MUGEN_VITA_GL
+    VitaDiag_Log("GL CACHE skipped_uniform_sets=%llu skipped_texture_parameters=%llu\n",
+                 g_vitaUniformSkips, g_vitaParameterSkips);
+    memset(g_vitaPrograms, 0, sizeof(g_vitaPrograms));
+    memset(g_vitaSamplers, 0, sizeof(g_vitaSamplers));
+    g_vitaLastProgram = NULL;
+    g_vitaLastSampler = NULL;
+    g_vitaProgramNext = g_vitaSamplerNext = 0;
+    g_vitaUniformSkips = g_vitaParameterSkips = 0;
+#endif
     g_glInitialized = 0;
     Glr_FreePremultiply();
     MatchLog_Printf(7,
@@ -896,8 +1032,28 @@ static int Glr_QuadSpecial(const DrawParams *dp, float *c0, float *c1)
 static void Glr_SetUniforms(const GlProgram *prog, const PalFx *fx, const GlrFx *t, const GlTex *tex,
                             const DrawParams *dp, int mask)
 {
+#if defined(MUGEN_VITA_GL) && MUGEN_VITA_RENDER_CACHE
+    GlrVitaProgram *cached = Glr_VitaProgram(prog->program);
+    GlrVitaUniforms values = {0};
+    values.mask = mask != 0;
+    memcpy(values.add, t->add, sizeof(values.add));
+    memcpy(values.mul, t->mul, sizeof(values.mul));
+    values.invert = fx->invertall;
+    values.colorbal = t->colorbal;
+    values.texsize[0] = (float)tex->w; values.texsize[1] = (float)tex->h;
+    values.alpha = dp->alpha_src;
+    if (cached != NULL && cached->samplers_valid && cached->uniforms_valid &&
+        memcmp(&cached->uniforms, &values, sizeof(values)) == 0) {
+        g_vitaUniformSkips++; return;
+    }
+    if (cached == NULL || !cached->samplers_valid) {
+#endif
     g_glewUniform1i(prog->texunit0, 0);
     g_glewUniform1i(prog->texunit1, 1);
+#if defined(MUGEN_VITA_GL) && MUGEN_VITA_RENDER_CACHE
+        if (cached != NULL) cached->samplers_valid = 1;
+    }
+#endif
     g_glewUniform1i(prog->mask, mask != 0);
     g_glewUniform3f(prog->add, t->add[0], t->add[1], t->add[2]);
     g_glewUniform3f(prog->mul, t->mul[0], t->mul[1], t->mul[2]);
@@ -905,6 +1061,9 @@ static void Glr_SetUniforms(const GlProgram *prog, const PalFx *fx, const GlrFx 
     g_glewUniform1f(prog->colorbal, t->colorbal);
     g_glewUniform2f(prog->texsize, (float)tex->w, (float)tex->h);
     g_glewUniform1f(prog->src_alphamul, dp->alpha_src);
+#if defined(MUGEN_VITA_GL) && MUGEN_VITA_RENDER_CACHE
+    if (cached != NULL) { cached->uniforms = values; cached->uniforms_valid = 1; }
+#endif
 }
 
 /*
@@ -976,15 +1135,18 @@ void Gl_DrawQuadRgba(const PalFx *fx, GlTex *tex, float x0, float y0, float x1, 
     Glr_UseProgram(prog->program);
     g_glewActiveTexture(GLR_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tex->id);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, special ? GL_REPEAT : GLR_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GLR_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    GlTex_SetParameter(tex, GL_TEXTURE_WRAP_S, special ? GL_REPEAT : GLR_CLAMP_TO_EDGE);
+    GlTex_SetParameter(tex, GL_TEXTURE_WRAP_T, GLR_CLAMP_TO_EDGE);
+    GlTex_SetParameter(tex, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    GlTex_SetParameter(tex, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     if (prog->program != 0) {
         Glr_SetUniforms(prog, fx, &t, tex, dp, mask);
     }
 #ifdef MUGEN_VITA_GL
-    VitaGl_DrawQuad(prog->program, v, special, c0, c1, dp);
+    if (prog->program != 0) {
+        GlrVitaProgram *cached = Glr_VitaProgram(prog->program);
+        VitaGl_DrawQuad(&cached->vertex, v, special, c0, c1, dp);
+    }
 #else
     glBegin(GL_TRIANGLE_STRIP);
     Glr_QuadVertices(v, dp, c0, c1, special);
@@ -1012,7 +1174,7 @@ void Gl_DrawQuadIndexed(const PalFx *fx, GlTex *tex, GlTex *pal, float x0, float
     Glr_UseProgram(prog->program);
     g_glewActiveTexture(GLR_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tex->id);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, special ? GL_REPEAT : GL_CLAMP);
+    GlTex_SetParameter(tex, GL_TEXTURE_WRAP_S, special ? GL_REPEAT : GL_CLAMP);
     g_glewActiveTexture(GLR_TEXTURE1);
 #ifdef MUGEN_VITA_GL
     glBindTexture(GL_TEXTURE_2D, pal->id);
@@ -1023,7 +1185,10 @@ void Gl_DrawQuadIndexed(const PalFx *fx, GlTex *tex, GlTex *pal, float x0, float
         Glr_SetUniforms(prog, fx, &t, tex, dp, mask);
     }
 #ifdef MUGEN_VITA_GL
-    VitaGl_DrawQuad(prog->program, v, special, c0, c1, dp);
+    if (prog->program != 0) {
+        GlrVitaProgram *cached = Glr_VitaProgram(prog->program);
+        VitaGl_DrawQuad(&cached->vertex, v, special, c0, c1, dp);
+    }
 #else
     glBegin(GL_TRIANGLE_STRIP);
     Glr_QuadVertices(v, dp, c0, c1, special);
@@ -1611,11 +1776,12 @@ int Gl_LoadShader(const char **defines, GlProgram *prog, const char *name)
 #endif
     if (!linked) goto fail;
 #ifdef MUGEN_VITA_GL
-    if (glGetAttribLocation(built.program, "aPosition") < 0 ||
-        glGetAttribLocation(built.program, "aTexCoord") < 0 ||
-        glGetUniformLocation(built.program, "uMvp") < 0) {
-        Log_Printf("GL: %s is missing the Vita vertex interface\n", name);
-        goto fail;
+    {
+        GlrVitaProgram *cached = Glr_VitaProgram(built.program);
+        if (cached->vertex.position < 0 || cached->vertex.texcoord < 0 || cached->vertex.matrix < 0) {
+            Log_Printf("GL: %s is missing the Vita vertex interface\n", name);
+            goto fail;
+        }
     }
 #endif
 #define GLR_UNIFORM(field) built.field = g_glewGetUniformLocation(built.program, #field)
@@ -1692,6 +1858,9 @@ fail:
 static void Glr_FreeProgram(GlProgram *prog)
 {
     if (prog->program != 0) {
+#ifdef MUGEN_VITA_GL
+        Glr_VitaForgetProgram(prog->program);
+#endif
         if (g_glCurrentProgram == prog->program) {
             g_glewUseProgram(0);
             g_glCurrentProgram = 0;

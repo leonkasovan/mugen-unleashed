@@ -1669,3 +1669,59 @@ The bridge was working correctly all along — the log confirmed
 * vitaGL: <https://github.com/Rinnegatamante/vitaGL>
 * The engine's own notes: `../../AGENTS.md`, `../../docs/ANALYSIS.md`,
   `../../PLANS.md` (see "Port work plan")
+
+### Conservative vitaGL optimizations
+
+The Vita renderer caches the linked program's `aPosition`, `aTexCoord` and
+`uMvp` locations, initializes sampler units on first use, skips identical
+per-program uniform sets, and skips redundant texture wrap/filter parameters.
+These are Vita-only optimizations; `GlProgram` and `GlTex` keep their original
+layouts. The caches are bounded, require no heap allocation, and safely rebuild
+entries after eviction. Shader deletion/replacement and texture deletion/init
+invalidate the relevant entries. Uploads and calibration use the same sampler
+setter, so NEAREST/LINEAR and CLAMP/REPEAT changes remain visible.
+
+Draw ordering, projective Q, matrix arithmetic, blend modes, resolution and game
+speed are unchanged. A shader reload that fails retains the working programs.
+At renderer shutdown, `mugen-vita-gl.log` records `GL CACHE` counts for skipped
+uniform sets and texture parameter calls. Counts demonstrate avoided work,
+not an FPS improvement.
+
+Draw-state caching defaults ON. Build a baseline and an optimized version with
+identical renderer/data/resolution options (the setting persists in CMake):
+
+```sh
+port/psvita/build.sh --renderer opengl --precache 0 --no-render-cache
+port/psvita/build.sh --renderer opengl --precache 0 --render-cache
+```
+
+Disk shader caching is a separate, **experimental** startup optimization. It
+requires the vendored vitaGL target and defaults OFF. `--shader-cache` selects
+that target and compiles it with `HAVE_SHADER_CACHE=1`; `--no-shader-cache`
+disables the feature. Neither option removes the bundled/runtime compiler
+requirement. Normal builds preserve explicit cache settings.
+
+```sh
+port/psvita/build.sh --renderer opengl --shader-cache
+port/psvita/build.sh --renderer opengl --no-shader-cache
+```
+
+Upstream's cache reader trusts cache contents and does not robustly handle
+truncated reads/allocation failure. Do not enable it for a conservative release
+until cold/warm/corrupt-cache behavior is qualified on hardware. If an enabled
+cache causes startup trouble, rebuild with `--no-shader-cache` before retrying.
+No new draw/buffer/math speedhack flags are enabled by these changes.
+
+Vertex-layout caching, VBO streaming, batching and render-target reordering are
+not enabled: attribute toggles currently invalidate layout reuse, and those
+changes need separate visual and GPU-lifetime qualification. Lower internal
+resolution remains an explicit configuration experiment, never an automatic
+optimization.
+
+Host verification: `tools/test_gl_errors.sh` tests actual renderer code with
+mock GL entry points, including cache hits, exact float bits, transactional
+replacement, numeric name reuse, bounded eviction and sampler changes after
+uploads. `tools/test_vita_video.sh` checks the actual adapter's quad submission.
+Neither test measures Vita GPU speed. Hardware acceptance requires identical
+characters, stage, clocks, inputs and duration, fixed-frame screenshots, drawn
+FPS/skips and frame-time measurements, with one optimization changed at a time.

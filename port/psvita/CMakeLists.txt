@@ -279,6 +279,14 @@ endif()
 option(MUGEN_VITA_BUILD_VITAGL
        "Build the vendored vitaGL (needed only for the OpenGL renderer work)" OFF)
 
+# Port optimization: state caching has a switch for controlled hardware A/B runs.
+option(MUGEN_VITA_RENDER_CACHE "Cache Vita shader and texture draw state" ON)
+# Upstream trusts cached shader files; keep disk caching an explicit experiment.
+option(MUGEN_VITA_SHADER_CACHE "Experimental vitaGL disk shader cache" OFF)
+if(MUGEN_VITA_SHADER_CACHE AND NOT MUGEN_VITA_BUILD_VITAGL)
+  message(FATAL_ERROR "MUGEN_VITA_SHADER_CACHE requires MUGEN_VITA_BUILD_VITAGL=ON")
+endif()
+
 if(MUGEN_VITA_BUILD_VITAGL)
   enable_language(CXX)
   include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/VitaGl.cmake")
@@ -357,6 +365,9 @@ add_executable(mugen
   ${MUGEN_LUA_SOURCES}
   ${MUGEN_MINIZIP_SOURCES}
   ${MUGEN_LIBRESAMPLE_SOURCES})
+
+target_compile_definitions(mugen PRIVATE
+  MUGEN_VITA_RENDER_CACHE=$<BOOL:${MUGEN_VITA_RENDER_CACHE}>)
 
 target_include_directories(mugen PRIVATE
   "${MUGEN_SRC}"                                  # engine headers

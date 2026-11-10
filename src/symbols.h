@@ -1679,6 +1679,8 @@ int __cdecl Pads_ControllerCount(void);
 /* 0x00479b80 */ int __cdecl Clsn_Collide(int flip_a, int flip_b, const Clsn *a, const Clsn *b, int dx, int dy);
 /* 0x00479ca0 */ GlTex *__cdecl GlTex_Create(void);
 /* 0x00479cf0 */ int __cdecl GlTex_Free(GlTex *tex);
+/* Port optimization: tex must already be bound to GL_TEXTURE_2D. */
+void __cdecl GlTex_SetParameter(const GlTex *tex, int name, int value);
 /* 0x00479d20 */ int __cdecl GlTex_Init(GlTex *tex);
 /* 0x00479d70 */ int __cdecl GlTex_Delete(GlTex *tex);
 /* 0x00479e00 */ int __cdecl GlTex_Alloc(GlTex *tex, int w, int h);

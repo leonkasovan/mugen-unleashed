@@ -349,7 +349,7 @@ void GlDetect_DrawQuad(unsigned int prog, const GlTex *tex, const GlTex *pal_tex
     }
     g_glewActiveTexture(GLD_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tex->id);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
+    GlTex_SetParameter(tex, GL_TEXTURE_WRAP_S, GL_CLAMP);
     g_glewActiveTexture(GLD_TEXTURE1);
     glBindTexture(GL_TEXTURE_1D, pal_tex->id);
     loc0 = g_glewGetUniformLocation(prog, "texunit0");

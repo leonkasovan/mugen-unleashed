@@ -77,6 +77,10 @@ function(mugen_add_vitagl target)
     TEXTURES_SPEEDHACK=1
     VGL_GIT_HASH="9bf3e3f")
 
+  if(MUGEN_VITA_SHADER_CACHE)
+    target_compile_definitions(${target} PRIVATE HAVE_SHADER_CACHE=1)
+  endif()
+
   # vitaGL's own build line (its Makefile): -O3 -ffast-math, Cortex-A9 + NEON,
   # IEEE half floats. -Wl,-q is required for vita-elf-create's relocation table
   # and is already in the toolchain flags.

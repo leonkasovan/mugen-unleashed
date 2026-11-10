@@ -18,6 +18,8 @@
 #   port/psvita/build.sh --output-resolution WxH  override display framebuffer size
 #   port/psvita/build.sh --shader-compiler FILE  bundle/cache your libshacccg.suprx
 #   port/psvita/build.sh --no-shader-compiler    clear the configured compiler input
+#   port/psvita/build.sh --render-cache / --no-render-cache  draw-state A/B test
+#   port/psvita/build.sh --shader-cache / --no-shader-cache  experimental disk cache
 #   port/psvita/build.sh --gl-selftest    startup GL smoke + frame-60 capture
 #   port/psvita/build.sh --precache N     0 | 1 (Vita default: 0)
 #   port/psvita/build.sh --env          print the exports, build nothing
@@ -115,6 +117,8 @@ DATA_DIR=""
 RENDERER=""
 PRECACHE=""
 GL_SELFTEST=OFF
+RENDER_CACHE=""
+SHADER_CACHE=""
 RESOLUTION=960x544
 SHADER_COMPILER=""
 SHADER_COMPILER_SET=0
@@ -137,6 +141,10 @@ while [ $# -gt 0 ]; do
         --offline) OFFLINE=1 ;;
         --debug) BUILD_TYPE=Debug ;;
         --gl-selftest) GL_SELFTEST=ON ;;
+        --render-cache) RENDER_CACHE=ON ;;
+        --no-render-cache) RENDER_CACHE=OFF ;;
+        --shader-cache) SHADER_CACHE=ON ;;
+        --no-shader-cache) SHADER_CACHE=OFF ;;
         --resolution) RESOLUTION="${2:-}"; shift
             [ -n "$RESOLUTION" ] || fail "--resolution requires WIDTHxHEIGHT" ;;
         --resolution=*) RESOLUTION="${1#*=}" ;;
@@ -621,10 +629,16 @@ if [ -n "$PRECACHE" ]; then
     cmake_args+=("-DMUGEN_VITA_PRECACHE=$PRECACHE")
 fi
 
-if [ "$GL_SELFTEST" = ON ]; then
+if [ -n "$RENDER_CACHE" ]; then
+    cmake_args+=("-DMUGEN_VITA_RENDER_CACHE=$RENDER_CACHE")
+fi
+if [ -n "$SHADER_CACHE" ]; then
+    cmake_args+=("-DMUGEN_VITA_SHADER_CACHE=$SHADER_CACHE")
+fi
+if [ "$GL_SELFTEST" = ON ] || [ "$SHADER_CACHE" = ON ]; then
     cmake_args+=("-DMUGEN_VITA_BUILD_VITAGL=ON")
     if [ ! -f "$ROOT/third_party/vitagl/src/source/vgl.c" ]; then
-        [ "$OFFLINE" = 0 ] || fail "--gl-selftest needs the pinned vitaGL source; fetch it before an offline build"
+        [ "$OFFLINE" = 0 ] || fail "vendored build needs the pinned vitaGL source; fetch it before an offline build"
         "$ROOT/tools/psvita/fetch_vitagl.sh"
     fi
 fi

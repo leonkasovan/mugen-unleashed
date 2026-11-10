@@ -27,6 +27,7 @@ class VitaBuildTests(unittest.TestCase):
         end = source.index('cmake "${cmake_args[@]}"', start)
         configure = source[start:end] + 'cmake "${cmake_args[@]}"\n'
         body = 'set -eu\n' + parse + '''
+ROOT="$PWD"
 HERE=/project/port/psvita; OUT=/project/build/psvita; GENERATOR=Ninja
 TOOLCHAIN_FILE_WIN=C:/vitasdk/share/vita.toolchain.cmake
 DATA_WIN="$DATA_DIR"
@@ -55,6 +56,47 @@ cmake() { printf '%s\\0' "$@"; }
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn(b'-DMUGEN_VITA_RENDERMODE=', result.stdout)
         self.assertNotIn(b'-DMUGEN_VITA_PRECACHE=', result.stdout)
+
+    def test_render_and_shader_cache_arguments(self):
+        for args, expected in [
+            (('--render-cache',), ('-DMUGEN_VITA_RENDER_CACHE=ON',)),
+            (('--no-render-cache',), ('-DMUGEN_VITA_RENDER_CACHE=OFF',)),
+            (('--shader-cache',), ('-DMUGEN_VITA_SHADER_CACHE=ON', '-DMUGEN_VITA_BUILD_VITAGL=ON')),
+            (('--no-shader-cache',), ('-DMUGEN_VITA_SHADER_CACHE=OFF',)),
+        ]:
+            with self.subTest(args=args):
+                result = self.arguments(*args)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                for value in expected:
+                    self.assertIn(value.encode() + b'\0', result.stdout)
+        result = self.arguments()
+        self.assertNotIn(b'-DMUGEN_VITA_SHADER_CACHE=', result.stdout)
+        self.assertNotIn(b'-DMUGEN_VITA_RENDER_CACHE=', result.stdout)
+
+    @unittest.skipUnless(os.environ.get('CMAKE') or shutil.which('cmake'), 'CMake unavailable')
+    def test_vendored_shader_cache_definition(self):
+        work = ROOT / 'build/tmp/vita-cache-cmake'
+        work.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=work) as tmp:
+            tmp = Path(tmp)
+            (tmp / 'source').mkdir()
+            (tmp / 'source/vgl.c').write_text('void probe(void) {}\n')
+            module = (ROOT / 'port/psvita/cmake/VitaGl.cmake').as_posix()
+            (tmp / 'CMakeLists.txt').write_text(
+                'cmake_minimum_required(VERSION 3.16)\nproject(cache_flags C)\n'
+                f'include("{module}")\n'
+                'set(MUGEN_VITAGL_DIR "${CMAKE_CURRENT_SOURCE_DIR}")\n'
+                'mugen_add_vitagl(probe)\n'
+                'get_target_property(flags probe COMPILE_DEFINITIONS)\n'
+                'file(WRITE "${CMAKE_BINARY_DIR}/flags.txt" "${flags}")\n')
+            for enabled in ('ON', 'OFF'):
+                result = subprocess.run([self.cmake(), '-S', str(tmp), '-B', str(tmp / enabled),
+                                         '-DMUGEN_VITA_SHADER_CACHE=' + enabled], capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                flags = (tmp / enabled / 'flags.txt').read_text()
+                self.assertEqual('HAVE_SHADER_CACHE=1' in flags, enabled == 'ON')
+                self.assertNotIn('DRAW_SPEEDHACK', flags)
+                self.assertNotIn('BUFFERS_SPEEDHACK', flags)
 
     def test_bad_arguments_fail(self):
         for args in [('--renderer',), ('--precache',), ('--renderer=wrong',), ('--precache=2',)]:

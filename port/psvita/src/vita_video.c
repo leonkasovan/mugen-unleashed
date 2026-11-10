@@ -127,7 +127,7 @@ int VitaGl_SetAttribute(SDL_GLattr attribute, int value)
  * all four texture coordinates (including projective Q). The shared CPU
  * builder preserves the original quad arithmetic and triangle-strip order.
  */
-void VitaGl_DrawQuad(GLuint program, const float *corners, int special,
+void VitaGl_DrawQuad(const VitaGlVertexInterface *vertex, const float *corners, int special,
                      float top, float bottom, const DrawParams *params)
 {
     GlQuadVerts quad;
@@ -135,10 +135,10 @@ void VitaGl_DrawQuad(GLuint program, const float *corners, int special,
     GLfloat vertices[GL_QUAD_VERTEX_COUNT * GL_QUAD_VERTEX_FLOATS];
     GLint position, texcoord, matrix;
 
-    if (!ready || display == NULL || program == 0) return;
-    position = glGetAttribLocation(program, "aPosition");
-    texcoord = glGetAttribLocation(program, "aTexCoord");
-    matrix = glGetUniformLocation(program, "uMvp");
+    if (!ready || display == NULL || vertex == NULL || corners == NULL || params == NULL) return;
+    position = vertex->position;
+    texcoord = vertex->texcoord;
+    matrix = vertex->matrix;
     if (position < 0 || texcoord < 0 || matrix < 0) return;
     GlQuad_Build(&quad, corners, special, top, bottom,
                  params->top_offset, params->bottom_offset, params->width_ratio);
