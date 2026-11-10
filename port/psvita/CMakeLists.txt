@@ -773,17 +773,18 @@ if(MUGEN_VITA_DATA_DIR)
       "\n([Pp][Rr][Ee][Cc][Aa][Cc][Hh][Ee][ \t]*=[ \t]*)[0-9]+"
       "\n\\1${MUGEN_VITA_PRECACHE}" _cfg "${_cfg}")
 
-    # Turn the on-screen frame counter on. The engine can only toggle it with
-    # the console's "fps" command, which needs a backquote key -- unreachable on
-    # a Vita. config.c now reads [Debug] ShowFPS, so it can be enabled here.
-    # The frame rate is also written to mugen.log every 10 s (port/psvita/src/
-    # vita_fps.c), which is the reading to quote in a bug report.
-    # Anchored on a preceding newline so comments are not matched: this file
-    # contains ";If Debug = 1, this will be ignored.", which a looser pattern
-    # turned into "ShowFPS = 1, this will be ignored."
-    string(REGEX REPLACE
-      "\n([Dd][Ee][Bb][Uu][Gg][ \t]*=[ \t]*[0-9]+)\n"
-      "\n\\1\nShowFPS = 1\n" _cfg "${_cfg}")
+    # Port fix: normalize an existing ShowFPS key rather than adding a second
+    # one when the selected template already enables the counter. Comments do
+    # not match. Both LF and CRLF templates are accepted by the insertion path.
+    if(_cfg MATCHES "\n[Ss][Hh][Oo][Ww][Ff][Pp][Ss][ \t]*=[ \t]*[0-9]+")
+      string(REGEX REPLACE
+        "\n([Ss][Hh][Oo][Ww][Ff][Pp][Ss][ \t]*=[ \t]*)[0-9]+"
+        "\n\\11" _cfg "${_cfg}")
+    else()
+      string(REGEX REPLACE
+        "\n([Dd][Ee][Bb][Uu][Gg][ \t]*=[ \t]*[0-9]+)[\r]?\n"
+        "\n\\1\nShowFPS = 1\n" _cfg "${_cfg}")
+    endif()
 
     # --- real joystick button indices for the Vita pad ----------------------
     #

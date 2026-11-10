@@ -2,6 +2,7 @@
 """Host tests of Vita build arguments and the production ELF layout check."""
 import importlib.util
 import os
+import re
 from pathlib import Path
 import shutil
 import struct
@@ -99,6 +100,33 @@ cmake() { printf '%s\\0' "$@"; }
                                              '-DMUGEN_VITA_SHADER_COMPILER=' + path,
                                              '-P', str(script)], capture_output=True)
                     self.assertEqual(result.returncode, expected, result.stderr)
+
+    @unittest.skipUnless(os.environ.get('CMAKE') or shutil.which('cmake'), 'CMake unavailable')
+    def test_showfps_normalization(self):
+        source = (ROOT / 'port/psvita/CMakeLists.txt').read_text()
+        start = source.index('    # Port fix: normalize an existing ShowFPS key')
+        end = source.index('    # --- real joystick button indices', start)
+        patch = source[start:end]
+        base = '[Debug]\nDebug = 0\n;If Debug = 1, this will be ignored.\n'
+        cases = [base, base.replace('\n', '\r\n'), base + 'ShowFPS = 0\n',
+                 base + 'ShowFPS = 1\n', base + 'showfps = 0\n',
+                 base + ';ShowFPS = 0\n', (ROOT / 'port/psvita/mugen.cfg').read_text()]
+        work = ROOT / 'build/tmp/vita-showfps-tests'
+        work.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=work) as tmp:
+            tmp = Path(tmp)
+            script = tmp / 'check.cmake'
+            script.write_text('file(READ "${CMAKE_CURRENT_LIST_DIR}/input.cfg" _cfg)\n' +
+                              patch + 'file(WRITE "${CMAKE_CURRENT_LIST_DIR}/output.cfg" "${_cfg}")\n')
+            for text in cases:
+                with self.subTest(text=text[:80]):
+                    (tmp / 'input.cfg').write_bytes(text.encode())
+                    subprocess.run([os.environ.get('CMAKE') or shutil.which('cmake'),
+                                    '-P', str(script)], check=True, capture_output=True)
+                    output = (tmp / 'output.cfg').read_text()
+                    values = re.findall(r'^showfps[ \t]*=[ \t]*(\d+)', output, re.M | re.I)
+                    self.assertEqual(values, ['1'])
+                    self.assertIn(';If Debug = 1, this will be ignored.', output)
 
     def test_failed_build_preserves_status_and_stops(self):
         source = (ROOT / 'port/psvita/build.sh').read_text()

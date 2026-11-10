@@ -203,13 +203,13 @@ with it empty, the data directory's `data/mugen.cfg` is used as before.
 
 ### The packed `mugen.cfg` is patched
 
-A desktop `data/mugen.cfg` does not work on the Vita, so four keys are rewritten
+A desktop `data/mugen.cfg` needs Vita-specific settings, so relevant keys are rewritten
 in a copy that goes into the VPK:
 
 ```ini
 [Config]
-GameWidth  = 480        ; was 1280
-GameHeight = 272        ; was 720
+GameWidth  = 960
+GameHeight = 544
 
 [Video]
 RenderMode = system    ; the shipped default; see "The OpenGL renderer" below
@@ -217,17 +217,17 @@ FullScreen = 1          ; was 0
 ```
 
 The values above are what the build actually packs: `MUGEN_VITA_VIDEO_WIDTH`
-(480), `MUGEN_VITA_VIDEO_HEIGHT` (272), `MUGEN_VITA_FULLSCREEN` (ON) and
+(960), `MUGEN_VITA_VIDEO_HEIGHT` (544), `MUGEN_VITA_FULLSCREEN` (ON) and
 `MUGEN_VITA_RENDERMODE` (`system`). `RenderMode = OpenGL` now selects the native vitaGL display and
 programmable sprite path described below; SDL's separate video presenter is
 bypassed. System remains the default pending hardware qualification.
 
-`GameWidth`/`GameHeight` matter most. vitaGL has exactly **one** framebuffer —
-the Vita's 960x544 — and the engine asks for a GL surface of `GameWidth x
-GameHeight`. Ask for 1280x720 and `SDL_SetVideoMode` fails; the engine's own
-quirk (`Video_SetMode`'s comment: *“with OpenGL a failed SDL_SetVideoMode is not
-noticed here”*) means it then calls `Gl_Init` with **no GL context** and dies
-with `C2-12828-1` before drawing a frame. The build patch below prevents that; the same symptom also comes from an oversized newlib heap, which is a separate failure — see "Diagnosing a failure on the console".
+`GameWidth`/`GameHeight` control the internal game buffer. With OpenGL,
+`[Video] Width/Height` independently select the output framebuffer dimensions.
+The build's resolution option patches both pairs together. To try a smaller
+internal buffer with native output, edit the active installed config after
+packaging and fully restart the game. Check `gameCoord` and the native
+presentation descriptor separately in fresh logs.
 
 **Your game tree is never modified.** The patch is written to
 `build/psvita/vita-mugen.cfg` and substituted while the VPK is packed, so
@@ -278,10 +278,10 @@ cmake -S port/psvita -B build/psvita -G Ninja \
 | `MUGEN_VITA_VERSION` | `01.00` | `APP_VER`, format `##.##` |
 | `MUGEN_VITA_MEMSIZE` | `0` | `vita-make-fself -m`: `0` for a normal app (recommended), `0x1000`–`0x12800` KiB for system mode |
 | `MUGEN_VITA_HEAP_MIB` | `64` | newlib heap; SDL's Vita video driver needs process memory for GXM too, so an oversized heap starves `sceGxmInitialize` |
-| `MUGEN_VITA_VIDEO_WIDTH` | `480` | `GameWidth` (render size; the panel is 960) |
-| `MUGEN_VITA_VIDEO_HEIGHT` | `272` | `GameHeight` (render size; the panel is 544) |
+| `MUGEN_VITA_VIDEO_WIDTH` | `960` | `GameWidth` (render size; the panel is 960) |
+| `MUGEN_VITA_VIDEO_HEIGHT` | `544` | `GameHeight` (render size; the panel is 544) |
 | `MUGEN_VITA_FULLSCREEN` | `ON` | Write `FullScreen = 1` into the packed `mugen.cfg` |
-| `MUGEN_VITA_RENDERMODE` | `system` | `RenderMode` in the packed `mugen.cfg` (`opengl` needs an SDL built with vitaGL) |
+| `MUGEN_VITA_RENDERMODE` | `system` | `RenderMode` in the packed `mugen.cfg` (`opengl` uses the native vitaGL adapter) |
 | `MUGEN_VITA_ICON_ICO` | `res/icons/1.ico` | the artwork every `sce_sys/` image is derived from |
 | `MUGEN_VITA_ICON_SIZE` | `128` | `icon0.png` edge length (the Vita expects 128) |
 | `MUGEN_VITA_BG_W` / `_BG_H` | `840` / `500` | LiveArea background size |
@@ -1318,6 +1318,14 @@ self-test enabled; the diagnostic module also compiled with it disabled.
 preservation of the previous shader set. Diagnostic-module tests also passed
 ASan/UBSan. The packaged SELF contains the integration marker, has the same
 UNSAFE authid as the working R4 app, and includes the matching four Vita shaders.
+
+### FPS display
+
+The Vita template explicitly enables `[Debug] ShowFPS = 1`; the packager
+normalizes that key without adding duplicates. `DrawFPS` is not read by this
+engine. Use `Debug = 0` for the normal FPS-only overlay. `ShowFPS` also enables
+`perf:` log lines, but use the match's `Avg frame rate` and `Skipped frames`
+when assessing delivered rendering performance.
 
 ### Native output and an optional bundled compiler
 
