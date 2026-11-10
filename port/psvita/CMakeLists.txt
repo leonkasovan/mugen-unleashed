@@ -94,6 +94,7 @@ endif()
 
 set(MUGEN_SRC    "${MUGEN_ROOT}/src")
 set(MUGEN_THIRD  "${MUGEN_ROOT}/third_party")
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Config.cmake")
 
 # --------------------------------------------------------------- packaging --
 #
@@ -138,13 +139,23 @@ set(MUGEN_VITA_DATA_DIR "" CACHE PATH
 # Both are rewritten when the game tree is packed, in a copy that goes into the
 # VPK. The tree on disk is never modified -- install/ is the pristine reference.
 # Port addition: native Vita output is the default for the now-working GL path.
-# GameWidth/GameHeight also select the actual vitaGL scanout dimensions.
+# GameWidth/GameHeight select the internal game buffer; output is separate.
 # System rendering at native size costs more CPU work; an explicit 480x272
 # build remains available when a lower-resolution software target is wanted.
 set(MUGEN_VITA_VIDEO_WIDTH  "960" CACHE STRING
     "GameWidth written into the packed data/mugen.cfg")
 set(MUGEN_VITA_VIDEO_HEIGHT "544" CACHE STRING
     "GameHeight written into the packed data/mugen.cfg")
+set(MUGEN_VITA_OUTPUT_WIDTH "" CACHE STRING
+    "Output Width in packed mugen.cfg (empty: follow game width)")
+set(MUGEN_VITA_OUTPUT_HEIGHT "" CACHE STRING
+    "Output Height in packed mugen.cfg (empty: follow game height)")
+if(MUGEN_VITA_OUTPUT_WIDTH STREQUAL "")
+  set(MUGEN_VITA_OUTPUT_WIDTH "${MUGEN_VITA_VIDEO_WIDTH}")
+endif()
+if(MUGEN_VITA_OUTPUT_HEIGHT STREQUAL "")
+  set(MUGEN_VITA_OUTPUT_HEIGHT "${MUGEN_VITA_VIDEO_HEIGHT}")
+endif()
 set(MUGEN_VITA_FULLSCREEN   "ON"  CACHE BOOL
     "Write FullScreen = 1 into the packed data/mugen.cfg")
 
@@ -247,6 +258,11 @@ set(MUGEN_VITA_RENDERMODE "system" CACHE STRING
 if(NOT MUGEN_VITA_RENDERMODE MATCHES "^(system|opengl|openglscreen)?$")
   message(FATAL_ERROR "MUGEN_VITA_RENDERMODE must be system, opengl, openglscreen or empty")
 endif()
+# Check cached/manual options too; the config patch rechecks a template mode
+# when MUGEN_VITA_RENDERMODE is empty.
+mugen_vita_validate_resolution("${MUGEN_VITA_RENDERMODE}"
+  "${MUGEN_VITA_VIDEO_WIDTH}" "${MUGEN_VITA_VIDEO_HEIGHT}"
+  "${MUGEN_VITA_OUTPUT_WIDTH}" "${MUGEN_VITA_OUTPUT_HEIGHT}")
 # Port fix: the background loader's 4 KiB default stack has overflowed on
 # hardware. Preserve the confirmed workaround when a fresh VPK is packed.
 set(MUGEN_VITA_PRECACHE "0" CACHE STRING "Precache written into the Vita configuration (0 or 1)")
@@ -708,7 +724,7 @@ if(MUGEN_VITA_DATA_DIR)
   # touched.
   #
   # The template is port/psvita/mugen.cfg when it exists: it carries the Vita's
-  # own defaults (RenderMode=System, 640x480 render size, FullScreen=1 and the
+  # own defaults (RenderMode=System, 960x544 render size, FullScreen=1 and the
   # PS button layout in [P<n> Joystick]) instead of the desktop values a general
   # game tree ships. MUGEN_VITA_CFG overrides it; an empty value falls back to
   # the data directory's copy, which is what earlier builds always used.
@@ -729,62 +745,9 @@ if(MUGEN_VITA_DATA_DIR)
   if(EXISTS "${MUGEN_VITA_CFG_SRC}")
     file(READ "${MUGEN_VITA_CFG_SRC}" _cfg)
 
-    # Ini keys are case-insensitive in the engine, so match any casing and keep
-    # whatever spelling and spacing the file uses.
-    string(REGEX REPLACE
-      "([Gg][Aa][Mm][Ee][Ww][Ii][Dd][Tt][Hh][ \t]*=[ \t]*)[0-9]+"
-      "\\1${MUGEN_VITA_VIDEO_WIDTH}" _cfg "${_cfg}")
-    string(REGEX REPLACE
-      "([Gg][Aa][Mm][Ee][Hh][Ee][Ii][Gg][Hh][Tt][ \t]*=[ \t]*)[0-9]+"
-      "\\1${MUGEN_VITA_VIDEO_HEIGHT}" _cfg "${_cfg}")
-
-    # Keep explicit [Video] dimensions in step with the render target. Commented
-    # Width/Height entries remain comments and therefore inherit GameWidth/Height.
-    string(REGEX REPLACE
-      "\n([Ww][Ii][Dd][Tt][Hh][ \t]*=[ \t]*)[0-9]+"
-      "\n\\1${MUGEN_VITA_VIDEO_WIDTH}" _cfg "${_cfg}")
-    string(REGEX REPLACE
-      "\n([Hh][Ee][Ii][Gg][Hh][Tt][ \t]*=[ \t]*)[0-9]+"
-      "\n\\1${MUGEN_VITA_VIDEO_HEIGHT}" _cfg "${_cfg}")
-
-    if(MUGEN_VITA_FULLSCREEN)
-      string(REGEX REPLACE
-        "([Ff][Uu][Ll][Ll][Ss][Cc][Rr][Ee][Ee][Nn][ \t]*=[ \t]*)[0-9]+"
-        "\\11" _cfg "${_cfg}")
-    else()
-      string(REGEX REPLACE
-        "([Ff][Uu][Ll][Ll][Ss][Cc][Rr][Ee][Ee][Nn][ \t]*=[ \t]*)[0-9]+"
-        "\\10" _cfg "${_cfg}")
-    endif()
-
-    # RenderMode takes a word, not a number, and it is also mentioned in the
-    # file's comments (";Ignored if RenderMode=System ..."). Matching is
-    # therefore anchored on a preceding newline, which comments in this file
-    # never have directly before the key, so only the real setting is rewritten.
-    if(MUGEN_VITA_RENDERMODE)
-      string(REGEX REPLACE
-        "\n([Rr][Ee][Nn][Dd][Ee][Rr][Mm][Oo][Dd][Ee][ \t]*=[ \t]*)[A-Za-z]+"
-        "\n\\1${MUGEN_VITA_RENDERMODE}" _cfg "${_cfg}")
-    endif()
-
-    # Port fix: update the selected template too, rather than letting a build
-    # silently restore Precache=1 after a user disabled it on the device.
-    string(REGEX REPLACE
-      "\n([Pp][Rr][Ee][Cc][Aa][Cc][Hh][Ee][ \t]*=[ \t]*)[0-9]+"
-      "\n\\1${MUGEN_VITA_PRECACHE}" _cfg "${_cfg}")
-
-    # Port fix: normalize an existing ShowFPS key rather than adding a second
-    # one when the selected template already enables the counter. Comments do
-    # not match. Both LF and CRLF templates are accepted by the insertion path.
-    if(_cfg MATCHES "\n[Ss][Hh][Oo][Ww][Ff][Pp][Ss][ \t]*=[ \t]*[0-9]+")
-      string(REGEX REPLACE
-        "\n([Ss][Hh][Oo][Ww][Ff][Pp][Ss][ \t]*=[ \t]*)[0-9]+"
-        "\n\\11" _cfg "${_cfg}")
-    else()
-      string(REGEX REPLACE
-        "\n([Dd][Ee][Bb][Uu][Gg][ \t]*=[ \t]*[0-9]+)[\r]?\n"
-        "\n\\1\nShowFPS = 1\n" _cfg "${_cfg}")
-    endif()
+    # Port fix: patch and validate actual INI groups, including ShowFPS;
+    # spelling, indentation, line endings and comments are not validators.
+    mugen_vita_patch_config(_cfg)
 
     # --- real joystick button indices for the Vita pad ----------------------
     #
@@ -823,50 +786,10 @@ if(MUGEN_VITA_DATA_DIR)
     # confirming. The pause collision is instead avoided by not binding Circle to
     # the C attack in src/config.c.
     #
-    # FirstRun = 0: the "This is 1 the first time you run MUGEN" flag.
-    #
-    # With it set, the engine opens the licence/info panel on the title screen
-    # before the mode select, and then REWRITES mugen.cfg to clear the flag
-    # (config.c, "Clear FirstRun once it has been seen") -- on the Vita that
-    # means writing into the app directory, after which the packed config and
-    # the on-disk one disagree. Packing it as 0 avoids both.
-    #
-    # Anchored on newlines so the comment above the value (";This is 1 the first
-    # time you run MUGEN.") cannot match -- the same trap as ShowFPS below.
-    string(REGEX REPLACE
-      "\n([Ff][Ii][Rr][Ss][Tt][Rr][Uu][Nn][ \t]*=[ \t]*)1\n"
-      "\n\\10\n" _cfg "${_cfg}")
-
-    # Verify the patches actually applied.
-    #
-    # These substitutions are easy to lose: an edit to this block once removed
-    # the FirstRun patch outright, and the build happily shipped a VPK with
-    # FirstRun = 1. A wrong config is invisible until it reaches the console, so
-    # a missing substitution is now a configure error rather than a surprise.
-    foreach(_expect
-        "GameWidth = ${MUGEN_VITA_VIDEO_WIDTH}"
-        "GameHeight = ${MUGEN_VITA_VIDEO_HEIGHT}"
-        "FirstRun = 0"
-        "Precache = ${MUGEN_VITA_PRECACHE}"
-        "ShowFPS = 1")
-      string(FIND "${_cfg}" "${_expect}" _found)
-      if(_found EQUAL -1)
-        message(FATAL_ERROR
-          "mugen.cfg patch did not apply: expected \"${_expect}\" in the packed "
-          "config. Fix the patch in port/psvita/CMakeLists.txt; shipping the "
-          "pristine value would change behaviour on the console.")
-      endif()
-    endforeach()
-    if(MUGEN_VITA_FULLSCREEN)
-      string(FIND "${_cfg}" "FullScreen = 1" _found)
-      if(_found EQUAL -1)
-        message(FATAL_ERROR "mugen.cfg patch did not apply: expected \"FullScreen = 1\"")
-      endif()
-    endif()
-
+    # Game/display/FPS keys have been validated by mugen_vita_patch_config.
     file(WRITE "${MUGEN_VITA_CFG_OUT}" "${_cfg}")
     message(STATUS "mugen.cfg patched: GameWidth ${MUGEN_VITA_VIDEO_WIDTH}, "
-                   "GameHeight ${MUGEN_VITA_VIDEO_HEIGHT}, "
+                   "GameHeight ${MUGEN_VITA_VIDEO_HEIGHT}, output ${MUGEN_VITA_OUTPUT_WIDTH}x${MUGEN_VITA_OUTPUT_HEIGHT}, "
                    "FullScreen ${MUGEN_VITA_FULLSCREEN}, "
                    "RenderMode ${MUGEN_VITA_RENDERMODE}, Precache ${MUGEN_VITA_PRECACHE}")
   else()
@@ -944,6 +867,18 @@ if(MUGEN_VITA_SHADER_COMPILER)
   endif()
   # The header check does not establish that the native loader will accept it.
   message(STATUS "Bundling supplied shader compiler as module/libshacccg.suprx")
+endif()
+
+# External compiler use is supported, but must be visible in the build log.
+set(_compiler_renderer "${MUGEN_VITA_RENDERMODE}")
+if(DEFINED _cfg)
+  mugen_vita_ini_get("${_cfg}" Video RenderMode _compiler_renderer)
+endif()
+string(TOLOWER "${_compiler_renderer}" _compiler_renderer)
+if(NOT MUGEN_VITA_SHADER_COMPILER AND
+   NOT EXISTS "${MUGEN_VITA_DATA_DIR}/module/libshacccg.suprx" AND
+   (_compiler_renderer STREQUAL "opengl" OR _compiler_renderer STREQUAL "openglscreen"))
+  message(WARNING "OpenGL VPK has no bundled shader compiler. Supply --shader-compiler FILE, or install libshacccg.suprx in ur0:/data/ on the Vita before launching.")
 endif()
 
 set(_mugen_vpk_args

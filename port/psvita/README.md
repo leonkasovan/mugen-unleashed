@@ -224,10 +224,21 @@ bypassed. System remains the default pending hardware qualification.
 
 `GameWidth`/`GameHeight` control the internal game buffer. With OpenGL,
 `[Video] Width/Height` independently select the output framebuffer dimensions.
-The build's resolution option patches both pairs together. To try a smaller
-internal buffer with native output, edit the active installed config after
-packaging and fully restart the game. Check `gameCoord` and the native
-presentation descriptor separately in fresh logs.
+`--resolution WxH` sets both pairs. Use `--game-resolution WxH` and
+`--output-resolution WxH` to override the internal and output sizes separately:
+
+```sh
+port/psvita/build.sh --renderer opengl --game-resolution 720x408 \
+  --output-resolution 960x544 --precache 0
+```
+
+This packages the mixed profile directly; editing the installed config is no
+longer required. Check `gameCoord` and the native presentation descriptor
+separately in fresh logs. A lower internal size is a test configuration, not
+a guarantee of any particular frame rate. OpenGL output must be one of
+960x544, 720x408, 640x368 or 480x272. For example, 640x480 is allowed internally
+with native output, but is rejected as OpenGL output. OpenGLScreen ties its
+game and display sizes together, so independent sizes require OpenGL.
 
 **Your game tree is never modified.** The patch is written to
 `build/psvita/vita-mugen.cfg` and substituted while the VPK is packed, so
@@ -279,7 +290,9 @@ cmake -S port/psvita -B build/psvita -G Ninja \
 | `MUGEN_VITA_MEMSIZE` | `0` | `vita-make-fself -m`: `0` for a normal app (recommended), `0x1000`–`0x12800` KiB for system mode |
 | `MUGEN_VITA_HEAP_MIB` | `64` | newlib heap; SDL's Vita video driver needs process memory for GXM too, so an oversized heap starves `sceGxmInitialize` |
 | `MUGEN_VITA_VIDEO_WIDTH` | `960` | `GameWidth` (render size; the panel is 960) |
-| `MUGEN_VITA_VIDEO_HEIGHT` | `544` | `GameHeight` (render size; the panel is 544) |
+| `MUGEN_VITA_VIDEO_HEIGHT` | `544` | `GameHeight` (internal render size) |
+| `MUGEN_VITA_OUTPUT_WIDTH` / `_HEIGHT` | empty | Output `Width`/`Height`; empty follows the corresponding internal size |
+| `MUGEN_VITA_SHADER_COMPILER` | empty | Optional supplied module; a configured path survives ordinary rebuilds |
 | `MUGEN_VITA_FULLSCREEN` | `ON` | Write `FullScreen = 1` into the packed `mugen.cfg` |
 | `MUGEN_VITA_RENDERMODE` | `system` | `RenderMode` in the packed `mugen.cfg` (`opengl` uses the native vitaGL adapter) |
 | `MUGEN_VITA_ICON_ICO` | `res/icons/1.ico` | the artwork every `sce_sys/` image is derived from |
@@ -1322,7 +1335,9 @@ UNSAFE authid as the working R4 app, and includes the matching four Vita shaders
 ### FPS display
 
 The Vita template explicitly enables `[Debug] ShowFPS = 1`; the packager
-normalizes that key without adding duplicates. `DrawFPS` is not read by this
+writes one canonical key in that group and validates the parsed value.
+Lowercase keys, compact spacing, indentation and CRLF are accepted. A
+`ShowFPS` key in another group cannot suppress the `[Debug]` entry. `DrawFPS` is not read by this
 engine. Use `Debug = 0` for the normal FPS-only overlay. `ShowFPS` also enables
 `perf:` log lines, but use the match's `Avg frame rate` and `Skipped frames`
 when assessing delivered rendering performance.
@@ -1337,11 +1352,13 @@ and match operation: 726 match frames in 12.12 seconds, reported average game
 rate 59.90 and average drawn frame rate 59.74. Native 960x544 output and an
 app-local compiler load still require their own device run.
 
-The template and new CMake defaults now use native 960x544 for both game and
-video dimensions. `build.sh` explicitly passes those dimensions so a cached
-480x272 configure cannot silently retain the old size. Manual CMake users with
-an existing build should pass both `MUGEN_VITA_VIDEO_WIDTH=960` and
-`MUGEN_VITA_VIDEO_HEIGHT=544` explicitly.
+The template and new CMake defaults use native 960x544 for both game and
+video dimensions. The script passes both selected pairs explicitly. Manual
+CMake users can select, for example, `MUGEN_VITA_VIDEO_WIDTH=720`,
+`MUGEN_VITA_VIDEO_HEIGHT=408`, `MUGEN_VITA_OUTPUT_WIDTH=960` and
+`MUGEN_VITA_OUTPUT_HEIGHT=544`. If output options are empty, they follow the
+internal dimensions. Effective OpenGL output is checked during configuration,
+including when the renderer comes from an existing cache or selected template.
 
 A compiler supplied by the builder can be included privately in the VPK:
 
@@ -1363,8 +1380,14 @@ The dedicated journal records the actual path and native result; verify an
 works independently of the system copy.
 
 The module is a user-supplied binary input; the project does not download it or
-store it in source control. Ordinary script builds clear a previously cached
-compiler path. `libvitashark`, `SceShaccCgExt` and taiHEN are linked dependencies,
+store it in source control. Once supplied with `--shader-compiler FILE`, the
+path survives ordinary rebuilds in the same build directory. Use
+`--no-shader-compiler` to clear that configured input explicitly. After
+`--clean` or another removal of the CMake cache, supply the path again.
+Files already inside the selected game-data tree remain ordinary assets.
+An OpenGL package without a bundled compiler produces a warning identifying
+the required system module; a missing cached input file is an error rather
+than a silent omission. `libvitashark`, `SceShaccCgExt` and taiHEN are linked dependencies,
 not additional `.suprx` files to pack. `.gxp` files are optional generated shader
 caches; no `.spr` dependency was found in the pinned vitaGL sources.
 

@@ -13,8 +13,11 @@
 #   port/psvita/build.sh --no-data      pack no game data (engine only)
 #   port/psvita/build.sh --titleid ID   nine-character title id (MSDK00001)
 #   port/psvita/build.sh --renderer MODE  system | opengl | openglscreen
-#   port/psvita/build.sh --resolution WxH  render/output size (default: 960x544)
-#   port/psvita/build.sh --shader-compiler FILE  bundle your libshacccg.suprx
+#   port/psvita/build.sh --resolution WxH  set game and output size (default: 960x544)
+#   port/psvita/build.sh --game-resolution WxH  override internal game size
+#   port/psvita/build.sh --output-resolution WxH  override display framebuffer size
+#   port/psvita/build.sh --shader-compiler FILE  bundle/cache your libshacccg.suprx
+#   port/psvita/build.sh --no-shader-compiler    clear the configured compiler input
 #   port/psvita/build.sh --gl-selftest    startup GL smoke + frame-60 capture
 #   port/psvita/build.sh --precache N     0 | 1 (Vita default: 0)
 #   port/psvita/build.sh --env          print the exports, build nothing
@@ -114,6 +117,9 @@ PRECACHE=""
 GL_SELFTEST=OFF
 RESOLUTION=960x544
 SHADER_COMPILER=""
+SHADER_COMPILER_SET=0
+GAME_RESOLUTION=""
+OUTPUT_RESOLUTION=""
 
 say()  { printf '\n==> %s\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
@@ -134,10 +140,19 @@ while [ $# -gt 0 ]; do
         --resolution) RESOLUTION="${2:-}"; shift
             [ -n "$RESOLUTION" ] || fail "--resolution requires WIDTHxHEIGHT" ;;
         --resolution=*) RESOLUTION="${1#*=}" ;;
-        --shader-compiler) SHADER_COMPILER="${2:-}"; shift
+        --game-resolution) GAME_RESOLUTION="${2:-}"; shift
+            [ -n "$GAME_RESOLUTION" ] || fail "--game-resolution requires WIDTHxHEIGHT" ;;
+        --game-resolution=*) GAME_RESOLUTION="${1#*=}"
+            [ -n "$GAME_RESOLUTION" ] || fail "--game-resolution requires WIDTHxHEIGHT" ;;
+        --output-resolution) OUTPUT_RESOLUTION="${2:-}"; shift
+            [ -n "$OUTPUT_RESOLUTION" ] || fail "--output-resolution requires WIDTHxHEIGHT" ;;
+        --output-resolution=*) OUTPUT_RESOLUTION="${1#*=}"
+            [ -n "$OUTPUT_RESOLUTION" ] || fail "--output-resolution requires WIDTHxHEIGHT" ;;
+        --shader-compiler) SHADER_COMPILER_SET=1; SHADER_COMPILER="${2:-}"; shift
             [ -n "$SHADER_COMPILER" ] || fail "--shader-compiler requires a file" ;;
-        --shader-compiler=*) SHADER_COMPILER="${1#*=}"
+        --shader-compiler=*) SHADER_COMPILER_SET=1; SHADER_COMPILER="${1#*=}"
             [ -n "$SHADER_COMPILER" ] || fail "--shader-compiler requires a file" ;;
+        --no-shader-compiler) SHADER_COMPILER_SET=1; SHADER_COMPILER="" ;;
         --jobs) JOBS="${2:-}"; shift ;;
         --jobs=*) JOBS="${1#*=}" ;;
         --data) DATA_DIR="${2:-}"; DATA_SET=1; shift ;;
@@ -159,12 +174,33 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-if [[ ! "$RESOLUTION" =~ ^([1-9][0-9]{0,2})x([1-9][0-9]{0,2})$ ]]; then
-    fail "--resolution requires WIDTHxHEIGHT (default: 960x544)"
-fi
-VIDEO_WIDTH="${BASH_REMATCH[1]}"
-VIDEO_HEIGHT="${BASH_REMATCH[2]}"
-[ "$VIDEO_WIDTH" -le 960 ] && [ "$VIDEO_HEIGHT" -le 544 ] || fail "resolution exceeds the 960x544 Vita panel"
+parse_resolution() {
+    local requested="$1" label="$2"
+    if [[ ! "$requested" =~ ^([1-9][0-9]{0,3})x([1-9][0-9]{0,3})$ ]]; then
+        fail "$label requires WIDTHxHEIGHT"
+    fi
+    PARSED_WIDTH="${BASH_REMATCH[1]}"
+    PARSED_HEIGHT="${BASH_REMATCH[2]}"
+    [ "$PARSED_WIDTH" -le 4096 ] && [ "$PARSED_HEIGHT" -le 4096 ] || fail "$label dimensions exceed 4096"
+}
+parse_resolution "$RESOLUTION" --resolution
+GAME_RESOLUTION="${GAME_RESOLUTION:-$RESOLUTION}"
+OUTPUT_RESOLUTION="${OUTPUT_RESOLUTION:-$RESOLUTION}"
+parse_resolution "$GAME_RESOLUTION" --game-resolution
+VIDEO_WIDTH="$PARSED_WIDTH"
+VIDEO_HEIGHT="$PARSED_HEIGHT"
+parse_resolution "$OUTPUT_RESOLUTION" --output-resolution
+OUTPUT_WIDTH="$PARSED_WIDTH"
+OUTPUT_HEIGHT="$PARSED_HEIGHT"
+# Explicit GL requests fail early. CMake checks the final cached/template
+# renderer too, so omitting --renderer cannot bypass native mode validation.
+case "$RENDERER" in
+    opengl|openglscreen)
+        case "$OUTPUT_RESOLUTION" in
+            960x544|720x408|640x368|480x272) ;;
+            *) fail "unsupported Vita OpenGL output $OUTPUT_RESOLUTION; use 960x544, 720x408, 640x368 or 480x272 (set --game-resolution separately)" ;;
+        esac ;;
+esac
 
 if [ "$OFFLINE" = 1 ] && [ "$DO_SETUP" = 1 ]; then
     fail "--offline cannot be combined with --setup"
@@ -568,9 +604,13 @@ cmake_args=(
     "-DMUGEN_VITA_GL_SELFTEST=$GL_SELFTEST"
     "-DMUGEN_VITA_VIDEO_WIDTH=$VIDEO_WIDTH"
     "-DMUGEN_VITA_VIDEO_HEIGHT=$VIDEO_HEIGHT"
-    # Explicitly clear a previous private compiler path on an ordinary build.
-    "-DMUGEN_VITA_SHADER_COMPILER=$(win_path "$(shell_path "$SHADER_COMPILER")")"
+    "-DMUGEN_VITA_OUTPUT_WIDTH=$OUTPUT_WIDTH"
+    "-DMUGEN_VITA_OUTPUT_HEIGHT=$OUTPUT_HEIGHT"
 )
+# No argument means preserve CMake's configured private compiler path.
+if [ "$SHADER_COMPILER_SET" = 1 ]; then
+    cmake_args+=("-DMUGEN_VITA_SHADER_COMPILER=$(win_path "$(shell_path "$SHADER_COMPILER")")")
+fi
 if [ -n "${TITLEID:-}" ]; then
     cmake_args+=("-DMUGEN_VITA_TITLEID=$TITLEID")
 fi
