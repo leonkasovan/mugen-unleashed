@@ -11,18 +11,22 @@
 #   port/psvita/build.sh --debug        Debug build (default: Release)
 #   port/psvita/build.sh --data DIR     pack this M.U.G.E.N tree into the VPK
 #   port/psvita/build.sh --no-data      pack no game data (engine only)
-#   port/psvita/build.sh --titleid ID   nine-character title id (MSDK00001)
-#   port/psvita/build.sh --renderer MODE  system | opengl | openglscreen
-#   port/psvita/build.sh --resolution WxH  set game and output size (default: 960x544)
-#   port/psvita/build.sh --game-resolution WxH  override internal game size
-#   port/psvita/build.sh --output-resolution WxH  override display framebuffer size
-#   port/psvita/build.sh --shader-compiler FILE  bundle/cache your libshacccg.suprx
-#   port/psvita/build.sh --no-shader-compiler    clear the configured compiler input
+#   port/psvita/build.sh --titleid ID   nine-character title id (MUGEN0001)
+#   port/psvita/build.sh --shader-compiler FILE  bundle this libshacccg.suprx instead
+#   port/psvita/build.sh --no-shader-compiler    bundle no compiler (see step 5)
 #   port/psvita/build.sh --render-cache / --no-render-cache  draw-state A/B test
 #   port/psvita/build.sh --shader-cache / --no-shader-cache  experimental disk cache
 #   port/psvita/build.sh --gl-selftest    startup GL smoke + frame-60 capture
-#   port/psvita/build.sh --precache N     0 | 1 (Vita default: 0)
 #   port/psvita/build.sh --env          print the exports, build nothing
+#
+# The Vita's configuration is port/psvita/mugen.psvita.cfg, packed as
+# data/mugen.psvita.cfg and merged over the game's data/mugen.cfg at start-up.
+# RenderMode, Precache, GameWidth/GameHeight and the video size are read from
+# that file; there are no flags for them. The flags that used to write those
+# values (--renderer, --precache, --resolution, --game-resolution,
+# --output-resolution) now fail with a message naming the file, rather than
+# being silently ignored: an old invocation that appears to work but changes
+# nothing is worse than one that stops.
 #
 # What it sets up, and where:
 #
@@ -49,6 +53,16 @@
 #   4. The build itself, with CMake into build/psvita (BUILD=<dir> overrides):
 #        build/psvita/mugen-psvita.self   the runnable module
 #        build/psvita/mugen-psvita.vpk    installable homebrew (VitaShell)
+#
+#   5. The vitaGL shader compiler, bundled into the VPK as
+#      module/libshacccg.suprx. It is a decrypted Sony module and is not tracked
+#      here: it comes from this project's lib-for-vita.zip release asset, is
+#      cached in build/downloads, verified against the SHA-256 pinned below and
+#      unpacked to build/downloads/libshacccg.suprx -- the default input, so an
+#      ordinary build needs no flag. --shader-compiler FILE bundles another
+#      file instead; --no-shader-compiler bundles none (an OpenGL RenderMode
+#      then needs libshacccg.suprx installed on the console, ur0:/data/).
+#      --offline with no cached asset builds a compiler-less VPK and says so.
 #
 # The VPK packs the game tree at DATA_DIR, which defaults to install/ when that
 # is a M.U.G.E.N installation; --no-data builds an engine-only VPK and the
@@ -87,6 +101,15 @@ VITASDK_URL="${VITASDK_URL:-https://github.com/leonkasovan/mugen-unleashed/relea
 VITASDK_FILE="vitasdk.zip"
 VITASDK_SHA256="${VITASDK_SHA256:-12410f2edaedb5de51bfba8a66c4c807dd587ee540311d846544daa556fb4b7d}"
 
+# The vitaGL shader compiler that goes into the VPK as module/libshacccg.suprx.
+# It is a decrypted Sony module, so it is not tracked in this repository: it is
+# a release asset of this project, cached in build/downloads and verified
+# against the pinned digest before it is unpacked (a re-published asset needs
+# VITA_LIBS_SHA256=<new hash>, exactly like VITASDK_SHA256 above).
+VITA_LIBS_URL="${VITA_LIBS_URL:-https://github.com/leonkasovan/mugen-unleashed/releases/download/toolchains-v1.0/lib-for-vita.zip}"
+VITA_LIBS_FILE="lib-for-vita.zip"
+VITA_LIBS_SHA256="${VITA_LIBS_SHA256:-0d1124a94e5e22ac0544414b7450b6b0ec5ad96e9b5dccf601bd60675ee8ec3e}"
+
 # The VitaSDK packages the port links against, as "vdpm package:artifact the
 # CMake configure actually needs". Checked by artifact, not by vdpm's own
 # bookkeeping, because the SDK may have been installed by hand or by this
@@ -114,16 +137,16 @@ CHECK_TOOLS=0
 PRINT_ENV=0
 DATA_SET=0
 DATA_DIR=""
-RENDERER=""
-PRECACHE=""
+TITLEID=MUGEN0001
 GL_SELFTEST=OFF
 RENDER_CACHE=""
 SHADER_CACHE=""
-RESOLUTION=960x544
+# Empty until install_vita_libs resolves it: the default input is the release
+# asset it unpacks into build/downloads (SHADER_COMPILER is that path once it
+# exists). An explicit --shader-compiler / --no-shader-compiler sets
+# SHADER_COMPILER_SET, which keeps that resolution out of it.
 SHADER_COMPILER=""
 SHADER_COMPILER_SET=0
-GAME_RESOLUTION=""
-OUTPUT_RESOLUTION=""
 
 say()  { printf '\n==> %s\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
@@ -145,17 +168,20 @@ while [ $# -gt 0 ]; do
         --no-render-cache) RENDER_CACHE=OFF ;;
         --shader-cache) SHADER_CACHE=ON ;;
         --no-shader-cache) SHADER_CACHE=OFF ;;
-        --resolution) RESOLUTION="${2:-}"; shift
-            [ -n "$RESOLUTION" ] || fail "--resolution requires WIDTHxHEIGHT" ;;
-        --resolution=*) RESOLUTION="${1#*=}" ;;
-        --game-resolution) GAME_RESOLUTION="${2:-}"; shift
-            [ -n "$GAME_RESOLUTION" ] || fail "--game-resolution requires WIDTHxHEIGHT" ;;
-        --game-resolution=*) GAME_RESOLUTION="${1#*=}"
-            [ -n "$GAME_RESOLUTION" ] || fail "--game-resolution requires WIDTHxHEIGHT" ;;
-        --output-resolution) OUTPUT_RESOLUTION="${2:-}"; shift
-            [ -n "$OUTPUT_RESOLUTION" ] || fail "--output-resolution requires WIDTHxHEIGHT" ;;
-        --output-resolution=*) OUTPUT_RESOLUTION="${1#*=}"
-            [ -n "$OUTPUT_RESOLUTION" ] || fail "--output-resolution requires WIDTHxHEIGHT" ;;
+        # Retired with the build-time config patch: these values live in
+        # port/psvita/mugen.psvita.cfg now, which the VPK packs verbatim and
+        # the engine merges over data/mugen.cfg. Failing here beats accepting a
+        # flag that no longer has anything to change.
+        --resolution|--resolution=*|--game-resolution|--game-resolution=*|\
+        --output-resolution|--output-resolution=*)
+            fail "$1 is retired: the game and output sizes are [Config] GameWidth/GameHeight
+       and [Video] Width/Height in $HERE/mugen.psvita.cfg. Edit that file." ;;
+        --renderer|--renderer=*)
+            fail "$1 is retired: the renderer is [Video] RenderMode in
+       $HERE/mugen.psvita.cfg (system | opengl | openglscreen). Edit that file." ;;
+        --precache|--precache=*)
+            fail "$1 is retired: precache is [Misc] Precache in
+       $HERE/mugen.psvita.cfg (0 is the confirmed hardware workaround)." ;;
         --shader-compiler) SHADER_COMPILER_SET=1; SHADER_COMPILER="${2:-}"; shift
             [ -n "$SHADER_COMPILER" ] || fail "--shader-compiler requires a file" ;;
         --shader-compiler=*) SHADER_COMPILER_SET=1; SHADER_COMPILER="${1#*=}"
@@ -168,47 +194,11 @@ while [ $# -gt 0 ]; do
         --no-data) DATA_DIR=""; DATA_SET=1 ;;
         --titleid) TITLEID="${2:-}"; shift ;;
         --titleid=*) TITLEID="${1#*=}" ;;
-        --renderer) RENDERER="${2:-}"; shift
-            case "$RENDERER" in system|opengl|openglscreen) ;; *) fail "--renderer requires system, opengl or openglscreen" ;; esac ;;
-        --renderer=*) RENDERER="${1#*=}"
-            case "$RENDERER" in system|opengl|openglscreen) ;; *) fail "--renderer requires system, opengl or openglscreen" ;; esac ;;
-        --precache) PRECACHE="${2:-}"; shift
-            case "$PRECACHE" in 0|1) ;; *) fail "--precache requires 0 or 1" ;; esac ;;
-        --precache=*) PRECACHE="${1#*=}"
-            case "$PRECACHE" in 0|1) ;; *) fail "--precache requires 0 or 1" ;; esac ;;
         --help|-h) usage; exit 0 ;;
         *) printf 'unknown argument: %s (--help)\n' "$1" >&2; exit 2 ;;
     esac
     shift
 done
-
-parse_resolution() {
-    local requested="$1" label="$2"
-    if [[ ! "$requested" =~ ^([1-9][0-9]{0,3})x([1-9][0-9]{0,3})$ ]]; then
-        fail "$label requires WIDTHxHEIGHT"
-    fi
-    PARSED_WIDTH="${BASH_REMATCH[1]}"
-    PARSED_HEIGHT="${BASH_REMATCH[2]}"
-    [ "$PARSED_WIDTH" -le 4096 ] && [ "$PARSED_HEIGHT" -le 4096 ] || fail "$label dimensions exceed 4096"
-}
-parse_resolution "$RESOLUTION" --resolution
-GAME_RESOLUTION="${GAME_RESOLUTION:-$RESOLUTION}"
-OUTPUT_RESOLUTION="${OUTPUT_RESOLUTION:-$RESOLUTION}"
-parse_resolution "$GAME_RESOLUTION" --game-resolution
-VIDEO_WIDTH="$PARSED_WIDTH"
-VIDEO_HEIGHT="$PARSED_HEIGHT"
-parse_resolution "$OUTPUT_RESOLUTION" --output-resolution
-OUTPUT_WIDTH="$PARSED_WIDTH"
-OUTPUT_HEIGHT="$PARSED_HEIGHT"
-# Explicit GL requests fail early. CMake checks the final cached/template
-# renderer too, so omitting --renderer cannot bypass native mode validation.
-case "$RENDERER" in
-    opengl|openglscreen)
-        case "$OUTPUT_RESOLUTION" in
-            960x544|720x408|640x368|480x272) ;;
-            *) fail "unsupported Vita OpenGL output $OUTPUT_RESOLUTION; use 960x544, 720x408, 640x368 or 480x272 (set --game-resolution separately)" ;;
-        esac ;;
-esac
 
 if [ "$OFFLINE" = 1 ] && [ "$DO_SETUP" = 1 ]; then
     fail "--offline cannot be combined with --setup"
@@ -560,6 +550,58 @@ if [ "$DATA_SET" = 0 ] && [ -f "$ROOT/install/data/system.def" ]; then
     DATA_DIR="$ROOT/install"
 fi
 
+# --------------------------------------------------------------- compiler
+#
+# The vitaGL shader compiler bundled as module/libshacccg.suprx. It is a
+# decrypted Sony module, so it is not tracked here: it is the lib-for-vita.zip
+# release asset, verified against the pinned SHA-256 and unpacked to
+# build/downloads/libshacccg.suprx, which becomes the default input -- the
+# cache directory every script in this repository shares.
+#
+# An explicit --shader-compiler FILE or --no-shader-compiler sets
+# SHADER_COMPILER_SET and is taken as final: nothing is downloaded or unpacked.
+install_vita_libs() {
+    local archive="$DOWNLOADS/$VITA_LIBS_FILE"
+    local dest="$DOWNLOADS/libshacccg.suprx"
+
+    [ "$SHADER_COMPILER_SET" = 0 ] || return 0
+
+    if [ -f "$dest" ]; then
+        SHADER_COMPILER="$dest"
+        info "compiler  $dest (unpacked by an earlier run)"
+        return 0
+    fi
+
+    mkdir -p "$DOWNLOADS"
+    if [ -f "$archive" ] && [ "$(hash_of sha256 "$archive")" = "$VITA_LIBS_SHA256" ]; then
+        info "compiler  cached $VITA_LIBS_FILE verified (sha256)"
+    else
+        rm -f "$archive"
+        if [ "$OFFLINE" = 1 ]; then
+            info "compiler  none: --offline and $VITA_LIBS_FILE is not cached"
+            info "          an OpenGL RenderMode then needs libshacccg.suprx"
+            info "          installed on the console (ur0:/data/)"
+            return 0
+        fi
+        info "compiler  downloading $VITA_LIBS_FILE (vitaGL shader compiler)"
+        info "          $VITA_LIBS_URL"
+        fetch "$VITA_LIBS_URL" "$archive"
+    fi
+
+    if [ "$(hash_of sha256 "$archive")" != "$VITA_LIBS_SHA256" ]; then
+        fail "$archive failed its SHA-256; nothing was unpacked
+       expected $VITA_LIBS_SHA256
+       (a re-published asset needs VITA_LIBS_SHA256=<new hash>)"
+    fi
+
+    command -v unzip >/dev/null 2>&1 || fail "unzip is required (MSYS2: pacman -S unzip)"
+    unzip -o -j -q "$archive" libshacccg.suprx -d "$DOWNLOADS" ||
+        fail "$archive does not contain libshacccg.suprx"
+    [ -s "$dest" ] || fail "$dest is empty after unpacking $archive"
+    SHADER_COMPILER="$dest"
+    info "compiler  $dest (goes in as module/libshacccg.suprx)"
+}
+
 # ------------------------------------------------------------------ build
 [ -n "$JOBS" ] || JOBS=$(nproc 2>/dev/null || echo 4)
 DATA_WIN=$(win_path "$DATA_DIR")
@@ -601,6 +643,8 @@ if [ -n "$DATA_DIR" ]; then
 else
     info "game data none (engine-only VPK; see --data)"
 fi
+info "title id  $TITLEID"
+install_vita_libs
 
 cmake_args=(
     -S "$HERE"
@@ -610,23 +654,16 @@ cmake_args=(
     "-DCMAKE_BUILD_TYPE=$BUILD_TYPE"
     "-DMUGEN_VITA_DATA_DIR=$DATA_WIN"
     "-DMUGEN_VITA_GL_SELFTEST=$GL_SELFTEST"
-    "-DMUGEN_VITA_VIDEO_WIDTH=$VIDEO_WIDTH"
-    "-DMUGEN_VITA_VIDEO_HEIGHT=$VIDEO_HEIGHT"
-    "-DMUGEN_VITA_OUTPUT_WIDTH=$OUTPUT_WIDTH"
-    "-DMUGEN_VITA_OUTPUT_HEIGHT=$OUTPUT_HEIGHT"
+    "-DMUGEN_VITA_CFG=$(win_path "$HERE/mugen.psvita.cfg")"
 )
-# No argument means preserve CMake's configured private compiler path.
-if [ "$SHADER_COMPILER_SET" = 1 ]; then
+# The resolved default is passed on every build so the VPK keeps its bundled
+# module; an empty value is what --no-shader-compiler asks for, and it clears
+# the path an earlier build left in CMake's cache.
+if [ "$SHADER_COMPILER_SET" = 1 ] || [ -n "$SHADER_COMPILER" ]; then
     cmake_args+=("-DMUGEN_VITA_SHADER_COMPILER=$(win_path "$(shell_path "$SHADER_COMPILER")")")
 fi
 if [ -n "${TITLEID:-}" ]; then
     cmake_args+=("-DMUGEN_VITA_TITLEID=$TITLEID")
-fi
-if [ -n "$RENDERER" ]; then
-    cmake_args+=("-DMUGEN_VITA_RENDERMODE=$RENDERER")
-fi
-if [ -n "$PRECACHE" ]; then
-    cmake_args+=("-DMUGEN_VITA_PRECACHE=$PRECACHE")
 fi
 
 if [ -n "$RENDER_CACHE" ]; then

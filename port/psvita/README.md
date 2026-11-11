@@ -42,7 +42,16 @@ builds the engine-only one, `--data DIR` packs another tree.
 | `--debug` | `Debug` build instead of `Release` |
 | `--jobs N` | parallel jobs (default: CPU count) |
 | `--data DIR` / `--no-data` | pack this game tree / pack no game data |
-| `--titleid ID` | nine-character title ID (default `MSDK00001`) |
+| `--titleid ID` | nine-character title ID (default `MUGEN0001`) |
+| `--renderer MODE` | *retired*: set `[Video] RenderMode` in `mugen.psvita.cfg` |
+| `--resolution WxH` | *retired*: set `[Config] GameWidth/GameHeight` and `[Video] Width/Height` |
+| `--game-resolution WxH` / `--output-resolution WxH` | *retired*: same file |
+| `--precache N` | *retired*: set `[Misc] Precache` |
+| `--shader-compiler FILE` | bundle this `libshacccg.suprx` instead of the fetched default |
+| `--no-shader-compiler` | bundle no compiler (an OpenGL build then needs it on the console) |
+| `--gl-selftest` | startup GL smoke test and frame-60 capture |
+| `--render-cache` / `--no-render-cache` | draw-state A/B test (CMake default: on) |
+| `--shader-cache` / `--no-shader-cache` | experimental vitaGL disk shader cache (default: off) |
 | `--env` | print the three exports for your own shell, build nothing |
 
 The environment it sets for its children (a script cannot change its caller's):
@@ -201,49 +210,66 @@ chooses Ninja, then Unix Makefiles, for exactly this reason.
 Up 17, Right 18, Select 19, Start 20). `MUGEN_VITA_CFG` overrides the template;
 with it empty, the data directory's `data/mugen.cfg` is used as before.
 
-### The packed `mugen.cfg` is patched
+### `mugen.psvita.cfg` is merged over the game's `mugen.cfg`
 
-A desktop `data/mugen.cfg` needs Vita-specific settings, so relevant keys are rewritten
-in a copy that goes into the VPK:
+A desktop `data/mugen.cfg` needs Vita-specific settings, so the port ships its
+own file — `port/psvita/mugen.psvita.cfg`, packed as `data/mugen.psvita.cfg`:
 
 ```ini
 [Config]
-GameWidth  = 960
+GameWidth  = 960        ; the game's file usually says 1280x720
 GameHeight = 544
 
 [Video]
-RenderMode = system    ; the shipped default; see "The OpenGL renderer" below
+RenderMode = OpenGL     ; see "The OpenGL renderer" below
 FullScreen = 1          ; was 0
 ```
 
-The values above are what the build actually packs: `MUGEN_VITA_VIDEO_WIDTH`
-(960), `MUGEN_VITA_VIDEO_HEIGHT` (544), `MUGEN_VITA_FULLSCREEN` (ON) and
-`MUGEN_VITA_RENDERMODE` (`system`). `RenderMode = OpenGL` now selects the native vitaGL display and
-programmable sprite path described below; SDL's separate video presenter is
-bypassed. System remains the default pending hardware qualification.
+The values above are not packed by rewriting anything: `data/mugen.cfg` goes into
+the VPK exactly as the game tree ships it, and `port/psvita/mugen.psvita.cfg` is
+packed beside it as `data/mugen.psvita.cfg`. At start-up the engine merges that
+file over the game's **per key** (`src/configmerge.c`, called from `Config_Load`
+and `Options_Load`): a key the platform file names wins, every other key keeps
+the game's value, and a group only the platform file has is appended.
 
-`GameWidth`/`GameHeight` control the internal game buffer. With OpenGL,
-`[Video] Width/Height` independently select the output framebuffer dimensions.
-`--resolution WxH` sets both pairs. Use `--game-resolution WxH` and
-`--output-resolution WxH` to override the internal and output sizes separately:
-
-```sh
-port/psvita/build.sh --renderer opengl --game-resolution 720x408 \
-  --output-resolution 960x544 --precache 0
+```ini
+[Config]
+GameWidth = 960         ; the game's file says 1280x720
+GameHeight = 544
+FirstRun = 0
+[Video]
+Width = 960
+Height = 544
+RenderMode = OpenGL
+FullScreen = 1
 ```
 
-This packages the mixed profile directly; editing the installed config is no
-longer required. Check `gameCoord` and the native presentation descriptor
-separately in fresh logs. A lower internal size is a test configuration, not
-a guarantee of any particular frame rate. OpenGL output must be one of
-960x544, 720x408, 640x368 or 480x272. For example, 640x480 is allowed internally
-with native output, but is rejected as OpenGL output. OpenGLScreen ties its
-game and display sizes together, so independent sizes require OpenGL.
+To change any of it, edit `port/psvita/mugen.psvita.cfg` and rebuild — there is no
+flag for these values, and `--renderer`/`--precache`/`--resolution` now fail with
+a message naming the file rather than being silently ignored. A plain
+`cmake --build` repacks the edited file; no reconfigure is needed.
 
-**Your game tree is never modified.** The patch is written to
-`build/psvita/vita-mugen.cfg` and substituted while the VPK is packed, so
-`install/` stays the pristine reference. To keep a config as-is, pass
-`-DMUGEN_VITA_RENDERMODE=` (empty) or edit the values above.
+Groups the engine writes back at runtime (`[Options]`, `[P<n> Keys]`,
+`[P<n> Joystick]`, `[P<n> Gamepad]`, the `[Sound]` volumes and
+`p1/p2.joystick.type`) are **ignored** in the platform file: `Options_Save` and
+the gamepad writer would revert them on the next boot, so the options screen
+would appear not to save. The port's joystick layout comes from the game tree's
+own `[P<n> Joystick]` group instead.
+
+Check `gameCoord` and the native presentation descriptor separately in fresh
+logs. A lower internal size is a test configuration, not a guarantee of any
+particular frame rate. OpenGL output must be one of 960x544, 720x408, 640x368 or
+480x272 — for example 640x480 is allowed *internally* with native output, but is
+rejected as OpenGL output. OpenGLScreen ties its game and display sizes
+together, so independent sizes require OpenGL. These rules are enforced at
+configure time against the platform file itself, so a bad combination fails the
+build instead of the console.
+
+**Your game tree is never modified, and nothing in it is rewritten.** The VPK
+carries `data/mugen.cfg` byte-for-byte as the tree ships it, plus
+`data/mugen.psvita.cfg` from `port/psvita/`. Because the merge happens in memory
+at start-up, a user who edits `data/mugen.cfg` on the console keeps their
+change; only the keys the platform file names are overridden.
 
 The one engine change this affects: `src/video.c` checks for a NULL surface
 under `MUGEN_VITA_GL` and returns `LIBERR_VIDEO_MODE`, so a bad resolution now
@@ -285,16 +311,12 @@ cmake -S port/psvita -B build/psvita -G Ninja \
 | Option | Default | Meaning |
 |---|---|---|
 | `MUGEN_VITA_DATA_DIR` | *(empty)* | M.U.G.E.N directory to pack into the VPK as `/data` |
-| `MUGEN_VITA_TITLEID` | `MSDK00001` | 9-character title ID |
+| `MUGEN_VITA_TITLEID` | `MUGEN0001` | 9-character title ID |
 | `MUGEN_VITA_VERSION` | `01.00` | `APP_VER`, format `##.##` |
 | `MUGEN_VITA_MEMSIZE` | `0` | `vita-make-fself -m`: `0` for a normal app (recommended), `0x1000`–`0x12800` KiB for system mode |
 | `MUGEN_VITA_HEAP_MIB` | `64` | newlib heap; SDL's Vita video driver needs process memory for GXM too, so an oversized heap starves `sceGxmInitialize` |
-| `MUGEN_VITA_VIDEO_WIDTH` | `960` | `GameWidth` (render size; the panel is 960) |
-| `MUGEN_VITA_VIDEO_HEIGHT` | `544` | `GameHeight` (internal render size) |
-| `MUGEN_VITA_OUTPUT_WIDTH` / `_HEIGHT` | empty | Output `Width`/`Height`; empty follows the corresponding internal size |
-| `MUGEN_VITA_SHADER_COMPILER` | empty | Optional supplied module; a configured path survives ordinary rebuilds |
-| `MUGEN_VITA_FULLSCREEN` | `ON` | Write `FullScreen = 1` into the packed `mugen.cfg` |
-| `MUGEN_VITA_RENDERMODE` | `system` | `RenderMode` in the packed `mugen.cfg` (`opengl` uses the native vitaGL adapter) |
+| `MUGEN_VITA_CFG` | `port/psvita/mugen.psvita.cfg` | Platform config packed verbatim as `data/mugen.psvita.cfg`. Required: a missing file, a missing `RenderMode`, or an unsupported resolution fails the configure |
+| `MUGEN_VITA_SHADER_COMPILER` | `build/downloads/libshacccg.suprx` | Module bundled as `module/libshacccg.suprx`; `build.sh` unpacks the release asset there. Its default is passed on every build |
 | `MUGEN_VITA_ICON_ICO` | `res/icons/1.ico` | the artwork every `sce_sys/` image is derived from |
 | `MUGEN_VITA_ICON_SIZE` | `128` | `icon0.png` edge length (the Vita expects 128) |
 | `MUGEN_VITA_BG_W` / `_BG_H` | `840` / `500` | LiveArea background size |
@@ -347,7 +369,7 @@ cp build/psvita/mugen-psvita.vpk /path/to/ux0:/
 # Then in VitaShell: select mugen-psvita.vpk -> "Install"
 ```
 
-Installs to `ux0:app/MSDK00001/`. Start it from the LiveArea bubble.
+Installs to `ux0:app/MUGEN0001/`. Start it from the LiveArea bubble.
 
 ### Verify the copy before installing
 
@@ -381,7 +403,7 @@ was refused", not which check failed:
    then moves it; it needs roughly twice the VPK's unpacked size free. A nearly
    full memory card fails here.
 3. **A leftover bubble with the same title ID.** A previous failed install can
-   leave `ux0:app/MSDK00001/` behind, and the promoter then refuses the reinstall.
+   leave `ux0:app/MUGEN0001/` behind, and the promoter then refuses the reinstall.
    Delete the bubble (or the directory) and retry.
 4. **Transfer method.** Copy over VitaShell's USB/FTP mode into `ux0:` and
    install from there. A file on a USB-mounted partition (`uma0:`) is not a
@@ -437,7 +459,7 @@ ux0:data/mugen/            <- the whole M.U.G.E.N 1.1b1 tree
 Then start the game with `-gamedir`:
 
 ```
-ux0:app/MSDK00001/eboot.bin -gamedir ux0:data/mugen
+ux0:app/MUGEN0001/eboot.bin -gamedir ux0:data/mugen
 ```
 
 That flag cannot be passed from the LiveArea bubble, so for a normal launch
@@ -465,12 +487,12 @@ RenderMode = opengl
 blitmode   = hardware
 ```
 
-`960x544` is now the native output/render default. Both `[Config]`
-`GameWidth/GameHeight` and active `[Video]` `Width/Height` are patched together.
-For an explicit smaller software target use `--resolution 480x272` (manual
-CMake: `-DMUGEN_VITA_VIDEO_WIDTH=480 -DMUGEN_VITA_VIDEO_HEIGHT=272`). Native
-resolution performance must be measured on hardware; the successful game run
-reported below used 480x272.
+`960x544` is the native output/render default, set by `[Config]`
+`GameWidth/GameHeight` and `[Video]` `Width/Height` in
+`port/psvita/mugen.psvita.cfg`. For an explicit smaller software target, change
+both pairs in that file (e.g. `480x272`) and rebuild. Native resolution
+performance must be measured on hardware; the successful game run reported
+below used 480x272.
 
 **Do not set `vretrace` too high.** The engine's frame pacing assumes a 60 Hz
 display; the Vita panel is 60 Hz, so the default is right.
@@ -522,9 +544,19 @@ diff is not the acceptance criterion here.
 ### `mugen.log` is still written
 
 The engine writes `mugen.log` next to the current working directory. On the
-Vita that is `ux0:app/MSDK00001/` for a LiveArea launch. That is the single most
-useful debugging aid this port has: the same log the Windows build produces,
-reachable through VitaShell.
+Vita that is `ux0:app/MUGEN0001/` for a LiveArea launch, and `ux0:data/mugen.log`
+when that directory is not writable. That is the single most useful debugging
+aid this port has: the same log the Windows build produces, reachable through
+VitaShell.
+
+Every line carries the local wall clock (`[12:34:56] ...`) and the header records
+the session's date, which the Windows build does not do: it is the only way to
+line a crash up with what was being done, and this port has no log-comparison
+workflow to protect. The switch is `[Debug] TimeStamps` in `data/mugen.cfg` — the
+Vita template sets it to 1, the desktop builds leave it off so `mugen.log` stays
+diffable against the original (`TimeStamps = 1` turns it on there too). Because
+the packed `data/mugen.cfg` is the Vita template, this is the file the build
+ships; the value read at start-up applies from the moment it is loaded.
 
 ### SDL_mixer without `Mix_QuerySpecEx`
 
@@ -940,7 +972,7 @@ the `kuio` sample installed, the kernel log shows the actual
 `sceKernelLoadStartModule` failure instead of the shell's generic code.
 
 Simpler, and enough for most cases: install **`VitaShell`** and check *both*
-`ux0:data/mugen.log` and `ux0:app/MSDK00001/mugen.log`. If the app started at
+`ux0:data/mugen.log` and `ux0:app/MUGEN0001/mugen.log`. If the app started at
 all it will have written `mugen.log` next to its eboot; an absent log *usually*
 means it never reached `main()`, i.e. a module-load failure rather than a game
 crash. Three exceptions are recorded rather than assumed: (1) logging itself
@@ -1013,19 +1045,19 @@ the layout; it does not establish that the Windows heap failure was caused by
 overlapping segments. The exact failing Windows ELF was not supplied, and the
 Windows converter crash has not been reproduced here.
 
-To explicitly build the OpenGL test configuration from MSYS2/Git Bash:
+To build the OpenGL configuration from MSYS2/Git Bash:
 
 ```sh
 git pull --ff-only
-bash port/psvita/build.sh --renderer opengl --precache 0
+bash port/psvita/build.sh
 ```
 
-`--renderer` writes `MUGEN_VITA_RENDERMODE`; without it, the existing CMake
-cache/default controls the mode (a fresh configuration defaults to System).
-`--precache` writes `MUGEN_VITA_PRECACHE`, whose Vita default is now 0 so that
-packing does not undo the confirmed precache workaround. The configure log
-prints both values. `--precache 1` is an explicit opt-in; the separate worker
-stack fix is not part of this change.
+The renderer and precache are not flags: they are `[Video] RenderMode = OpenGL`
+and `[Misc] Precache = 0` in `port/psvita/mugen.psvita.cfg`, and the configure
+log prints what it read from that file (`opengl 960x544, game 960x544,
+FullScreen 1, Precache 0`). Edit the file for `system` (the software SceGxm
+path) or to opt into `Precache = 1`; the separate worker stack fix is not part
+of this.
 
 If the converter still fails, keep `build/psvita/mugen` from **that failed
 build** and capture a verbose converter run, from the repository root in
@@ -1056,7 +1088,7 @@ for running the Windows-hosted converter on the original failing ELF.
 
 | Symptom | Cause and fix |
 |---|---|
-| **`Error 0x8010113D`** installing the VPK | `ScePromoterUtil` refused the package (`0x801011xx`; the console may show it as `C2-12691-9`). First suspect is `sce_sys/` artwork that is not 8-bit indexed — see "The bubble artwork"; then the ordered checks in "Verify the copy before installing" (copy size/SHA-256, free space on `ux0:`, a leftover `ux0:app/MSDK00001/`, installing from `ux0:` rather than `uma0:`) |
+| **`Error 0x8010113D`** installing the VPK | `ScePromoterUtil` refused the package (`0x801011xx`; the console may show it as `C2-12691-9`). First suspect is `sce_sys/` artwork that is not 8-bit indexed — see "The bubble artwork"; then the ordered checks in "Verify the copy before installing" (copy size/SHA-256, free space on `ux0:`, a leftover `ux0:app/MUGEN0001/`, installing from `ux0:` rather than `uma0:`) |
 | `VITASDK is not set` | `eval "$(port/psvita/build.sh --env)"`, or pass `-DCMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake` |
 | `arm-vita-eabi/include/SDL/SDL.h not found` | VitaSDK's `sdl` package is missing: `port/psvita/build.sh` reinstalls it with `vdpm`, or by hand `vdpm install sdl` |
 | `libvitaGL.a not found` | `vdpm install vitaGL` (not part of a hand-made base SDK) |
@@ -1296,7 +1328,7 @@ must expose `uPalMul`; an incompatible deployed shader is rejected.
 Enable the optional startup triangle/pixel test and actual game-frame capture:
 
 ```sh
-port/psvita/build.sh --renderer opengl --precache 0 --gl-selftest
+port/psvita/build.sh --gl-selftest
 ```
 
 Or configure with `-DMUGEN_VITA_BUILD_VITAGL=ON` and
@@ -1352,20 +1384,26 @@ and match operation: 726 match frames in 12.12 seconds, reported average game
 rate 59.90 and average drawn frame rate 59.74. Native 960x544 output and an
 app-local compiler load still require their own device run.
 
-The template and new CMake defaults use native 960x544 for both game and
-video dimensions. The script passes both selected pairs explicitly. Manual
-CMake users can select, for example, `MUGEN_VITA_VIDEO_WIDTH=720`,
-`MUGEN_VITA_VIDEO_HEIGHT=408`, `MUGEN_VITA_OUTPUT_WIDTH=960` and
-`MUGEN_VITA_OUTPUT_HEIGHT=544`. If output options are empty, they follow the
-internal dimensions. Effective OpenGL output is checked during configuration,
-including when the renderer comes from an existing cache or selected template.
+The platform file uses native 960x544 for both game and video dimensions.
+Manual CMake users change the sizes in that file (or point `MUGEN_VITA_CFG` at
+another one); the configure step validates the values it actually contains, so
+an unsupported OpenGL output or a missing `RenderMode` fails the build.
 
-A compiler supplied by the builder can be included privately in the VPK:
+The shader compiler for the OpenGL path is a default input, not something you
+have to supply. It is a decrypted Sony module, so it is not tracked here: it is
+this project's `lib-for-vita.zip` release asset, and `build.sh` fetches it into
+`build/downloads/` (cached; SHA-256 pinned in the script), verifies it and
+unpacks `build/downloads/libshacccg.suprx`, which it then packs as
+`module/libshacccg.suprx`. An ordinary build therefore bundles it with no flag:
 
 ```sh
-port/psvita/build.sh --renderer opengl --precache 0 --resolution 960x544 \
-  --gl-selftest --shader-compiler "C:/Vita/libshacccg.suprx"
+port/psvita/build.sh            # opengl + bundled compiler, title MUGEN0001
 ```
+
+`--shader-compiler FILE` packs another file instead (given on each invocation —
+a plain build packs the default); `--no-shader-compiler` packs none. With
+`--offline` and no cached asset the VPK is built without a compiler and the
+script says so.
 
 Manual CMake accepts
 `-DMUGEN_VITA_SHADER_COMPILER=/path/to/libshacccg.suprx`. The input must exist
@@ -1379,11 +1417,12 @@ The dedicated journal records the actual path and native result; verify an
 `app0:/module/` load succeeds on the next device run before claiming the bundle
 works independently of the system copy.
 
-The module is a user-supplied binary input; the project does not download it or
-store it in source control. Once supplied with `--shader-compiler FILE`, the
-path survives ordinary rebuilds in the same build directory. Use
-`--no-shader-compiler` to clear that configured input explicitly. After
-`--clean` or another removal of the CMake cache, supply the path again.
+The module is loaded from `app0:/module/libshacccg.suprx` when the VPK carries
+it; a missing or rejected bundle retains the existing `ur0:/data/` and
+`ur0:/data/external/` fallback, so a console that already has the system module
+keeps working. `--no-shader-compiler` packs none and clears the path CMake had
+cached; a missing path handed to `--shader-compiler` is an error rather than a
+silent omission.
 Files already inside the selected game-data tree remain ordinary assets.
 An OpenGL package without a bundled compiler produces a warning identifying
 the required system module; a missing cached input file is an error rather
@@ -1404,15 +1443,14 @@ the self-test disabled also passed. These checks do not substitute for native
 ```sh
 cmake -S port/psvita -B build/psvita-gl \
   -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" \
-  -DMUGEN_VITA_RENDERMODE=opengl \
   -DMUGEN_VITA_DATA_DIR="$PWD/install"
 cmake --build build/psvita-gl
 bash tools/test_vita_video.sh
 ```
 
-Keep `[Misc] Precache = 0` in the configuration used for the hardware test.
-The precache stack issue is separate. The build patches a copy of the selected
-configuration; check `build/psvita-gl/vita-mugen.cfg` before installing.
+Keep `[Misc] Precache = 0` in `port/psvita/mugen.psvita.cfg` for the hardware
+test; the precache stack issue is separate. Nothing is rewritten at build time:
+check `port/psvita/mugen.psvita.cfg` itself before installing.
 
 A Linux-hosted VitaSDK GCC 15.2.0 cross build, using the pinned SDK's dependency
 archives, completed through ELF, SELF and VPK with the splash, shader and
@@ -1468,7 +1506,7 @@ not a general GPU-allocation health check. No resolution setting changes.
 Rebuild and reinstall:
 
 ```sh
-bash port/psvita/build.sh --renderer opengl --precache 0
+bash port/psvita/build.sh
 ```
 
 Expect `GL: vitaGL splash handed off to engine` in `mugen.log`.
@@ -1691,8 +1729,8 @@ Draw-state caching defaults ON. Build a baseline and an optimized version with
 identical renderer/data/resolution options (the setting persists in CMake):
 
 ```sh
-port/psvita/build.sh --renderer opengl --precache 0 --no-render-cache
-port/psvita/build.sh --renderer opengl --precache 0 --render-cache
+port/psvita/build.sh --no-render-cache
+port/psvita/build.sh --render-cache
 ```
 
 Disk shader caching is a separate, **experimental** startup optimization. It
@@ -1702,8 +1740,8 @@ disables the feature. Neither option removes the bundled/runtime compiler
 requirement. Normal builds preserve explicit cache settings.
 
 ```sh
-port/psvita/build.sh --renderer opengl --shader-cache
-port/psvita/build.sh --renderer opengl --no-shader-cache
+port/psvita/build.sh --shader-cache
+port/psvita/build.sh --no-shader-cache
 ```
 
 Upstream's cache reader trusts cache contents and does not robustly handle

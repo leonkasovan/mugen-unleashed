@@ -34,6 +34,7 @@ set(MUGEN_SOURCES
   src/cmdline.c
   src/cnsparse.c
   src/config.c
+  src/configmerge.c
   src/console.c
   src/continue.c
   src/dbgcmd.c

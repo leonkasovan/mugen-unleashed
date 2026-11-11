@@ -374,6 +374,27 @@ unless `--no-data` is given. The build needs Windows (the SDK's compiler is
 `arm-vita-eabi-gcc.exe`); `--offline` forbids every download. Details:
 `port/psvita/README.md`.
 
+The VPK carries two configs: the game tree's `data/mugen.cfg` unchanged, and
+`data/mugen.psvita.cfg` packed verbatim from `port/psvita/mugen.psvita.cfg` (no
+build step and no flag rewrites a value in it; edit the file and rebuild). At
+start-up `src/configmerge.c` layers the platform file over the game's **per key**
+— a key the platform file names wins, everything else comes from the game's
+file — and never writes the result anywhere. It also refuses to force the groups
+the engine writes back at runtime (`[Options]`, `[P<n> Keys]`, `[P<n> Joystick]`,
+`[P<n> Gamepad]`, the volume keys, `p1/p2.joystick.type`), because a forced
+value there would be reverted by the next `Options_Save`. Android and Linux
+arm64 look for `data/mugen.android.cfg` / `data/mugen.arm64.cfg` the same way;
+neither is packaged yet, so both are inert. Do not reintroduce a wholesale
+`data/mugen.cfg` replacement in a port: it discards whatever the user set.
+
+The vitaGL shader compiler is a decrypted Sony module, so it is **not tracked**
+in this repository. It is the `lib-for-vita.zip` release asset: `build.sh`
+fetches it into `build/downloads/`, verifies it against a SHA-256 pinned in the
+script and unpacks `build/downloads/libshacccg.suprx`, which is then bundled as
+`module/libshacccg.suprx` by default (no flag needed); `--shader-compiler FILE`
+bundles another file, `--no-shader-compiler` none. `VITA_LIBS_URL` /
+`VITA_LIBS_SHA256` override the asset, like `VITASDK_URL` / `VITASDK_SHA256`.
+
 ## Exploring the code with CBM
 
 This repository is indexed in **codebase-memory-mcp** (CBM), a code knowledge

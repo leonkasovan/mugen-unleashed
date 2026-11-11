@@ -5,6 +5,7 @@
  * handle the part the options screen edits ([Options], volumes, keys).
  */
 #include "mugen.h"
+#include "configmerge.h"
 #include "render_policy.h"
 
 #ifdef MUGEN_VITA_GL
@@ -41,6 +42,33 @@ void Config_ApplyJoystickSlot(int player);
 #endif
 
 #define CONFIG_PATH "data/mugen.cfg"
+
+/*
+ * Port addition: the platform's own configuration file, merged over
+ * data/mugen.cfg by Config_OpenConfig below.
+ *
+ * The reference build has none, so on it Config_OpenConfig is exactly the
+ * original's "open data/mugen.cfg": a second layer there would be a behaviour
+ * change nothing asks for. A port ships its file beside the game's:
+ *
+ *   PS Vita      data/mugen.psvita.cfg   port/psvita/mugen.psvita.cfg
+ *   Android      data/mugen.android.cfg  (not packaged yet)
+ *   Linux arm64  data/mugen.arm64.cfg    (not packaged yet)
+ *
+ * Absent is normal and not an error: the game's file is then used unmodified,
+ * which is also what happens on a tree copied without the platform file.
+ * CONFIG_PORT_PATH can be predefined from the command line, which is how a host
+ * test drives the merge.
+ */
+#ifndef CONFIG_PORT_PATH
+#if defined(MUGEN_VITA_GL)
+#define CONFIG_PORT_PATH "data/mugen.psvita.cfg"
+#elif defined(ANDROID_PORT)
+#define CONFIG_PORT_PATH "data/mugen.android.cfg"
+#elif defined(__aarch64__) || defined(_M_ARM64)
+#define CONFIG_PORT_PATH "data/mugen.arm64.cfg"
+#endif
+#endif
 
 static const char *const ai_ramp_modes[3] = { "arcade", "team", "survival" };
 
@@ -115,6 +143,78 @@ int Config_RequestedRenderMode(void)
     return g_configuredRenderMode;
 }
 
+/* Opens and parses one text file; NULL when it is not there or out of memory. */
+static Ini *Config_ParseFile(const char *path)
+{
+    Stream *s = Stream_OpenFile(path, "rt");
+    Ini *ini = NULL;
+
+    if (s != NULL) {
+        ini = Ini_Parse(s, INI_MODE_READ);
+        Stream_Close(s);
+    }
+    return ini;
+}
+
+/*
+ * Port addition: the Ini the engine reads, which on a port is data/mugen.cfg
+ * with the platform file merged over it (configmerge.c, per key).
+ *
+ * Config_Load and Options_Load both go through here, and both must: Options_Load
+ * rereads the input sections, and a merge applied to only one of them is the bug
+ * that once left the Vita reading the shipped 24-button [P1 Joystick] indices
+ * straight out of the file (see Config_ApplyVitaJoystick).
+ *
+ * The merge lives in memory and is never written back: the game tree can be
+ * read-only (a packed VPK is), and the files the engine writes are the game's
+ * alone -- Options_Save and the FirstRun clear must not see port values.
+ */
+static Ini *Config_OpenConfig(void)
+{
+    Ini *base = Config_ParseFile(CONFIG_PATH);
+#ifdef CONFIG_PORT_PATH
+    Ini *over;
+    Ini *merged;
+    Stream *ms;
+    char *text = NULL;
+    int len = 0;
+    int keys = 0;
+    int skipped = 0;
+
+    if (base == NULL) {
+        return NULL;        /* the caller keeps its own error message */
+    }
+    over = Config_ParseFile(CONFIG_PORT_PATH);
+    if (over == NULL) {
+        Log_Printf("config: %s not present; %s used as is\n", CONFIG_PORT_PATH, CONFIG_PATH);
+        return base;
+    }
+    if (!ConfigMerge_Text(base, over, &text, &len, &keys, &skipped)) {
+        Log_Printf("config: %s could not be merged; %s used as is\n", CONFIG_PORT_PATH, CONFIG_PATH);
+        Ini_Free(over);
+        return base;
+    }
+    ms = Stream_OpenMemory(text, len);
+    merged = (ms != NULL) ? Ini_Parse(ms, INI_MODE_READ) : NULL;
+    Stream_Close(ms);       /* a memory stream does not free the buffer */
+    free(text);
+    Ini_Free(over);
+    Ini_Free(base);
+    if (merged == NULL) {
+        Log_Printf("config: the merged configuration could not be parsed\n");
+        return NULL;
+    }
+    Log_Printf("config: merged %s over %s (%d keys)\n", CONFIG_PORT_PATH, CONFIG_PATH, keys);
+    if (skipped > 0) {
+        Log_Printf("config: %s: %d group(s) ignored; the engine writes those back\n",
+                   CONFIG_PORT_PATH, skipped);
+    }
+    return merged;
+#else
+    return base;
+#endif
+}
+
 /*
  * 0x0045DE80: loads data/mugen.cfg into the game variables. Returns 0 (with
  * an error message) on a missing mandatory group or an invalid value; as in
@@ -127,15 +227,10 @@ int Config_Load(void)
     const char *value;
     int width, height;
     int flag;
-    Stream *s;
     Ini *ini = NULL;
     int c, i;
 
-    s = Stream_OpenFile(CONFIG_PATH, "rt");
-    if (s != NULL) {
-        ini = Ini_Parse(s, INI_MODE_READ);
-        Stream_Close(s);
-    }
+    ini = Config_OpenConfig();
     if (ini == NULL) {
         Error_Printf("Can't open config file %s.\n", CONFIG_PATH);
         return 0;
@@ -1100,14 +1195,15 @@ void Options_Load(void)
 {
     GameVars *g;
     const char *value;
-    Stream *s;
     Ini *ini = NULL;
 
-    s = Stream_OpenFile(CONFIG_PATH, "rt");
-    if (s != NULL) {
-        ini = Ini_Parse(s, INI_MODE_READ);
-        Stream_Close(s);
-    }
+    /*
+     * Port addition: the same merged view Config_Load reads (Config_OpenConfig).
+     * Options_Load rereads the input sections, so a merge applied to only one
+     * of the two would leave the platform file's values out of exactly the
+     * groups it is most needed for.
+     */
+    ini = Config_OpenConfig();
     if (ini == NULL) {
         Error_Fatal("Error reading %s\n", CONFIG_PATH);
     }

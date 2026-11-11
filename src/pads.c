@@ -1360,7 +1360,7 @@ void Pads_DeviceEvent(const SDL_Event *event)
 #endif
 
 /*
- * Diagnostic (port addition): the joystick bindings the config asked for.
+ * Diagnostic (port addition): the joystick bindings the engine will use.
  *
  * Printed after the options reload, because Options_Load rereads
  * [P1 Joystick]/[P2 Joystick] and a platform policy may have replaced them
@@ -1368,6 +1368,13 @@ void Pads_DeviceEvent(const SDL_Event *event)
  * Pads_Init is what shows whether a pad that opens will actually press
  * anything: the same physical button produces different engine codes on a
  * controller with a different axis or hat count.
+ *
+ * Where the values came from is named, not assumed. On the PS Vita they are
+ * NOT the file's: Config_ApplyVitaJoystick (src/config.c) overwrites both
+ * slots with the port's PS layout before this runs, and P2 gets JOY_NONE
+ * because the console reports a single pad. The line used to say "from
+ * mugen.cfg" everywhere, which read as if the shipped 24-button indices were
+ * in effect -- the exact confusion this diagnostic exists to prevent.
  */
 void Pads_LogBindings(void)
 {
@@ -1412,7 +1419,12 @@ void Pads_LogBindings(void)
                     pos = (int)sizeof(line) - 1;
                 }
             }
+#ifdef MUGEN_VITA_GL
+            /* One pad, P1 only: the PS layout from Config_ApplyVitaJoystick. */
+            Log_Printf("pads: P%d joystick bindings (Vita PS layout): %s\n", player + 1, line);
+#else
             Log_Printf("pads: P%d joystick bindings from mugen.cfg: %s\n", player + 1, line);
+#endif
         }
         if (unbound == (int)(sizeof(names) / sizeof(names[0]))) {
             Log_Printf("pads: P%d has no joystick bound (every entry is JOY_NONE)\n", player + 1);

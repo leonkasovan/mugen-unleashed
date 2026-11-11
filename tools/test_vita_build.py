@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Host tests of Vita build arguments and the production ELF layout check."""
 import importlib.util
+import hashlib
 import os
 import re
 from pathlib import Path
@@ -10,11 +11,19 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('vita_elf_check', ROOT / 'tools/psvita/check_elf.py')
 check = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(check)
+
+
+def shell_function(source, name):
+    """The text of one top-level shell function, braces included."""
+    start = source.index(name + '() {')
+    end = source.index('\n}\n', start) + len('\n}\n')
+    return source[start:end]
 
 
 class VitaBuildTests(unittest.TestCase):
@@ -26,9 +35,10 @@ class VitaBuildTests(unittest.TestCase):
         start = source.index('cmake_args=(')
         end = source.index('cmake "${cmake_args[@]}"', start)
         configure = source[start:end] + 'cmake "${cmake_args[@]}"\n'
-        body = 'set -eu\n' + parse + '''
-ROOT="$PWD"
-HERE=/project/port/psvita; OUT=/project/build/psvita; GENERATOR=Ninja
+        # The script defines HERE and ROOT above the argument parser; the probe
+        # has to do the same, or a message that names $HERE is unbound.
+        body = ('set -eu\nROOT="$PWD"\nHERE=/project/port/psvita\n'
+                'OUT=/project/build/psvita; GENERATOR=Ninja\n') + parse + '''
 TOOLCHAIN_FILE_WIN=C:/vitasdk/share/vita.toolchain.cmake
 DATA_WIN="$DATA_DIR"
 shell_path() { printf '%s' "$1"; }
@@ -37,86 +47,64 @@ cmake() { printf '%s\\0' "$@"; }
 ''' + configure
         return subprocess.run(['bash', '-c', body, 'probe', *args], cwd=ROOT, capture_output=True)
 
-    def test_explicit_renderer_and_precache(self):
-        result = self.arguments('--renderer', 'opengl', '--precache', '0', '--data', 'C:/Game Data')
+    def test_data_and_titleid_arguments(self):
+        result = self.arguments('--data', 'C:/Game Data', '--titleid', 'TEST00001')
         self.assertEqual(result.returncode, 0, result.stderr)
         args = result.stdout.decode().split('\0')
-        self.assertIn('-DMUGEN_VITA_RENDERMODE=opengl', args)
-        self.assertIn('-DMUGEN_VITA_PRECACHE=0', args)
         self.assertIn('-DMUGEN_VITA_DATA_DIR=C:/Game Data', args)
+        self.assertIn('-DMUGEN_VITA_TITLEID=TEST00001', args)
 
     def test_equal_arguments(self):
-        result = self.arguments('--renderer=system', '--precache=1')
+        result = self.arguments('--titleid=TEST00002', '--data=C:/Other Tree')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(b'-DMUGEN_VITA_RENDERMODE=system\0', result.stdout)
-        self.assertIn(b'-DMUGEN_VITA_PRECACHE=1\0', result.stdout)
+        self.assertIn(b'-DMUGEN_VITA_TITLEID=TEST00002\0', result.stdout)
+        self.assertIn(b'-DMUGEN_VITA_DATA_DIR=C:/Other Tree\0', result.stdout)
 
-    def test_absent_arguments_preserve_cache(self):
+    def test_absent_arguments_apply_port_defaults(self):
         result = self.arguments()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertNotIn(b'-DMUGEN_VITA_RENDERMODE=', result.stdout)
-        self.assertNotIn(b'-DMUGEN_VITA_PRECACHE=', result.stdout)
-
-    def test_render_and_shader_cache_arguments(self):
-        for args, expected in [
-            (('--render-cache',), ('-DMUGEN_VITA_RENDER_CACHE=ON',)),
-            (('--no-render-cache',), ('-DMUGEN_VITA_RENDER_CACHE=OFF',)),
-            (('--shader-cache',), ('-DMUGEN_VITA_SHADER_CACHE=ON', '-DMUGEN_VITA_BUILD_VITAGL=ON')),
-            (('--no-shader-cache',), ('-DMUGEN_VITA_SHADER_CACHE=OFF',)),
-        ]:
-            with self.subTest(args=args):
-                result = self.arguments(*args)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                for value in expected:
-                    self.assertIn(value.encode() + b'\0', result.stdout)
-        result = self.arguments()
-        self.assertNotIn(b'-DMUGEN_VITA_SHADER_CACHE=', result.stdout)
-        self.assertNotIn(b'-DMUGEN_VITA_RENDER_CACHE=', result.stdout)
-
-    @unittest.skipUnless(os.environ.get('CMAKE') or shutil.which('cmake'), 'CMake unavailable')
-    def test_vendored_shader_cache_definition(self):
-        work = ROOT / 'build/tmp/vita-cache-cmake'
-        work.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=work) as tmp:
-            tmp = Path(tmp)
-            (tmp / 'source').mkdir()
-            (tmp / 'source/vgl.c').write_text('void probe(void) {}\n')
-            module = (ROOT / 'port/psvita/cmake/VitaGl.cmake').as_posix()
-            (tmp / 'CMakeLists.txt').write_text(
-                'cmake_minimum_required(VERSION 3.16)\nproject(cache_flags C)\n'
-                f'include("{module}")\n'
-                'set(MUGEN_VITAGL_DIR "${CMAKE_CURRENT_SOURCE_DIR}")\n'
-                'mugen_add_vitagl(probe)\n'
-                'get_target_property(flags probe COMPILE_DEFINITIONS)\n'
-                'file(WRITE "${CMAKE_BINARY_DIR}/flags.txt" "${flags}")\n')
-            for enabled in ('ON', 'OFF'):
-                result = subprocess.run([self.cmake(), '-S', str(tmp), '-B', str(tmp / enabled),
-                                         '-DMUGEN_VITA_SHADER_CACHE=' + enabled], capture_output=True)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                flags = (tmp / enabled / 'flags.txt').read_text()
-                self.assertEqual('HAVE_SHADER_CACHE=1' in flags, enabled == 'ON')
-                self.assertNotIn('DRAW_SPEEDHACK', flags)
-                self.assertNotIn('BUFFERS_SPEEDHACK', flags)
+        args = result.stdout.decode().split('\0')
+        # The title id is the only value with a script default.
+        self.assertIn('-DMUGEN_VITA_TITLEID=MUGEN0001', args)
+        # The renderer, sizes and precache live in the platform config, which is
+        # passed as one file and packed verbatim -- never as separate values.
+        self.assertIn(b'-DMUGEN_VITA_CFG=', result.stdout)
+        self.assertIn(b'/mugen.psvita.cfg\0', result.stdout)
+        for retired in (b'-DMUGEN_VITA_RENDERMODE=', b'-DMUGEN_VITA_PRECACHE=',
+                        b'-DMUGEN_VITA_VIDEO_WIDTH=', b'-DMUGEN_VITA_OUTPUT_WIDTH='):
+            self.assertNotIn(retired, result.stdout)
+        # The compiler default is not a flag default: install_vita_libs
+        # resolves it from the unpacked release asset (its own test below).
+        self.assertNotIn(b'-DMUGEN_VITA_SHADER_COMPILER=', result.stdout)
 
     def test_bad_arguments_fail(self):
-        for args in [('--renderer',), ('--precache',), ('--renderer=wrong',), ('--precache=2',)]:
+        for args in [('--titleid',), ('--jobs',), ('--data',)]:
             with self.subTest(args=args):
                 self.assertNotEqual(self.arguments(*args).returncode, 0)
 
-    def test_native_resolution_and_optional_compiler(self):
-        result = self.arguments()
+    def test_retired_arguments_are_rejected(self):
+        # Renderer, precache and the sizes moved into port/psvita/mugen.psvita.cfg,
+        # which the VPK packs verbatim. The flags are gone rather than silently
+        # ignored, so an old invocation fails and names the file.
+        for args in [('--renderer',), ('--renderer', 'opengl'), ('--renderer=opengl',),
+                     ('--precache',), ('--precache', '0'), ('--precache=0',),
+                     ('--resolution',), ('--resolution', '480x272'), ('--resolution=480x272',),
+                     ('--game-resolution=720x408',), ('--output-resolution=960x544',)]:
+            with self.subTest(args=args):
+                result = self.arguments(*args)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(b'retired', result.stderr)
+                self.assertIn(b'mugen.psvita.cfg', result.stderr)
+
+    def test_compiler_input_is_passed_through(self):
+        result = self.arguments('--shader-compiler', 'C:/My Files/libshacccg.suprx')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(b'-DMUGEN_VITA_VIDEO_WIDTH=960\0', result.stdout)
-        self.assertIn(b'-DMUGEN_VITA_VIDEO_HEIGHT=544\0', result.stdout)
-        self.assertNotIn(b'-DMUGEN_VITA_SHADER_COMPILER=', result.stdout)
-        result = self.arguments('--resolution=480x272', '--shader-compiler', 'C:/My Files/libshacccg.suprx')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(b'-DMUGEN_VITA_VIDEO_WIDTH=480\0', result.stdout)
-        self.assertIn(b'-DMUGEN_VITA_VIDEO_HEIGHT=272\0', result.stdout)
         self.assertIn(b'-DMUGEN_VITA_SHADER_COMPILER=C:/My Files/libshacccg.suprx\0', result.stdout)
-        for args in [('--resolution',), ('--resolution=0x544',), ('--resolution=0960x544',),
-                     ('--renderer=opengl', '--resolution=961x544'), ('--renderer=opengl', '--resolution=960x545'),
-                     ('--shader-compiler',), ('--shader-compiler=',)]:
+        # An explicit clear still reaches CMake, and empties the cached path.
+        result = self.arguments('--no-shader-compiler')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(b'-DMUGEN_VITA_SHADER_COMPILER=\0', result.stdout)
+        for args in [('--shader-compiler',), ('--shader-compiler=',)]:
             with self.subTest(args=args):
                 self.assertNotEqual(self.arguments(*args).returncode, 0)
 
@@ -124,13 +112,14 @@ cmake() { printf '%s\\0' "$@"; }
     def test_supplied_compiler_input(self):
         source = (ROOT / 'port/psvita/CMakeLists.txt').read_text()
         start = source.index('set(MUGEN_VITA_SHADER_COMPILER "" CACHE FILEPATH')
-        end = source.index('set(_mugen_vpk_args', start)
+        end = source.index('# External compiler use is supported', start)
         work = ROOT / 'build/tmp/vita-build-inputs'
         work.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=work) as tmp:
             tmp = Path(tmp)
             script = tmp / 'check.cmake'
-            script.write_text(source[start:end])
+            script.write_text('set(_vita_renderer opengl)\n'
+                              'set(MUGEN_VITA_DATA_DIR "")\n' + source[start:end])
             module = tmp / 'private module.suprx'
             raw = tmp / 'raw.elf'
             module.write_bytes(b'SCE\0' + bytes(12))
@@ -143,116 +132,144 @@ cmake() { printf '%s\\0' "$@"; }
                                              '-P', str(script)], capture_output=True)
                     self.assertEqual(result.returncode, expected, result.stderr)
 
-    def test_supported_output_modes_and_independent_game_size(self):
-        for mode in ('960x544', '720x408', '640x368', '480x272'):
-            with self.subTest(mode=mode):
-                result = self.arguments('--renderer=opengl', '--resolution=' + mode)
-                self.assertEqual(result.returncode, 0, result.stderr)
-        result = self.arguments('--renderer=opengl', '--game-resolution=640x480',
-                                '--output-resolution=960x544')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(b'-DMUGEN_VITA_VIDEO_WIDTH=640\0', result.stdout)
-        self.assertIn(b'-DMUGEN_VITA_VIDEO_HEIGHT=480\0', result.stdout)
-        self.assertIn(b'-DMUGEN_VITA_OUTPUT_WIDTH=960\0', result.stdout)
-        self.assertIn(b'-DMUGEN_VITA_OUTPUT_HEIGHT=544\0', result.stdout)
-        for args in [('--renderer=opengl', '--resolution=640x480'),
-                     ('--renderer=opengl', '--output-resolution=800x450'),
-                     ('--game-resolution',), ('--output-resolution',),
-                     ('--game-resolution=',), ('--output-resolution=',),
-                     ('--game-resolution=4097x720',)]:
-            with self.subTest(args=args):
-                self.assertNotEqual(self.arguments(*args).returncode, 0)
-
     def cmake(self):
         return os.environ.get('CMAKE') or shutil.which('cmake')
 
-    def patched(self, text, game='960x544', output='960x544', renderer='opengl'):
+    def validated(self, text):
+        """Run the platform-config validation block against `text`.
+
+        The block reads MUGEN_VITA_CFG and checks the values in their actual
+        groups. Nothing is rewritten any more, so the only output is the exit
+        status (and any message), which is exactly what has to be tested.
+        """
         source = (ROOT / 'port/psvita/CMakeLists.txt').read_text()
-        start = source.index('    file(READ "${MUGEN_VITA_CFG_SRC}" _cfg)')
-        end = source.index('    file(WRITE "${MUGEN_VITA_CFG_OUT}" "${_cfg}")', start)
-        end += len('    file(WRITE "${MUGEN_VITA_CFG_OUT}" "${_cfg}")')
+        start = source.index('# Validate what it actually says')
+        end = source.index('# ------------------------------------------------------------- vitaGL (opt) --', start)
         work = ROOT / 'build/tmp/vita-config-tests'
         work.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=work) as tmp:
             tmp = Path(tmp)
-            script = tmp / 'check.cmake'
+            (tmp / 'mugen.psvita.cfg').write_bytes(text.encode())
             helper = (ROOT / 'port/psvita/cmake/Config.cmake').as_posix()
+            script = tmp / 'check.cmake'
             script.write_text('cmake_minimum_required(VERSION 3.16)\ninclude("' + helper + '")\n' +
+                              'set(MUGEN_VITA_CFG "' + (tmp / 'mugen.psvita.cfg').as_posix() + '")\n' +
                               source[start:end])
-            (tmp / 'input.cfg').write_bytes(text.encode())
-            gw, gh = game.split('x'); ow, oh = output.split('x')
-            args = ['-DMUGEN_VITA_VIDEO_WIDTH=' + gw, '-DMUGEN_VITA_VIDEO_HEIGHT=' + gh,
-                    '-DMUGEN_VITA_OUTPUT_WIDTH=' + ow, '-DMUGEN_VITA_OUTPUT_HEIGHT=' + oh,
-                    '-DMUGEN_VITA_FULLSCREEN=ON', '-DMUGEN_VITA_RENDERMODE=' + renderer,
-                    '-DMUGEN_VITA_PRECACHE=0', '-DMUGEN_VITA_CFG_SRC=' + str(tmp / 'input.cfg'),
-                    '-DMUGEN_VITA_CFG_OUT=' + str(tmp / 'output.cfg')]
-            result = subprocess.run([self.cmake(), *args, '-P', str(script)], capture_output=True)
-            output_file = tmp / 'output.cfg'
-            return result, output_file.read_text() if output_file.exists() else ''
+            return subprocess.run([self.cmake(), '-P', str(script)], capture_output=True)
 
     @unittest.skipUnless(os.environ.get('CMAKE') or shutil.which('cmake'), 'CMake unavailable')
-    def test_full_config_patch_and_validation(self):
-        template = (ROOT / 'port/psvita/mugen.cfg').read_text()
-        cases = [template, template.replace('ShowFPS = 1', 'showfps = 0'),
-                 template.replace('ShowFPS = 1', 'ShowFPS=0'),
-                 template.replace('ShowFPS = 1', '  ShowFPS = 0'),
-                 template.replace('ShowFPS = 1', ';ShowFPS = 0'),
-                 template.replace('ShowFPS = 1', 'ShowFPS = 0\nshowfps=0'),
-                 template.replace('ShowFPS = 1', ';absent').replace('[Video]', '[Video]\nShowFPS = 0'),
-                 template.replace('[Debug]', '[dEbUg]').replace('Debug = 0', 'debug=0'),
-                 template.replace('ShowFPS = 1', 'ShowFPS=0').replace('\n', '\r\n'),
-                 template.replace('GameWidth = 960', 'gamewidth=320').replace(
-                     'GameHeight = 544', ' gameheight=240').replace('[Config]', '[config]'),
-                 '[Other]\nWidth = 123\n;semi;colon;and C:\\file\n']
-        for text in cases:
-            with self.subTest(text=text[:100]):
-                result, output = self.patched(text)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                section = re.search(r'^\[Debug\]\s*$(.*?)(?=^\[|\Z)', output,
-                                    re.M | re.S | re.I).group(1)
-                self.assertEqual(re.findall(r'^ShowFPS = (\d+)\s*$', section, re.M), ['1'])
-                if ';If Debug = 1, this will be ignored.' in text:
-                    self.assertIn(';If Debug = 1, this will be ignored.', output)
-                if '[Other]' in text:
-                    self.assertIn('Width = 123', output)
-                    self.assertIn(';semi;colon;and C:\\file', output)
-                repeated, again = self.patched(output)
-                self.assertEqual(repeated.returncode, 0, repeated.stderr)
-                self.assertEqual(output, again)
+    def test_platform_config_is_required_and_validated(self):
+        text = (ROOT / 'port/psvita/mugen.psvita.cfg').read_text()
+        result = self.validated(text)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(b'packed verbatim', result.stdout)
 
-    @unittest.skipUnless(os.environ.get('CMAKE') or shutil.which('cmake'), 'CMake unavailable')
-    def test_config_dimensions_and_template_renderer_validation(self):
-        template = (ROOT / 'port/psvita/mugen.cfg').read_text()
-        result, output = self.patched(template, game='720x408')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('GameWidth = 720', output)
-        self.assertIn('GameHeight = 408', output)
-        self.assertIn('Width = 960', output)
-        self.assertIn('Height = 544', output)
-        for mode in ('960x544', '720x408', '640x368', '480x272'):
-            result, _ = self.patched(template, game=mode, output=mode)
-            self.assertEqual(result.returncode, 0, result.stderr)
-        # No explicit renderer still checks the actual config's OpenGL mode.
-        gl_template = template.replace('RenderMode = System', 'rendermode=OpenGL')
-        for renderer in ('opengl', ''):
-            result, _ = self.patched(gl_template, game='640x480', output='640x480', renderer=renderer)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn(b'Unsupported Vita OpenGL output', result.stderr)
-        for game in ('0x408', '720x0', '4097x408'):
-            result, _ = self.patched(template, game=game)
-            self.assertNotEqual(result.returncode, 0)
-        result, _ = self.patched(template, game='640x480', renderer='system')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        result, _ = self.patched(template, game='720x408', renderer='openglscreen')
+        # Case and spacing are not validators; the values in their groups are.
+        for variant in (text.replace('RenderMode = OpenGL', 'rendermode=OpenGL'),
+                        text.replace('RenderMode = OpenGL', '  RenderMode = opengl  '),
+                        text.replace('\n', '\r\n')):
+            with self.subTest(variant=variant[:40]):
+                self.assertEqual(self.validated(variant).returncode, 0)
+
+        # A missing or unsupported renderer, and missing sizes, are errors.
+        for broken, message in [
+            (text.replace('RenderMode = OpenGL', 'RenderMode = DirectX'), b'not one of'),
+            (text.replace('RenderMode = OpenGL', ';RenderMode = OpenGL'), b'no [Video] RenderMode'),
+            (text.replace('GameWidth = 960\n', ''), b'missing a size'),
+            (text.replace('Width = 960\n', ''), b'missing a size'),
+            (text.replace('GameWidth = 960', 'GameWidth = 0'), b'Invalid Vita'),
+        ]:
+            with self.subTest(message=message):
+                result = self.validated(broken)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+
+        # OpenGL output must be one of the four panel modes; the game size is free.
+        result = self.validated(text.replace('Width = 960', 'Width = 640')
+                                    .replace('Height = 544', 'Height = 480'))
         self.assertNotEqual(result.returncode, 0)
-        result, _ = self.patched(template, game='480x272', output='480x272', renderer='openglscreen')
+        self.assertIn(b'Unsupported Vita OpenGL output', result.stderr)
+        result = self.validated(text.replace('Width = 960', 'Width = 720')
+                                    .replace('Height = 544', 'Height = 408')
+                                    .replace('GameWidth = 960', 'GameWidth = 720')
+                                    .replace('GameHeight = 544', 'GameHeight = 408'))
         self.assertEqual(result.returncode, 0, result.stderr)
 
+        # OpenGLScreen ties the game and display sizes together.
+        result = self.validated(text.replace('RenderMode = OpenGL', 'RenderMode = OpenGLScreen')
+                                    .replace('GameWidth = 960', 'GameWidth = 480'))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b'OpenGLScreen uses the game size', result.stderr)
+
+        # FullScreen / FirstRun / Precache warn rather than fail: they are the
+        # hardware workarounds, not correctness rules.
+        for key, value in [('FullScreen = 1', 'FullScreen = 0'),
+                           ('FirstRun = 0', 'FirstRun = 1'),
+                           ('Precache = 0', 'Precache = 1')]:
+            with self.subTest(key=key):
+                result = self.validated(text.replace(key, value))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(b'Warning', result.stderr)
+
+    @unittest.skipUnless(shutil.which('unzip') and shutil.which('bash'), 'unzip/bash unavailable')
+    def test_default_shader_compiler_is_unpacked_release_asset(self):
+        source = (ROOT / 'port/psvita/build.sh').read_text()
+        work = ROOT / 'build/tmp/vita-compiler-tests'
+        work.mkdir(parents=True, exist_ok=True)
+        module = b'SCE\0' + bytes(12)
+        with tempfile.TemporaryDirectory(dir=work) as tmp:
+            tmp = Path(tmp)
+            downloads = tmp / 'build/downloads'
+            downloads.mkdir(parents=True)
+            archive = downloads / 'lib-for-vita.zip'
+            with zipfile.ZipFile(archive, 'w') as bundle:
+                bundle.writestr('libshacccg.suprx', module)
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            probe = ('set -eu\n'
+                     'DOWNLOADS=' + downloads.as_posix() + '\n'
+                     'VITA_LIBS_FILE=lib-for-vita.zip\n'
+                     'VITA_LIBS_SHA256=' + digest + '\n'
+                     'VITA_LIBS_URL=https://example.invalid/lib-for-vita.zip\n'
+                     'OFFLINE=0\nSHADER_COMPILER=""\nSHADER_COMPILER_SET=0\n'
+                     'info() { printf \'    %s\\n\' "$*"; }\n'
+                     'fail() { printf \'error: %s\\n\' "$*" >&2; exit 1; }\n'
+                     'fetch() { fail "fetch must not run with a verified cache"; }\n'
+                     + shell_function(source, 'hash_of')
+                     + shell_function(source, 'install_vita_libs')
+                     + 'install_vita_libs\n'
+                     'printf \'RESULT=%s\\n\' "$SHADER_COMPILER"\n')
+
+            def run(offline='0'):
+                result = subprocess.run(['bash', '-c', probe.replace('OFFLINE=0', 'OFFLINE=' + offline)],
+                                        cwd=tmp, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return result.stdout.decode()
+
+            packed = downloads / 'libshacccg.suprx'
+            # The default input is the unpacked asset, produced here by unzip.
+            self.assertIn('RESULT=' + packed.as_posix(), run())
+            self.assertEqual(packed.read_bytes(), module)
+            # A second run reuses it instead of re-unpacking.
+            self.assertIn('RESULT=' + packed.as_posix(), run())
+            # A cache that does not verify, offline: no compiler, no failure.
+            archive.write_bytes(b'not the release asset')
+            packed.unlink()
+            self.assertIn('RESULT=\n', run(offline='1'))
+            self.assertFalse(packed.exists())
+            # An explicit choice is never overridden by the fetch step.
+            explicit = tmp / 'supplied.suprx'
+            explicit.write_bytes(module)
+            body = (probe.replace('SHADER_COMPILER_SET=0', 'SHADER_COMPILER_SET=1')
+                    .replace('SHADER_COMPILER=""', 'SHADER_COMPILER=' + explicit.as_posix()))
+            result = subprocess.run(['bash', '-c', body], cwd=tmp, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('RESULT=' + explicit.as_posix(), result.stdout.decode())
+
     @unittest.skipUnless(os.environ.get('CMAKE') or shutil.which('cmake'), 'CMake unavailable')
-    def test_compiler_cache_survives_plain_rebuild(self):
+    def test_compiler_flag_controls_the_packed_module(self):
         source = (ROOT / 'port/psvita/CMakeLists.txt').read_text()
         start = source.index('set(MUGEN_VITA_SHADER_COMPILER "" CACHE FILEPATH')
-        end = source.index('if(MUGEN_VITA_DATA_DIR)\n  # Each top-level entry', start)
+        end = source.index('if(MUGEN_VITA_DATA_DIR)', start)
         work = ROOT / 'build/tmp/vita-cache-tests'
         work.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=work) as tmp:
@@ -262,19 +279,36 @@ cmake() { printf '%s\\0' "$@"; }
             helper = (ROOT / 'port/psvita/cmake/Config.cmake').as_posix()
             (tmp / 'CMakeLists.txt').write_text('cmake_minimum_required(VERSION 3.16)\n'
                 'project(cache_probe NONE)\ninclude("' + helper + '")\n'
-                'set(MUGEN_VITA_RENDERMODE opengl)\n' + source[start:end] +
+                'set(_vita_renderer opengl)\n'
+                'set(MUGEN_VITA_DATA_DIR "")\n'
+                'set(MUGEN_VITA_CFG "' + (tmp / 'mugen.psvita.cfg').as_posix() + '")\n'
+                'set(VITA_APP_NAME probe)\n'
+                'set(MUGEN_VITA_VERSION 01.00)\n'
+                'set(MUGEN_VITA_TITLEID TEST00001)\n'
+                'set(MUGEN_VITA_ICON_PNG icon.png)\n'
+                'set(MUGEN_VITA_BG_PNG bg.png)\n'
+                'set(MUGEN_VITA_STARTUP_PNG startup.png)\n'
+                'set(MUGEN_VITA_SCE_SYS "${CMAKE_CURRENT_SOURCE_DIR}")\n'
+                'set(MUGEN_VITA_SFO sfo)\n'
+                'set(MUGEN_VITA_EBOOT eboot)\n'
+                + source[start:end] +
                 'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/args.txt" "${_mugen_vpk_args}")\n')
-            for args, expected in [(('--shader-compiler', str(module)), True), ((), True),
-                                   (('--no-shader-compiler',), False), ((), False)]:
+            (tmp / 'mugen.psvita.cfg').write_text('[Video]\nRenderMode = OpenGL\n')
+            # A plain build's default input only exists after install_vita_libs
+            # has unpacked it, which the parser slice above does not run, so the
+            # CMake half drives the explicit choices only.
+            for args, expected in [(('--shader-compiler', str(module)), True),
+                                   (('--no-shader-compiler',), False)]:
                 with self.subTest(args=args):
                     parsed = self.arguments(*args)
                     self.assertEqual(parsed.returncode, 0, parsed.stderr)
                     flags = [s for s in parsed.stdout.decode().split('\0')
                              if s.startswith('-DMUGEN_VITA_SHADER_COMPILER=')]
-                    result = subprocess.run([self.cmake(), '-S', str(tmp), '-B', str(tmp / 'out'), *flags],
+                    target = tmp / ('out-' + str(expected))
+                    result = subprocess.run([self.cmake(), '-S', str(tmp), '-B', str(target), *flags],
                                             capture_output=True)
                     self.assertEqual(result.returncode, 0, result.stderr)
-                    packed = (tmp / 'out/args.txt').read_text()
+                    packed = (target / 'args.txt').read_text()
                     self.assertEqual('module/libshacccg.suprx' in packed, expected)
                     if not expected:
                         self.assertIn(b'no bundled shader compiler', result.stderr)

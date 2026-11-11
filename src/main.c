@@ -6,6 +6,27 @@
  */
 #include "mugen.h"
 
+#ifdef MUGEN_VITA_GL
+/*
+ * PS Vita port: the write half of the stdout/stderr sink installed below.
+ *
+ * It accepts whatever it is given and reports it as written, and there is no
+ * descriptor behind it, so a write can neither fault in sceIoWrite nor create
+ * a file. read/seek/close are NULL in the funopen call: nothing reads stdin
+ * through these streams and nothing reopens or seeks them.
+ *
+ * _READ_WRITE_BUFSIZE_TYPE is int on this target (newlib sys/config.h), and is
+ * spelled out so the callback matches funopen's prototype exactly.
+ */
+static int Vita_StdioDiscard(void *cookie, const char *buf,
+                             _READ_WRITE_BUFSIZE_TYPE len)
+{
+    (void)cookie;
+    (void)buf;
+    return len;
+}
+#endif
+
 /* 0x00421500 (SDL.h renames main to SDL_main) */
 #ifdef ANDROID_PORT
 /*
@@ -27,28 +48,33 @@ int main(int argc, char *argv[])
 {
 #ifdef MUGEN_VITA_GL
     /*
-     * PS Vita port (port/psvita): give stdout and stderr real files.
+     * PS Vita port (port/psvita): stdout and stderr go to a sink in memory.
      *
-     * The console has no standard output. Whatever descriptor newlib hands out
-     * for stdout/stderr is not a valid SceIo fd, and writing to it faults inside
+     * The console has no standard output, and the descriptor newlib hands out
+     * for fds 1 and 2 is not a valid SceIo fd: writing to it faults inside
      * sceIoWrite -- core dump 1793497610 (delta 0x4e000) died exactly there,
-     * reached from _write_r.
+     * reached from _write_r. So the streams cannot be left as they are; the
+     * engine writes to them on its failure paths (src/system.c's allocation
+     * failures, and Error_Printf's vfprintf fallback when the error clipboard
+     * does not exist yet), and reporting a fault would take the process down.
      *
-     * The engine writes to these streams on its error paths: Error_Printf falls
-     * back to vfprintf(stderr, ...) when the error clipboard does not exist yet,
-     * and several allocations printf before the log is up. So the failure mode
-     * was: something goes wrong, the engine tries to report it, and reporting it
-     * takes the process down -- hiding the original fault.
-     *
-     * Redirecting them costs nothing, removes a whole class of crash, and leaves
-     * the text on the memory card where it can actually be read. Windows has
-     * SDLmain doing the same thing to stdout.txt/stderr.txt.
+     * What is deliberately NOT done here is redirecting them to a file.
+     * ux0:data/mugen-stdout.txt and mugen-stderr.txt used to be created for
+     * this, and were always empty: the engine reports through Log_Printf into
+     * mugen.log, and Error_Printf / Error_Fatal write into g_game->error_text,
+     * which reaches the log and, on this port, a message box
+     * (SDL_VITA_ShowMessageBox). stderr is only the fallback for the few
+     * failures that happen before those exist, and those runs end at once.
+     * Two empty files on the memory card are not worth that trade, so the sink
+     * owns no file at all.
      */
-    if (freopen("ux0:data/mugen-stdout.txt", "w", stdout) == NULL) {
-        (void)0;    /* nothing to report to: carry on with the original stream */
-    }
-    if (freopen("ux0:data/mugen-stderr.txt", "w", stderr) == NULL) {
-        (void)0;
+    {
+        FILE *sink = funopen(NULL, NULL, Vita_StdioDiscard, NULL, NULL);
+
+        if (sink != NULL) {
+            stdout = sink;
+            stderr = sink;
+        }
     }
 #endif
 #ifdef MUGEN_VITA_GL

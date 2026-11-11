@@ -674,7 +674,11 @@ registers gives a moving target:
   the check. Lifetime (allocation, free, pointer swap) still needs tracing
 alongside the global-corruption checks below.
 - **stdout/stderr** — redirected to `ux0:data/mugen-std*.txt`; both stayed empty,
-  so that path is not being used.
+  so that path is not being used. They are no longer created at all: the streams
+  now go to a `funopen` sink with no descriptor and no file (src/main.c), which
+  keeps the `sceIoWrite` fault closed without leaving two empty files on the
+  card. Nothing is lost — a normal run logs to `mugen.log`, and a fatal error
+  reaches `g_game->error_text` and the Vita message box.
 
 **Current hypothesis, not yet proven.** The faults do not share a code path but
 they *do* share a shape: each reads a **global** and finds nonsense — a

@@ -21,7 +21,7 @@
 #      cmake --build build/psvita
 #
 #  Outputs (in the build directory):
-#      mugen-psvita.self  the executable, runnable from ux0:app/MSDK00001/
+#      mugen-psvita.self  the executable, runnable from ux0:app/MUGEN0001/
 #      mugen-psvita.vpk   installable homebrew, data/ included
 #
 #  Notes on the source set (read before changing anything):
@@ -102,7 +102,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Config.cmake")
 # author field, 00001 = first title, per the TITLEID convention in the sample.
 
 set(VITA_APP_NAME "M.U.G.E.N Unleashed")
-set(MUGEN_VITA_TITLEID "MSDK00001" CACHE STRING "9-character Vita title ID")
+set(MUGEN_VITA_TITLEID "MUGEN0001" CACHE STRING "9-character Vita title ID")
 set(MUGEN_VITA_VERSION "01.00"     CACHE STRING "APP_VER, format ##.##")
 
 # Data zipped into the VPK. The game tree (chars/, stages/, data/, font/,
@@ -117,47 +117,103 @@ set(MUGEN_VITA_VERSION "01.00"     CACHE STRING "APP_VER, format ##.##")
 set(MUGEN_VITA_DATA_DIR "" CACHE PATH
     "M.U.G.E.N directory to pack into the VPK (optional: its contents go to data/)")
 
-# --------------------------------------------------------- video config patch --
+# ------------------------------------------------------- platform config --
 #
-# The game's data/mugen.cfg is written for a desktop, and two of its settings
-# break this port:
+# The Vita's settings live in port/psvita/mugen.psvita.cfg, which the VPK packs
+# as data/mugen.psvita.cfg exactly as written -- no build step and no flag
+# rewrites a value in it. The engine merges it over the game tree's own
+# data/mugen.cfg at start-up, per key (src/configmerge.c): a key the platform
+# file names wins, everything else keeps the game's value.
 #
-#   GameWidth / GameHeight   A desktop install is usually 1280x720 or larger.
-#                            vitaGL has one framebuffer -- the Vita's 960x544 --
-#                            and SDL_SetVideoMode fails for anything else. The
+# That is why nothing here patches data/mugen.cfg any more. The game's file is
+# packed unchanged, so the tree stays the user's: the options screen writes back
+# into it, and a value baked in at build time would look like a setting that
+# refuses to change. The keys this port needs are all in the platform file:
+#
+#   GameWidth / GameHeight   a desktop tree is usually 1280x720 or larger, and
+#                            vitaGL has one framebuffer -- the Vita's 960x544.
+#                            SDL_SetVideoMode fails for anything else and the
 #                            engine does not check that failure in its OpenGL
-#                            path (a quirk kept from the original: "with OpenGL
-#                            a failed SDL_SetVideoMode is not noticed here"), so
-#                            it calls Gl_Init with no GL context and the process
-#                            dies with C2-12828-1 before the first frame.
+#                            path (a quirk kept from the original), so it calls
+#                            Gl_Init with no context and dies with C2-12828-1.
+#   FullScreen               0 asks for a window; the Vita has none.
+#   RenderMode               OpenGL selects the native vitaGL path (src/vita_video.c).
+#   Precache                 0: the background loader's 4 KiB stack overflowed
+#                            on hardware.
+#   FirstRun                 1 opens the licence panel and then rewrites
+#                            data/mugen.cfg, which a packed VPK cannot do.
 #
-#   FullScreen               0 asks for a window; the Vita has none. The vita
-#                            video driver fills the panel either way, but the
-#                            engine takes different paths for windowed mode
-#                            (window position env vars, SDL_ShowCursor).
-#
-# Both are rewritten when the game tree is packed, in a copy that goes into the
-# VPK. The tree on disk is never modified -- install/ is the pristine reference.
-# Port addition: native Vita output is the default for the now-working GL path.
-# GameWidth/GameHeight select the internal game buffer; output is separate.
-# System rendering at native size costs more CPU work; an explicit 480x272
-# build remains available when a lower-resolution software target is wanted.
-set(MUGEN_VITA_VIDEO_WIDTH  "960" CACHE STRING
-    "GameWidth written into the packed data/mugen.cfg")
-set(MUGEN_VITA_VIDEO_HEIGHT "544" CACHE STRING
-    "GameHeight written into the packed data/mugen.cfg")
-set(MUGEN_VITA_OUTPUT_WIDTH "" CACHE STRING
-    "Output Width in packed mugen.cfg (empty: follow game width)")
-set(MUGEN_VITA_OUTPUT_HEIGHT "" CACHE STRING
-    "Output Height in packed mugen.cfg (empty: follow game height)")
-if(MUGEN_VITA_OUTPUT_WIDTH STREQUAL "")
-  set(MUGEN_VITA_OUTPUT_WIDTH "${MUGEN_VITA_VIDEO_WIDTH}")
+# The file is required: a VPK without it starts with the desktop values above
+# and dies before the first frame, so a missing or invalid one is a configure
+# error rather than a silent downgrade.
+set(MUGEN_VITA_CFG "${CMAKE_CURRENT_SOURCE_DIR}/mugen.psvita.cfg" CACHE FILEPATH
+    "platform config packed verbatim as data/mugen.psvita.cfg")
+if(NOT MUGEN_VITA_CFG)
+  message(FATAL_ERROR
+    "MUGEN_VITA_CFG is empty. The Vita port needs a platform config: it is "
+    "merged over the game's data/mugen.cfg at start-up and carries the "
+    "resolution, RenderMode, FullScreen and Precache this device needs.")
 endif()
-if(MUGEN_VITA_OUTPUT_HEIGHT STREQUAL "")
-  set(MUGEN_VITA_OUTPUT_HEIGHT "${MUGEN_VITA_VIDEO_HEIGHT}")
+if(NOT EXISTS "${MUGEN_VITA_CFG}" OR IS_DIRECTORY "${MUGEN_VITA_CFG}")
+  message(FATAL_ERROR "MUGEN_VITA_CFG=${MUGEN_VITA_CFG} does not exist")
 endif()
-set(MUGEN_VITA_FULLSCREEN   "ON"  CACHE BOOL
-    "Write FullScreen = 1 into the packed data/mugen.cfg")
+
+# Validate what it actually says, in its actual groups, before packing it.
+# Reading the file the build ships is the point: a typo in RenderMode or a
+# 640x480 OpenGL output is caught here instead of on the console.
+file(READ "${MUGEN_VITA_CFG}" _mugen_vita_cfg_text)
+mugen_vita_ini_get("${_mugen_vita_cfg_text}" Video RenderMode _vita_renderer)
+mugen_vita_ini_get("${_mugen_vita_cfg_text}" Config GameWidth _vita_game_w)
+mugen_vita_ini_get("${_mugen_vita_cfg_text}" Config GameHeight _vita_game_h)
+mugen_vita_ini_get("${_mugen_vita_cfg_text}" Video Width _vita_out_w)
+mugen_vita_ini_get("${_mugen_vita_cfg_text}" Video Height _vita_out_h)
+mugen_vita_ini_get("${_mugen_vita_cfg_text}" Video FullScreen _vita_fullscreen)
+mugen_vita_ini_get("${_mugen_vita_cfg_text}" Config FirstRun _vita_firstrun)
+mugen_vita_ini_get("${_mugen_vita_cfg_text}" Misc Precache _vita_precache)
+if(_vita_renderer STREQUAL "")
+  message(FATAL_ERROR
+    "${MUGEN_VITA_CFG}: no [Video] RenderMode. The device needs one: "
+    "system, opengl or openglscreen.")
+endif()
+# The value is matched case-insensitively, like every Ini lookup (the engine
+# never sets g_iniCaseSensitive): RenderMode = OpenGL is what a M.U.G.E.N config
+# traditionally says.
+string(TOLOWER "${_vita_renderer}" _vita_renderer_lc)
+if(NOT _vita_renderer_lc MATCHES "^(system|opengl|openglscreen)$")
+  message(FATAL_ERROR
+    "${MUGEN_VITA_CFG}: [Video] RenderMode='${_vita_renderer}' is not one of "
+    "system, opengl, openglscreen")
+endif()
+set(_vita_renderer "${_vita_renderer_lc}")
+foreach(_key game_w game_h out_w out_h)
+  if("${_vita_${_key}}" STREQUAL "")
+    message(FATAL_ERROR
+      "${MUGEN_VITA_CFG}: missing a size the port needs "
+      "([Config] GameWidth/GameHeight, [Video] Width/Height)")
+  endif()
+endforeach()
+if(NOT _vita_fullscreen STREQUAL "1")
+  message(WARNING
+    "${MUGEN_VITA_CFG}: [Video] FullScreen='${_vita_fullscreen}'. The Vita has "
+    "no window; the driver fills the panel either way, but the engine then "
+    "takes its windowed paths (window position, SDL_ShowCursor).")
+endif()
+if(_vita_firstrun STREQUAL "1")
+  message(WARNING
+    "${MUGEN_VITA_CFG}: [Config] FirstRun=1 opens the licence panel and then "
+    "rewrites data/mugen.cfg, which a packed VPK cannot do.")
+endif()
+if(NOT _vita_precache STREQUAL "0")
+  message(WARNING
+    "${MUGEN_VITA_CFG}: [Misc] Precache='${_vita_precache}'. The background "
+    "loader's 4 KiB stack overflowed on hardware; 0 is the confirmed workaround.")
+endif()
+mugen_vita_validate_resolution("${_vita_renderer}" "${_vita_game_w}"
+  "${_vita_game_h}" "${_vita_out_w}" "${_vita_out_h}")
+message(STATUS "Vita: platform config ${MUGEN_VITA_CFG} (packed verbatim)")
+message(STATUS "      ${_vita_renderer} ${_vita_out_w}x${_vita_out_h}, game "
+               "${_vita_game_w}x${_vita_game_h}, FullScreen ${_vita_fullscreen}, "
+               "Precache ${_vita_precache}")
 
 # Memory budget for the process, in KiB, passed to vita-make-fself as -m.
 #
@@ -247,28 +303,21 @@ set(MUGEN_VITA_MEMSIZE "0" CACHE STRING
 # libvitaGL.a, before main, so the console shows C2-12828-1 with no mugen.log at
 # all. port/psvita/src/vita_newlib.c defines the symbol; this sets its value.
 #
-# The renderer written into the packed data/mugen.cfg.
+# The part of that budget given to the newlib heap (malloc/operator new).
 #
-# System remains the default pending hardware qualification of the native
-# vitaGL display and explicit-attribute sprite path. An OpenGL request bypasses
-# SDL's separate SceGxm video driver; see src/vita_video.c. A failure after GL
-# ownership exits, since the pinned vitaGL has no context teardown API.
-set(MUGEN_VITA_RENDERMODE "system" CACHE STRING
-    "RenderMode written into the packed data/mugen.cfg (system | opengl | openglscreen)")
-if(NOT MUGEN_VITA_RENDERMODE MATCHES "^(system|opengl|openglscreen)?$")
-  message(FATAL_ERROR "MUGEN_VITA_RENDERMODE must be system, opengl, openglscreen or empty")
-endif()
-# Check cached/manual options too; the config patch rechecks a template mode
-# when MUGEN_VITA_RENDERMODE is empty.
-mugen_vita_validate_resolution("${MUGEN_VITA_RENDERMODE}"
-  "${MUGEN_VITA_VIDEO_WIDTH}" "${MUGEN_VITA_VIDEO_HEIGHT}"
-  "${MUGEN_VITA_OUTPUT_WIDTH}" "${MUGEN_VITA_OUTPUT_HEIGHT}")
-# Port fix: the background loader's 4 KiB default stack has overflowed on
-# hardware. Preserve the confirmed workaround when a fresh VPK is packed.
-set(MUGEN_VITA_PRECACHE "0" CACHE STRING "Precache written into the Vita configuration (0 or 1)")
-if(NOT MUGEN_VITA_PRECACHE MATCHES "^[01]$")
-  message(FATAL_ERROR "MUGEN_VITA_PRECACHE must be 0 or 1")
-endif()
+# VitaSDK's crt0 defaults the heap to 128 MiB when `_newlib_heap_size_user` is
+# undefined -- larger than the whole budget above, so `sceKernelAllocMemBlock`
+# fails, crt0 zeroes `_newlib_heap_size`, and every allocation from then on
+# returns NULL. The first allocation happens in a C++ static constructor inside
+# libvitaGL.a, before main, so the console shows C2-12828-1 with no mugen.log at
+# all. port/psvita/src/vita_newlib.c defines the symbol; this sets its value.
+#
+# SDL's Vita video driver needs the *same* process memory for GXM, so an
+# oversized heap starves `sceGxmInitialize` (SCE_GXM_ERROR_OUT_OF_MEMORY). 64 MiB
+# leaves GXM and vitaGL plenty on a normal-app budget and is far more than
+# M.U.G.E.N 1.1 needs on the Vita.
+set(MUGEN_VITA_HEAP_MIB "64" CACHE STRING
+    "newlib heap size in MiB (must leave room for GXM; 64 is comfortable)")
 
 # ------------------------------------------------------------- vitaGL (opt) --
 #
@@ -727,88 +776,18 @@ if(MUGEN_VITA_DATA_DIR)
     endif()
   endforeach()
 
-  # --- patch data/mugen.cfg into a build-directory copy ---------------------
+  # --- the platform config -------------------------------------------------
   #
-  # vita-pack-vpk refuses a destination that is already in the archive, so the
-  # patched file cannot simply be added after the tree; it has to be substituted
-  # at the point the tree is enumerated (see below). The source tree is never
-  # touched.
+  # data/mugen.cfg is packed exactly as the tree ships it. The Vita's own
+  # settings are port/psvita/mugen.psvita.cfg, packed beside it as
+  # data/mugen.psvita.cfg and merged over it per key by the engine
+  # (src/configmerge.c, called from Config_Load and Options_Load). Nothing is
+  # rewritten here, which is what keeps the game's file the user's: the options
+  # screen saves into it, and a value baked in at build time would look like a
+  # setting that refuses to change.
   #
-  # The template is port/psvita/mugen.cfg when it exists: it carries the Vita's
-  # own defaults (RenderMode=System, 960x544 render size, FullScreen=1 and the
-  # PS button layout in [P<n> Joystick]) instead of the desktop values a general
-  # game tree ships. MUGEN_VITA_CFG overrides it; an empty value falls back to
-  # the data directory's copy, which is what earlier builds always used.
-  set(MUGEN_VITA_CFG "${CMAKE_CURRENT_SOURCE_DIR}/mugen.cfg" CACHE FILEPATH
-      "mugen.cfg template packed as data/mugen.cfg (empty: use MUGEN_VITA_DATA_DIR)")
-  set(MUGEN_VITA_CFG_SRC "${MUGEN_VITA_DATA_DIR}/data/mugen.cfg")
-  if(MUGEN_VITA_CFG)
-    if(EXISTS "${MUGEN_VITA_CFG}")
-      set(MUGEN_VITA_CFG_SRC "${MUGEN_VITA_CFG}")
-      message(STATUS "Vita: config template ${MUGEN_VITA_CFG}")
-    else()
-      message(WARNING
-        "MUGEN_VITA_CFG=${MUGEN_VITA_CFG} does not exist; using "
-        "${MUGEN_VITA_DATA_DIR}/data/mugen.cfg")
-    endif()
-  endif()
-  set(MUGEN_VITA_CFG_OUT "${CMAKE_CURRENT_BINARY_DIR}/vita-mugen.cfg")
-  if(EXISTS "${MUGEN_VITA_CFG_SRC}")
-    file(READ "${MUGEN_VITA_CFG_SRC}" _cfg)
-
-    # Port fix: patch and validate actual INI groups, including ShowFPS;
-    # spelling, indentation, line endings and comments are not validators.
-    mugen_vita_patch_config(_cfg)
-
-    # --- real joystick button indices for the Vita pad ----------------------
-    #
-    # config.c seeds the joystick bindings for a *generic* pad:
-    #
-    #     joy_keys[KEY_JUMP] = 1; joy_keys[KEY_CROUCH] = 2;
-    #     joy_keys[KEY_LEFT] = 3; joy_keys[KEY_RIGHT] = 4;
-    #
-    # which on SDL's Vita driver means Circle jumps, Cross crouches, Square
-    # walks left and L walks right -- and A/B/C/X/Y/Z are all left unassigned
-    # (Config_FillUnassigned), so no attack button works at all. The bindings
-    # are only overridden by a [P1 Joystick]/[P2 Joystick] section, which the
-    # shipped mugen.cfg does not contain.
-    #
-    # The indices below are from SDL's Vita joystick driver (SDL_sysjoystick.o),
-    # confirmed on hardware with build/psvita/input-mapper:
-    #
-    #   0 Triangle  1 Circle  2 Cross   3 Square   4 L   5 R
-    #   6 Down      7 Left    8 Up      9 Right   10 Select  11 Start
-    #   12 buttons, 4 axes, 0 hats (the d-pad is buttons, not a hat)
-    #
-    # Layout is the conventional PS one: Square/Triangle/Circle/Cross = A/B/C/X.
-    #
-    # [P1 Keys] Start stays at 13 (Return).
-    #
-    # An earlier revision moved it to 283 (F2) so that Circle's Return could not
-    # pause a fight. That was wrong: the menus do not read screen->key at all,
-    # they read screen->input, which Screen_ReadInput computes as
-    #
-    #     Input_FindKey(input_keys, 2, screen->key_code)
-    #
-    # where `input_keys` is the built-in keyboard table in src/system.c
-    # (Jump = SDLK_UP, ..., Start = SDLK_RETURN). A key reaches a menu only if it
-    # is present in that table, so re-binding Start away from Return removed the
-    # only route by which Return could confirm anything -- Circle stopped
-    # confirming. The pause collision is instead avoided by not binding Circle to
-    # the C attack in src/config.c.
-    #
-    # Game/display/FPS keys have been validated by mugen_vita_patch_config.
-    file(WRITE "${MUGEN_VITA_CFG_OUT}" "${_cfg}")
-    message(STATUS "mugen.cfg patched: GameWidth ${MUGEN_VITA_VIDEO_WIDTH}, "
-                   "GameHeight ${MUGEN_VITA_VIDEO_HEIGHT}, output ${MUGEN_VITA_OUTPUT_WIDTH}x${MUGEN_VITA_OUTPUT_HEIGHT}, "
-                   "FullScreen ${MUGEN_VITA_FULLSCREEN}, "
-                   "RenderMode ${MUGEN_VITA_RENDERMODE}, Precache ${MUGEN_VITA_PRECACHE}")
-  else()
-    set(MUGEN_VITA_CFG_OUT "")
-    message(WARNING
-      "${MUGEN_VITA_CFG_SRC} not found: the VPK carries the tree's config "
-      "unchanged, so GameWidth/GameHeight are whatever the desktop value was.")
-  endif()
+  # vita-pack-vpk refuses a destination already in the archive, so a stale copy
+  # of mugen.psvita.cfg in the game tree is skipped where data/ is enumerated.
 
   # --- replace the four renderer shaders with the vitaGL-compatible versions --
   #
@@ -881,11 +860,9 @@ if(MUGEN_VITA_SHADER_COMPILER)
 endif()
 
 # External compiler use is supported, but must be visible in the build log.
-set(_compiler_renderer "${MUGEN_VITA_RENDERMODE}")
-if(DEFINED _cfg)
-  mugen_vita_ini_get("${_cfg}" Video RenderMode _compiler_renderer)
-endif()
-string(TOLOWER "${_compiler_renderer}" _compiler_renderer)
+# The renderer comes from the platform config validated above, so the warning
+# fires for exactly the VPKs that need the module.
+string(TOLOWER "${_vita_renderer}" _compiler_renderer)
 if(NOT MUGEN_VITA_SHADER_COMPILER AND
    NOT EXISTS "${MUGEN_VITA_DATA_DIR}/module/libshacccg.suprx" AND
    (_compiler_renderer STREQUAL "opengl" OR _compiler_renderer STREQUAL "openglscreen"))
@@ -957,12 +934,14 @@ if(MUGEN_VITA_DATA_DIR)
       message(STATUS "  not packing ${_entry} (this project's own build output)")
       continue()
     endif()
-    if(_entry STREQUAL "data" AND MUGEN_VITA_CFG_OUT)
+    if(_entry STREQUAL "data")
       file(GLOB _mugen_data_files RELATIVE "${MUGEN_VITA_DATA_DIR}/data"
            "${MUGEN_VITA_DATA_DIR}/data/*")
       foreach(_sub IN LISTS _mugen_data_files)
-        if(_sub STREQUAL "mugen.cfg")
-          list(APPEND _mugen_vpk_args -a "${MUGEN_VITA_CFG_OUT}=data/mugen.cfg")
+        if(_sub STREQUAL "mugen.psvita.cfg")
+          # The port's file is packed below; a copy left in the game tree would
+          # be a duplicate destination, and vita-pack-vpk rejects those.
+          continue()
         elseif(MUGEN_VITA_SHADER_${_sub})
           list(APPEND _mugen_vpk_args -a "${MUGEN_VITA_SHADER_${_sub}}=data/${_sub}")
         else()
@@ -970,6 +949,8 @@ if(MUGEN_VITA_DATA_DIR)
                -a "${MUGEN_VITA_DATA_DIR}/data/${_sub}=data/${_sub}")
         endif()
       endforeach()
+      # Verbatim: no value in the file is rewritten by the build.
+      list(APPEND _mugen_vpk_args -a "${MUGEN_VITA_CFG}=data/mugen.psvita.cfg")
     else()
       list(APPEND _mugen_vpk_args -a "${MUGEN_VITA_DATA_DIR}/${_entry}=${_entry}")
     endif()
@@ -981,7 +962,7 @@ add_custom_command(
   COMMAND ${VITA_PACK_VPK} ${_mugen_vpk_args} ${MUGEN_VITA_VPK}
   DEPENDS ${MUGEN_VITA_SFO} ${MUGEN_VITA_EBOOT} mugen-psvita.self
           ${MUGEN_VITA_ICON_PNG} ${MUGEN_VITA_BG_PNG} ${MUGEN_VITA_STARTUP_PNG}
-          ${MUGEN_VITA_CFG_OUT} ${MUGEN_VITA_SHADER_COMPILER}
+          ${MUGEN_VITA_CFG} ${MUGEN_VITA_SHADER_COMPILER}
           "${MUGEN_VITA_SCE_SYS}/livearea/contents/template.xml"
           ${MUGEN_VITA_SHADER_indexed.vert} ${MUGEN_VITA_SHADER_indexed.frag}
           ${MUGEN_VITA_SHADER_rgba.vert} ${MUGEN_VITA_SHADER_rgba.frag}
@@ -1003,7 +984,9 @@ message(STATUS "  Memory       budget ${MUGEN_VITA_MEMSIZE} KiB, newlib heap ${M
 message(STATUS "  Output       ${CMAKE_CURRENT_BINARY_DIR}/mugen-psvita.self")
 message(STATUS "               ${CMAKE_CURRENT_BINARY_DIR}/mugen-psvita.vpk")
 message(STATUS "")
-message(STATUS "  Renderer: set `rendermode = opengl` in data/mugen.cfg on the Vita.")
+message(STATUS "  Renderer: ${_vita_renderer} from ${MUGEN_VITA_CFG}")
+message(STATUS "            packed as data/mugen.psvita.cfg and merged over the game's")
+message(STATUS "            data/mugen.cfg at start-up (per key). Edit it to change them.")
 message(STATUS "  Floating point: no x87 on ARMv7, so mugen.log differs from win32")
 message(STATUS "  on the numeric lines by design. See port/psvita/README.md.")
 message(STATUS "")
