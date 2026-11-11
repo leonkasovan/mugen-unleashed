@@ -42,6 +42,7 @@ int g_padsChanged;
 Console *g_console;
 GameVars *g_game;
 int g_outOfMemory;
+int g_logVerbose;
 Uint32 g_videoSdlFlags;
 ActivateFn g_onActivate;
 int g_quitRequested;

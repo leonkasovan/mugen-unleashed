@@ -11,6 +11,9 @@
 /* <SDL.h> comes from mugen.h, which pulls it in after glad.h. */
 
 #include "mugen.h"
+#if defined(MUGEN_VITA) && defined(MUGEN_SDL2_API)
+#include "vita_input.h"
+#endif
 
 #ifdef MUGEN_GAMEPAD_POLICY
 /* Binding policy for one player plus publication to the input map (config.c),
@@ -353,6 +356,9 @@ static void Pads_SetDirectionSource(int slot, int source, int code, int held)
 void Pads_ResetDirectionSources(void)
 {
     int slot;
+#ifdef MUGEN_VITA
+    VitaInput_ClearCancel(-1);
+#endif
 
     for (slot = 0; slot < PAD_MAX; slot++) {
         g_padDirHeld[0][slot] = 0;
@@ -369,6 +375,9 @@ void Pads_ClearDirectionSources(int slot)
     if (slot < 0 || slot >= PAD_MAX) {
         return;
     }
+#ifdef MUGEN_VITA
+    VitaInput_ClearCancel(slot);
+#endif
     g_padDirHeld[0][slot] = 0;
     g_padDirHeld[1][slot] = 0;
 #ifdef MUGEN_GAMEPAD_POLICY
@@ -429,12 +438,22 @@ static const PadCtrlMap pad_ctrl_map[] = {
     { SDL_CONTROLLER_BUTTON_DPAD_DOWN, PAD_CTRL_DOWN, KEY_CROUCH, "Down" },
     { SDL_CONTROLLER_BUTTON_DPAD_LEFT, PAD_CTRL_LEFT, KEY_LEFT, "Left" },
     { SDL_CONTROLLER_BUTTON_DPAD_RIGHT, PAD_CTRL_RIGHT, KEY_RIGHT, "Right" },
+#ifdef MUGEN_VITA
+    /* Port change: options Default matches Vita startup defaults. */
+    { SDL_CONTROLLER_BUTTON_A, PAD_CTRL_A, KEY_X, "A" },
+    { SDL_CONTROLLER_BUTTON_B, PAD_CTRL_B, KEY_C, "B" },
+    { SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, PAD_CTRL_C, KEY_Z, "C" },
+    { SDL_CONTROLLER_BUTTON_X, PAD_CTRL_X, KEY_A, "X" },
+    { SDL_CONTROLLER_BUTTON_Y, PAD_CTRL_Y, KEY_B, "Y" },
+    { SDL_CONTROLLER_BUTTON_LEFTSHOULDER, PAD_CTRL_Z, KEY_Y, "Z" },
+#else
     { SDL_CONTROLLER_BUTTON_A, PAD_CTRL_A, KEY_A, "A" },
     { SDL_CONTROLLER_BUTTON_B, PAD_CTRL_B, KEY_B, "B" },
     { SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, PAD_CTRL_C, KEY_C, "C" },
     { SDL_CONTROLLER_BUTTON_X, PAD_CTRL_X, KEY_X, "X" },
     { SDL_CONTROLLER_BUTTON_Y, PAD_CTRL_Y, KEY_Y, "Y" },
     { SDL_CONTROLLER_BUTTON_LEFTSHOULDER, PAD_CTRL_Z, KEY_Z, "Z" },
+#endif
     { SDL_CONTROLLER_BUTTON_START, PAD_CTRL_START, KEY_START, "Start" },
     /* System controls have no KEY_* slot. The screen/key-config loops
      * interpret them; -1 keeps them out of the player binding table. */
@@ -520,6 +539,9 @@ static void Pads_CompleteControllerMapping(int device_index)
     /* Hotplug can reach this without an initial Pads_Init (for example when
      * player joystick preferences were disabled at startup). */
     Pads_LoadControllerMappings();
+#ifdef MUGEN_VITA
+    VitaInput_EnsureMapping(device_index);
+#endif
     guid = SDL_JoystickGetDeviceGUID(device_index);
     SDL_JoystickGetGUIDString(guid, guidstr, (int)sizeof guidstr);
     for (i = 0; i < PAD_FIXUP_COUNT; i++) {

@@ -8,7 +8,7 @@
 #include "configmerge.h"
 #include "render_policy.h"
 
-#ifdef MUGEN_VITA_GL
+#if defined(MUGEN_VITA_GL) && !defined(MUGEN_SDL2_API)
 /* Defined near Options_Load; Config_Load runs first. */
 static void Config_ApplyVitaJoystick(void);
 #endif
@@ -28,8 +28,15 @@ static const struct {
 } gamepad_bindings[] = {
     { "Jump", KEY_JUMP, 1 }, { "Crouch", KEY_CROUCH, 2 },
     { "Left", KEY_LEFT, 3 }, { "Right", KEY_RIGHT, 4 },
+#ifdef MUGEN_VITA
+    /* Port change: Square/Triangle/Circle/Cross/L/R = A/B/C/X/Y/Z.
+     * These are semantic SDL2 codes, not topology-dependent raw offsets. */
+    { "A", KEY_A, 8 }, { "B", KEY_B, 9 }, { "C", KEY_C, 6 },
+    { "X", KEY_X, 5 }, { "Y", KEY_Y, 10 }, { "Z", KEY_Z, 7 },
+#else
     { "A", KEY_A, 5 }, { "B", KEY_B, 6 }, { "C", KEY_C, 7 },
     { "X", KEY_X, 8 }, { "Y", KEY_Y, 9 }, { "Z", KEY_Z, 10 },
+#endif
     { "Start", KEY_START, 11 },
 };
 /* Defined near Options_Load; Config_Load runs first. */
@@ -696,7 +703,7 @@ int Config_Load(void)
     Config_ReadKeys(ini, text, g_game->joy_keys[0]);
     sprintf(text, "P2 joystick");
     Config_ReadKeys(ini, text, g_game->joy_keys[1]);
-#ifdef MUGEN_VITA_GL
+#if defined(MUGEN_VITA_GL) && !defined(MUGEN_SDL2_API)
     /* The platform joystick policy; see Config_ApplyVitaJoystick. Applied here
      * and again after every Options_Load, which rereads the sections below. */
     Config_ApplyVitaJoystick();
@@ -1069,7 +1076,7 @@ void Config_RepublishJoystick(int player)
 
 #endif /* MUGEN_GAMEPAD_POLICY */
 
-#ifdef MUGEN_VITA_GL
+#if defined(MUGEN_VITA_GL) && !defined(MUGEN_SDL2_API)
 /*
  * Port addition: the Vita joystick mapping, as a function so every place that
  * reloads the bindings can reapply it.
@@ -1301,7 +1308,7 @@ void Options_Load(void)
 #ifdef MUGEN_GAMEPAD_POLICY
     memcpy(g_cfgRawJoyKeys, g->joy_keys, sizeof(g_cfgRawJoyKeys));
 #endif
-#ifdef MUGEN_VITA_GL
+#if defined(MUGEN_VITA_GL) && !defined(MUGEN_SDL2_API)
     /*
      * Fix (port change): this reload rereads both [P1 Joystick] and
      * [P2 Joystick] straight from mugen.cfg, which replaced the Vita mapping

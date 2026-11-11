@@ -295,9 +295,9 @@ int Error_ShowDialog(const char *text, const char *title)
      * trade-off already recorded for the Linux build below.
      */
     if (text != NULL && text[0] != '\0') {
-        SDL_VITA_ShowMessageBox(text);
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, title != NULL ? title : "M.U.G.E.N", text, NULL);
     } else if (title != NULL && title[0] != '\0') {
-        SDL_VITA_ShowMessageBox(title);
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "M.U.G.E.N", title, NULL);
     }
     return 0;
 #else

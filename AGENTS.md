@@ -52,7 +52,7 @@ src/            83 .c + 52 .h — the engine, one file per original module
   symbols.h     every prototype and global, with the original's addresses
   globals.c     the globals, with their initial values from the original .data
   sdlmain.c     SDL 1.2's SDLmain (WinMain), rebuilt
-  sdl2compat.c  SDL 1.2 entry points over SDL2 (only with SDL_BACKEND=2)
+  sdl2compat.c  engine surface entry points over SDL2 (desktop + Vita SDL2)
   sdl2surface.c shared SDL2 scaler, proven against SDL_gfx by test_zoomdiff
   mugen.rc      error dialog (200), version info, icon 101 from res/icons
 third_party/    Lua 5.1.4, libpng 1.2.38, glad 2.1, minizip 0.15, sdk,

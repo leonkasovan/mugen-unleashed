@@ -180,15 +180,23 @@ static int Merge_LineKeyIs(const char *line, const char *name)
 static int Merge_SkipsGroup(const char *header)
 {
     int len = Merge_HeaderLength(header) - 2;   /* inside the brackets */
+    const char *group = header + 1;
+    const char *dot;
     int i;
 
     if (len <= 0) {
         return 0;
     }
+    /* Port fix: localized write-back groups obey the same ownership rule. */
+    dot = memchr(group, '.', (size_t)len);
+    if (dot != NULL) {
+        len -= (int)(dot + 1 - group);
+        group = dot + 1;
+    }
     for (i = 0; i < (int)(sizeof(merge_skip_groups) / sizeof(merge_skip_groups[0])); i++) {
         const char *name = merge_skip_groups[i];
 
-        if ((int)strlen(name) == len && Str_PrefixMatchI(header + 1, name, len)) {
+        if ((int)strlen(name) == len && Str_PrefixMatchI(group, name, len)) {
             return 1;
         }
     }

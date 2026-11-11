@@ -23,9 +23,8 @@ cached in `build/downloads/vitasdk.zip`, SHA-256 checked), installs it to
 configures CMake and builds. The result:
 
 ```
-build/psvita/mugen-psvita.self   2171 KB   the runnable module
-build/psvita/mugen-psvita.vpk    2203 KB   installable, engine only
-                                 4957 KB   with install/ packed as /data
+build/psvita/mugen-psvita.self   the runnable module
+build/psvita/mugen-psvita.vpk    installable (size depends on data/compiler)
 ```
 
 Because `install/` is a real M.U.G.E.N tree, the VPK is built with its data
@@ -82,32 +81,33 @@ use the manual commands below.
 | Toolchain | VitaSDK `arm-vita-eabi-gcc` (GCC 15.2.0) |
 | libc | newlib |
 | Graphics | **vitaGL** — GL 1.x/2.1 compatibility layer over SceGxm |
-| SDL | **SDL 1.2.16** from VitaSDK (`libSDL.a`), not SDL2 |
+| SDL | **SDL2** from VitaSDK (`libSDL2.a`); no SDL1 libraries |
 | Output | `mugen-psvita.self` (runnable) and `mugen-psvita.vpk` (installable) |
 
-### Why SDL 1.2 and not SDL2
+### SDL2 backend and display ownership
 
-VitaSDK ships both. SDL2 is the one its own samples use, because SDL2 is what
-its samples are written against — but SDL2 is the wrong fit here:
+The Vita engine now defines `MUGEN_SDL2` and `SDL_MAIN_HANDLED`, links native
+VitaSDK **SDL2 / SDL2_mixer / SDL2_ttf**, and uses the shared engine surface/key
+adapters. These are project helpers, not an SDL1 binary runtime. SDL_gfx is
+replaced by the existing shared SDL2 scaler. Lua, minizip and libresample
+remain vendored.
 
-* the 78 engine modules call `SDL_SetVideoMode`, pass `SDL_HWSURFACE`,
-  `SDL_HWACCEL` and `SDL_DOUBLEBUF`, and keep exactly one `SDL_Surface` for the
-  screen;
-* there is no renderer abstraction — `src/gfx.c` picks a renderer and
-  `src/glrender.c` draws through it, both written against the SDL 1.2 surface
-  model;
-* SDL2 removed `SDL_SetVideoMode` and the software surface as a drawing target
-  entirely.
+Use the ordinary `sdl2` VitaSDK package. OpenGL/OpenGLScreen retain the native
+vitaGL adapter, which initializes GXM and swaps directly. SDL2 subsystem init
+alone does not start a presenter. System instead uses SDL2's GXM renderer and
+streaming texture. The two presenters must never coexist; switching between
+them requires restarting. A failed native GL startup cannot fall back to SDL
+once vitaGL owns GXM. The build rejects SDL2 vitaGL/PIB/PVR providers.
 
-Porting the engine to SDL2 would mean rewriting the renderer and the video
-setup, which is a different project. VitaSDK's SDL 1.2 is a real 1.2.16 built
-for the Vita (its `SDL_config_vita.h` enables the SceCtrl/SceAudio/SceThread
-backends) and its OpenGL driver runs on vitaGL, so the engine's existing GL
-path works as-is.
+Native ARM compilation, static link and SELF/VPK generation pass with SDL
+2.32.8, SDL2_mixer 2.8.2 and SDL2_ttf 2.24.0. Hardware startup, visible pixels,
+audible playback, suspend/resume and FPS still require console testing.
 
-SDL 1.2, SDL_gfx, SDL_mixer, SDL_ttf, zlib and libpng all come from VitaSDK.
-Lua 5.1.4, minizip 0.15 and libresample are built from `../../third_party`,
-because `src/symbols.h` pins their versions and no Vita package matches them.
+The platform INI is validated for duplicate/malformed section headers and
+revalidated on an incremental build after edits. The default shader compiler
+is resolved from the pinned archive on every build; extraction uses an atomic
+`.part` file with ZIP CRC verification. An unresolved offline result clears
+stale CMake cache state. Explicit compiler overrides remain authoritative.
 
 ---
 
@@ -119,8 +119,8 @@ provides, and what to arrange yourself on a host it does not cover.
 **VitaSDK.** The project publishes the SDK as a release asset
 (`vitasdk.zip` on the `toolchains-v1.0` release, 196 MB packed / 600 MB
 installed), pinned by SHA-256 in the script and unpacked to `C:\vitasdk`. It is
-a complete SDK with the packages below already installed, so there is no `vdpm`
-step on a clean machine. The environment it needs is
+an older dependency snapshot. Missing SDL2 packages are installed with `vdpm`;
+`--offline` requires those packages to be installed already. The environment it needs is
 
 ```bat
 set VITASDK=C:\vitasdk
@@ -132,17 +132,17 @@ which is also what `C:\Projects\setup_psvita_dev.bat` sets for an SDK installed
 by hand. Any equivalent shell works; the build only needs `VITASDK` and the
 toolchain file.
 
-**VitaSDK packages.** The pinned SDK ships all of them. With a hand-made SDK
-they are separate installs:
+**VitaSDK packages.** The script checks actual artifacts and installs missing
+packages. To prepare a native Linux SDK or upgrade an existing SDK manually:
 
 ```sh
-vdpm install sdl sdl_gfx sdl_mixer sdl_ttf zlib libpng
+vdpm install sdl2 sdl2_mixer sdl2_ttf mpg123 zlib libpng
 vdpm install vitaGL      # pulls in vitaShaRK, SceShaccCgExt and libmathneon
 ```
 
-SDL 1.2's OpenGL video driver cannot initialise without vitaGL, and the CMake
+The native OpenGL display needs vitaGL, and the CMake
 configure fails with an explicit message if any of the four libraries is
-missing. `build.sh` checks for the artefacts themselves (`libSDL.a`,
+missing. `build.sh` checks for the artefacts themselves (`libSDL2.a`,
 `libvitaGL.a`, ...) rather than trusting `vdpm`'s bookkeeping, because an SDK
 unpacked from the archive has no package database to ask.
 
@@ -201,14 +201,12 @@ From `cmd.exe` (no `sh.exe` on `PATH`) `-G "MinGW Makefiles"` is the equivalent,
 and `cmake --build build/psvita` picks the tool itself. `port/psvita/build.sh`
 chooses Ninja, then Unix Makefiles, for exactly this reason.
 
-### The packed `mugen.cfg` comes from `port/psvita/mugen.cfg`
+### Configuration ownership
 
-`port/psvita/mugen.cfg` is the Vita's own config: `RenderMode = System`,
-`GameWidth/GameHeight = 960x544` and explicit video `Width/Height = 960x544`,
-`FullScreen = 1`, and `[P1 Joystick]` bound to the Vita driver's engine codes
-(Triangle 9, Circle 10, Cross 11, Square 12, L 13, R 14, Down 15, Left 16,
-Up 17, Right 18, Select 19, Start 20). `MUGEN_VITA_CFG` overrides the template;
-with it empty, the data directory's `data/mugen.cfg` is used as before.
+The game's `data/mugen.cfg` is packed unchanged. The required platform overlay
+is `port/psvita/mugen.psvita.cfg`, selected by `MUGEN_VITA_CFG`. Localized
+write-back groups such as `[en.Options]` remain owned by the game's config.
+The old `port/psvita/mugen.cfg` is a historical SDL1 template, not a build input.
 
 ### `mugen.psvita.cfg` is merged over the game's `mugen.cfg`
 
@@ -501,22 +499,36 @@ display; the Vita panel is 60 Hz, so the default is right.
 
 ## Controls
 
-The engine reads SDL 1.2 keyboard, joystick and — on Windows — DirectInput. On
-the Vita, SDL 1.2's `SDL_JOYSTICK_VITA` driver exposes the physical buttons as
-a single joystick (12 buttons, 4 axes, 0 hats — the d-pad is buttons, not a
-hat). The engine reads bindings from the `[P1 Joystick]` / `[P2 Joystick]`
-groups, gated by `P1.UseKeyboard` and `P1.Joystick.Type` — there is no
-`P1.Keyboard`, `P1.Joystick` or `P1.Joy.Bn` key, so the engine ignores an
-`[Input]` block written that way.
+The built-in pad uses SDL2's semantic controller API. Native fallback mapping
+is registered only when SDL has none, after loading `data/gamecontrollerdb.txt`;
+user database mappings win. The former SDL1 `raw_index + 9` engine codes are
+not used. SDL2 may expose six axes/sixteen buttons rather than four/twelve.
 
-The values are also **engine button codes, not SDL indices**: `hat_base = 4*2 =
-8`, so Triangle (raw 0) arrives as code 9. The C code in `src/config.c`
-installs the correct codes for this pad on startup and therefore overwrites
-whatever is saved, which means a remap written to the file does not survive
-the next launch. Until that precedence is fixed, treat the startup override
-as the binding of record (see `port/psvita/PLAN.md` M2). Use the hardware
-test in `tools/test_vita_pad.sh` — which asserts all 11 delivered codes —
-rather than trusting the raw indices from the input mapper.
+| Physical control | Default engine action | Gamepad code |
+|---|---|---|
+| D-pad / left stick | Up / Down / Left / Right | 1 / 2 / 3 / 4 |
+| Square | A | 8 |
+| Triangle | B | 9 |
+| Circle | C / confirm | 6 |
+| Cross | X | 5 |
+| L | Y | 10 |
+| R | Z | 7 |
+| Start | Start / Pause | 11 |
+| Select | Back / Escape | Reserved |
+
+In character select Cross/Square cancel and L/R are suppressed. Held cancel
+releases work across screen changes, device removal and input resets. SDL2
+handles gameplay/directions once without duplicate raw-to-keyboard events.
+
+`[P1 Gamepad]` / `[P2 Gamepad]` persist remappings in `data/mugen.cfg`. Missing
+groups and Default in the options menu use the layout above. Existing groups
+stay authoritative: remove them to adopt the new defaults or remap in options.
+Generic unmapped external pads retain `[P<n> Joystick]`. `[Input]`
+`p<n>.joystick.type` gates detection; the overlay cannot override this setting.
+
+Host checks: `tools/test_vita_sdl2input.sh` and
+`TEST_PLATFORM=vita tools/test_gamepad_config.sh`. The standalone input mapper
+also uses SDL2. These checks cannot measure physical Vita input latency.
 
 ---
 
@@ -670,6 +682,9 @@ both fallbacks.
 ---
 
 ## Diagnosing a failure on the console
+
+Older SDL1 bring-up incidents below are historical. Use the current package
+names, controller codes and display ownership above for new builds.
 
 The Vita reports almost everything as a generic error code and writes nothing
 anywhere you can read. Work through these in order — each step narrows the

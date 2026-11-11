@@ -34,9 +34,8 @@
 #      the project's own release asset, cached in build/downloads/vitasdk.zip and
 #      verified against a SHA-256 pinned below, exactly like
 #      build/sysroots/arm64-sysroot.zip in port/arm64/build.sh. It is a full SDK
-#      with the packages already in it (sdl, sdl_gfx, sdl_mixer, sdl_ttf, zlib,
-#      libpng, vitaGL and vitaGL's own dependencies), so a clean machine needs
-#      one download and no vdpm at all. An SDK that is already installed --
+#      with legacy packages already in it. Missing SDL2 packages are installed
+#      with vdpm after extraction; SDL1 archives are never linked. An SDK that is already installed --
 #      C:/vitasdk from setup_psvita_dev.bat included -- is used as it is.
 #
 #   2. The environment the build needs, for the duration of this script:
@@ -115,11 +114,11 @@ VITA_LIBS_SHA256="${VITA_LIBS_SHA256:-0d1124a94e5e22ac0544414b7450b6b0ec5ad96e9b
 # bookkeeping, because the SDK may have been installed by hand or by this
 # project's archive and then it has no package database to ask.
 VITA_PACKAGES=(
-    "sdl:arm-vita-eabi/include/SDL/SDL.h"
-    "sdl:arm-vita-eabi/lib/libSDL.a"
-    "sdl_gfx:arm-vita-eabi/lib/libSDL_gfx.a"
-    "sdl_mixer:arm-vita-eabi/lib/libSDL_mixer.a"
-    "sdl_ttf:arm-vita-eabi/lib/libSDL_ttf.a"
+    "sdl2:arm-vita-eabi/include/SDL2/SDL.h"
+    "sdl2:arm-vita-eabi/lib/libSDL2.a"
+    "sdl2_mixer:arm-vita-eabi/lib/libSDL2_mixer.a"
+    "sdl2_ttf:arm-vita-eabi/lib/libSDL2_ttf.a"
+    "mpg123:arm-vita-eabi/lib/libmpg123.a"
     "zlib:arm-vita-eabi/lib/libz.a"
     "libpng:arm-vita-eabi/lib/libpng.a"
     "vitaGL:arm-vita-eabi/lib/libvitaGL.a"
@@ -404,7 +403,7 @@ install_vitasdk() {
 #
 # Artifacts, not vdpm's package list: the CMake configure links these files, so
 # these files are the requirement. vitaGL is listed with its whole dependency
-# chain (vitaShaRK, SceShaccCgExt, mathneon) because SDL 1.2's OpenGL driver
+# chain (vitaShaRK, SceShaccCgExt, mathneon) because the native vitaGL display
 # cannot initialise without them and the install of one pulls in all four.
 missing_artifacts() {
     local entry pkg file missing=""
@@ -474,7 +473,7 @@ check_packages() {
         printf '             run: port/psvita/build.sh   (it runs vdpm install)\n'
         return 1
     fi
-    printf '  packages   ok       sdl sdl_gfx sdl_mixer sdl_ttf zlib libpng vitaGL\n'
+    printf '  packages   ok       sdl2 sdl2_mixer sdl2_ttf mpg123 zlib libpng vitaGL\n'
     return 0
 }
 
@@ -566,11 +565,7 @@ install_vita_libs() {
 
     [ "$SHADER_COMPILER_SET" = 0 ] || return 0
 
-    if [ -f "$dest" ]; then
-        SHADER_COMPILER="$dest"
-        info "compiler  $dest (unpacked by an earlier run)"
-        return 0
-    fi
+    SHADER_COMPILER=""
 
     mkdir -p "$DOWNLOADS"
     if [ -f "$archive" ] && [ "$(hash_of sha256 "$archive")" = "$VITA_LIBS_SHA256" ]; then
@@ -595,9 +590,17 @@ install_vita_libs() {
     fi
 
     command -v unzip >/dev/null 2>&1 || fail "unzip is required (MSYS2: pacman -S unzip)"
-    unzip -o -j -q "$archive" libshacccg.suprx -d "$DOWNLOADS" ||
-        fail "$archive does not contain libshacccg.suprx"
-    [ -s "$dest" ] || fail "$dest is empty after unpacking $archive"
+    # Port fix: publish only a complete, CRC-checked extraction.
+    rm -f "$dest.part"
+    if ! unzip -p "$archive" libshacccg.suprx > "$dest.part"; then
+        rm -f "$dest.part"
+        fail "$archive does not contain a valid libshacccg.suprx"
+    fi
+    if [ ! -s "$dest.part" ]; then
+        rm -f "$dest.part"
+        fail "libshacccg.suprx is empty in $archive"
+    fi
+    mv -f "$dest.part" "$dest"
     SHADER_COMPILER="$dest"
     info "compiler  $dest (goes in as module/libshacccg.suprx)"
 }
@@ -659,9 +662,7 @@ cmake_args=(
 # The resolved default is passed on every build so the VPK keeps its bundled
 # module; an empty value is what --no-shader-compiler asks for, and it clears
 # the path an earlier build left in CMake's cache.
-if [ "$SHADER_COMPILER_SET" = 1 ] || [ -n "$SHADER_COMPILER" ]; then
-    cmake_args+=("-DMUGEN_VITA_SHADER_COMPILER=$(win_path "$(shell_path "$SHADER_COMPILER")")")
-fi
+cmake_args+=("-DMUGEN_VITA_SHADER_COMPILER=$(win_path "$(shell_path "$SHADER_COMPILER")")")
 if [ -n "${TITLEID:-}" ]; then
     cmake_args+=("-DMUGEN_VITA_TITLEID=$TITLEID")
 fi

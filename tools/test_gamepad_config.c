@@ -10,6 +10,10 @@
 #undef main
 #endif
 
+#ifdef MUGEN_VITA
+void Keyboard_HandleKey(int key, int pressed) { (void)key; (void)pressed; }
+#endif
+
 static GameVars game;
 static Font options_font;
 static int map_rebuilds;
@@ -490,7 +494,11 @@ int main(int argc, char **argv)
         KeyConfig_Run(1, 0);
         Options_Save();
         {
+#ifdef MUGEN_VITA
+            static const int defaults[] = { 1, 2, 3, 4, 8, 9, 6, 5, 10, 7, 11 };
+#else
             static const int defaults[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 };
+#endif
             Ini *ini = open_config();
             check_group(ini, "P1 Gamepad", defaults);
             if (!raw_p2) check_group(ini, "P2 Gamepad", defaults);

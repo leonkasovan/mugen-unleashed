@@ -14,9 +14,12 @@
 #endif
 #ifdef MUGEN_SDL2_API
 #include "sdl2keys.h"
+#ifdef MUGEN_VITA
+#include "vita_input.h"
+#endif
 #endif
 
-#ifdef MUGEN_VITA_GL
+#if defined(MUGEN_VITA_GL) && !defined(MUGEN_SDL2_API)
 /*
  * PS Vita port (port/psvita): make the gamepad drive the keyboard.
  *
@@ -560,7 +563,11 @@ void Events_Poll(void)
         case SDL_CONTROLLERBUTTONDOWN:
         case SDL_CONTROLLERBUTTONUP:
         case SDL_CONTROLLERAXISMOTION:
+#ifdef MUGEN_VITA
+            VitaInput_HandleControllerEvent(&ev);
+#else
             Pads_HandleControllerEvent(&ev);
+#endif
             break;
         case SDL_CONTROLLERDEVICEADDED:
         case SDL_CONTROLLERDEVICEREMOVED:
@@ -570,13 +577,13 @@ void Events_Poll(void)
         case SDL_JOYAXISMOTION:
         case SDL_JOYHATMOTION:
             Pads_HandleEvent(&ev);
-#ifdef MUGEN_VITA_GL
+#if defined(MUGEN_VITA_GL) && !defined(MUGEN_SDL2_API)
             VitaInput_TranslateEvent(&ev);
 #endif
             break;
         case SDL_JOYBUTTONDOWN:
         case SDL_JOYBUTTONUP:
-#ifdef MUGEN_VITA_GL
+#if defined(MUGEN_VITA_GL) && !defined(MUGEN_SDL2_API)
             /*
              * PS Vita port: in the character select, Cross/Square are "back" and
              * L/R do nothing, so their pad code is withheld -- otherwise the
@@ -588,7 +595,7 @@ void Events_Poll(void)
             {
                 Pads_HandleEvent(&ev);
             }
-#ifdef MUGEN_VITA_GL
+#if defined(MUGEN_VITA_GL) && !defined(MUGEN_SDL2_API)
             /* PS Vita port: the pads also drive the keyboard menus; see the
              * VitaInput_TranslateEvent comment at the top of this file. */
             VitaInput_TranslateEvent(&ev);

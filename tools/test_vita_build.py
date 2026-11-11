@@ -27,6 +27,57 @@ def shell_function(source, name):
 
 
 class VitaBuildTests(unittest.TestCase):
+    def test_sdl2_artifacts_not_satisfied_by_sdl1(self):
+        source = (ROOT / 'port/psvita/build.sh').read_text()
+        start = source.index('VITA_PACKAGES=(')
+        end = source.index('\n)', start) + 2
+        work = ROOT / 'build/tmp/vita-package-tests'
+        work.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=work) as temp:
+            sdk = Path(temp)
+            for name in ('libSDL.a', 'libSDL_gfx.a', 'libSDL_mixer.a', 'libSDL_ttf.a'):
+                path = sdk / 'arm-vita-eabi/lib' / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch()
+            script = source[start:end] + '\n' + shell_function(source, 'missing_artifacts') + '\nmissing_artifacts\n'
+            result = subprocess.run(['bash', '-c', script], cwd=ROOT,
+                                    env={**os.environ, 'VITASDK': str(sdk)},
+                                    capture_output=True, text=True, check=True)
+            missing = result.stdout.split()
+            for package in ('sdl2', 'sdl2_mixer', 'sdl2_ttf', 'mpg123'):
+                self.assertIn(package, missing)
+            self.assertNotIn('sdl', missing)
+            self.assertNotIn('sdl_gfx', missing)
+
+    @unittest.skipUnless(os.environ.get('CMAKE') or shutil.which('cmake'), 'CMake unavailable')
+    def test_strict_ini_headers_and_incremental_revalidation(self):
+        text = (ROOT / 'port/psvita/mugen.psvita.cfg').read_text()
+        for extra in ('[Video]\nRenderMode=System\n', '[vIdEo]\n', '[ Video ]\n', '[Video] trailing\n', '[Video\n'):
+            with self.subTest(extra=extra):
+                result = self.validated(text + '\n' + extra)
+                self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.validated('\ufeff' + text.replace('\n', '\r\n')).returncode, 0)
+        work = ROOT / 'build/tmp/vita-regeneration-tests'
+        work.mkdir(parents=True, exist_ok=True)
+        source = (ROOT / 'port/psvita/CMakeLists.txt').read_text()
+        a = source.index('# Validate what it actually says')
+        b = source.index('# ------------------------------------------------------------- vitaGL (opt) --', a)
+        helper = (ROOT / 'port/psvita/cmake/Config.cmake').as_posix()
+        with tempfile.TemporaryDirectory(dir=work) as temp:
+            temp = Path(temp)
+            cfg = temp / 'mugen.psvita.cfg'
+            cfg.write_text(text)
+            (temp / 'CMakeLists.txt').write_text('cmake_minimum_required(VERSION 3.16)\nproject(probe NONE)\n'
+                + 'include("' + helper + '")\nset(MUGEN_VITA_CFG "' + cfg.as_posix() + '")\n'
+                + source[a:b] + '\nadd_custom_target(probe ALL COMMAND "${CMAKE_COMMAND}" -E true)\n')
+            output = temp / 'out'
+            result = subprocess.run([self.cmake(), '-S', str(temp), '-B', str(output)], capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            cfg.write_text(text + '\n[Video]\n')
+            result = subprocess.run([self.cmake(), '--build', str(output)], capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(b'Duplicate Vita INI section', result.stderr)
+
     def arguments(self, *args):
         source = (ROOT / 'port/psvita/build.sh').read_text()
         start = source.index('BUILD_TYPE=Release')
@@ -73,9 +124,9 @@ cmake() { printf '%s\\0' "$@"; }
         for retired in (b'-DMUGEN_VITA_RENDERMODE=', b'-DMUGEN_VITA_PRECACHE=',
                         b'-DMUGEN_VITA_VIDEO_WIDTH=', b'-DMUGEN_VITA_OUTPUT_WIDTH='):
             self.assertNotIn(retired, result.stdout)
-        # The compiler default is not a flag default: install_vita_libs
-        # resolves it from the unpacked release asset (its own test below).
-        self.assertNotIn(b'-DMUGEN_VITA_SHADER_COMPILER=', result.stdout)
+        # An empty resolution clears stale cache state; install_vita_libs
+        # resolves the verified release asset during a real build.
+        self.assertIn(b'-DMUGEN_VITA_SHADER_COMPILER=\0', result.stdout)
 
     def test_bad_arguments_fail(self):
         for args in [('--titleid',), ('--jobs',), ('--data',)]:
@@ -251,11 +302,43 @@ cmake() { printf '%s\\0' "$@"; }
             self.assertEqual(packed.read_bytes(), module)
             # A second run reuses it instead of re-unpacking.
             self.assertIn('RESULT=' + packed.as_posix(), run())
+            # A stale or damaged extracted module never bypasses the pin.
+            packed.write_bytes(b'partial module')
+            run()
+            self.assertEqual(packed.read_bytes(), module)
+            replacement = module + b'new release'
+            with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_STORED) as bundle:
+                bundle.writestr('libshacccg.suprx', replacement)
+            updated_digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            probe = probe.replace(digest, updated_digest)
+            run()
+            self.assertEqual(packed.read_bytes(), replacement)
+            # A valid pinned ZIP with a bad member CRC must not publish bytes.
+            broken = bytearray(archive.read_bytes())
+            payload = broken.index(replacement)
+            broken[payload] ^= 1
+            archive.write_bytes(broken)
+            broken_probe = probe.replace(updated_digest, hashlib.sha256(broken).hexdigest())
+            result = subprocess.run(['bash', '-c', broken_probe], cwd=tmp, capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(packed.read_bytes(), replacement)
+            self.assertFalse(Path(str(packed) + '.part').exists())
+            for member, contents in [('missing.suprx', b'x'), ('libshacccg.suprx', b'')]:
+                with zipfile.ZipFile(archive, 'w') as bundle:
+                    bundle.writestr(member, contents)
+                bad_probe = probe.replace(updated_digest, hashlib.sha256(archive.read_bytes()).hexdigest())
+                result = subprocess.run(['bash', '-c', bad_probe], cwd=tmp, capture_output=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(packed.read_bytes(), replacement)
+                self.assertFalse(Path(str(packed) + '.part').exists())
             # A cache that does not verify, offline: no compiler, no failure.
             archive.write_bytes(b'not the release asset')
-            packed.unlink()
             self.assertIn('RESULT=\n', run(offline='1'))
-            self.assertFalse(packed.exists())
+            self.assertEqual(packed.read_bytes(), replacement)
+            stale_probe = probe.replace('OFFLINE=0', 'OFFLINE=1').replace('SHADER_COMPILER=""', 'SHADER_COMPILER=/stale/path', 1)
+            result = subprocess.run(['bash', '-c', stale_probe], cwd=tmp, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(b'RESULT=\n', result.stdout)
             # An explicit choice is never overridden by the fetch step.
             explicit = tmp / 'supplied.suprx'
             explicit.write_bytes(module)

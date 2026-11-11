@@ -39,7 +39,11 @@ static SDL_Surface *SDL_CreateRGBSurface(int flags, int w, int h, int d,
     s = malloc(sizeof(*s)); assert(s); s->w = w; s->h = h; ++allocations; return s;
 }
 static void SDL_FreeSurface(SDL_Surface *s) { assert(s); ++frees; free(s); }
+#ifdef MUGEN_SDL2
+static int Sdl2_HasWindow(void) { return sdl_display != NULL; }
+#else
 static SDL_Surface *SDL_GetVideoSurface(void) { return sdl_display; }
+#endif
 static void SDL_SetError(const char *format, ...) { (void)format; }
 static void Log_Printf(const char *format, ...) { (void)format; }
 static GLboolean vglInitWithCustomSizes(int pool, int w, int h, int ram, int cdram,

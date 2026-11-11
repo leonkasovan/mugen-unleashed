@@ -1,16 +1,25 @@
 # PS Vita: SDL 1.2 to SDL2 and programmable vitaGL rendering
 
-Date: 2026-11-02 (Asia/Jakarta).
-Status: implementation plan; no migration milestone is marked complete by this document.
-Repository inspected: `sdl2` at `f0ad526907378f4b6b2fe7aa4384841fa99f3dba`.
-VitaSDK package recipes inspected at `de769c80482cc3e53cc16b71cb4bb27a323e5a31`.
-Repository vitaGL pin: `9bf3e3f4e55efd1f4a191b179144f7f9a98cd925`.
+Updated: 2026-11-11 (Asia/Jakarta). Native SDL2 migration implemented over
+baseline `314e296`. The original blueprint below is retained as history;
+proposals for SDL-owned vitaGL contexts are superseded by this implementation.
 
-This plan supersedes contradictory operational guidance in the Vita README for
-the migration work. Historical failures remain useful evidence, but source and
-new measurements take precedence. This document does not claim a successful
-Vita cross-build, working on-device SDL2, pixel equivalence, audible playback,
-or a particular frame rate. Those are acceptance gates below.
+- Vita CMake/build.sh select SDL2, SDL2_mixer, SDL2_ttf and mpg123. No SDL1 or
+  SDL_gfx archives are linked; shared engine SDL2 surface/key/audio helpers apply.
+- Ordinary GXM SDL2 supplies input/audio and the System presenter. OpenGL and
+  OpenGLScreen retain the direct vitaGL adapter. Ownership guards prevent
+  competing presenters; SDL2 vitaGL/PIB/PVR providers are rejected at compile time.
+- Input uses semantic controller mapping, Vita defaults and persisted Gamepad
+  groups. The SDL1 raw offsets and keyboard duplication are disabled.
+- Native ARM engine and input-mapper compilation, static link, ELF metadata
+  headroom check, SELF conversion and VPK generation pass.
+- Host checks cover mappings/database precedence, Back/Pause, six buttons,
+  character-select cancellation, cross-screen release, resets and config saving.
+
+Still open: physical Vita startup, pixels in all three modes, controller and
+suspend behavior, audible SFX/BGM, compiler loading and memory/performance.
+Cross-build/host results do not establish device equivalence or FPS gains.
+Follow the README for current dependencies and commands.
 
 ## 1. Goals, scope and build ownership
 
@@ -49,15 +58,15 @@ Scope constraints:
   structures, not fields added to original `Sprite`, `GlTex` or `GlProgram`.
 - Preserve configured game resolution and gameplay coordinates. Changing SDL
   version is not permission to change `GameWidth`/`GameHeight`. The current
-  packaged defaults are 480x272; the physical Vita panel is 960x544.
+  packaged defaults are 960x544; the physical Vita panel is 960x544.
 - Do not rewrite files in the reference `install/` tree. Package generated
   configuration and Vita shader variants from the build directory.
-- Keep an SDL1 Vita build and separate build directories until SDL2 passes its
-  hardware gates. Do not change the default backend in the first implementation.
+- SDL2 is the Vita default as requested. Keep SDL1 baselines in a separate
+  checkout/build directory until the SDL2 hardware gates pass.
 - Optimize after correctness. A constant-alpha no-op, dropped projective Q,
   missing palette colors, or a silent renderer fallback is a release blocker.
 
-## 2. Verified starting point
+## 2. Historical starting point (2026-11-02)
 
 | Area | What the inspected source actually does | Consequence |
 |---|---|---|
@@ -106,7 +115,7 @@ See [SDL2_PLAN.md](../../SDL2_PLAN.md).
 
 ## 3. Dependency and architecture decisions
 
-### 3.1 Use an SDL2 backend that actually exposes vitaGL
+### 3.1 Original SDL-owned-context alternative (superseded)
 
 The inspected official VitaSDK recipes include two mutually conflicting
 providers of SDL2:
@@ -136,7 +145,7 @@ Upstream SDL's PVR/gl4es/PIB alternatives are different implementations.
 They are not the selected architecture and must not be confused with
 the vitaGL package patch.
 
-### 3.2 Select exactly one owner of the graphics device
+### 3.2 Original SDL-owned-context design (superseded)
 
 Preferred ownership:
 

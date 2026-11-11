@@ -164,6 +164,9 @@ int Video_Deinit(void)
     }
 #ifdef MUGEN_VITA_GL
     VitaGl_ReleaseDisplay();
+#ifdef MUGEN_SDL2
+    Sdl2_VideoQuit();
+#endif
     g_videoSurface = g_screenSurface = NULL;
 #endif
     if (g_videoScratch != NULL) {

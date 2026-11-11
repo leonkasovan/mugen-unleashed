@@ -6,7 +6,8 @@
  *
  * This header is included by mugen.h right after <SDL.h> when the build defines
  * MUGEN_SDL2 (Makefile SDL_BACKEND=2). It is not used by the SDL 1.2 build and
- * not by the Android or Vita ports, which have their own layers.
+ * not by Android. Vita shares this backend for System rendering; its GL
+ * display remains owned by the native vitaGL adapter.
  *
  * Why a layer instead of editing the call sites: src/video.c, src/gfx.c,
  * src/system.c and src/sdlmain.c are faithful reconstructions of the original
@@ -103,6 +104,8 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags);
 void Sdl2_Flip(SDL_Surface *surface);
 void Sdl2_UpdateRect(SDL_Surface *surface, Sint32 x, Sint32 y, Uint32 w, Uint32 h);
 void Sdl2_VideoQuit(void);
+/* Native Vita display ownership query. */
+int Sdl2_HasWindow(void);
 /* Drops the cached renderer and texture after SDL reports a device or targets
  * reset, so the next Sdl2_Present recreates them. SDL requires every texture to
  * be recreated; keeping the old one renders into a dead handle (a black or

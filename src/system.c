@@ -140,6 +140,10 @@ void System_Init(void)
     SDL_putenv("SDL_DISABLE_LOCK_KEYS=1");
 #endif
 #if defined(MUGEN_VITA_GL) || defined(ANDROID_PORT)
+#if defined(MUGEN_VITA) && defined(MUGEN_SDL2_API)
+    /* Port change: our own main replaces SDL2main. */
+    SDL_SetMainReady();
+#endif
     /*
      * PS Vita port (port/psvita): initialise video on its own.
      *

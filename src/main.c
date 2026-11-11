@@ -63,7 +63,7 @@ int main(int argc, char *argv[])
      * this, and were always empty: the engine reports through Log_Printf into
      * mugen.log, and Error_Printf / Error_Fatal write into g_game->error_text,
      * which reaches the log and, on this port, a message box
-     * (SDL_VITA_ShowMessageBox). stderr is only the fallback for the few
+     * (SDL2 system message box before native GL ownership). stderr is only the fallback for the few
      * failures that happen before those exist, and those runs end at once.
      * Two empty files on the memory card are not worth that trade, so the sink
      * owns no file at all.

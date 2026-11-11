@@ -65,10 +65,9 @@
 /*
  * PS Vita port (port/psvita): glad is not part of that build. It is generated
  * for the desktop GL loader (wglGetProcAddress / glXGetProcAddressARB against
- * libGL.so / opengl32.dll), which the Vita does not have. VitaSDK's SDL 1.2
- * OpenGL driver runs on vitaGL, which implements the same GL 1.x/2.1
- * fixed-function API over SceGxm and declares it in <vitaGL.h>. SDL 1.2's
- * <SDL.h> does not include SDL_opengl.h, so vitaGL is included here directly
+ * libGL.so / opengl32.dll), which the Vita does not have. The native vitaGL
+ * adapter owns the display, while SDL2 supplies input/audio and the System
+ * presenter. vitaGL declares GL over SceGxm in <vitaGL.h>, included directly
  * and becomes the single source of GL declarations on this target. Capability
  * probing and the few entry points vitaGL lacks move to port/psvita/src, whose
  * header is included here so that symbols.h can map the g_glew* macros onto
@@ -82,6 +81,13 @@
 #endif
 
 #include <SDL.h>
+#if defined(MUGEN_VITA_GL) && defined(MUGEN_SDL2)
+/* Port change: native vitaGL owns its display, SDL2 must use ordinary GXM. */
+#if SDL_MAJOR_VERSION != 2 || !SDL_VIDEO_RENDER_VITA_GXM || \
+    SDL_VIDEO_VITA_VGL || SDL_VIDEO_VITA_PIB || SDL_VIDEO_VITA_PVR
+#error "Vita requires ordinary VitaSDK sdl2 (GXM), not sdl2_vitagl/PIB/PVR"
+#endif
+#endif
 #include "engine_keys.h"
 #ifdef ANDROID_PORT
 #include "android_platform.h"

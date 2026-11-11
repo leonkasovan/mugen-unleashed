@@ -469,6 +469,15 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
      * already returns early for these, this is the second line of defence. */
     int want_w = width;
     int want_h = height;
+#ifdef MUGEN_VITA_GL
+    /* Port change: never initialize competing GXM presenters. GL requests
+     * use native vitaGL; partial GL initialization owns GXM until exit. */
+    if (is_gl) return VitaGl_CreateDisplay(width, height, bpp);
+    if (VitaGl_OwnsDisplay()) {
+        SDL_SetError("Restart required to switch from vitaGL to SDL2 System");
+        return NULL;
+    }
+#endif
 
     if (!Sdl2_FormatForDepth(bpp, &rmask, &gmask, &bmask, &amask, &format)) {
         Log_Printf("video: %s\n", SDL_GetError());
@@ -875,6 +884,11 @@ void Sdl2_MarkDisplayDirty(void)
 int Sdl2_DiagIsDirty(void)
 {
     return g_sdl2Video.display_dirty;
+}
+
+int Sdl2_HasWindow(void)
+{
+    return g_sdl2Video.window != NULL;
 }
 
 void Sdl2_VideoQuit(void)

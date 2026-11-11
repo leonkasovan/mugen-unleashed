@@ -1733,7 +1733,19 @@ int KeyConfig_Run(int joystick, int ticks)
             key = 0;
             pad = 0;
         } else if (item == KEYCONFIG_DEFAULT && accept) {
+#ifdef MUGEN_GAMEPAD_POLICY
+            int controller_defaults[KEY_COUNT];
+            int controller = joystick == 1 && Pads_SlotUsesController(player);
+            /* Port change: controller defaults include Vita's PS layout. */
+            if (controller) Pads_ControllerBindings(player, controller_defaults);
+#endif
             for (i = 0; i < KEYCONFIG_ENTRIES; i++) {
+#ifdef MUGEN_GAMEPAD_POLICY
+                if (controller) {
+                    cur[player][i] = controller_defaults[keyconfig_slots[i]];
+                    continue;
+                }
+#endif
                 cur[player][i] = !joystick ? keyconfig_default_keys[player][i] : keyconfig_default_joy[player][i];
             }
         }

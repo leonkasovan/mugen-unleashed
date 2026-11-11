@@ -1,5 +1,5 @@
 /*
- * sdl-input-mapper -- a PS Vita tool for inspecting SDL 1.2 joystick input.
+ * sdl-input-mapper -- a PS Vita tool for inspecting SDL2 joystick input.
  *
  * Why this exists
  * ---------------
@@ -26,17 +26,9 @@
  *
  * Deliberate choices (learned the hard way on the mugen port)
  * ----------------------------------------------------------
- *   - SDL_SWSURFACE. src/video.c on the mugen port writes straight into
- *     surface->pixels without locking, which a hardware surface does not allow;
- *     this tool draws with SDL_FillRect, but it asks for a software surface for
- *     the same reason: it is the mode that behaves predictably on this driver.
- *   - SDL_Flip every frame. The Vita driver returns a double-buffered surface
- *     whether or not SDL_DOUBLEBUF is requested, and SDL 1.2 only presents a
- *     double-buffered surface on SDL_Flip. Without it the screen stays black.
- *   - Video is initialised before audio. SDL 1.2's SDL_Init walks its
- *     subsystems in a fixed order and returns at the first failure; audio comes
- *     before video, so a failed audio init silently leaves video uninitialised.
- *     This tool does not need audio, but it does not ask for it either.
+ *   - A software surface is uploaded to an SDL2 streaming texture each frame.
+ *     SDL2's GXM renderer owns this diagnostic application's display.
+ *   - No audio is initialized: this tool measures input only.
  *   - _newlib_heap_size_user is defined (see vita_newlib_inputmapper.c): the
  *     VitaSDK default of 128 MiB is larger than the process budget allows.
  */
@@ -387,7 +379,7 @@ static void draw(int num_axes, int num_buttons, int num_hats, const char *name)
 
     draw_text_centered(6, 2, rgb(255, 255, 255), "SDL INPUT MAPPER");
     draw_text_centered(24, 1, rgb(140, 160, 190),
-                       "PS Vita  --  SDL 1.2 joystick, hats and axes");
+                       "PS Vita  --  SDL2 joystick, hats and axes");
 
     y = 40;
     {
@@ -422,6 +414,9 @@ static void draw(int num_axes, int num_buttons, int num_hats, const char *name)
 int main(int argc, char *argv[])
 {
     SDL_Joystick *joy = NULL;
+    SDL_Window *window = NULL;
+    SDL_Renderer *renderer = NULL;
+    SDL_Texture *texture = NULL;
     const char *name = "(no joystick)";
     int num_axes = 0;
     int num_buttons = 0;
@@ -444,11 +439,12 @@ int main(int argc, char *argv[])
     log_event("sdl-input-mapper\n");
 
     /*
-     * Video before audio, and audio not at all. SDL 1.2's SDL_Init returns at
+     * Video before audio, and audio not at all. SDL2's SDL_Init returns at
      * the first subsystem failure, so a broken audio init would leave video
      * uninitialised; that is exactly how the mugen port came to report
      * "Can't change video mode" for an audio problem.
      */
+    SDL_SetMainReady(); /* Own main, no SDL2main wrapper. */
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_JOYSTICK) < 0) {
         log_event("SDL_Init failed: %s\n", SDL_GetError());
         fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
@@ -458,29 +454,29 @@ int main(int argc, char *argv[])
         return 1;
     }
     {
-        const SDL_version *linked = SDL_Linked_Version();
-        log_event("SDL headers %d.%d.%d, linked %d.%d.%d\n", SDL_MAJOR_VERSION, SDL_MINOR_VERSION,
-                  SDL_PATCHLEVEL, linked->major, linked->minor, linked->patch);
+        SDL_version linked;
+        SDL_GetVersion(&linked);
+        log_event("SDL2 linked %d.%d.%d\n", linked.major, linked.minor, linked.patch);
     }
-
-    g_screen = SDL_SetVideoMode(SCREEN_W, SCREEN_H, 32, SDL_SWSURFACE | SDL_FULLSCREEN);
+    window = SDL_CreateWindow("SDL2 Input Mapper", SDL_WINDOWPOS_UNDEFINED,
+                              SDL_WINDOWPOS_UNDEFINED, SCREEN_W, SCREEN_H,
+                              SDL_WINDOW_FULLSCREEN);
+    if (window != NULL) renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_PRESENTVSYNC);
+    if (renderer != NULL) texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888,
+                                    SDL_TEXTUREACCESS_STREAMING, SCREEN_W, SCREEN_H);
+    if (texture != NULL) g_screen = SDL_CreateRGBSurfaceWithFormat(0, SCREEN_W, SCREEN_H,
+                                                                 32, SDL_PIXELFORMAT_ARGB8888);
     if (g_screen == NULL) {
-        log_event("SDL_SetVideoMode(32) failed: %s; retrying 16\n", SDL_GetError());
-        g_screen = SDL_SetVideoMode(SCREEN_W, SCREEN_H, 16, SDL_SWSURFACE | SDL_FULLSCREEN);
-    }
-    if (g_screen == NULL) {
-        log_event("SDL_SetVideoMode failed: %s\n", SDL_GetError());
-        fprintf(stderr, "SDL_SetVideoMode failed: %s\n", SDL_GetError());
+        log_event("SDL2 video initialization failed: %s\n", SDL_GetError());
+        if (texture) SDL_DestroyTexture(texture);
+        if (renderer) SDL_DestroyRenderer(renderer);
+        if (window) SDL_DestroyWindow(window);
         SDL_Quit();
-        if (g_log != NULL) {
-            fclose(g_log);
-        }
+        if (g_log) fclose(g_log);
         return 1;
     }
-    SDL_WM_SetCaption("SDL Input Mapper", "SDL Input Mapper");
-    log_event("surface %dx%d %d bpp, flags 0x%08X%s\n", g_screen->w, g_screen->h,
-              g_screen->format->BitsPerPixel, (unsigned)g_screen->flags,
-              (g_screen->flags & SDL_DOUBLEBUF) ? " (double buffered -> SDL_Flip required)" : "");
+    log_event("surface %dx%d %d bpp, streaming SDL2 texture\n", g_screen->w, g_screen->h,
+              g_screen->format->BitsPerPixel);
 
     /* Joystick. Without ENABLE, SDL reports no joystick events at all. */
     SDL_JoystickEventState(SDL_ENABLE);
@@ -492,7 +488,7 @@ int main(int argc, char *argv[])
             num_axes = SDL_JoystickNumAxes(joy);
             num_buttons = SDL_JoystickNumButtons(joy);
             num_hats = SDL_JoystickNumHats(joy);
-            name = SDL_JoystickName(0);
+            name = SDL_JoystickName(joy);
             if (name == NULL) {
                 name = "(unnamed)";
             }
@@ -519,13 +515,12 @@ int main(int argc, char *argv[])
             handle_event(&ev, &done);
         }
         draw(num_axes, num_buttons, num_hats, name);
-        /*
-         * The Vita driver hands back a double-buffered surface whether or not
-         * SDL_DOUBLEBUF was asked for, and SDL 1.2 presents such a surface only
-         * on SDL_Flip. Skipping this leaves a black screen with everything
-         * else working.
-         */
-        SDL_Flip(g_screen);
+        if (SDL_UpdateTexture(texture, NULL, g_screen->pixels, g_screen->pitch) != 0 ||
+            SDL_RenderClear(renderer) != 0 || SDL_RenderCopy(renderer, texture, NULL, NULL) != 0) {
+            log_event("SDL2 presentation failed: %s\n", SDL_GetError());
+            break;
+        }
+        SDL_RenderPresent(renderer);
         SDL_Delay(16);
     }
 
@@ -533,6 +528,10 @@ int main(int argc, char *argv[])
     if (have_joy && joy != NULL) {
         SDL_JoystickClose(joy);
     }
+    SDL_FreeSurface(g_screen);
+    SDL_DestroyTexture(texture);
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
     SDL_Quit();
     if (g_log != NULL) {
         fclose(g_log);

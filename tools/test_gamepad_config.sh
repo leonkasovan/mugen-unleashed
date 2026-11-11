@@ -10,8 +10,9 @@ PKG_CONFIG="${PKG_CONFIG:-pkg-config}"
 OUT="${OUT:-$PWD/build/tmp/gamepad-config-test}"
 case "${TEST_PLATFORM:-android}" in
     android) PLATFORM_DEFS="-DANDROID_PORT -DMUGEN_ANDROID_SW"; PLATFORM_SRCS="" ;;
+    vita) PLATFORM_DEFS="-DMUGEN_SDL2 -DMUGEN_VITA"; PLATFORM_SRCS="src/sdl2compat.c port/psvita/src/vita_input.c" ;;
     desktop) PLATFORM_DEFS="-DMUGEN_SDL2"; PLATFORM_SRCS="src/sdl2compat.c" ;;
-    *) echo "TEST_PLATFORM must be android or desktop" >&2; exit 2 ;;
+    *) echo "TEST_PLATFORM must be android, desktop or vita" >&2; exit 2 ;;
 esac
 mkdir -p "$OUT/tmp"
 export TMPDIR="$OUT/tmp"
@@ -20,7 +21,7 @@ SDL_CFLAGS="${SDL_CFLAGS:-$("$PKG_CONFIG" --cflags sdl2 SDL2_ttf SDL2_mixer)}"
 SDL_LIBS="${SDL_LIBS:-$("$PKG_CONFIG" --libs sdl2 zlib | sed 's/-lSDL2main//g; s/-mwindows//g')}"
 FLAGS="${CFLAGS:-} -std=gnu11 -O1 -g -UNDEBUG -Werror=implicit-function-declaration"
 FLAGS="$FLAGS $PLATFORM_DEFS -DSDL_MAIN_HANDLED -ffunction-sections -fdata-sections -fno-asynchronous-unwind-tables"
-FLAGS="$FLAGS -Isrc -Iport/android/app/src/main/jni/src -Ithird_party/glad-2.1 -Ithird_party/minizip-0.15"
+FLAGS="$FLAGS -Isrc -Iport/psvita/src -Iport/android/app/src/main/jni/src -Ithird_party/glad-2.1 -Ithird_party/minizip-0.15"
 FLAGS="$FLAGS -Ithird_party/libpng-1.2.38 -Ithird_party/lua-5.1.4/src -Ithird_party/libresample/include $SDL_CFLAGS"
 case "$($CC -dumpmachine)" in *mingw*) FLAGS="$FLAGS -flto=auto" ;; esac
 SAN=""
@@ -31,7 +32,7 @@ $CC $FLAGS -c src/globals.c -o "$OUT/globals.o"
 # Flags are intentionally split so CC can carry a compiler/target wrapper.
 # shellcheck disable=SC2086
 $CC $FLAGS $SAN \
-    $PLATFORM_SRCS tools/test_gamepad_config.c src/config.c src/title.c src/ini.c src/stream.c \
+    $PLATFORM_SRCS tools/test_gamepad_config.c src/config.c src/configmerge.c src/title.c src/ini.c src/stream.c \
     src/file.c src/util.c src/compat_linux.c src/pads.c src/sdl2keys.c src/gameloop.c "$OUT/globals.o" \
     third_party/minizip-0.15/unzip.c -Wl,--gc-sections \
     ${LDFLAGS:-} $SDL_LIBS -lm -o "$OUT/test_gamepad_config"

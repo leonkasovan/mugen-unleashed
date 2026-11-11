@@ -1,5 +1,5 @@
 # =============================================================================
-#  sdl-input-mapper -- PS Vita SDL 1.2 input inspection tool
+#  sdl-input-mapper -- PS Vita SDL2 input inspection tool
 # =============================================================================
 #
 #  A small standalone app that shows what SDL's Vita joystick driver actually
@@ -41,10 +41,10 @@ if(NOT DEFINED ENV{VITASDK})
 endif()
 set(MUGEN_VITASDK "$ENV{VITASDK}")
 
-if(NOT EXISTS "${MUGEN_VITASDK}/arm-vita-eabi/include/SDL/SDL.h")
+if(NOT EXISTS "${MUGEN_VITASDK}/arm-vita-eabi/include/SDL2/SDL.h")
   message(FATAL_ERROR
-    "${MUGEN_VITASDK}/arm-vita-eabi/include/SDL/SDL.h not found: install "
-    "VitaSDK's SDL 1.2 (vdpm install sdl) and reconfigure.")
+    "${MUGEN_VITASDK}/arm-vita-eabi/include/SDL2/SDL.h not found: install "
+    "VitaSDK's SDL2 (vdpm install sdl2) and reconfigure.")
 endif()
 
 include("${MUGEN_VITASDK}/share/vita.cmake" REQUIRED)
@@ -71,8 +71,10 @@ add_executable(sdl-input-mapper
 
 target_include_directories(sdl-input-mapper PRIVATE
   "${MUGEN_VITASDK}/arm-vita-eabi/include"
-  "${MUGEN_VITASDK}/arm-vita-eabi/include/SDL"
+  "${MUGEN_VITASDK}/arm-vita-eabi/include/SDL2"
   "${MUGEN_PORT_SRC}")            # input_mapper_font.h
+
+target_compile_definitions(sdl-input-mapper PRIVATE SDL_MAIN_HANDLED)
 
 target_compile_options(sdl-input-mapper PRIVATE
   -std=gnu11
@@ -80,20 +82,21 @@ target_compile_options(sdl-input-mapper PRIVATE
   -Wall -Wno-unused-parameter
   -ffunction-sections -fdata-sections)
 
-# SDL 1.2 plus the SCE userland stubs its Vita backend calls. Listed explicitly
+# SDL2 plus the SCE userland stubs its Vita backend calls. Listed explicitly
 # rather than through pkg-config: that keeps this tool buildable even when the
 # host pkg-config setup the game port needs is not present (see the "How
 # pkg-config is handled" section of port/psvita/README.md). The list is the one
 # in VitaSDK's sdl.pc.
 target_link_directories(sdl-input-mapper PRIVATE "${MUGEN_VITASDK}/arm-vita-eabi/lib")
 target_link_libraries(sdl-input-mapper PRIVATE
-  SDL
+  SDL2
   SceGxm_stub
   SceDisplay_stub
   SceCtrl_stub
   SceTouch_stub
   SceHid_stub
   SceMotion_stub
+  SceAudioIn_stub
   SceAudio_stub
   SceIofilemgr_stub
   SceAppMgr_stub
@@ -109,7 +112,7 @@ target_link_libraries(sdl-input-mapper PRIVATE
 
 target_link_options(sdl-input-mapper PRIVATE
   -Wl,--gc-sections
-  -Wl,--allow-multiple-definition)
+  -Wl,--defsym=__sce_headroom=0x10000)
 
 set_target_properties(sdl-input-mapper PROPERTIES OUTPUT_NAME "sdl-input-mapper")
 
@@ -142,7 +145,8 @@ add_custom_command(
           -a ${MUGEN_VITA_SCE_SYS}/livearea/contents/startup.png=sce_sys/livearea/contents/startup.png
           -a ${MUGEN_VITA_SCE_SYS}/livearea/contents/template.xml=sce_sys/livearea/contents/template.xml
           ${MUGEN_VITA_VPK}
-  DEPENDS ${MUGEN_VITA_SFO} sdl-input-mapper.self
+  DEPENDS ${MUGEN_VITA_SFO} sdl-input-mapper.self-self
+          "${CMAKE_CURRENT_BINARY_DIR}/sdl-input-mapper.self"
   COMMENT "Building sdl-input-mapper.vpk"
   VERBATIM)
 

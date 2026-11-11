@@ -1,5 +1,5 @@
 /*
- * Port fix: SDL 1.2's Vita driver does not create a vitaGL context. Never use
+ * Port fix: SDL2's Vita driver does not create a vitaGL context. Never use
  * its SceGxm presenter alongside vitaGL. The GL display is process-owned:
  * the pinned vitaGL has no public shutdown API (eglTerminate is a no-op).
  * Engine objects and the metadata surface are released, but a failed GL
@@ -36,7 +36,11 @@ SDL_Surface *VitaGl_CreateDisplay(int width, int height, int depth)
         SDL_SetError("Restart required to change the VitaGL display size");
         return NULL;
     }
+    #ifdef MUGEN_SDL2
+    if (!ready && Sdl2_HasWindow()) {
+#else
     if (!ready && SDL_GetVideoSurface() != NULL) {
+#endif
         SDL_SetError("Restart required to switch from SDL System to vitaGL");
         return NULL;
     }
