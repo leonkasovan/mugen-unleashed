@@ -299,6 +299,7 @@ static inline int Sdl2_putenv_inline(const char *kv)
 #include "result.h"
 #include "pngio.h"
 #include "spritecodec.h"
+#include "model.h"
 
 #include "symbols.h"
 #ifdef MUGEN_VITA_GL

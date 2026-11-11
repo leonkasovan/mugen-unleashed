@@ -56,7 +56,8 @@ src/            83 .c + 52 .h — the engine, one file per original module
   sdl2surface.c shared SDL2 scaler, proven against SDL_gfx by test_zoomdiff
   mugen.rc      error dialog (200), version info, icon 101 from res/icons
 third_party/    Lua 5.1.4, libpng 1.2.38, glad 2.1, minizip 0.15, sdk,
-                libresample, glew-1.5.4 (reference only, no longer built), vitagl
+                libresample, glew-1.5.4 (reference only, no longer built), vitagl,
+                cgltf-1.14 and stb (upstream desktop 3D model support)
 cmake/          build helpers (MugenSdk.cmake, ThirdParty.cmake)
 setup.bat       installs the two Windows devkits + dependency trees, then builds
 res/icons/      the window/bubble icon as one .ico per size (see below)
@@ -638,3 +639,13 @@ compiler rearrange it.
 
 Verify claims before writing them here. Anything in AGENTS.md that is not true of
 the tree is worse than nothing.
+
+## Imported desktop 3D renderer
+
+`docs/UPSTREAM_MERGE.md` records the explicit content base for the unrelated
+zxmarcos history, conflict decisions and validation. `MUGEN_MODEL3D=1` enables
+its desktop-GL model/stage/background code in Make and root MSVC CMake builds.
+GLES/Android and Vita builds use `model_stub.c` and retain their 2D renderers;
+do not enable desktop GLSL or cgltf/stb there without a separate port.
+`tools/test_model.sh` loads a generated glTF/PNG fixture with the real renderer,
+checks pixels and fresh-context teardown, and returns 77 if GL is unavailable.

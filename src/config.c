@@ -419,6 +419,8 @@ int Config_Load(void)
     Ini_GetInt(ini, "keepaspect", &g_game->keep_aspect);
     Ini_GetInt(ini, "filterindexed", &g_game->filter_indexed);
     Ini_GetInt(ini, "fullscreen", &g_game->fullscreen);
+    /* mugen-unleashed: shadows of the lights of 3D stages, as Ikemen GO's option (model.c) */
+    Ini_GetInt(ini, "enablemodelshadow", &g_modelShadows);
     g = g_game;
     if (g->fullscreen == 0) {
         g->video_flags &= ~VIDEO_FULLSCREEN;

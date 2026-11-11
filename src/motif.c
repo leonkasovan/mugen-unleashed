@@ -250,6 +250,8 @@ int System_LoadMotif(void)
     }
     strcpy(g->motif_sff_path, path);
     Log_Printf("OK\n");
+    /* mugen-unleashed: the 3D model of the motif backgrounds, [Files] model (bg3d.c) */
+    Bg3D_LoadMotifModel(ini);
     if (g_sndActive == 1) {
         Log_Printf("  Load system snd...");
         value = Ini_GetValue(ini, "snd");
@@ -423,6 +425,7 @@ int System_LoadMotif(void)
     }
 
     /* backgrounds */
+    Bg3D_SetModel(Bg3D_MotifModel());   /* mugen-unleashed */
     Log_Printf("  Load TitleBG...");
     g->title_bg = Bg_Load("TitleBG", ini, g->motif_dir, g->motif_sprites, g->motif_anims);
     if (g->title_bg == NULL) {
@@ -449,6 +452,7 @@ int System_LoadMotif(void)
     }
     Log_Printf("OptionBG...");
     g->option_bg = Bg_Load("OptionBG", ini, g->motif_dir, g->motif_sprites, g->motif_anims);
+    Bg3D_SetModel(NULL);                /* mugen-unleashed */
     if (g->option_bg == NULL) {
         Error_Printf("Error loading OptionBG\n");
         return 0;
@@ -485,6 +489,7 @@ void System_FreeMotif(void)
     g->versus_bg = NULL;
     Bg_Free(g->title_bg);
     g->title_bg = NULL;
+    Bg3D_FreeMotifModel();  /* mugen-unleashed */
     if (g->select_info.cells != NULL) {
         for (i = 0; i < g->select_info.rows * g->select_info.columns; i++) {
             if (g->select_info.cells[i].sprites != NULL) {
@@ -552,6 +557,7 @@ void System_ReloadMotif(void)
         if (ini == NULL) {
             Error_Fatal("Out of memory loading system file %s\n", g->motif_file);
         }
+        Bg3D_SetModel(Bg3D_MotifModel());   /* mugen-unleashed */
         if (g->title_bg == NULL) {
             g->title_bg = Bg_Load("TitleBG", ini, g->motif_dir, g->motif_sprites, g->motif_anims);
             if (g->title_bg == NULL) {
@@ -579,6 +585,7 @@ void System_ReloadMotif(void)
                 Error_Fatal("Error reloading OptionBG\n");
             }
         }
+        Bg3D_SetModel(NULL);                /* mugen-unleashed */
         Ini_Free(ini);
         Log_Printf("OK\n");
     }

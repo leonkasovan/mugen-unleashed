@@ -30,7 +30,7 @@ $CC $FLAGS $SAN -Dfopen=Test_Fopen -Dfclose=Test_Fclose -c src/file.c -o "$OUT/f
 # shellcheck disable=SC2086
 $CC $FLAGS $SAN tools/test_build_warnings.c src/ai.c src/playerinput.c src/wav.c \
     src/hashtable.c src/ini.c src/util.c src/compat_linux.c \
-    src/storyboard.c src/keyedarray.c src/misc.c \
+    src/storyboard.c src/model_stub.c src/keyedarray.c src/misc.c \
     "$OUT/file.o" "$OUT/globals.o" -Wl,--gc-sections ${LDFLAGS:-} -lm -o "$OUT/test_build_warnings"
 # shellcheck disable=SC2086
 ${RUNNER:-} "$OUT/test_build_warnings"

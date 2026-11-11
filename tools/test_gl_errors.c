@@ -19,7 +19,9 @@ int VitaGl_Probe(void);
 int VitaGl_InitShaderCompiler(void);
 int VitaGl_OwnsDisplay(void);
 void VitaDiag_Log(const char *format, ...);
-void SDL_VITA_ShowMessageBox(const char *text);
+/* The mock still uses SDL1 host headers; the real Vita port now uses SDL2. */
+#define SDL_MESSAGEBOX_ERROR 0x10
+int SDL_ShowSimpleMessageBox(unsigned flags, const char *title, const char *text, void *window);
 void VitaGl_DrawQuad(const VitaGlVertexInterface *vertex, const float *v, int special,
                      float top, float bottom, const DrawParams *dp);
 #endif
@@ -97,7 +99,12 @@ void VitaDiag_Log(const char *format, ...) { (void)format; }
 int VitaGl_Probe(void) { return 1; }
 int VitaGl_InitShaderCompiler(void) { return !preflight_failure; }
 int VitaGl_OwnsDisplay(void) { return native_display_owned; }
-void SDL_VITA_ShowMessageBox(const char *text) { assert(text); sdl_dialogs++; }
+int SDL_ShowSimpleMessageBox(unsigned flags, const char *title, const char *text, void *window)
+{
+    assert(flags == SDL_MESSAGEBOX_ERROR && title && text && window == NULL);
+    sdl_dialogs++;
+    return 0;
+}
 void VitaGl_DrawQuad(const VitaGlVertexInterface *vertex, const float *v, int special,
                      float top, float bottom, const DrawParams *dp)
 { assert(vertex && vertex->position == 2 && vertex->texcoord == 5 && vertex->matrix == 9); vita_quad_draws++; }

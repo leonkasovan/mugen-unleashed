@@ -145,3 +145,94 @@ made for study and preservation. It ships no copyrighted game assets: the
 characters, stages, fonts and sound files under `install/` belong to their
 respective authors. Third-party libraries keep their own licences, listed in
 [third_party/README.md](third_party/README.md).
+
+## 3D stages
+
+The merged upstream code adds 3D stages to the engine, compatible with the ones made for
+[Ikemen GO](https://github.com/ikemen-engine/Ikemen-GO). This is new code, not part of the
+original. A stage gets a glTF 2.0 model (`.glb` or `.gltf`) through its `.def`:
+
+```ini
+[Camera]
+fov = 30                 ; vertical field of view in degrees (default 40)
+
+[BGdef]
+model = mystage.glb      ; relative to the stage's directory
+spr = mystage.sff        ; still used for the stage portrait
+
+[Model]
+offset = 0, -0.16, -0.7  ; x, y, z of the model in the view; z is the depth of the ground
+scale = 0.0575, 0.0575, 0.0575
+```
+
+As in Ikemen GO:
+
+- the `[Model] offset` y moves the stage's `zoffset` onto the ground of the model;
+- a stage with a model needs no `[BG]` element;
+- `[Camera] near`, `far` and `yshift` are read as well.
+
+The model follows the camera. It is drawn under the `[BG]` elements of the back layer. Nodes
+with a `layerNumber` extra of 1 are drawn in front of the players, together with the model's
+second scene.
+
+What is supported so far:
+
+- node hierarchies;
+- base colour textures (PNG, JPEG and uncompressed RGBA DDS, the formats Ikemen GO reads) and
+  vertex colours;
+- `alphaMode` and `doubleSided`;
+- `KHR_texture_transform`;
+- node animations (linear, step and cubic spline), skins and morph targets (with weight
+  animations);
+- `KHR_animation_pointer` on the targets Ikemen GO animates: node transforms and weights, mesh
+  weights, material factors, alpha cutoff, occlusion strength and texture transforms, light
+  colour, intensity, range and cone angles;
+- punctual lights (`KHR_lights_punctual`: directional, point and spot, up to 4 per scene);
+- PBR materials (metallic-roughness, normal, occlusion and emission maps,
+  `KHR_materials_unlit`);
+- environment maps (image based lighting) from an equirectangular Radiance HDR panorama:
+  `[Model] environment = sky.hdr` and `environmentintensity` (1);
+- shadow maps, with the light and node extras `shadowMapNear`, `shadowMapFar`,
+  `shadowMapLeft`, `shadowMapRight`, `shadowMapBottom`, `shadowMapTop` and `shadowMapBias`.
+  `[Video] EnableModelShadow = 0` in `mugen.cfg` turns them off;
+- the Ikemen GO node extras `trans`, `disableZTest`, `disableZWrite`, `castShadow`,
+  `layerNumber`, `id` and `meshOutline` (with the `_OUTLINE_ATTRIBUTE` vertex attribute);
+- the animation extras `id`, `loopCount` and `enabled`;
+- `[BGCtrl3D]` groups of type `Anim` and `Visible`, aimed at the `id` extras of animations and
+  nodes by `ctrlid`, on Ikemen GO's timing.
+
+A model without lights or an environment map is drawn unlit, as Ikemen GO does. Like Ikemen GO,
+the engine ignores a second set of joints (`JOINTS_1` / `WEIGHTS_1`). 3D stages need
+the OpenGL renderer. Shadows need float textures (OpenGL 3.0 or `ARB_texture_rg` /
+`ARB_texture_float`), environment maps OpenGL 3.0. Problems with models are written to
+`mugen.log`.
+
+Screens and storyboards can have a 3D background too, as in Ikemen GO. The motif (`[Files] model`)
+or the storyboard (`[SceneDef] model`) names the model. Each background group then picks a scene of
+it and places a fixed camera:
+
+```ini
+[TitleBGdef]
+scenenumber = 0          ; the glTF scene to draw (none without)
+fov = 40
+near = 0.1
+far = 1000
+modeloffset = 0, -1.5, -8
+modelrotate = 10, 20, 0  ; degrees
+modelscale = 0.015, 0.015, 0.015
+```
+
+The code is in `src/model.c` (glTF models), `src/stage3d.c` (stages) and `src/bg3d.c` (screen and
+storyboard backgrounds). Where the original code calls into it, a `mugen-unleashed:` comment marks
+the change.
+
+
+Desktop Makefile builds enable this with `MUGEN_MODEL3D=1` (default when
+`MUGEN_GLES=0`); `MUGEN_MODEL3D=0` disables it. The MSVC CMake build has the
+matching `MUGEN_MODEL3D` option. This renderer uses desktop GLSL 1.20, with
+GLSL 1.30/OpenGL 3.0 for environment maps. VitaGL and GLES/Android retain their
+existing 2D renderers; desktop model shaders are not enabled on those targets.
+Unsupported model requests are logged.
+
+See [the merge and validation record](docs/UPSTREAM_MERGE.md) for the exact
+upstream revision, compatibility choices and remaining qualification limits.

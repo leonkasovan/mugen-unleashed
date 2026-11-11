@@ -689,6 +689,21 @@ else
   GLES_SHADER_SRCS :=
 endif
 
+# Upstream model shaders are a desktop GL backend, not GLES/VitaGL shaders.
+MUGEN_MODEL3D ?= $(if $(filter 1,$(MUGEN_GLES)),0,1)
+MODEL_SHADER_DIR := $(BUILD)/shaders/model
+MODEL_SHADER_NAMES := model.vert model.frag shadow.vert shadow.frag env.vert env_panorama.frag env_filter.frag
+ifeq ($(MUGEN_MODEL3D),1)
+  ifeq ($(MUGEN_GLES),1)
+    $(error MUGEN_MODEL3D requires the desktop OpenGL backend)
+  endif
+  ENGINE_DEFS += -DMUGEN_MODEL3D
+  CPPFLAGS += -I$(TP_DIR)/cgltf-1.14 -I$(TP_DIR)/stb -I$(MODEL_SHADER_DIR)
+  MODEL_SHADER_HEADERS := $(addprefix $(MODEL_SHADER_DIR)/,$(addsuffix .h,$(MODEL_SHADER_NAMES)))
+  MODEL_TP_OBJS := $(OBJ_DIR)/model/cgltf.o $(OBJ_DIR)/model/stb_image.o
+endif
+CONFIG_ID += model3d=$(MUGEN_MODEL3D)
+
 # SANITIZE=address (or undefined,thread) instruments the engine and links the
 # runtime. Used while bringing up a new platform; not for shipping builds.
 ifneq ($(SANITIZE),)
@@ -805,7 +820,7 @@ MINIZIP_OBJ := $(OBJ_DIR)/minizip/unzip.o
 
 LUA_LIB := $(LIB_DIR)/liblua.a
 LRS_LIB := $(LIB_DIR)/libresample.a
-TP_LIBS := $(LUA_LIB) $(LRS_LIB) $(GLAD_OBJ) $(MINIZIP_OBJ)
+TP_LIBS := $(LUA_LIB) $(LRS_LIB) $(GLAD_OBJ) $(MINIZIP_OBJ) $(MODEL_TP_OBJS)
 
 # Resources: the error dialog (200) and version info from mugen.rc, plus an
 # assembly manifest (the original embeds one the same way, as RT_MANIFEST 1).
@@ -855,7 +870,7 @@ $(TARGET): $(ENGINE_OBJS) $(RC_OBJ) $(TP_LIBS)
 	$(Q)$(CC) $(ARCHFLAGS) -o $@ $(ENGINE_OBJS) $(RC_OBJ) \
 	    $(PLAT_LDFLAGS) $(CROSS_LDFLAGS) \
 	    -L$(LIB_DIR) -llua -lresample \
-	    $(GLAD_OBJ) $(MINIZIP_OBJ) \
+	    $(GLAD_OBJ) $(MINIZIP_OBJ) $(MODEL_TP_OBJS) \
 	    $(PKG_LIBS) $(SYS_LIBS) \
 	    $(LINK_MODE)
 
@@ -884,6 +899,22 @@ $(OBJ_DIR)/src/%.o: $(SRC_DIR)/%.c $(CONFIG_STAMP)
 	@echo "  CC      $<"
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(CC) $(ENGINE_CFLAGS) $(CPPFLAGS) -c $< -o $@
+
+ifeq ($(MUGEN_MODEL3D),1)
+$(OBJ_DIR)/src/model.o: $(SRC_DIR)/model.c $(MODEL_SHADER_HEADERS)
+
+$(MODEL_SHADER_DIR)/%.h: $(SRC_DIR)/shaders/% tools/embed_shader.sh
+	@echo "  SHADER  $<"
+	$(Q)sh tools/embed_shader.sh "$<" "$@" "g_shader_$(subst .,_,$*)"
+
+$(OBJ_DIR)/model/cgltf.o: $(TP_DIR)/cgltf-1.14/cgltf.c $(CONFIG_STAMP)
+	$(Q)mkdir -p $(dir $@)
+	$(Q)$(CC) $(TP_CFLAGS) -c $< -o $@
+
+$(OBJ_DIR)/model/stb_image.o: $(TP_DIR)/stb/stb_image.c $(CONFIG_STAMP)
+	$(Q)mkdir -p $(dir $@)
+	$(Q)$(CC) $(TP_CFLAGS) -c $< -o $@
+endif
 
 # --- Lua 5.1.4 --------------------------------------------------------------
 

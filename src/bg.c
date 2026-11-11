@@ -91,10 +91,24 @@ Bg *Bg_Load(const char *name, Ini *ini, const char *dir, SpriteSet *sprites, Ani
     count = Ini_CountGroups(ini, key_close);
     count += Ini_CountGroups(ini, key_space);
     if (count == 0) {
-        MatchLog_Printf(3, "Need at least one [%s] type bg\n", name);
+        /*
+         * mugen-unleashed: a background with a 3D model needs no element: a
+         * stage's ([<name>def] model) or a screen's ([<name>def] scenenumber)
+         */
+#ifndef MUGEN_MODEL3D
+        MatchLog_Printf(3, "Need at least one [%s] type bg (3D backgrounds unavailable)\n", name);
         return NULL;
+#else
+        strcpy(group, name);
+        strcat(group, "def");
+        if (Ini_SelectGroup(ini, group) == -1 ||
+            (Ini_GetValue(ini, "model") == NULL && Ini_GetValue(ini, "scenenumber") == NULL)) {
+            MatchLog_Printf(3, "Need at least one [%s] type bg\n", name);
+            return NULL;
+        }
+#endif
     }
-    bg = Bg_Create(count);
+    bg = Bg_Create(count > 0 ? count : 1);
     if (bg == NULL) {
         return NULL;
     }
@@ -133,6 +147,8 @@ Bg *Bg_Load(const char *name, Ini *ini, const char *dir, SpriteSet *sprites, Ani
     } else {
         Ini_Scanf(ini, "bgclearcolor", "%i,%i,%i", &bg->clear_color[0], &bg->clear_color[1], &bg->clear_color[2]);
     }
+    /* mugen-unleashed: a scene of the motif's / storyboard's 3D model (bg3d.c) */
+    Bg3D_Attach(bg, ini);
     if (anim != NULL) {
         bg->anim = anim;
         bg->owns_anim = 0;
@@ -418,6 +434,16 @@ int BgCtrl_Load(const char *name, Bg *bg, Ini *ini)
     len = (int)strlen(key_ctrl);
     n = Ini_CountGroups(ini, key_def);
     count = Ini_CountGroups(ini, key_ctrl) - n;
+    {
+        /*
+         * mugen-unleashed: the [<name>Ctrl3D] groups of 3D stages (stage3d.c)
+         * share the prefix; counted here, the loop below would run past the
+         * last group looking for them.
+         */
+        char key_3d[40];
+        sprintf(key_3d, "%sctrl3d", name);
+        count -= Ini_CountGroups(ini, key_3d);
+    }
     if (count == 0) {
         return 1;
     }
@@ -566,6 +592,7 @@ void Bg_Free(Bg *bg)
     if (bg == NULL) {
         return;
     }
+    Bg3D_Detach(bg);    /* mugen-unleashed */
     list = bg->elems;
     if (list != NULL) {
         for (e = KeyedArray_First(list); e != NULL; e = KeyedArray_Next(list)) {
@@ -820,6 +847,12 @@ void Bg_Draw(Bg *bg, int layer)
     if (bg->clear_cur[0] != -1 && layer == 0) {
         g_gfxClear(Video_MapRGB(bg->clear_cur[0], bg->clear_cur[1], bg->clear_cur[2]));
     }
+    /* mugen-unleashed: the 3D model of the stage (stage3d.c) or of a screen (bg3d.c), under the elements of the layer */
+    if (bg == g_game->stage_bg) {
+        Stage3D_Draw(layer);
+    } else {
+        Bg3D_Draw(bg, layer);
+    }
     for (e = KeyedArray_First(list); e != NULL; e = KeyedArray_Next(list)) {
         if (e->layer == layer) {
             BgElem_Draw(e, bg);
@@ -855,6 +888,7 @@ void Bg_Tick(Bg *bg)
         e->pos_x = (float)(e->vel_x + (double)e->pos_x);
         e->pos_y = (float)(e->vel_y + (double)e->pos_y);
     }
+    Bg3D_Tick(bg);      /* mugen-unleashed: the animations of its 3D model (bg3d.c) */
     bg->ticks++;
 }
 

@@ -64,6 +64,9 @@ int Test_Fclose(FILE *fp)
     return 0;
 }
 
+/* Disabled model backend reports unsupported 3D requests through logging. */
+void Log_Printf(const char *fmt, ...) { (void)fmt; }
+
 void Error_Printf(const char *fmt, ...)
 {
     (void)fmt;

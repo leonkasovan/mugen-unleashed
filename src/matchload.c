@@ -606,6 +606,8 @@ int Stage_Load(Stage *st)
     st->zoffsetlink = -1;
     Ini_GetInt(ini, "zoffset", &st->zoffset);
     Ini_GetInt(ini, "zoffsetlink", &st->zoffsetlink);
+    /* mugen-unleashed: the 3D model of the stage, whose [Model] offset moves zoffset (stage3d.c) */
+    Stage3D_Load(st, ini, path);
     if (st->cutlow < 0) {
         if (st->zoffsetlink == -1) {
             st->cutlow = Ftol((st->height - st->zoffset) - st->height / 20.0);
@@ -805,6 +807,7 @@ void Stage_Unload(Stage *st)
         g->stage_bg = NULL;
     }
     Bg_Free(st->bg);
+    Stage3D_Free();     /* mugen-unleashed */
     memset(st, 0, sizeof(Stage));
     Log_Printf("OK\n");
 }
@@ -1339,6 +1342,7 @@ void Match_Start(void)
     }
     g->hitdef_serial = 0;
     Bg_Reset(g->stage_bg);
+    Stage3D_Reset();    /* mugen-unleashed */
     g->victory_quote[0] = '\0';
     for (t = 0; t < 2; t++) {
         TeamSel *ts = &g->teams[t];
@@ -1617,6 +1621,7 @@ void Round_Reset(void)
     memset(&g->assert_intro, 0, 11);
     if (g->stage.resetbg != 0) {
         Bg_Reset(g->stage_bg);
+        Stage3D_Reset();    /* mugen-unleashed */
     }
     {
         PalFxDef *def = &g->bg_palfx_def;

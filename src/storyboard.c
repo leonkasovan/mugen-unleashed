@@ -320,6 +320,9 @@ Storyboard *Storyboard_Parse(const char *dir, Ini *ini)
         }
         sb->owns_snd = 1;
     }
+    /* mugen-unleashed: the 3D model of the scene backgrounds, [SceneDef] model (bg3d.c) */
+    value = Ini_GetValue(ini, "model");
+    Bg3D_SetModel(value != NULL && value[0] != '\0' ? Bg3D_LoadModel(value, dir) : NULL);
     dirs[0] = dir;
     dirs[1] = g_storyboardFontDir;
     Fonts_Load(ini, sb->fonts, dirs);
@@ -589,10 +592,12 @@ Storyboard *Storyboard_Parse(const char *dir, Ini *ini)
         }
     }
     Storyboard_Reset(sb);
+    Bg3D_EndModel();    /* mugen-unleashed */
     return sb;
 
 fail:
     Storyboard_Free(sb);
+    Bg3D_EndModel();    /* mugen-unleashed */
     return NULL;
 }
 

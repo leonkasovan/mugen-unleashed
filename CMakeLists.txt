@@ -23,6 +23,7 @@ set(MUGEN_SOURCES
   src/ai.c
   src/anim.c
   src/bg.c
+  src/bg3d.c
   src/bgm.c
   src/bgmplugins.c
   src/bgmstream.c
@@ -67,6 +68,8 @@ set(MUGEN_SOURCES
   src/match.c
   src/matchload.c
   src/misc.c
+  src/model.c
+  src/model_stub.c
   src/motif.c
   src/pads.c
   src/palette.c
@@ -86,6 +89,7 @@ set(MUGEN_SOURCES
   src/sound.c
   src/sprite.c
   src/spritecodec.c
+  src/stage3d.c
   src/statedef.c
   src/storyboard.c
   src/stream.c
@@ -120,6 +124,28 @@ target_compile_definitions(mugen PRIVATE _CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO
 target_compile_options(mugen PRIVATE "$<$<COMPILE_LANGUAGE:C>:/W3;/wd4100;/utf-8;/arch:IA32>")
 target_link_libraries(mugen PRIVATE mugen_sdk lua51 png12 glad minizip
   opengl32 glu32 winmm shell32 user32 gdi32)
+
+# Upstream 3D rendering is desktop-only; portable ports keep their 2D path.
+option(MUGEN_MODEL3D "Enable desktop OpenGL glTF models and 3D stages" ON)
+if(MUGEN_MODEL3D)
+  target_compile_definitions(mugen PRIVATE MUGEN_MODEL3D)
+  target_link_libraries(mugen PRIVATE cgltf stb_image)
+  set(_shader_dir "${CMAKE_CURRENT_BINARY_DIR}/shaders/model")
+  set(_shader_headers)
+  foreach(_shader model.vert model.frag shadow.vert shadow.frag env.vert env_panorama.frag env_filter.frag)
+    string(REPLACE "." "_" _shader_var "g_shader_${_shader}")
+    set(_shader_out "${_shader_dir}/${_shader}.h")
+    add_custom_command(OUTPUT "${_shader_out}"
+      COMMAND "${CMAKE_COMMAND}" "-DIN=${CMAKE_CURRENT_SOURCE_DIR}/src/shaders/${_shader}"
+              "-DOUT=${_shader_out}" "-DNAME=${_shader_var}"
+              -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbedShader.cmake"
+      DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/shaders/${_shader}"
+              "${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbedShader.cmake" VERBATIM)
+    list(APPEND _shader_headers "${_shader_out}")
+  endforeach()
+  target_sources(mugen PRIVATE ${_shader_headers})
+  target_include_directories(mugen PRIVATE "${_shader_dir}")
+endif()
 
 # The window icon of the original, when its mugen.exe and Python 3 with pefile are available.
 find_package(Python3 COMPONENTS Interpreter)

@@ -884,6 +884,10 @@ static void Glr_FreeSysTex(GlTex *tex)
 /* 0x0047A930: stops the renderer and logs the draw statistics. */
 int Gl_Deinit(void)
 {
+#ifdef MUGEN_MODEL3D
+    /* Port integration: shared model shaders/FBOs belong to this context. */
+    Model_RendererQuit();
+#endif
     /* Port fix: readiness does not describe partial ownership. */
     Gl_FreeShaders();
     Glr_FreeSysTex(g_glSysTex[1]);
