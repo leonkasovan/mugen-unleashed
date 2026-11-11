@@ -14,9 +14,9 @@ case "$($CC -dumpmachine)" in
     *) GL_LIBS="-lGL -lGLU" ;;
 esac
 SDL_LIBS="${SDL_LIBS:-$(pkg-config --libs sdl2 | sed 's/-lSDL2main//g; s/-mwindows//g') $GL_LIBS}"
-FLAGS="${CFLAGS:-} -std=gnu11 -O1 -g -UNDEBUG -Wall -Wno-unused-parameter -Werror=implicit-function-declaration -ffunction-sections -fdata-sections -fno-asynchronous-unwind-tables -DMUGEN_SDL2 -DSDL_MAIN_HANDLED"
+FLAGS="${CFLAGS:-} -std=gnu11 -O1 -g -UNDEBUG -Wall -Wno-unused-parameter -Werror=implicit-function-declaration -ffunction-sections -fdata-sections -fno-asynchronous-unwind-tables -DSDL_MAIN_HANDLED"
 FLAGS="$FLAGS -Isrc -Ithird_party/glad-2.1 -Ithird_party/minizip-0.15 -Ithird_party/libpng-1.2.38 -Ithird_party/lua-5.1.4/src -Ithird_party/libresample/include $SDL_CFLAGS"
 case "$($CC -dumpmachine)" in *mingw*) FLAGS="$FLAGS -flto=auto" ;; esac
 $CC $FLAGS -c src/globals.c -o "$OUT/globals.o"
-$CC $FLAGS tools/test_fullscreen.c src/video.c src/keyboard.c src/events.c src/sdl2compat.c src/sdl2keys.c src/sdl2surface.c third_party/glad-2.1/glad.c "$OUT/globals.o" -Wl,--gc-sections ${LDFLAGS:-} $SDL_LIBS -lm -o "$OUT/test_fullscreen"
+$CC $FLAGS tools/test_fullscreen.c src/video.c src/keyboard.c src/events.c src/sdl2video.c src/sdl2keys.c src/sdl2surface.c third_party/glad-2.1/glad.c "$OUT/globals.o" -Wl,--gc-sections ${LDFLAGS:-} $SDL_LIBS -lm -o "$OUT/test_fullscreen"
 ${RUNNER:-} "$OUT/test_fullscreen"

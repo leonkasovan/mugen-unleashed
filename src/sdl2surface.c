@@ -1,8 +1,7 @@
-#if defined(MUGEN_SDL2) || defined(ANDROID_PORT) || defined(MUGEN_ANDROID_SW)
 /*
  * Shared SDL2 nearest-neighbour scaler, proven against libSDL_gfx.
  *
- * Extracted from src/sdl2compat.c (PLAN Android B4, desktop SDL2_PLAN Stage 4)
+ * Extracted from src/sdl2video.c (PLAN Android B4, desktop SDL2_PLAN Stage 4)
  * so SDL2 consumers that must NOT pull in the desktop window/present
  * implementation (Android, Vita SDL2) can still scale identically. The
  * sampling rules, palette handling, colour-key capture, blend-mode
@@ -16,10 +15,10 @@
 #include <limits.h>
 #include <string.h> /* memcpy is not declared by every SDL2 configuration */
 
-/* --------------------------------------------------------------- zoomSurface */
+/* --------------------------------------------------------------- Sdl2_ScaleSurface */
 
 /* Palette, colour key and modulation of src onto the fresh surface dst, which
- * zoomSurface must reproduce: SDL 1.2's SDL_gfx did, and the engine's callers
+ * Sdl2_ScaleSurface must reproduce: SDL 1.2's SDL_gfx did, and the engine's callers
  * free the result without further fix-up. */
 static void Sdl2_CopySurfaceState(SDL_Surface *src, SDL_Surface *dst)
 {
@@ -267,7 +266,7 @@ SDL_Surface *Sdl2_ScaleSurface(SDL_Surface *src, double zoomx, double zoomy, int
     if (!(zoomx > 0.0) || !(zoomy > 0.0) || !isfinite(zoomx) || !isfinite(zoomy) ||
         !isfinite((double)src->w * zoomx) || !isfinite((double)src->h * zoomy) ||
         (double)src->w * zoomx + 0.5 > INT_MAX || (double)src->h * zoomy + 0.5 > INT_MAX) {
-        SDL_SetError("zoomSurface: zoom factors must be positive");
+        SDL_SetError("Sdl2_ScaleSurface: zoom factors must be positive");
         return NULL;
     }
     /*
@@ -278,12 +277,12 @@ SDL_Surface *Sdl2_ScaleSurface(SDL_Surface *src, double zoomx, double zoomy, int
      *   zoomSurfaceSize(16, 16, 0.5, 0.5) = 8x8
      * Truncating cost a row and a column on every fractional scale, which is
      * exactly the case the engine hits when a font is drawn at a non-integer
-     * scale (src/font.c's zoomSurface call).
+     * scale (src/font.c's Sdl2_ScaleSurface call).
      */
     dw = (int)((double)src->w * zoomx + 0.5);
     dh = (int)((double)src->h * zoomy + 0.5);
     if (dw <= 0 || dh <= 0) {
-        SDL_SetError("zoomSurface: resulting size is empty");
+        SDL_SetError("Sdl2_ScaleSurface: resulting size is empty");
         return NULL;
     }
 
@@ -297,7 +296,7 @@ SDL_Surface *Sdl2_ScaleSurface(SDL_Surface *src, double zoomx, double zoomy, int
      */
     if (src->format->BitsPerPixel == 8) {
         if (smooth != 0) {
-            SDL_SetError("zoomSurface: smooth scaling of 8-bit surfaces is not supported");
+            SDL_SetError("Sdl2_ScaleSurface: smooth scaling of 8-bit surfaces is not supported");
             return NULL;
         }
         return Sdl2_ZoomNearest(src, dw, dh);
@@ -348,13 +347,3 @@ SDL_Surface *Sdl2_ScaleSurface(SDL_Surface *src, double zoomx, double zoomy, int
     }
     return Sdl2_ZoomNearest(src, dw, dh);
 }
-
-#ifndef ANDROID_PORT
-/* Desktop SDL_gfx entry point retained for the reconstructed desktop path. */
-SDL_Surface *zoomSurface(SDL_Surface *src, double zoomx, double zoomy, int smooth)
-{
-    return Sdl2_ScaleSurface(src, zoomx, zoomy, smooth);
-}
-#endif
-
-#endif /* SDL2 consumers only */

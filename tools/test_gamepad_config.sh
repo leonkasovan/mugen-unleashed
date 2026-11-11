@@ -10,8 +10,8 @@ PKG_CONFIG="${PKG_CONFIG:-pkg-config}"
 OUT="${OUT:-$PWD/build/tmp/gamepad-config-test}"
 case "${TEST_PLATFORM:-android}" in
     android) PLATFORM_DEFS="-DANDROID_PORT -DMUGEN_ANDROID_SW"; PLATFORM_SRCS="" ;;
-    vita) PLATFORM_DEFS="-DMUGEN_SDL2 -DMUGEN_VITA"; PLATFORM_SRCS="src/sdl2compat.c port/psvita/src/vita_input.c" ;;
-    desktop) PLATFORM_DEFS="-DMUGEN_SDL2"; PLATFORM_SRCS="src/sdl2compat.c" ;;
+    vita) PLATFORM_DEFS="-DMUGEN_VITA"; PLATFORM_SRCS="src/sdl2video.c port/psvita/src/vita_input.c" ;;
+    desktop) PLATFORM_DEFS=""; PLATFORM_SRCS="src/sdl2video.c" ;;
     *) echo "TEST_PLATFORM must be android, desktop or vita" >&2; exit 2 ;;
 esac
 mkdir -p "$OUT/tmp"

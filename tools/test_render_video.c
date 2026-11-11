@@ -103,7 +103,7 @@ void Timer_ResetFrame(void)
 }
 
 void Video_OnResize(int width, int height);
-/* MUGEN_SDL2_DIAG fault injection (src/sdl2compat.c). */
+/* MUGEN_SDL2_DIAG fault injection (src/sdl2video.c). */
 void Sdl2_DiagFailNext(int which);
 
 static int failures;
@@ -147,10 +147,10 @@ static void test_r02_projection(void)
     printf("-- R02 projection\n");
     g_renderMode = RENDER_OPENGL_SCREEN;
     g_videoDepth = 16;
-    /* SDL_OPENGL, as the engine passes for this mode: with flags 0 the
+    /* DISPLAY_OPENGL, as the engine passes for this mode: with flags 0 the
      * backend silently becomes the System renderer and the GL placeholder
      * (the surface g_screenSurface aliases here) is never exercised. */
-    g_videoSdlFlags = SDL_OPENGL;
+    g_videoSdlFlags = DISPLAY_OPENGL;
 
     /* Twenty identical resizes must give identical matrices and pixels. */
     for (i = 0; i < 20; i++) {
@@ -302,7 +302,7 @@ int main(void)
     /* A real GL context: the projection matrix only exists there. The
      * engine loads glad in Gl_Init; this harness is not the engine, so it
      * loads the entry points itself after the context is current. */
-    glsurf = Sdl2_SetVideoMode(640, 480, 16, SDL_OPENGL);
+    glsurf = Sdl2_SetVideoMode(640, 480, 16, DISPLAY_OPENGL);
     if (glsurf == NULL) {
         printf("SKIP: no GL context: %s\n", SDL_GetError());
         SDL_Quit();

@@ -2,7 +2,7 @@
  * M0 regression tests for R01-R05 (RENDERING_PLAN.md section 4, gates).
  *
  * Built and run by tools/test_render_regress.sh, NOT part of the engine.
- * Links the production units (src/sdl2compat.c, src/sdl2surface.c) so these
+ * Links the production units (src/sdl2video.c, src/sdl2surface.c) so these
  * are the real functions, not copies, plus the MUGEN_SDL2_DIAG diagnostic
  * build (counters + SDL_QueryTexture-based texture check). Uses a hidden
  * window on the platform video driver: no visible display or game data is
@@ -41,7 +41,7 @@ void Sdl2_UpdateRect(SDL_Surface *surface, Sint32 x, Sint32 y, Uint32 w, Uint32 
 void Sdl2_VideoQuit(void);
 void Sdl2_ResetRenderer(void);
 
-/* MUGEN_SDL2_DIAG test hooks (src/sdl2compat.c). */
+/* MUGEN_SDL2_DIAG test hooks (src/sdl2video.c). */
 void Sdl2_DiagReset(void);
 void Sdl2_DiagCounters(int *present, int *tex_create, int *tex_destroy);
 int Sdl2_DiagTextureSize(int *w, int *h, Uint32 *format);

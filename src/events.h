@@ -42,7 +42,6 @@ typedef void (__cdecl *KeyEventFn)(unsigned int unicode, int sym, int pressed);
 
 /* Joysticks opened by Pads_Init. */
 #define PAD_MAX             4
-#ifdef MUGEN_GAMEPAD_POLICY
 /* Port additions: system controls are separate from the eleven assignable
  * player actions. Codes are local to a slot, including P2/P3/P4. */
 #define PAD_SELECT_CODE     12
@@ -59,7 +58,6 @@ typedef enum PadMenuAction {
     PAD_MENU_BACK,
     PAD_MENU_PAUSE
 } PadMenuAction;
-#endif
 #define PAD_BUTTONS         0x20    /* button codes per joystick: pad * PAD_BUTTONS + 1.. */
 
 /*

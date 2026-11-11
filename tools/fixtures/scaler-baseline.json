@@ -1,0 +1,91 @@
+{
+  "baseline_commit": "6753f6b898b8c9067f900720c6043418429351eb",
+  "generator": "tools/test_zoomdiff.c",
+  "runtime": "SDL2 2.32.4, little-endian Linux x86-64; recorded before SDL2-only edits",
+  "files": {
+    "indexed_0p5x.raw": {
+      "size": 329,
+      "sha256": "5b96bb9bf2585b15a205f6cd67c156058c5e35dae06ae9040428897e5d6eaf86"
+    },
+    "indexed_2x.raw": {
+      "size": 4171,
+      "sha256": "8ca0dc52b2bbf8d7427d5f89f2d5b279f4911963dcc93f5138d4d48218d249e0"
+    },
+    "indexed_frac.raw": {
+      "size": 1515,
+      "sha256": "0ad19dd49cf7b0690c5e9a7f3d3e1efafff6093cab9529630e293414668612ec"
+    },
+    "indexed_key1_0p5x.raw": {
+      "size": 329,
+      "sha256": "1a9e792af209441e17a95e23da1ce6ee95c71d701ce77ff9b660546b76636526"
+    },
+    "indexed_key1_2x.raw": {
+      "size": 4171,
+      "sha256": "05d7cb2c6965a5218dddccba3a95f4df9e205f28bb766a31147ed53604d5d04d"
+    },
+    "indexed_multi_2x.raw": {
+      "size": 4189,
+      "sha256": "af77d3af09fc8bdf3eccb1d666b186d037d24b769992d27ca00aff21c5bc386c"
+    },
+    "indexed_white1_2x.raw": {
+      "size": 4171,
+      "sha256": "2aa54ef27e4c395e4885cc5d52f7488dad040d0ba36ee3d94cabb9b3e2ad2832"
+    },
+    "one_px_2x.raw": {
+      "size": 69,
+      "sha256": "75f2b2ee737e40f3a2eaa3ff444ca7f753446e79829384bee761804b346d5820"
+    },
+    "one_px_indexed.raw": {
+      "size": 109,
+      "sha256": "8a110e2045d2a3fac03848a4f9b450c876e2b87150df3c46029a0e7fc62b950b"
+    },
+    "rgb32_2x.raw": {
+      "size": 4151,
+      "sha256": "1034e5bf4e545ac5f042dd6e0880c6e422a04d2ebf03803f77246ca997597ccb"
+    },
+    "rgb555_1p5x.raw": {
+      "size": 955,
+      "sha256": "6ab4f5b6841eaf1a1d9391d9c6151986b822cd654a702d1d0d93231e9c433fa7"
+    },
+    "rgb565_0p75x.raw": {
+      "size": 631,
+      "sha256": "295bf709d71f7bf982989fe9417633e66ba74684f6ebb5bd0ddafa115aa629a8"
+    },
+    "rgb565_2x.raw": {
+      "size": 4151,
+      "sha256": "d9c4c422c12da92c6a287cf74436e8b208eef8414db83632f75f69a12e76f32f"
+    },
+    "rgba32_0p5x.raw": {
+      "size": 309,
+      "sha256": "771e2dc28a77b0d1e58ef2b79cf78365a309bf98f02195bc81902d51ebb6b101"
+    },
+    "rgba32_10to15.raw": {
+      "size": 955,
+      "sha256": "987a07614fd344bb4fd8308e365928dc8f29a57323f2001fd17567d4e76899d2"
+    },
+    "rgba32_13to20.raw": {
+      "size": 1655,
+      "sha256": "b7666391bfdab14175e0fa93a087fdccebf6182db793992e22fa3dc386b96aba"
+    },
+    "rgba32_16to12.raw": {
+      "size": 631,
+      "sha256": "f8d8c7937b59b2300e8f75255c7610487bffd31fb778b1ef3eeb63ac2dcf9ab2"
+    },
+    "rgba32_2x.raw": {
+      "size": 4151,
+      "sha256": "bfd61e9bcccdbb5c7b6114444f1a1e46f29fc32b7d4e09dffbd8ed50b42e47b3"
+    },
+    "rgba32_frac.raw": {
+      "size": 1495,
+      "sha256": "4865e5d8bf47fc73c45edc00fdba06ddd601ff066977e4001741144c73319737"
+    },
+    "rgba32_odd.raw": {
+      "size": 390,
+      "sha256": "41205ac642690333685b4a2fe0a6e5a9ccd79956b82b3c7c8b07e028fa5a9036"
+    },
+    "tall_thin.raw": {
+      "size": 161,
+      "sha256": "909f150ca4ea7b436ab7e04befd88d09299ec9eb304914ea34a1f32deae0377c"
+    }
+  }
+}

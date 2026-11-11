@@ -36,16 +36,12 @@ SDL_Surface *VitaGl_CreateDisplay(int width, int height, int depth)
         SDL_SetError("Restart required to change the VitaGL display size");
         return NULL;
     }
-    #ifdef MUGEN_SDL2
     if (!ready && Sdl2_HasWindow()) {
-#else
-    if (!ready && SDL_GetVideoSurface() != NULL) {
-#endif
         SDL_SetError("Restart required to switch from SDL System to vitaGL");
         return NULL;
     }
     /* SDL surface metadata is used by the engine, not by SDL's presenter. */
-    surface = SDL_CreateRGBSurface(SDL_SWSURFACE, width, height, 32,
+    surface = SDL_CreateRGBSurface(0, width, height, 32,
                                  0xff, 0xff00, 0xff0000, 0xff000000);
     if (surface == NULL) return NULL;
     if (!ready) {
@@ -116,13 +112,10 @@ void VitaGl_SwapBuffers(void)
     }
 }
 
-int VitaGl_SetAttribute(SDL_GLattr attribute, int value)
+void VitaGl_SetSwapInterval(int interval)
 {
-    if (attribute == SDL_GL_SWAP_CONTROL) {
-        vsync = value != 0;
-        if (ready) vglWaitVblankStart(vsync ? GL_TRUE : GL_FALSE);
-    }
-    return 0;
+    vsync = interval != 0;
+    if (ready) vglWaitVblankStart(vsync ? GL_TRUE : GL_FALSE);
 }
 
 /*

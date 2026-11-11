@@ -19,9 +19,7 @@ int VitaGl_Probe(void);
 int VitaGl_InitShaderCompiler(void);
 int VitaGl_OwnsDisplay(void);
 void VitaDiag_Log(const char *format, ...);
-/* The mock still uses SDL1 host headers; the real Vita port now uses SDL2. */
-#define SDL_MESSAGEBOX_ERROR 0x10
-int SDL_ShowSimpleMessageBox(unsigned flags, const char *title, const char *text, void *window);
+
 void VitaGl_DrawQuad(const VitaGlVertexInterface *vertex, const float *v, int special,
                      float top, float bottom, const DrawParams *dp);
 #endif
@@ -99,7 +97,7 @@ void VitaDiag_Log(const char *format, ...) { (void)format; }
 int VitaGl_Probe(void) { return 1; }
 int VitaGl_InitShaderCompiler(void) { return !preflight_failure; }
 int VitaGl_OwnsDisplay(void) { return native_display_owned; }
-int SDL_ShowSimpleMessageBox(unsigned flags, const char *title, const char *text, void *window)
+int SDL_ShowSimpleMessageBox(Uint32 flags, const char *title, const char *text, SDL_Window *window)
 {
     assert(flags == SDL_MESSAGEBOX_ERROR && title && text && window == NULL);
     sdl_dialogs++;
@@ -289,7 +287,7 @@ static void install(void)
     g_glMaxTextureSize = 16384;
     g_videoWidth = g_targetWidth = 640; g_videoHeight = g_targetHeight = 480;
     g_videoDepth = g_targetBpp = 32; g_renderMode = RENDER_MODE_GL;
-    g_videoFlags = VIDEO_HWBLIT; g_videoSdlFlags = SDL_DOUBLEBUF;
+    g_videoFlags = VIDEO_HWBLIT; g_videoSdlFlags = DISPLAY_DOUBLEBUF;
 #ifdef TEST_GLES
     g_glesReady = 1;
 #endif
@@ -364,7 +362,7 @@ static void test_targets_capture(void)
 #ifdef TEST_GLES
 void Android_GLDrawableSize(int *w,int *h) { *w=1280;*h=960; }
 void Sdl2_GLDrawableSize(int *w,int *h) { *w=1280;*h=960; }
-void SDL_GL_SwapBuffers(void) { assert(binding == 0);swaps++; }
+void Video_SwapBuffers(void) { assert(binding == 0);swaps++; }
 static void overlay(SpriteSet *set,int index)
 {
     overlays++;

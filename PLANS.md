@@ -1,5 +1,8 @@
 # PLANS
 
+> Historical record. For the current SDL2-only build and removal of root
+> MSVC/CMake, see [docs/SDL2_ONLY_PLAN.md](docs/SDL2_ONLY_PLAN.md).
+
 Porting mugen-unleashed from Windows/MSVC to Linux/GCC, and optimising the
 renderer. This file records the research (what the code actually depends on),
 the decisions, and the ordered work plans. Update the status column as work

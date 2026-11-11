@@ -1465,7 +1465,7 @@ void Sprite_DrawGL(SpriteSet *set, int sprite, const DrawParams *dp)
  * Size of the drawable the context renders into, in pixels.
  *
  * Android owns its window through ANativeWindow, so it asks that. Everywhere
- * else the window belongs to src/sdl2compat.c, which wraps SDL_GL_GetDrawableSize.
+ * else the window belongs to src/sdl2video.c, which wraps SDL_GL_GetDrawableSize.
  * It is not the window size on a scaled or high-DPI display, and the presenter
  * below must clear and viewport the drawable or the picture lands in a corner.
  */
@@ -1566,12 +1566,12 @@ void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
      * this point, and the restore below must still run. A skipped frame never
      * reaches the presenter at all, so it presents nothing, as on Android.
      */
-    if ((g_videoFlags & VIDEO_HWBLIT) && (g_videoSdlFlags & SDL_DOUBLEBUF)) {
-        SDL_GL_SwapBuffers();
+    if ((g_videoFlags & VIDEO_HWBLIT) && (g_videoSdlFlags & DISPLAY_DOUBLEBUF)) {
+        Video_SwapBuffers();
     } else {
         /*
          * Unreachable today: config.c forces VIDEO_HWBLIT for RENDER_OPENGL and
-         * Video_SetMode turns that into SDL_DOUBLEBUF. Reported rather than
+         * Video_SetMode turns that into DISPLAY_DOUBLEBUF. Reported rather than
          * assumed, because the failure it would produce -- a framed, healthy
          * log and a black panel -- is indistinguishable from the bug above.
          */

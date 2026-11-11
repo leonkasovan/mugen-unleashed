@@ -99,7 +99,7 @@ Each is marked in the code with a comment. None affect Windows.
 | Error dialog | writes the message to `stderr` instead of a modal RichEdit dialog built from PE resource 200 |
 | Window icon | not set; the icon lives in a PE resource the Linux build has no access to |
 | Full screen | `SDL_WM_ToggleFullScreen` instead of poking `HWND` styles and the primary monitor's rectangle |
-| `-log` / stdout redirection | `sdlmain.c` (SDL 1.2's WinMain wrapper) is Windows-only; `main.c` is the entry on Linux |
+| `-log` / stdout redirection | `platform_main_win32.c` (SDL 1.2's WinMain wrapper) is Windows-only; `main.c` is the entry on Linux |
 | `g_triggersV11` loop | bounded by the array length. The original's table is the only one with no `-1` terminator and relied on reading into `g_sctrlsV10` to stop |
 
 ## Struct layouts on 64-bit

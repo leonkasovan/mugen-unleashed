@@ -1,6 +1,8 @@
 #ifndef MUGEN_SOUND_H
 #define MUGEN_SOUND_H
 
+int Sound_QueryMixerSpec(int *frequency, Uint16 *format, int *channels, int *chunksize);
+
 /*
  * Types of the sound effects module (sound.c) and of the code it uses from
  * other, not yet decompiled modules: the id map container (0x466550..) and

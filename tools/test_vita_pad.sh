@@ -3,17 +3,18 @@ set -eu
 cd "$(dirname "$0")/.."
 OUT=build/tmp/vita-pad-test
 CC="${CC:-gcc}"
+. tools/lib_target.sh
 PKGS="sdl2"
 mkdir -p "$OUT"
-$CC -m32 -std=gnu11 -O1 -g -Wall \
-    -DMUGEN_SDL2 -DSDL_MAIN_HANDLED \
+$CC $ARCHFLAGS -ffunction-sections -fdata-sections -std=gnu11 -O1 -g -Wall \
+    -DSDL_MAIN_HANDLED \
     -Isrc -Ithird_party/glad-2.1 -Ithird_party/minizip-0.15 \
-    -Ithird_party/lua-5.1.4/src -Ithird_party/sdk/include \
+    -Ithird_party/lua-5.1.4/src $PLAT_INC \
     -Ithird_party/libresample/include \
-    $(pkg-config --cflags $PKGS | sed 's/-Dmain=SDL_main//') \
-    tools/test_vita_pad.c src/pads.c src/keyboard.c src/events.c src/sdl2compat.c \
-    -o "$OUT/test_vita_pad" \
-    $(pkg-config --libs --static $PKGS | sed 's/-lSDL2main//') \
-    -lopengl32 -lglu32 -lwinmm -lshell32 -luser32 -lgdi32 -lpthread -lm
+    ${SDL_CFLAGS:-$("$PKGCONF" --cflags $PKGS)} \
+    tools/test_vita_pad.c src/pads.c src/keyboard.c src/events.c src/sdl2video.c src/sdl2keys.c src/sdl2surface.c \
+    -Wl,--gc-sections ${LDFLAGS:-} -o "$OUT/test_vita_pad" \
+    ${SDL_LIBS:-$("$PKGCONF" --libs $SDL_LINK_MODE $PKGS)} \
+    $TEST_SYS_LIBS -lpthread -lm
 echo "built $OUT/test_vita_pad"
 "$OUT/test_vita_pad"

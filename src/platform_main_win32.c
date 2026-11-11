@@ -1,5 +1,6 @@
 /*
- * The program entry: SDL 1.2.15's SDLmain
+ * Windows SDL2 entry point, preserving the original command-line/log contract.
+ * Historical source: SDL 1.2.15 SDLmain
  * (SDL_win32_main.c), which mugen.exe links statically (0x4DCF80-0x4DD700,
  * library code). Rebuilt from the original
  * because the prebuilt SDLmain.lib of the SDL development package uses the
@@ -7,7 +8,7 @@
  *
  * WinMain splits the command line into argv, redirects stdout and stderr to
  * stdout.txt / stderr.txt next to the executable (unless SDL_STDIO_REDIRECT
- * is set to 0), starts SDL with SDL_INIT_NOPARACHUTE and runs SDL_main
+ * is set to 0), calls SDL_SetMainReady, initializes SDL2 and runs main
  * (main.c). At exit the redirection files are closed and deleted when empty.
  *
  * Quirks kept from the original:
@@ -20,24 +21,22 @@
 #include "mugen.h"
 
 /*
- * SDL 1.2's SDLmain is a Windows-only helper: it exists to provide WinMain,
+ * The Windows entry adapter is Windows-only: it exists to provide WinMain,
  * split lpCmdLine into argv, redirect stdout/stderr to files beside the
- * executable and pre-load DDRAW.DLL. None of that applies on other platforms,
+ * executable. None of that applies on other platforms,
  * where the C runtime passes argv to main() directly and src/main.c is the
  * entry point (SDL 1.2's SDL_main.h only renames main on Windows).
  *
  * The whole implementation is therefore compiled only for Windows. Under
  * --gc-sections a Linux link happened to drop it, but that is luck rather than
- * design: the section references GetCommandLineA and SDL_main, which do not
+ * design: the section references GetCommandLineA and the engine main, which do not
  * exist here, and any build that keeps the section alive fails to link.
  */
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(ANDROID_PORT)
 
-#ifdef MUGEN_SDL2
 /* Port fix: SDL_MAIN_HANDLED leaves the engine entry named main; SDL2's
  * headers no longer declare it on our behalf. */
 int main(int argc, char **argv);
-#endif
 
 static char g_stdoutPath[MAX_PATH];     /* 0x00503178 */
 static char g_stderrPath[MAX_PATH];     /* 0x00503280 */
@@ -232,13 +231,13 @@ static int console_main(int argc, char *argv[])
     SDL_strlcpy(bufp, appname, n + 1);
     appname = bufp;
 
-    if (SDL_Init(SDL_INIT_NOPARACHUTE) < 0) {
+    SDL_SetMainReady();
+    if (SDL_Init(0) < 0) {
         ShowError("WinMain() error", SDL_GetError());
         return 0;
     }
     atexit(cleanup_output);
     atexit(cleanup);
-#ifdef MUGEN_SDL2
     /*
      * SDL2 has no SDL_SetModuleHandle (it finds the module itself) and no
      * SDL_main: the build defines SDL_MAIN_HANDLED and does not link
@@ -247,17 +246,12 @@ static int console_main(int argc, char *argv[])
      * did with SDL_main under SDL 1.2 -- same argc/argv, same exit status.
      */
     exit(main(argc, argv));
-#else
-    SDL_SetModuleHandle(GetModuleHandleA(NULL));
-    exit(SDL_main(argc, argv));
-#endif
     return 0;
 }
 
 /* 0x004DD240 */
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR szCmdLine, int sw)
 {
-    HMODULE handle;
     const char *env;
     char *cmdline;
     char *bufp;
@@ -266,10 +260,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR szCmdLine, int sw)
     char **argv;
 
     /* starts DirectX early (a workaround of SDL for some drivers) */
-    handle = LoadLibraryA("DDRAW.DLL");
-    if (handle != NULL) {
-        FreeLibrary(handle);
-    }
 
     env = SDL_getenv("SDL_STDIO_REDIRECT");
     if (env != NULL) {

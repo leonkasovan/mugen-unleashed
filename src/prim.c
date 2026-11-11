@@ -195,7 +195,7 @@ void Gfx_SoftPutPixel(int x, int y, unsigned int color)
 #ifdef ANDROID_PORT
         Android_MarkDisplayDirty(surface);
 #else
-        SDL_UpdateRect(surface, x, y, 1, 1);
+        Sdl2_UpdateRect(surface, x, y, 1, 1);
 #endif
     }
 }
@@ -224,7 +224,7 @@ void Gfx_SoftAddPixel(int x, int y, unsigned int color)
 #ifdef ANDROID_PORT
         Android_MarkDisplayDirty(surface);
 #else
-        SDL_UpdateRect(surface, x, y, 1, 1);
+        Sdl2_UpdateRect(surface, x, y, 1, 1);
 #endif
     }
 }
@@ -252,7 +252,7 @@ void Gfx_SoftInvertPixel(int x, int y)
 #ifdef ANDROID_PORT
         Android_MarkDisplayDirty(surface);
 #else
-        SDL_UpdateRect(surface, x, y, 1, 1);
+        Sdl2_UpdateRect(surface, x, y, 1, 1);
 #endif
     }
 }

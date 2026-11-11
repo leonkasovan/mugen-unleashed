@@ -20,14 +20,14 @@ echo "target $TARGET: $CC $ARCHFLAGS ($("$CC" -dumpmachine 2>/dev/null || echo u
 
 # shellcheck disable=SC2086
 "$CC" $ARCHFLAGS -std=gnu11 -O1 -g -Wall \
-    -DMUGEN_SDL2 -DSDL_MAIN_HANDLED -DMUGEN_SDL2_DIAG \
+    -DSDL_MAIN_HANDLED -DMUGEN_SDL2_DIAG \
     -Isrc -Ithird_party/glad-2.1 -Ithird_party/minizip-0.15 \
     -Ithird_party/lua-5.1.4/src $PLAT_INC \
     $("$PKGCONF" --cflags $PKGS | sed 's/-Dmain=SDL_main//') \
-    tools/test_render_regress.c src/sdl2compat.c src/sdl2keys.c src/sdl2surface.c \
-    -o "$OUT/test_render_regress" \
-    $("$PKGCONF" --libs --static $PKGS | sed 's/-lSDL2main//') \
-    -lopengl32 -lglu32 -lwinmm -lshell32 -luser32 -lgdi32 -lm
+    tools/test_render_regress.c src/sdl2video.c src/sdl2keys.c src/sdl2surface.c \
+    ${LDFLAGS:-} -o "$OUT/test_render_regress" \
+    $("$PKGCONF" --libs $SDL_LINK_MODE $PKGS | sed 's/-lSDL2main//') \
+    $TEST_SYS_LIBS -lm
 
 echo "built $OUT/test_render_regress"
 # No SDL_VIDEODRIVER override: the static kit only ships the `windows`

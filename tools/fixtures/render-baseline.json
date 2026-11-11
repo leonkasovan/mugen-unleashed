@@ -1,0 +1,19 @@
+{
+  "baseline_commit": "6753f6b898b8c9067f900720c6043418429351eb",
+  "generator": "tools/test_render_baseline.c",
+  "runtime": "SDL2 2.32.4, little-endian Linux x86-64; recorded before SDL2-only edits",
+  "files": {
+    "F-IDX8.raw": {
+      "size": 31,
+      "sha256": "cf145ca2bb1e78063fd90eff96de4684bfd62554389bb563958a40363f9431a1"
+    },
+    "F-PADX.raw": {
+      "size": 53,
+      "sha256": "7f40ea0d4968101d73f967c994d672ff002cd7cc89432a9662553dba3243870e"
+    },
+    "F-RAMP565.raw": {
+      "size": 8192,
+      "sha256": "5ddaa252e4e6ded172e9f5946ecfbab729992aa98f2d90ba00d91357780dc04d"
+    }
+  }
+}

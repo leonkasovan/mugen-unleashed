@@ -1,5 +1,8 @@
 # SDL 1.2 to SDL2 Migration Plan
 
+> Historical record. For the current SDL2-only build and removal of root
+> MSVC/CMake, see [docs/SDL2_ONLY_PLAN.md](docs/SDL2_ONLY_PLAN.md).
+
 ## Goal
 
 Port the desktop M.U.G.E.N reconstruction from SDL 1.2 to SDL2 while preserving the original engine's observable behavior, especially input timing, audio output, rendering, and startup/shutdown behavior. Keep the current SDL 1.2 build usable until the SDL2 path passes the comparison gates below.

@@ -1,9 +1,9 @@
 /*
- * Host test for the SDL2 shim's pure functions: key translation both ways and
- * zoomSurface's palette handling. Built and run by tools/test_sdl2shim.sh, not
+ * Host test for the shared SDL2 key/surface operations: key translation both ways and
+ * Sdl2_ScaleSurface's palette handling. Built and run by tools/test_sdl2helpers.sh, not
  * part of the engine.
  *
- * These are the parts of src/sdl2compat.c that need no window, so they can be
+ * The production sdl2keys.c/sdl2surface.c helpers need no window, so they can be
  * checked without a display. The engine must still be run for anything that
  * touches video or audio.
  */
@@ -12,16 +12,16 @@
 #include <SDL.h>
 
 /* Only the declarations, not the engine's headers: this test links against the
- * shim and SDL2, not the engine. */
+ * helpers and SDL2, not the engine. */
 int Sdl2_EngineKey(int sdl_keycode);
 SDL_Keycode Sdl2_SdlKeyForEngineKey(int engine_key);
 const char *Sdl2_KeyName(int engine_key);
-SDL_Surface *zoomSurface(SDL_Surface *src, double zoomx, double zoomy, int smooth);
+SDL_Surface *Sdl2_ScaleSurface(SDL_Surface *src, double zoomx, double zoomy, int smooth);
 
 /* The shim logs through the engine's logger; this test is not the engine. */
 void Log_Printf(const char *fmt, ...);
 SDL_Keycode Sdl2_SdlKeyForEngineKey(int engine_key);
-SDL_Surface *zoomSurface(SDL_Surface *src, double zoomx, double zoomy, int smooth);
+SDL_Surface *Sdl2_ScaleSurface(SDL_Surface *src, double zoomx, double zoomy, int smooth);
 
 #define ENGINE_KEY_COUNT 0x200   /* sizeof(g_keyState) - 1, events.h */
 
@@ -189,7 +189,7 @@ static void test_translation(void)
 }
 
 /*
- * zoomSurface must keep an indexed surface's palette. TTF_RenderUTF8_Solid
+ * Sdl2_ScaleSurface must keep an indexed surface's palette. TTF_RenderUTF8_Solid
  * returns an 8-bit palettised surface whose entry 1 is the text colour; before
  * the fix the scaled copy got SDL's default grey ramp, so scaled TrueType text
  * changed colour.
@@ -234,13 +234,13 @@ static void test_zoom_palette(void)
     /* Mark entry 0 as the colour key, the way TTF_RenderUTF8_Solid does. */
     SDL_SetColorKey(src, SDL_TRUE, 0);
 
-    dst = zoomSurface(src, 2.0, 2.0, 0);
-    check(dst != NULL, "zoomSurface returned NULL for an indexed surface");
+    dst = Sdl2_ScaleSurface(src, 2.0, 2.0, 0);
+    check(dst != NULL, "Sdl2_ScaleSurface returned NULL for an indexed surface");
     if (dst != NULL) {
         Uint8 *dpix = NULL;
 
-        check(dst->w == 8 && dst->h == 8, "zoomSurface doubled the size");
-        check(dst->format->BitsPerPixel == 8, "zoomSurface kept the 8-bit format");
+        check(dst->w == 8 && dst->h == 8, "Sdl2_ScaleSurface doubled the size");
+        check(dst->format->BitsPerPixel == 8, "Sdl2_ScaleSurface kept the 8-bit format");
         check(dst->format->palette != NULL, "the destination has a palette");
         if (dst->format->palette != NULL) {
             check(dst->format->palette->colors[1].r == colors[1].r,
@@ -294,7 +294,7 @@ int main(void)
     test_zoom_palette();
     SDL_Quit();
     if (failures == 0) {
-        printf("ok: sdl2 shim tests passed\n");
+        printf("ok: SDL2 key/surface helper tests passed\n");
     }
     return failures != 0;
 }

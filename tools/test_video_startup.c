@@ -13,9 +13,9 @@ static int refused = 1, mode_calls, gl_calls, target_calls;
 static SDL_Surface display;
 void Log_Printf(const char *fmt, ...) {}
 void MatchLog_Printf(int level,const char *fmt, ...) {}
-SDL_Surface *SDL_SetVideoMode(int w,int h,int bpp,Uint32 flags)
+SDL_Surface *Sdl2_SetVideoMode(int w,int h,int bpp,Uint32 flags)
 { mode_calls++;return refused ? NULL : &display; }
-int SDL_GL_SetAttribute(SDL_GLattr attr,int value) { return 0; }
+int Sdl2_GL_SetAttribute(SDL_GLattr attr,int value) { return 0; }
 int SDL_putenv(const char *value) { return 0; }
 int SDL_ShowCursor(int value) { return 0; }
 void SDL_FreeSurface(SDL_Surface *s) {}
@@ -43,3 +43,5 @@ int main(void)
     puts("ok: refused GLES mode never enters GL; software retry and successful GLES initialization work");
     return 0;
 }
+
+int Sdl2_SetSwapInterval(int value) { (void)value; return 0; }

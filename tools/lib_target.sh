@@ -22,7 +22,14 @@
 # wrappers need their bin dir first to find cc1/as for the right target, and an
 # inherited assembler from the other kit rejects the other --32/--64.
 
-TARGET="${MUGEN_TEST_TARGET:-win32}"
+if [ -n "${MUGEN_TEST_TARGET:-}" ]; then
+    TARGET="$MUGEN_TEST_TARGET"
+else
+    case "$(uname -s)" in
+        Linux) case "$(uname -m)" in aarch64|arm64) TARGET=linux-arm64;; *) TARGET=linux-x64;; esac ;;
+        *) TARGET=win32 ;;
+    esac
+fi
 
 case "$TARGET" in
 win32)
@@ -52,10 +59,22 @@ win64)
         unset PKG_CONFIG_PATH
     fi
     ;;
+linux-x64|linux-arm64)
+    CC="${CC:-cc}"
+    ARCHFLAGS=""
+    EXPECT_BITS=64
+    PKGCONF="${PKG_CONFIG:-pkg-config}"
+    PLAT_INC=""
+    ;;
 *)
-    echo "unsupported MUGEN_TEST_TARGET $TARGET (win32|win64)" >&2
+    echo "unsupported MUGEN_TEST_TARGET $TARGET (win32|win64|linux-x64|linux-arm64)" >&2
     exit 2
     ;;
+esac
+
+case "$TARGET" in
+win*) SDL_LINK_MODE=--static; TEST_SYS_LIBS="-lopengl32 -lglu32 -lwinmm -lshell32 -luser32 -lgdi32" ;;
+*) SDL_LINK_MODE=""; TEST_SYS_LIBS="-lGL -lGLU -ldl" ;;
 esac
 
 # Prepend the directory of the chosen compiler so its cc1/as win.

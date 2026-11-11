@@ -24,7 +24,20 @@ typedef struct Coord {
 MUGEN_ASSERT_OFFSET(Coord, unit, 0x18);
 MUGEN_ASSERT_SIZE(Coord, 0x28);
 
-/* SDL video mode flags that SDL.h only defines internally. */
-#define VIDEO_SDL_HWACCEL 0x00000100
+/* Engine display request bits inherited from the original config contract.
+ * SDL2 backend explicitly translates them to SDL_WINDOW_*; never pass these
+ * to SDL_CreateWindow or store them in an SDL_Surface's native flags. */
+#define DISPLAY_SOFTWARE  0x00000000u
+#define DISPLAY_HARDWARE  0x00000001u
+#define DISPLAY_OPENGL    0x00000002u
+#define DISPLAY_RESIZABLE 0x00000010u
+#define DISPLAY_BORDERLESS 0x00000020u
+#define DISPLAY_ACCEL     0x00000100u
+#define DISPLAY_DOUBLEBUF 0x40000000u
+#define DISPLAY_FULLSCREEN 0x80000000u
+
+
+void Video_SwapBuffers(void);
+void Video_SetSwapInterval(int interval);
 
 #endif /* MUGEN_VIDEO_H */

@@ -190,12 +190,12 @@ void Screen_Present(void)
         g = g_game;
     }
     g_gfxPresent(g->render_target, 0, (float)x, (float)y, (float)w, (float)h);
-#if defined(MUGEN_SDL2) && !defined(ANDROID_PORT)
+#if !defined(ANDROID_PORT)
     /* M3 frame boundary: UpdateRect only dirtied the display (offscreen
      * primitive updates must not present); flush once here so Normal and
      * PageFlip each produce exactly one upload+present per final frame.
-     * SDL1, Android (Android_PresentFrame in Screen_EndFrame) and Vita keep
-     * their own paths. Skipped frames return above before g_gfxPresent, so
+     * Android presents through Android_PresentFrame in Screen_EndFrame;
+     * native VitaGL swaps through Video_SwapBuffers. Skipped frames return above before g_gfxPresent, so
      * they present nothing. */
     Sdl2_PresentFrame();
 #endif

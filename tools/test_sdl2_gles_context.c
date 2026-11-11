@@ -8,7 +8,7 @@
 #include <stdarg.h>
 static int Test_LoadGles(GLADloadproc load);
 #define gladLoadGLES2Loader Test_LoadGles
-#include "../src/sdl2compat.c"
+#include "../src/sdl2video.c"
 #undef gladLoadGLES2Loader
 
 static int loads;
@@ -26,11 +26,11 @@ int main(void)
     assert(Sdl2_GL_SetAttribute(SDL_GL_RED_SIZE,8) == 0);
     assert(SDL_WasInit(SDL_INIT_VIDEO) & SDL_INIT_VIDEO);
     SDL_QuitSubSystem(SDL_INIT_VIDEO); /* Exercise lazy mode setup separately. */
-    surface=Sdl2_SetVideoMode(640,480,32,SDL_OPENGL);
+    surface=Sdl2_SetVideoMode(640,480,32,DISPLAY_OPENGL);
     if (loads == 0) { Sdl2_VideoQuit();SDL_Quit();puts("SKIP: ES3 context unavailable");return 77; }
     assert(surface == NULL && loads == 1);
     assert(g_sdl2Video.gl == NULL && g_sdl2Video.window != NULL);
-    surface=Sdl2_SetVideoMode(640,480,32,SDL_OPENGL);
+    surface=Sdl2_SetVideoMode(640,480,32,DISPLAY_OPENGL);
     assert(surface != NULL && loads == 2 && g_sdl2Video.gl != NULL);
     assert(GLVersion.major >= 3 && glGetString(GL_VERSION) != NULL);
     assert(strncmp((const char *)glGetString(GL_VERSION), "OpenGL ES ", 10) == 0);

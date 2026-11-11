@@ -14,9 +14,9 @@ typedef float GLfloat;
 typedef struct { int w, h; } SDL_Surface;
 typedef struct DrawParams { float top_offset, bottom_offset, width_ratio; } DrawParams;
 enum { GL_FALSE, GL_TRUE, GL_PROJECTION_MATRIX, GL_MODELVIEW_MATRIX,
-       GL_ARRAY_BUFFER, GL_FLOAT, GL_TRIANGLE_STRIP, SDL_GL_SWAP_CONTROL,
+       GL_ARRAY_BUFFER, GL_FLOAT, GL_TRIANGLE_STRIP, SDL_GL_UNUSED_ATTRIBUTE,
        GL_VIEWPORT, GL_COLOR_BUFFER_BIT = 0x4000, GL_DEPTH_BUFFER_BIT = 0x100 };
-#define SDL_SWSURFACE 0
+#define DISPLAY_SOFTWARE 0
 #define SCE_GXM_MULTISAMPLE_NONE 0
 static int allocations, frees, inits, swaps, draws, enables, disables;
 static int allocation_failure, invalid_viewport, resolution_fallback, last_vsync = -1;
@@ -39,11 +39,7 @@ static SDL_Surface *SDL_CreateRGBSurface(int flags, int w, int h, int d,
     s = malloc(sizeof(*s)); assert(s); s->w = w; s->h = h; ++allocations; return s;
 }
 static void SDL_FreeSurface(SDL_Surface *s) { assert(s); ++frees; free(s); }
-#ifdef MUGEN_SDL2
 static int Sdl2_HasWindow(void) { return sdl_display != NULL; }
-#else
-static SDL_Surface *SDL_GetVideoSurface(void) { return sdl_display; }
-#endif
 static void SDL_SetError(const char *format, ...) { (void)format; }
 static void Log_Printf(const char *format, ...) { (void)format; }
 static GLboolean vglInitWithCustomSizes(int pool, int w, int h, int ram, int cdram,
@@ -121,7 +117,7 @@ int main(int argc, char **argv)
     assert(!VitaGl_CreateDisplay(0, 480, 32));
     assert(!VitaGl_CreateDisplay(640, 480, 16));
     assert(!inits && !VitaGl_OwnsDisplay());
-    VitaGl_SetAttribute(SDL_GL_SWAP_CONTROL, 0);
+    VitaGl_SetSwapInterval(0);
     s = VitaGl_CreateDisplay(640,480,32);
     if (allocation_failure) {
         assert(!s && !inits && !VitaGl_OwnsDisplay());
@@ -139,7 +135,7 @@ int main(int argc, char **argv)
     assert(VitaGl_CreateDisplay(640,480,32) == s && inits == 1);
     assert(!VitaGl_CreateDisplay(480,272,32));
     VitaGl_SwapBuffers(); assert(swaps == 2 && game_presents == 1);
-    VitaGl_SetAttribute(SDL_GL_SWAP_CONTROL, 1); assert(last_vsync == 1);
+    VitaGl_SetSwapInterval(1); assert(last_vsync == 1);
     VitaGl_DrawQuad(&vertex,corners,1,2,1,&dp);
     assert(draws == 1 && enables == 2 && disables == 2);
     assert(uploaded_mvp[0] == 2 && uploaded_mvp[5] == 3);

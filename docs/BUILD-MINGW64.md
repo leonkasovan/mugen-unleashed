@@ -71,7 +71,7 @@ Verified by building both targets with nothing but the unpacked tree for their
 dependencies (a clean 2.11.0 kit has no SDL at all); the result imports only
 Windows system DLLs, so SDL2 is linked statically as before.
 
-`SDL_BACKEND=1` is rejected for this target (SDL 1.2 is win32-only, see the
+`SDL_BACKEND=1` is rejected for this target (SDL1 support is retired for all targets, see the
 Makefile guard).
 
 ## What differs from the win32 build

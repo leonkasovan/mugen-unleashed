@@ -1,16 +1,6 @@
-/*
- * Differential test: SDL_gfx's zoomSurface (the SDL 1.2 library the engine was
- * built against) versus the SDL2 shim's replacement in src/sdl2compat.c.
- *
- * SDL2_PLAN.md asks for this before the replacement counts as equivalent. The
- * two functions come from different SDL generations, so they cannot share a
- * process: this file is compiled twice, once against SDL 1.2 + SDL_gfx and once
- * against SDL2 + the shim, and each run writes one .raw image per case.
- * tools/test_zoomdiff.sh runs both and compares the bytes.
- *
- * The cases cover what the plan lists: indexed with a palette and colour key,
- * 16-bit and 32-bit RGBA, fractional and odd scale factors, enlargement and
- * reduction, and 1-pixel edges.
+/* SDL2 scaler regression fixture generator.
+ * Expected hashes were recorded from 6753f6b before this migration.
+ * See the baseline manifests under tools/fixtures/; the runner never updates expectations.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,9 +14,8 @@
 /*
  * The two SDL generations spell a few things differently. The compatibility
  * macros below let one source file build against both, so the two runs really
- * do differ only in which zoomSurface they link.
+ * do differ only in which Sdl2_ScaleSurface they link.
  */
-#ifdef MUGEN_SDL2
 /* SDL2 reports the colour key through SDL_GetColorKey; SDL 1.2 through a flag
  * bit plus SDL_PixelFormat.colorkey. Reading SDL 1.2's bit in the SDL2 build
  * always said "no key", which is why this is split rather than shared. */
@@ -68,27 +57,8 @@ static Uint8 zd_alpha_mod(SDL_Surface *s)
 #define ZD_BLENDS(s) (zd_blend(s) != 0)
 #define ZD_PAL_ALPHA(c) ((c).a)
 #define ZD_SET_COLORS(s, pal, first, n) SDL_SetPaletteColors((s)->format->palette, (pal), (first), (n))
-#else
-#define ZD_SRCCOLORKEY SDL_SRCCOLORKEY
-/* SDL 1.2 keeps both the flag and the value in the surface itself. */
-static int zd_color_key(SDL_Surface *s, Uint32 *out)
-{
-    if ((s->flags & SDL_SRCCOLORKEY) == 0) {
-        return 0;
-    }
-    *out = s->format->colorkey;
-    return 1;
-}
-#define ZD_COLOR_MOD(s, r, g, b) \
-    do { *(r) = (s)->format->Rloss ? 0 : 0; *(g) = 0; *(b) = 0; } while (0)
-#define ZD_ALPHA_MOD(s) ((s)->format->alpha)
-#define ZD_BLEND(s) (((s)->flags & SDL_SRCALPHA) ? 1 : 0)
-#define ZD_BLENDS(s) (((s)->flags & SDL_SRCALPHA) ? 1 : 0)
-#define ZD_PAL_ALPHA(c) 255
-#define ZD_SET_COLORS(s, pal, first, n) SDL_SetColors((s), (pal), (first), (n))
-#endif
 
-SDL_Surface *zoomSurface(SDL_Surface *src, double zoomx, double zoomy, int smooth);
+SDL_Surface *Sdl2_ScaleSurface(SDL_Surface *src, double zoomx, double zoomy, int smooth);
 
 /* The shim logs through the engine's logger; this test is not the engine. */
 void Log_Printf(const char *fmt, ...)
@@ -240,7 +210,7 @@ static SDL_Surface *make(const Case *c)
      * four entries to ZD_SET_COLORS reads all of them. */
     SDL_Color pal[4];
 
-    s = SDL_CreateRGBSurface(SDL_SWSURFACE, c->w, c->h, c->bpp, c->rmask, c->gmask, c->bmask, c->amask);
+    s = SDL_CreateRGBSurface(0, c->w, c->h, c->bpp, c->rmask, c->gmask, c->bmask, c->amask);
     if (s == NULL) {
         fprintf(stderr, "create failed for %s: %s\n", c->name, SDL_GetError());
         return NULL;
@@ -264,9 +234,7 @@ static SDL_Surface *make(const Case *c)
             pal[1].r = 200; pal[1].g = 150; pal[1].b = 100;
             pal[2].r = 220; pal[2].g = 30;  pal[2].b = 40;
             pal[3].r = 25;  pal[3].g = 180; pal[3].b = 90;
-#ifdef MUGEN_SDL2
             pal[0].a = 255; pal[1].a = 255; pal[2].a = 255; pal[3].a = 255;
-#endif
             ZD_SET_COLORS(s, pal, 0, 4);
             SDL_SetColorKey(s, ZD_SRCCOLORKEY, (Uint32)c->colorkey);
             fill(s, c);
@@ -284,10 +252,8 @@ static SDL_Surface *make(const Case *c)
             pal[1].g = 150;
             pal[1].b = 100;
         }
-#ifdef MUGEN_SDL2
         pal[0].a = 255;
         pal[1].a = 255;
-#endif
         ZD_SET_COLORS(s, pal, 0, 2);
         SDL_SetColorKey(s, ZD_SRCCOLORKEY, (Uint32)c->colorkey);
     }
@@ -421,9 +387,9 @@ int main(int argc, char **argv)
         if (src == NULL) {
             return 2;
         }
-        dst = zoomSurface(src, k_cases[i].zx, k_cases[i].zy, 0);
+        dst = Sdl2_ScaleSurface(src, k_cases[i].zx, k_cases[i].zy, 0);
         if (dst == NULL) {
-            fprintf(stderr, "zoomSurface failed for %s: %s\n", k_cases[i].name, SDL_GetError());
+            fprintf(stderr, "Sdl2_ScaleSurface failed for %s: %s\n", k_cases[i].name, SDL_GetError());
             return 2;
         }
         snprintf(path, sizeof(path), "%s/%s.raw", dir, k_cases[i].name);

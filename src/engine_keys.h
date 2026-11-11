@@ -56,6 +56,7 @@ enum {
     ENGINE_KEY_LALT = 308,
     ENGINE_KEY_SYSREQ = 317,
     ENGINE_KEY_SCROLLOCK = 302,
+    ENGINE_KEY_NAME_LIMIT = 320, /* Preserve the desktop binding-name range. */
     ENGINE_KEY_LIMIT = 323
 };
 #endif

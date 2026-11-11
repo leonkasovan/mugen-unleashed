@@ -2,8 +2,7 @@
 
 `Makefile` builds **`mugen-mingw-win32-sdl2.exe`**: a single self-contained 32-bit Windows
 executable with no DLL dependencies besides the Windows system ones. GNU Make +
-GCC, as an alternative to the CMake/MSVC build (`CMakeLists.txt`,
-`CMakePresets.json`), which links the game's original DLLs instead.
+GCC. This is the supported Windows build; root MSVC/CMake has been removed.
 
 Everything third-party is either compiled from source in `third_party/` or
 linked statically from `C:\x86devkit`.
@@ -76,7 +75,7 @@ The instructions below are for the environment this project was verified in:
 | Compiler | `gcc` (GCC) 16.1.0, target `i686-w64-mingw32` |
 | Make | GNU Make 4.4.1 |
 | Binutils | `i686-w64-mingw32-{ar,windres,strip}` from the same kit |
-| `pkg-config` | finds `sdl2.pc`, `SDL2_mixer.pc`, `SDL2_ttf.pc`, `zlib.pc`, `libpng16.pc` (the default backend). For `make SDL_BACKEND=1`: `sdl.pc`, `SDL_gfx.pc`, `SDL_mixer.pc`, `SDL_ttf.pc` |
+| `pkg-config` | finds `sdl2.pc`, `SDL2_mixer.pc`, `SDL2_ttf.pc`, `zlib.pc`, `libpng16.pc` |
 | Shell | MSYS2 bash (or `sh` from the same kit) |
 | Python | any working `python3` / `python` / `py -3` — only for the optional icon |
 
@@ -92,7 +91,6 @@ Targets and variables:
 | Command | Effect |
 |---|---|
 | `make` | build `$(TARGET)`; the SDL2 backend by default, so `build/mingw-sdl2/mugen-mingw-win32-sdl2.exe` |
-| `make SDL_BACKEND=1` | the SDL 1.2 backend instead: `build/mingw-sdl1/mugen-mingw-win32-sdl1.exe` |
 | `make -j8` | parallel build, from scratch in ~30 s on a recent machine |
 | `make V=1` | print the full command lines |
 | `make DEBUG=1` | `-O0 -g3` build, in its own directory with `BUILD=build/mingw-debug` |
@@ -131,8 +129,6 @@ stamp, so use a new build directory):
 ```sh
 make -j8 BUILD=build/warnings-sdl2 SDL_BACKEND=2 \
   ENGINE_WARN='-Wall -Werror -Wno-unused-parameter -Wno-unused-result -Wno-stringop-truncation'
-make -j8 BUILD=build/warnings-sdl1 SDL_BACKEND=1 \
-  ENGINE_WARN='-Wall -Werror -Wno-unused-parameter -Wno-unused-result -Wno-stringop-truncation'
 bash tools/test_build_warnings.sh
 bash tools/test_cns_abi.sh
 ```
@@ -147,7 +143,7 @@ Validation for this change: all 88 source units compiled with the flags above
 for i686 MinGW GCC 13.2 (SDL1 and SDL2) and Linux x86-64 GCC 13.3 (SDL2).
 The Linux engine linked, and Linux runtime regressions passed with ASan/UBSan.
 These are cross-compilation results for Windows, not execution of w64devkit's
-Windows-hosted GCC 16.1 or of the Windows game. MSVC, Android/Vita builds and
+Windows-hosted GCC 16.1 or of the Windows game. Android/Vita builds and
 gameplay log comparisons remain unverified for this change. The Windows-only
 `test_zoomdiff.sh` could not run on this Linux host (`-mconsole` and the Windows
 SDL/SDL_gfx static kit are required); the scaler change only adds its missing
@@ -188,15 +184,13 @@ from the game.
 
 ### Linked statically
 
-The SDL2 backend is the default. `make SDL_BACKEND=1` swaps the four SDL rows
-for their SDL 1.2 counterparts and drops the rest; nothing else changes.
+SDL2 is the only backend. SDL1 development headers, libraries and import definitions are removed.
 
 | Library | Version | How it gets in |
 |---|---|---|
 | **SDL2** | — | `libSDL2.a` from the kit, via `sdl2.pc` |
 | **SDL2_mixer** | 2.8.2 | `libSDL2_mixer.a` via `SDL2_mixer.pc`, plus its own static deps |
 | **SDL2_ttf** | — | `libSDL2_ttf.a` via `SDL2_ttf.pc` + freetype, bz2 |
-| *(SDL 1.2 only)* | | `libSDL.a` `libSDL_gfx.a` (`zoomSurface`) `libSDL_mixer.a` `libSDL_ttf.a` |
 | **zlib** | — | `libz.a`, via `zlib.pc` |
 | **pthreads-win32** | — | `libpthread.a` (the kit's static build) |
 | **mpg123** | — | `libmpg123.a`, via `SDL2_mixer.pc` / `SDL_mixer.pc` |
@@ -249,13 +243,11 @@ with the channel parameter restored. `third_party/libresample/VENDORED.md`
 documents every change; `tools/check_libresample.c` verifies that one channel is
 bit-identical to upstream and that N channels equal N independent mono runs.
 
-### Mix_QuerySpecEx
+### Engine mixer query
 
-`src/sound.c` calls `Mix_QuerySpecEx`, an Elecbyte addition to SDL_mixer that
-stock SDL_mixer 1.2 does not have (it has `Mix_QuerySpec`, without the chunk
-size). The static build therefore compiles `src/sdlmixercompat.c`, which wraps
-`Mix_QuerySpec` and reports the chunk size the engine requested. The CMake/MSVC
-build does not compile that file — it links the game's real `SDL_mixer.dll`.
+`src/sdl2audio.c` implements `Sound_QueryMixerSpec` using SDL2_mixer's
+`Mix_QuerySpec` and the engine's requested chunk size. It is shared by all
+platforms and does not impersonate an SDL extension export.
 
 ### What the executable still imports
 
@@ -279,7 +271,7 @@ symbols, so it is harmless.
 ### Windows system libraries
 
 `opengl32`, `glu32`, `winmm` (timers, `timeGetTime`), `shell32`, `user32`,
-`gdi32` — the same list as `target_link_libraries()` in `CMakeLists.txt`.
+`gdi32`.
 
 ### Tools used by the build
 
@@ -319,34 +311,29 @@ make MUGEN_GAME_DIR=C:/mugen-1.1b1                   # the original mugen.exe's 
 preprocessor, and passing the define to the C compiler alone left icon 101 out
 of the executable entirely.
 
-The assembly manifest is embedded as resource `1 24` (RT_MANIFEST); it still
-names `Elecbyte.MUGEN.libs`, which is harmless now that nothing loads from it.
+The standalone `mugen-static.manifest` is embedded as resource `1 24`
+(RT_MANIFEST). The retired game-DLL/MSVC manifest is removed.
 
 ## What the build does, in order
 
 1. Compile the engine modules in `src/` into `build/mingw-sdl2/obj/src/`
-   (78 original modules plus `src/sdlmixercompat.c`).
+   (78 original modules plus `src/sdl2audio.c`).
 2. Compile Lua, libpng, libresample, glad, minizip into `build/mingw-sdl2/obj/` and
    archive the three libraries into `build/mingw-sdl2/lib/`.
 3. Generate `build/mingw-sdl2/obj/res/mugen_all.rc` — a copy of `src/mugen.rc` with
    the assembly manifest appended as resource `1 24` — and compile it with
-   `windres`. `src/mugen.rc` itself is left untouched, so the CMake build keeps
-   adding `src/mugen.manifest` to the linker directly.
+   `windres`. The source resource and manifest files remain unchanged.
 4. Link `build/mingw-sdl2/mugen-mingw-win32-sdl2.exe` with `-mwindows` (GUI subsystem,
-   `WinMain` from `src/sdlmain.c`) and `-Wl,--gc-sections` so unreferenced
+   `WinMain` from `src/platform_main_win32.c`) and `-Wl,--gc-sections` so unreferenced
    archive members are dropped.
 5. `make install` strips a copy and puts it in `install/`.
 
-Nothing in `third_party/` is modified by the build. `src/sdlmixercompat.c` is
-new and static-build only; it is not an original module and is not in the CMake
-build.
+Nothing in `third_party/` is modified by the build.
 
 ## Portability notes
 
-* **SDL headers now come from the kit**, not `third_party/sdk/include/SDL`.
-  The kit's are the same 1.2.15 API and match the archives we link. The
-  `third_party/sdk/include/SDL` copy stays for the MSVC build, which still uses
-  the game's DLLs.
+* **SDL2 headers come from the selected dependency tree.** No bundled SDL1
+  SDK is available.
 * **Include order is load-bearing.** `third_party/libresample/include` must
   precede `third_party/sdk/include`, because the latter's `libresample.h`
   declares `dllimport` unconditionally. Likewise `third_party/sdk/include`

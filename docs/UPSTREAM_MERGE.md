@@ -1,5 +1,8 @@
 # zxmarcos main integration
 
+> Historical record. For the current SDL2-only build and removal of root
+> MSVC/CMake, see [docs/SDL2_ONLY_PLAN.md](SDL2_ONLY_PLAN.md).
+
 ## Revisions and history
 
 This merge integrates `zxmarcos/mugen-unleashed` `main` at

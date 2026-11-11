@@ -1,9 +1,9 @@
 /*
  * Runtime tests for the SDL2 build's audio paths that a -nosound run cannot
- * reach: the custom music hook (bgmthread.c) and the Mix_QuerySpecEx shim.
+ * reach: the custom music hook (bgmthread.c) and the Sound_QueryMixerSpec shim.
  *
  * Built and run by tools/test_sdl2audio.sh. Links the engine's own
- * bgmthread.c and sdlmixercompat.c, so these are the real functions.
+ * bgmthread.c and sdl2audio.c, so these are the real functions.
  *
  * The engine's own mixer-and-device path (sound.c) needs an audio device; this
  * test uses SDL_mixer's dummy-free path but tolerates a machine with no output
@@ -12,7 +12,6 @@
 #include "mugen.h"
 #include <SDL_mixer.h>
 
-extern DECLSPEC int SDLCALL Mix_QuerySpecEx(int *frequency, Uint16 *format, int *channels, int *chunksize);
 
 #include <stdio.h>
 #include <string.h>
@@ -301,7 +300,7 @@ static void test_callback_fills_every_byte(void)
 /* -------------------------------------------------------------- QuerySpecEx */
 
 /*
- * Mix_QuerySpecEx is the local stand-in for Elecbyte's extension. Its contract:
+ * Sound_QueryMixerSpec is the local stand-in for Elecbyte's extension. Its contract:
  * report what the device actually opened with, and pass through 0 when the
  * mixer is not open.
  */
@@ -327,8 +326,8 @@ static void test_query_spec_ex(void)
     int i;
 
     /* With no mixer open, Mix_QuerySpec returns 0 and so must the shim. */
-    rc = Mix_QuerySpecEx(&freq, &format, &channels, &chunk);
-    check(rc == 0, "Mix_QuerySpecEx reports 0 when no device is open");
+    rc = Sound_QueryMixerSpec(&freq, &format, &channels, &chunk);
+    check(rc == 0, "Sound_QueryMixerSpec reports 0 when no device is open");
 
     if (SDL_Init(SDL_INIT_AUDIO) != 0) {
         skip("no audio subsystem; Mix_OpenAudio not exercised", SDL_GetError());
@@ -341,20 +340,20 @@ static void test_query_spec_ex(void)
     }
     freq = channels = chunk = 0;
     format = 0;
-    rc = Mix_QuerySpecEx(&freq, &format, &channels, &chunk);
-    check(rc > 0, "Mix_QuerySpecEx reports success once the mixer is open");
+    rc = Sound_QueryMixerSpec(&freq, &format, &channels, &chunk);
+    check(rc > 0, "Sound_QueryMixerSpec reports success once the mixer is open");
     check(freq > 0, "the frequency was reported");
     check(channels == 1 || channels == 2, "a sane channel count was reported");
     check(format == AUDIO_U8 || format == AUDIO_S16LSB || format == AUDIO_S16MSB ||
               format == AUDIO_S32LSB || format == AUDIO_F32LSB,
           "the format is one the engine understands");
     /*
-     * Mix_QuerySpecEx echoes back the size the engine REQUESTED; it cannot
+     * Sound_QueryMixerSpec echoes back the size the engine REQUESTED; it cannot
      * report what the backend actually does, because the shim has no way to ask.
      * That is why the value is labelled "requested" and the real callback
      * length is measured separately below.
      */
-    check(chunk == 1024, "Mix_QuerySpecEx reports the requested chunk size (requested = 1024 frames)");
+    check(chunk == 1024, "Sound_QueryMixerSpec reports the requested chunk size (requested = 1024 frames)");
     printf("  device: %d Hz, %d ch, format 0x%04X, requested chunk %d frames\n", freq, channels, format,
            chunk);
 
@@ -468,7 +467,7 @@ int main(void)
     check(pthread_mutex_destroy((pthread_mutex_t *)Bgm_MutexPtr()) == 0, "BGM mutex destroy");
     printf("bgm hook callback:\n");
     test_callback_fills_every_byte();
-    printf("Mix_QuerySpecEx:\n");
+    printf("Sound_QueryMixerSpec:\n");
     test_query_spec_ex();
     printf("RWops size:\n");
     test_rwops_size();

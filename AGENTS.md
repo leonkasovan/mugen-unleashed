@@ -51,23 +51,23 @@ src/            83 .c + 52 .h — the engine, one file per original module
   mugen.h       common header; type headers describe the original's structs
   symbols.h     every prototype and global, with the original's addresses
   globals.c     the globals, with their initial values from the original .data
-  sdlmain.c     SDL 1.2's SDLmain (WinMain), rebuilt
-  sdl2compat.c  engine surface entry points over SDL2 (desktop + Vita SDL2)
+  platform_main_win32.c  SDL2 Windows command-line/log entry
+  sdl2video.c   explicit engine display operations over SDL2
   sdl2surface.c shared SDL2 scaler, proven against SDL_gfx by test_zoomdiff
   mugen.rc      error dialog (200), version info, icon 101 from res/icons
 third_party/    Lua 5.1.4, libpng 1.2.38, glad 2.1, minizip 0.15, sdk,
                 libresample, glew-1.5.4 (reference only, no longer built), vitagl,
                 cgltf-1.14 and stb (upstream desktop 3D model support)
-cmake/          build helpers (MugenSdk.cmake, ThirdParty.cmake)
+port/*/cmake/   platform-only CMake helpers; no root MSVC build
 setup.bat       installs the two Windows devkits + dependency trees, then builds
 res/icons/      the window/bubble icon as one .ico per size (see below)
 res/shaders/    project-owned shader dialects: gles/ (staged as data/gles by the
                 Android build) and vita/ (substituted into the VPK); the desktop
                 shaders are the game installation's own data/*.{vert,frag}
-tools/          msvc_env.bat, extract_icon.py, iconpack.py, compare_logs.py,
+tools/          extract_icon.py, iconpack.py, compare_logs.py,
                 make_win_sysroot.sh, test_*.sh
 port/           android/, psvita/ and arm64/ — the platform ports
-docs/           ANALYSIS.md, BUILD-MSVC.md, BUILD-MINGW.md, BUILD-LINUX.md, LUA.md
+docs/           ANALYSIS.md, SDL2_ONLY_PLAN.md, BUILD-MINGW.md, BUILD-LINUX.md, LUA.md
 install/        a real M.U.G.E.N 1.1b1 installation (untracked, for testing;
                 tools/fetch_game_data.sh fetches it when absent)
 build/          all build output (git-ignored) — layout below
@@ -79,14 +79,12 @@ Each entry point owns its own subtree and never writes into another's.
 
 | Path | Written by | Contents |
 |---|---|---|
-| `build/mingw/` | root `Makefile` (Windows, default) | `obj/`, `lib/`, `mugen-mingw-win32-sdl2.exe`, `-stripped.exe` (SDL2 backend) |
-| `build/mingw-sdl1/` | `make SDL_BACKEND=1` (Windows) | the same shape, `mugen-mingw-win32-sdl1.exe` |
+| `build/mingw-sdl2/` | root `Makefile` (Windows, default) | `obj/`, `lib/`, `mugen-mingw-win32-sdl2.exe`, `-stripped.exe` (SDL2 backend) |
 
 | `build/mingw64-sdl2/` | plain `make` with the 64-bit kit on `PATH`, or `make MUGEN_TARGET=win64` (Windows, experimental) | the same shape, `mugen-mingw-win64-sdl2.exe` |
-| `build/<linux-target>/` | root `Makefile` (Linux) | same shape, `mugen-linux-<arch>` |
+| `build/<linux-target>-sdl2/` | root `Makefile` (Linux) | same shape, `mugen-linux-<arch>` |
 | `build/<linux-target>-<cross-prefix>-<sdl>/` | root `Makefile` with `CROSS_COMPILE=`/`XSYSROOT=` (via `port/arm64/build.sh`) | same shape, `mugen-linux-<arch>-<prefix>`; the dependency tree it links against is `build/sysroots/arm64-sysroot/` |
 | `build/mingw-debug/` | `make DEBUG=1 BUILD=build/mingw-debug` | an explicit `BUILD=` override |
-| `build/x86-release/`, `build/x86-debug/` | root `CMakeLists.txt` via `CMakePresets.json` | MSVC `mugen-msvc-win32-sdl1.exe` + `.pdb` |
 | `build/psvita*/` | `port/psvita/build.sh` (default `build/psvita/`) or `port/psvita/CMakeLists.txt` by hand (`BUILD=<dir>` picks another) | `mugen`, `mugen-psvita.self`, `mugen-psvita.vpk`, `vita-mugen.cfg` |
 | `build/android/` | `port/android/build.sh` | `toolchains/` (JDK/SDK/NDK/CMake, `env.sh`), `sdl2/<abi>/`, `android-deps/<abi>/`, `android-deps-src/`, `sources/`, `build-sdl2/`, `gradle-user-home/`, `asset-list.txt`, `mugen-unleashed-<abi>.apk` |
 | `build/baseline/` | hand-made, kept on purpose | SDL1 reference binary and log used by the log-comparison workflow |
@@ -149,7 +147,7 @@ claiming a 64-bit target works, grep for `(const char *)… + 0x` /
 run the same scenario under both builds and compare the logs with
 `tools/compare_logs.py`.
 
-The CMake/MSVC build still hard-rejects anything but 32-bit MSVC. The Makefile
+The root MSVC/CMake build is retired. The SDL2-only Makefile
 builds Linux x64/arm64 and an experimental `win64` target (a 64-bit static kit).
 On Windows the target follows the compiler's own triple, so the kit on `PATH`
 chooses it: `x86devkit`'s `i686-w64-mingw32` gcc builds win32, `w64devkit`'s
@@ -157,24 +155,10 @@ chooses it: `x86devkit`'s `i686-w64-mingw32` gcc builds win32, `w64devkit`'s
 still overrides. See `PLANS.md` for what is still outstanding on the 64-bit side,
 and do not describe either as verified until the offsets above are dealt with.
 
-Output names differ by build: `mugen-msvc-win32-sdl1.exe` (MSVC),
-`mugen-mingw-win32-sdl2.exe` (MinGW/SDL2), `mugen-mingw-win32-sdl1.exe` (MinGW/SDL 1.2),
-`mugen-linux-<arch>` (Linux).
-
-### MSVC 2022 (primary)
-
-```bat
-tools\msvc_env.bat cmake --preset x86-release
-tools\msvc_env.bat cmake --build --preset x86-release
-```
-
-→ `build\x86-release\mugen-msvc-win32-sdl1.exe` + `.pdb`
-
-Debug variant: same with `x86-debug`. `tools\msvc_env.bat` finds VS 2022 through
-`vswhere`, so any edition or install path works. Never call `cmake` or `cl`
-directly without it — the environment will be missing.
-
-Details: `docs/BUILD-MSVC.md`.
+Output names: `mugen-mingw-win32-sdl2.exe`,
+`mugen-mingw-win64-sdl2.exe`, `mugen-linux-<arch>`.
+SDL2 is the only backend; root MSVC/CMake is removed. Android and Vita retain
+platform CMake. See `docs/SDL2_ONLY_PLAN.md` for the implementation record.
 
 ### Linux (same Makefile, auto-detected)
 
@@ -259,8 +243,7 @@ game-controller semantics (`MUGEN_GAMEPAD_POLICY`, `src/mugen.h`), configured by
 1..11 layout and is written into the file. The raw `[P<n> Joystick]` indices are
 the original model and only line up with a pad whose axis/hat/button topology
 matches the PC pad they were written for — on a handheld the d-pad arrives as
-buttons, so those indices land on the wrong controls. The SDL 1.2 backend keeps
-the original raw lifecycle, so the reference build is unchanged.
+buttons, so those indices land on the wrong controls. The original numeric binding IDs remain an engine configuration contract.
 
 SDL's game-controller API reports only the controls its *mapping* names, and
 some handheld entries in its database stop at the face buttons: the GO-Super
@@ -300,16 +283,11 @@ make install                            # strips and copies into install/
 This build links **everything statically** (SDL2, SDL2_mixer, SDL2_ttf, zlib,
 pthread from the kit; Lua, libpng, glad, minizip, libresample from source). The
 result needs no `Elecbyte.MUGEN.libs` — only Windows system DLLs and
-`msvcrt.dll`. The CMake/MSVC build still links the game's DLLs; the two are not
-the same link step.
+`msvcrt.dll`. There is no game-DLL or MSVC build path.
 
-`SDL_BACKEND` selects the SDL stack. **2 is the default** and is the normal
-target; `SDL_BACKEND=1` builds the older SDL 1.2 backend into
-`build/mingw-sdl1/mugen-mingw-win32-sdl1.exe`, which exists for the differential
-comparisons against the original binary. Switching the variable in an existing
-build directory is safe: `$(OBJ_DIR)/.config` records the backend and target,
-every object depends on it, and it is only rewritten when the configuration
-changes, so a switch recompiles the tree and a repeat build recompiles nothing.
+SDL2 is mandatory. `SDL_BACKEND=1` fails explicitly. The configuration stamp
+tracks target, GLES/model options and include roots, so changing configuration
+rebuilds objects and a stable configuration recompiles nothing.
 
 Because SDL2_mixer carries mpg123 and vorbisfile, WAV, MP3 and Ogg Vorbis play
 with no external decoder DLL (`MUGEN_SDLMIX_NATIVE_CODECS`, `src/mugen.h`). A
@@ -366,8 +344,8 @@ port/psvita/build.sh --check-tools
 
 VitaSDK is a release asset (`vitasdk.zip`, SHA-256 pinned in the script) and is
 unpacked to `C:/vitasdk` — one of the two sanctioned exceptions to the
-temp-file rule above. It is a complete SDK: `sdl`, `sdl_gfx`, `sdl_mixer`,
-`sdl_ttf`, `zlib`, `libpng`, `vitaGL` and vitaGL's helpers are already in it, so
+temp-file rule above. It is a complete SDK: `sdl2`, `sdl2_mixer`,
+`sdl2_ttf`, `zlib`, `libpng`, `vitaGL` and vitaGL's helpers are already in it, so
 a clean machine needs no `vdpm` run; the script checks the artefacts and only
 calls `vdpm` for something genuinely missing. Output is
 `build/psvita/mugen-psvita.{self,vpk}`, and the VPK packs `install/` as `/data`
@@ -474,7 +452,7 @@ is the tool's own state, not ours.
 alpha); `5`, `6`, `7` and `9` are the same drawing as 8-bit palette images.
 All three platforms use it, and nothing else: the artwork is edited in one place.
 
-- The Windows Makefile merges the 32-bit set into `build/mingw/icon/mugen.ico`
+- The Windows Makefile merges the 32-bit set into `build/mingw-sdl2/icon/mugen.ico`
   with `tools/iconpack.py` and `windres` embeds it as icon group 101. Windows
   picks the size it needs per context, so the file must carry all of them; a
   single-size icon is scaled and looks soft. Without `python3` the first icon is
@@ -521,20 +499,11 @@ There are two kinds of check, and they answer different questions.
 
 **1. Differential tests — does the port match the original?**
 
-`tools/test_zoomdiff.sh` builds the same 21 scaling cases against the SDL 1.2
-SDL_gfx (`SDL_BACKEND=1`) and the SDL2 replacement, and requires every result to
-be byte-identical. It is the guard against silent divergence in software
-rendering and it has caught real regressions, so run it after touching
-`src/sdl2surface.c` or anything that feeds it:
-
-```sh
-bash tools/test_zoomdiff.sh
-```
-
-When a case legitimately cannot match — SDL2 discarded a piece of state SDL 1.2
-had, such as the real palette length — narrow what the dump records *and say why
-in the comment*. Do not weaken the comparison wholesale; the pixel data must stay
-fully compared.
+`tools/test_zoomdiff.sh` checks 21 SDL2 scaling cases against committed
+synthetic outputs recorded at `6753f6b`. `test_render_baseline.sh` checks three
+render fixtures. No SDL1 development headers/libraries are needed. Keep the
+fixture hashes fixed; never regenerate expected values from a failing candidate.
+Historical SDL1 differential evidence remains in Git and SDL2_PLAN.md.
 
 The Android port has its own suite under `port/android/tests/` (native SDL2,
 present host, manifest hashes, plus `test_build.py`); the Vita port has
@@ -553,11 +522,6 @@ make install
 cd install
 ./mugen-mingw-win32-sdl2.exe -nosound          # startup/mode select
 ```
-
-For the MSVC build, copy `build/x86-release/mugen-msvc-win32-sdl1.exe` into `install/`
-by hand; it needs the `Elecbyte.MUGEN.libs` folder, the static one does not. An
-`SDL_BACKEND=1` static build installs as `mugen-mingw-win32-sdl1.exe` and does not
-overwrite the default one.
 
 Copy the original `mugen.exe` log out of the way first, then compare:
 
@@ -613,17 +577,17 @@ That directory is the pristine game tree; leave it as you found it.
 5. Prefer the existing helpers: `Ftol`/`Trunc64` for float→int (`src/ftol.h`),
    `Mem_Calloc`/`Mem_Malloc` for allocation, `Log_Printf`/`MatchLog_Printf` for
    output.
-6. Build with all three toolchains if you touched anything shared; MSVC is the
-   reference.
+6. Validate supported MinGW/Linux builds and Android/Vita platform paths for
+   shared changes. Report unavailable cross-compilers/device tests honestly.
 7. If you change behaviour on purpose, add a comment saying so. If you fix an
    original bug, mark it as a fix — silently diverging is the one thing this
    project does not accept.
 
 ### Style
 
-Match the surrounding code. It is C11 with MSVC as the baseline: no GCC-only
+Match the surrounding code. It is C11 with the original layout/comments preserved: avoid compiler-specific
 extensions, declarations at the top of a block, `__cdecl` on prototypes, explicit
-comparisons against `NULL`/`0`. Warnings are `/W3` (MSVC) and `-Wall` (GCC) with
+comparisons against `NULL`/`0`. Warnings are `-Wall` with
 `-Wno-unused-parameter`, because reconstructed functions keep every original
 parameter.
 
@@ -644,7 +608,7 @@ the tree is worse than nothing.
 
 `docs/UPSTREAM_MERGE.md` records the explicit content base for the unrelated
 zxmarcos history, conflict decisions and validation. `MUGEN_MODEL3D=1` enables
-its desktop-GL model/stage/background code in Make and root MSVC CMake builds.
+its desktop-GL model/stage/background code in GNU Make desktop builds.
 GLES/Android and Vita builds use `model_stub.c` and retain their 2D renderers;
 do not enable desktop GLSL or cgltf/stb there without a separate port.
 `tools/test_model.sh` loads a generated glTF/PNG fixture with the real renderer,

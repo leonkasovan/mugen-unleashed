@@ -395,7 +395,6 @@ static int SDLCALL StreamRW_Write(SDL_RWops *rw, const void *ptr, int size, int 
     return -1;
 }
 
-#ifdef MUGEN_SDL2_API
 /*
  * SDL2-signature adapters (see the assignment site). Each forwards to the
  * int-based callback the engine already implements.
@@ -436,7 +435,6 @@ static Sint64 SDLCALL StreamRW_Size64(SDL_RWops *rw)
     }
     return (Sint64)size;
 }
-#endif
 
 /* 0x004673F0 */
 static int SDLCALL StreamRW_Close(SDL_RWops *rw)
@@ -477,7 +475,6 @@ SDL_RWops *Stream_ToRWops(Stream *s)
         SDL_FreeRW(rw);
         return NULL;
     }
-#ifdef MUGEN_SDL2_API
     /*
      * SDL2's RWops struct has the same four-or-five-callback shape with wider
      * types. `size` is new and must be set: SDL2_mixer queries it when a music
@@ -490,13 +487,6 @@ SDL_RWops *Stream_ToRWops(Stream *s)
     rw->seek = StreamRW_Seek64;
     rw->write = StreamRW_Write64;
     rw->read = StreamRW_Read64;
-#else
-    rw->type = STREAM_RW_TYPE;
-    rw->close = StreamRW_Close;
-    rw->seek = StreamRW_Seek;
-    rw->write = StreamRW_Write;
-    rw->read = StreamRW_Read;
-#endif
     ctx->stream = s;
     ctx->close_stream = 0;
     if (s->type == STREAM_MEMORY) {

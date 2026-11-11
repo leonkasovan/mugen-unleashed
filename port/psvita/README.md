@@ -570,11 +570,11 @@ diffable against the original (`TimeStamps = 1` turns it on there too). Because
 the packed `data/mugen.cfg` is the Vita template, this is the file the build
 ships; the value read at start-up applies from the moment it is loaded.
 
-### SDL_mixer without `Mix_QuerySpecEx`
+### SDL_mixer without `Sound_QueryMixerSpec`
 
-The original linked Elecbyte's own SDL_mixer, which exported `Mix_QuerySpecEx`
+The original linked Elecbyte's own SDL_mixer, which exported `Sound_QueryMixerSpec`
 (reporting the chunk size). VitaSDK's stock SDL_mixer 1.2.12 does not.
-`src/sdlmixercompat.c` supplies it, exactly as the static Windows build does.
+`src/sdl2audio.c` supplies it, exactly as the static Windows build does.
 
 ### BGM plugins: none load
 

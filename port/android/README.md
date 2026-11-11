@@ -2,7 +2,7 @@
 
 Android now uses **native SDL2 APIs**, **SDL2_ttf** and **SDL2_mixer**.
 There is no Android SDL1 API shim or SDL1 library dependency. The desktop
-`src/sdl2compat.c/.h` remains for desktop builds and is excluded from Android.
+`src/sdl2video.c/.h` remains for desktop builds and is excluded from Android.
 `android_main.h`, `android_gfx.c` and `android_glstub.c` have been removed.
 
 Current target: **arm64-v8a**, minimum API 21, compile SDK 34, target SDK 29.

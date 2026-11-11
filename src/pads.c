@@ -11,17 +11,14 @@
 /* <SDL.h> comes from mugen.h, which pulls it in after glad.h. */
 
 #include "mugen.h"
-#if defined(MUGEN_VITA) && defined(MUGEN_SDL2_API)
+#if defined(MUGEN_VITA)
 #include "vita_input.h"
 #endif
 
-#ifdef MUGEN_GAMEPAD_POLICY
 /* Binding policy for one player plus publication to the input map (config.c),
  * applied when a pad attaches or detaches. */
 void Config_RepublishJoystick(int player);
-#endif
 
-#ifdef MUGEN_SDL2_API
 /* Port fix: own only the subsystem references acquired here. Options reloads
  * must not increment SDL's refcounts indefinitely or shut down another owner. */
 static Uint32 g_padOwnedSubsystems;
@@ -122,17 +119,14 @@ static int Pads_InitSdl2(void)
     SDL_PumpEvents();
     return 1;
 }
-#endif
 
 /* Axis values beyond this press the axis' button. */
 #define PAD_AXIS_THRESHOLD 16000
 
-#ifdef MUGEN_GAMEPAD_POLICY
 /* Defined below (the game-controller path); Pads_Init and Input_DeinitPads
  * call them, so the declarations come first. */
 static int Pads_OpenControllers(void);
 static void Pads_CloseControllers(void);
-#endif
 
 /*
  * 0x004745F0: opens the joysticks (at most PAD_MAX). Returns the button
@@ -145,23 +139,19 @@ int Pads_Init(void)
     int found = 0;
     int i;
 
-#ifdef MUGEN_SDL2_API
     if (!Pads_InitSdl2()) {
         g_padCount = 0;
         g_padsActive = 0;
         return 0;
     }
-#endif
 
     g_padCount = SDL_NumJoysticks();
-#ifdef MUGEN_SDL2_API
     if (g_padCount < 0) {
         Log_Printf("pads: joystick enumeration failed: %s\n", SDL_GetError());
         g_padCount = 0;
         g_padsActive = 0;
         return 0;
     }
-#endif
     /*
      * Diagnostic (port addition): how many devices SDL reports, and what each
      * one looks like. Without this the only evidence was "Initializing pads...
@@ -171,7 +161,6 @@ int Pads_Init(void)
      */
     Log_Printf("pads: SDL_NumJoysticks() = %d\n", g_padCount);
     if (g_padCount == 0) {
-#if defined(ANDROID_PORT) || defined(MUGEN_SDL2_API)
         /*
          * Fix (port change): keep discovery alive when nothing is attached.
          * Returning here left joystick events disabled (Input_DeinitPads sets
@@ -185,9 +174,6 @@ int Pads_Init(void)
         g_padsActive = 0;
         g_padCount = 0;
         return 0;
-#else
-        return 0;
-#endif
     }
     if (g_padCount > PAD_MAX) {
         g_padCount = PAD_MAX;
@@ -200,18 +186,12 @@ int Pads_Init(void)
         int count;
 
         if (joy == NULL) {
-#ifdef MUGEN_SDL2_API
             Log_Printf("pads: SDL_JoystickOpen(%d) failed: %s\n", i, SDL_GetError());
-#endif
             continue;
         }
         /* Port fix: SDL1 names a device index; SDL2 names an open handle. */
-#ifdef MUGEN_SDL2_API
         name = SDL_JoystickName(joy);
         Pads_LogDevice(joy, i);
-#else
-        name = SDL_JoystickName(i);
-#endif
         pad->joystick = joy;
         pad->hat_base = SDL_JoystickNumAxes(joy) * 2;
         pad->button_base = pad->hat_base + SDL_JoystickNumHats(joy) * 4;
@@ -245,12 +225,10 @@ int Pads_Init(void)
     }
     /* One byte more than the INPUT_PAD_COUNT buttons. */
     memset(g_padButtonState, 0, INPUT_PAD_COUNT + 1);
-#ifdef MUGEN_GAMEPAD_POLICY
     if (Pads_OpenControllers() > 0) {
         /* Controller events, not raw joystick events, drive these pads. */
         SDL_GameControllerEventState(SDL_ENABLE);
     }
-#endif
     g_padsActive = found != 0;
     if (g_padsActive) {
         SDL_JoystickEventState(SDL_ENABLE);
@@ -297,10 +275,8 @@ int Pads_Init(void)
 
 /* Sidecars, not fields on Pad: the reconstructed struct has a fixed layout. */
 static unsigned char g_padDirHeld[PAD_DIR_SOURCES][PAD_MAX];
-#ifdef MUGEN_GAMEPAD_POLICY
 /* System controls never enter g_padButtonState or the gameplay input map. */
 static unsigned char g_padMenuHeld[PAD_MAX];
-#endif
 
 static void Pads_ComposeDirections(int slot)
 {
@@ -323,7 +299,6 @@ static void Pads_ComposeDirections(int slot)
 }
 
 /* Records what one source holds for one direction and re-derives the union. */
-#ifdef MUGEN_GAMEPAD_POLICY
 static void Pads_SetDirectionSource(int slot, int source, int code, int held)
 {
     int bit;
@@ -342,7 +317,6 @@ static void Pads_SetDirectionSource(int slot, int source, int code, int held)
     }
     Pads_ComposeDirections(slot);
 }
-#endif /* only the controller path feeds per-source directions */
 
 /*
  * Forgets every slot's direction sources.
@@ -363,9 +337,7 @@ void Pads_ResetDirectionSources(void)
     for (slot = 0; slot < PAD_MAX; slot++) {
         g_padDirHeld[0][slot] = 0;
         g_padDirHeld[1][slot] = 0;
-#ifdef MUGEN_GAMEPAD_POLICY
         g_padMenuHeld[slot] = 0;
-#endif
     }
 }
 
@@ -380,13 +352,10 @@ void Pads_ClearDirectionSources(int slot)
 #endif
     g_padDirHeld[0][slot] = 0;
     g_padDirHeld[1][slot] = 0;
-#ifdef MUGEN_GAMEPAD_POLICY
     g_padMenuHeld[slot] = 0;
-#endif
     Pads_ComposeDirections(slot);
 }
 
-#ifdef MUGEN_GAMEPAD_POLICY
 /*
  * Port fix: the controller path uses SDL's game-controller semantics.
  *
@@ -881,29 +850,20 @@ void Pads_HandleControllerEvent(const SDL_Event *ev)
         }
     }
 }
-#endif /* MUGEN_GAMEPAD_POLICY */
 
 /* 0x004746D0: closes the joysticks and removes the joystick handler. */
 void Input_DeinitPads(void)
 {
     int i;
 
-#ifndef MUGEN_SDL2_API
-    if (g_padsActive == 0) {
-        return;
-    }
-#endif
     g_padHandler = NULL;
-#ifdef MUGEN_GAMEPAD_POLICY
     Pads_CloseControllers();
-#endif
     memset(g_padButtonState, 0, INPUT_PAD_COUNT + 1);
     /* The slots go with the pads; a stale mask would resurface on the next
      * analog event of a later session. */
     Pads_ResetDirectionSources();
     g_padQueueWrite = 0;
     g_padQueueRead = 0;
-#if defined(ANDROID_PORT) || defined(MUGEN_SDL2_API)
     /*
      * Fix (port change): SDL_IGNORE here disabled the joystick events that
      * Pads_DeviceEvent depends on, and Pads_Init returns early when no pad is
@@ -912,38 +872,27 @@ void Input_DeinitPads(void)
      * Events stay enabled and Pads_HandleEvent already ignores them while no
      * pad is open (g_padsActive == 0).
      */
-#else
-    SDL_JoystickEventState(SDL_IGNORE);
-#endif
     for (i = 0; i < g_padCount; i++) {
-#ifdef MUGEN_SDL2_API
         /*
          * SDL2 removed SDL_JoystickOpened. The engine keeps its own handle per
          * pad slot, which is the same test -- a non-NULL handle means the slot
          * is open.
          */
         if (g_pads[i].joystick != NULL) {
-#else
-        if (SDL_JoystickOpened(i) && g_pads[i].joystick != NULL) {
-#endif
             SDL_JoystickClose(g_pads[i].joystick);
-#if defined(ANDROID_PORT) || defined(MUGEN_SDL2_API)
             /* Fix (port change): clear the handle on every SDL2 target, not
              * just Android. A closed handle left in the slot makes
              * Pads_DeviceEvent treat it as an open pad and skip the slot when
              * the device comes back. */
             g_pads[i].joystick = NULL;
-#endif
         }
     }
     g_padsActive = 0;
     g_padCount = 0;
-#ifdef MUGEN_SDL2_API
     if (g_padOwnedSubsystems & SDL_INIT_GAMECONTROLLER) SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);
     if (g_padOwnedSubsystems & SDL_INIT_JOYSTICK) SDL_QuitSubSystem(SDL_INIT_JOYSTICK);
     g_padOwnedSubsystems = 0;
     g_padMappingDbChecked = 0;
-#endif
 }
 
 /* 0x00474750: reports a button change (code = pad * PAD_BUTTONS + button). */
@@ -997,7 +946,6 @@ static void pad_set_flag(int code, int value)
  */
 static int Pads_EventSlot(const SDL_Event *ev)
 {
-#ifdef MUGEN_SDL2_API
     SDL_JoystickID id;
     int i;
 
@@ -1014,15 +962,6 @@ static int Pads_EventSlot(const SDL_Event *ev)
         }
     }
     return -1;
-#else
-    if (ev->type == SDL_JOYHATMOTION) {
-        return ev->jhat.which;
-    }
-    if (ev->type == SDL_JOYAXISMOTION) {
-        return ev->jaxis.which;
-    }
-    return ev->jbutton.which;
-#endif
 }
 
 void Pads_HandleEvent(const SDL_Event *ev)
@@ -1054,7 +993,6 @@ void Pads_HandleEvent(const SDL_Event *ev)
         }
         return;
     }
-#ifdef MUGEN_GAMEPAD_POLICY
     /*
      * The same device delivers both raw joystick events and controller events.
      * When a slot is backed by a game controller the semantic path owns it:
@@ -1066,7 +1004,6 @@ void Pads_HandleEvent(const SDL_Event *ev)
     if (Pads_SlotUsesController(slot)) {
         return;
     }
-#endif
     /*
      * Fix (port change): the original indexes the pad's button codes without a
      * bound, and the check that guarded it was Android-only. A pad reporting
@@ -1264,7 +1201,6 @@ long long Input_FindKey(int *const *maps, int count, int code)
     return 0;
 }
 
-#if defined(ANDROID_PORT) || defined(MUGEN_SDL2_API)
 /*
  * SDL2 hotplug: attach a device that appeared, release one that left, keeping
  * existing pad slots stable. Written for Android but not Android-specific --
@@ -1302,7 +1238,6 @@ void Pads_DeviceEvent(const SDL_Event *event)
             Log_Printf("pads: device removed from slot %d (instance %d)\n", i,
                        (int)event->jdevice.which);
             SDL_JoystickClose(g_pads[i].joystick);
-#ifdef MUGEN_GAMEPAD_POLICY
             /*
              * The semantic handle for this slot has to go with the raw one.
              * Leaving it open left g_padController[i] pointing at the old
@@ -1319,17 +1254,14 @@ void Pads_DeviceEvent(const SDL_Event *event)
                 SDL_GameControllerClose(g_padController[i]);
                 g_padController[i] = NULL;
             }
-#endif
             Pads_ClearDirectionSources(i);
             memset(&g_pads[i], 0, sizeof(Pad));
-#ifdef MUGEN_GAMEPAD_POLICY
             /* The slot has no controller any more: put the raw [P<n> Joystick]
              * bindings back and publish them, so the player is not left bound
              * to semantic codes no device will send. This runs on every SDL2
              * target (MUGEN_GAMEPAD_POLICY); only the SDL 1.2 reference build
              * keeps the original raw-joystick lifecycle. */
             Config_RepublishJoystick(i);
-#endif
         }
         return;
     }
@@ -1357,9 +1289,7 @@ void Pads_DeviceEvent(const SDL_Event *event)
     Pads_LogDevice(joystick, event->jdevice.which);
     pad = &g_pads[slot];
     pad->joystick = joystick;
-#ifdef MUGEN_GAMEPAD_POLICY
     Pads_AttachController(slot, event->jdevice.which);
-#endif
     Pads_ClearDirectionSources(slot);
     pad->hat_base = SDL_JoystickNumAxes(joystick) * 2;
     pad->button_base = pad->hat_base + SDL_JoystickNumHats(joystick) * 4;
@@ -1372,14 +1302,11 @@ void Pads_DeviceEvent(const SDL_Event *event)
     }
     g_padsActive = 1;
     SDL_JoystickEventState(SDL_ENABLE);
-#ifdef MUGEN_GAMEPAD_POLICY
     /* A generic joystick may have no controller mapping. It still needs its
      * configured raw bindings published after a pad-less startup. */
     if (!Pads_SlotUsesController(slot)) Config_RepublishJoystick(slot);
-#endif
     Log_Printf("pads: attached device %d to slot %d, instance=%d\n", event->jdevice.which, slot, (int)id);
 }
-#endif
 
 /*
  * Diagnostic (port addition): the joystick bindings the engine will use.

@@ -8,11 +8,6 @@
 #include "configmerge.h"
 #include "render_policy.h"
 
-#if defined(MUGEN_VITA_GL) && !defined(MUGEN_SDL2_API)
-/* Defined near Options_Load; Config_Load runs first. */
-static void Config_ApplyVitaJoystick(void);
-#endif
-#ifdef MUGEN_GAMEPAD_POLICY
 /* The [P<n> Gamepad] groups, loaded with the rest of the options and applied
  * after the pads open (their topology is only known then). */
 static int g_cfgGamepadKeys[2][KEY_COUNT];
@@ -46,7 +41,6 @@ static int g_cfgRawJoyKeys[2][KEY_COUNT];
 void Config_ApplyJoystickBindings(void);
 /* Per-player version, used when a controller attaches after start-up. */
 void Config_ApplyJoystickSlot(int player);
-#endif
 
 #define CONFIG_PATH "data/mugen.cfg"
 
@@ -705,13 +699,7 @@ int Config_Load(void)
     Config_ReadKeys(ini, text, g_game->joy_keys[0]);
     sprintf(text, "P2 joystick");
     Config_ReadKeys(ini, text, g_game->joy_keys[1]);
-#if defined(MUGEN_VITA_GL) && !defined(MUGEN_SDL2_API)
-    /* The platform joystick policy; see Config_ApplyVitaJoystick. Applied here
-     * and again after every Options_Load, which rereads the sections below. */
-    Config_ApplyVitaJoystick();
-#endif
     g = g_game;
-#ifdef MUGEN_GAMEPAD_POLICY
     /*
      * Keep the [P<n> Joystick] codes as configured. Config_ApplyJoystickSlot
      * overwrites joy_keys with the semantic controller layout for a slot that
@@ -722,7 +710,6 @@ int Config_Load(void)
      */
     memcpy(g_cfgRawJoyKeys[0], g->joy_keys[0], sizeof(g_cfgRawJoyKeys[0]));
     memcpy(g_cfgRawJoyKeys[1], g->joy_keys[1], sizeof(g_cfgRawJoyKeys[1]));
-#endif
     memcpy(g->joy_keys_active[0], g->joy_keys[0], sizeof(g->joy_keys_active[0]));
     memcpy(g->joy_keys_active[1], g->joy_keys[1], sizeof(g->joy_keys_active[1]));
     if (!g->use_joystick[0]) {
@@ -789,7 +776,6 @@ static double Options_PctToVolume(int pct, double volume)
     return (volume - floor(volume + 0.5)) + pct;
 }
 
-#ifdef MUGEN_GAMEPAD_POLICY
 /*
  * Fix (port change): a pad is bound through SDL's game-controller semantics on
  * every SDL2 target, not by translating raw device indices.
@@ -1076,128 +1062,7 @@ void Config_RepublishJoystick(int player)
     Input_ResetState();
 }
 
-#endif /* MUGEN_GAMEPAD_POLICY */
 
-#if defined(MUGEN_VITA_GL) && !defined(MUGEN_SDL2_API)
-/*
- * Port addition: the Vita joystick mapping, as a function so every place that
- * reloads the bindings can reapply it.
- *
- * It used to live inline in Config_Load only. Options_Load rereads both
- * [P1 Joystick] and [P2 Joystick] from mugen.cfg afterwards, and on the Vita
- * that silently replaced the mapping with the shipped 24-button PC pad values:
- * Jump 17 came back as 9, A as 13, Start as 24 -- and 24 does not exist on the
- * Vita driver at all. Applying the policy after every reload, including the
- * one at start-up, keeps the documented layout in force.
- */
-static void Config_ApplyVitaJoystick(void)
-{
-
-/*
- * PS Vita port (port/psvita): replace the joystick bindings with the real
- * *engine codes*, not the SDL driver indices.
- *
- * The shipped mugen.cfg binds [P1 Joystick] to indices 9..24, which is a
- * 24-button PC pad. SDL's Vita joystick driver reports only 12 buttons, and
- * in a different order, so those bindings make Right jump, Left crouch,
- * Start walk left, and leave every attack button pointing at a button that
- * does not exist.
- *
- * Indices from SDL_sysjoystick.o in VitaSDK's libSDL.a, confirmed on
- * hardware with port/psvita/input-mapper (12 buttons, 4 axes, 0 hats -- the
- * d-pad is buttons, not a hat):
- *
- *   0 Triangle  1 Circle  2 Cross   3 Square  4 L    5 R
- *   6 Down      7 Left    8 Up      9 Right  10 Select  11 Start
- *
- * But Pads_HandleEvent never delivers a raw index. It computes
- *     code = slot * PAD_BUTTONS + axes*2 + hats*4 + 1 + raw_index,
- * so with the Vita driver's 4 axes and 0 hats, Triangle (raw 0) arrives as
- * code 9. Storing the raw index therefore never matches: Triangle would be
- * B=0, which translates to engine code 0 instead of Triangle's 9. (Zero is
- * not JOY_NONE=0x80; it is simply a code nothing delivers.)
- *
- * The table below is RAW_INDEX + 9 for this topology: 9 Triangle, 10 Circle,
- * 11 Cross, 12 Square, 13 L, 14 R, 15 Down, 16 Left, 17 Up, 18 Right,
- * 19 Select, 20 Start. Do NOT hardcode the +9 anywhere else: it is 1 +
- * axes*2 + hats*4 for the enumerated device, and a different controller
- * topology produces different codes.
- *
- * Layout is the conventional PS one: Square/Triangle/Circle/Cross = A/B/C/X.
- * Overriding here rather than rewriting the config keeps the patch
- * deterministic and leaves the shipped file's [P1 Joystick] text intact.
- */
-{
-    /*
-     * Written by name, not positionally: the KEY_* enum is
-     * JUMP, RIGHT, CROUCH, LEFT, A..Z, START -- note RIGHT before CROUCH,
-     * so an initializer written in reading order would silently swap the
-     * vertical and horizontal directions.
-     *
-     * Values are engine button codes for the 4-axis/0-hat driver (raw index
-     * + 9), not the SDL indices. See the comment above.
-     */
-    /*
-     * Fix (port change): the loop used to give both players the same joystick
-     * codes. g_keyMap is one global table, so the second player's pass simply
-     * overwrote the first: whatever P2 bound to a code became the action for
-     * everyone. That is invisible only while both players bind the same action
-     * to the same button, which is a coincidence and not a property.
-     *
-     * The Vita has a single internal pad -- SDL's Vita joystick driver reports
-     * one device -- so the pad belongs to player 1 and player 2 gets no
-     * joystick at all. Binding P2 to slot 1 instead would leave it matching
-     * nothing, since no second pad exists to deliver those codes.
-     */
-    int player;
-
-    for (player = 0; player < 2; player++) {
-        int *jk = g_game->joy_keys[player];
-        int i;
-
-        /*
-         * Fix (port change): this was memset(jk, JOY_NONE, sizeof(...)), but
-         * jk is an array of int and JOY_NONE is 0x80, so every element came
-         * out as 0x80808080 (-2139062144) instead of 128. Player 2 -- which
-         * the loop leaves at the cleared values -- then displayed a label of
-         * "A--2139062144" and eleven more negative bindings in the options
-         * screen, and Options_Save wrote them out again. The fill has to be
-         * per element because the elements are wider than a byte.
-         */
-        for (i = 0; i < KEY_COUNT; i++) {
-            jk[i] = JOY_NONE;
-        }
-        if (player != 0) {
-            /* One pad: it drives P1 only. */
-            continue;
-        }
-        jk[KEY_JUMP] = 17;     /* d-pad up: raw 8 */
-        jk[KEY_RIGHT] = 18;    /* d-pad right: raw 9 */
-        jk[KEY_CROUCH] = 15;   /* d-pad down: raw 6 */
-        jk[KEY_LEFT] = 16;     /* d-pad left: raw 7 */
-        /*
-         * Full six-button fight layout. The character select's own
-         * overrides (Cross/Square = back, L/R = nothing) are applied per
-         * screen in src/events.c, so nothing is lost in a fight.
-         */
-        jk[KEY_A] = 12;        /* Square: raw 3 */
-        jk[KEY_B] = 9;         /* Triangle: raw 0 */
-        /*
-         * Circle is C. The earlier revision left this unbound because
-         * Circle emitted Return, which is also the Start/pause action, so
-         * C on Circle would have paused the match mid-punch. Circle now
-         * emits the C key itself (see VitaInput_KeyForButton), giving the
-         * conventional Square/Triangle/Circle/Cross = A/B/C/X layout.
-         */
-        jk[KEY_C] = 10;        /* Circle: raw 1 */
-        jk[KEY_X] = 11;        /* Cross: raw 2 */
-        jk[KEY_Y] = 13;        /* L: raw 4 */
-        jk[KEY_Z] = 14;        /* R: raw 5 */
-        jk[KEY_START] = 20;    /* Start: raw 11 */
-    }
-}
-}
-#endif
 
 /* 0x0045F170: reloads the options screen settings from mugen.cfg and reinitialises input. */
 void Options_Load(void)
@@ -1283,12 +1148,9 @@ void Options_Load(void)
     g->joystick_type[1] = g->option_input[1][1];
     g->use_joystick[0] = g->option_input[0][1] != 0;
     g->use_joystick[1] = g->option_input[1][1] != 0;
-#ifdef MUGEN_GAMEPAD_POLICY
     memcpy(g->joy_keys, g_cfgRawJoyKeys, sizeof(g_cfgRawJoyKeys));
-#endif
     Config_ReadKeys(ini, "P1 joystick", g->joy_keys[0]);
     Config_ReadKeys(ini, "P2 joystick", g_game->joy_keys[1]);
-#ifdef MUGEN_GAMEPAD_POLICY
     /* [P<n> Gamepad] describes the compact game-controller layout; see
      * Config_ApplyJoystickBindings for why every SDL2 target uses that. */
     Config_LoadGamepadGroups(ini);
@@ -1303,32 +1165,15 @@ void Options_Load(void)
             Config_WriteMissingGamepadGroups();
         }
     }
-#endif
     g = g_game;
     Config_FillUnassigned(g->joy_keys[0], JOY_NONE);
     Config_FillUnassigned(g->joy_keys[1], JOY_NONE);
-#ifdef MUGEN_GAMEPAD_POLICY
     memcpy(g_cfgRawJoyKeys, g->joy_keys, sizeof(g_cfgRawJoyKeys));
-#endif
-#if defined(MUGEN_VITA_GL) && !defined(MUGEN_SDL2_API)
-    /*
-     * Fix (port change): this reload rereads both [P1 Joystick] and
-     * [P2 Joystick] straight from mugen.cfg, which replaced the Vita mapping
-     * Config_Load had installed. Jump came back as 9 instead of 17, A as 13
-     * instead of 12, Start as 24 -- a code the Vita driver does not have. The
-     * platform policy has to be applied after every configuration reload,
-     * including the one at start-up.
-     */
-    Config_ApplyVitaJoystick();
-    g = g_game;
-#endif
     Ini_Free(ini);
     Input_InitPads();
-#ifdef MUGEN_GAMEPAD_POLICY
     /* After the pads are open (their topology is only known then) and before
      * Input_Remap builds g_keyMap from these codes. */
     Config_ApplyJoystickBindings();
-#endif
     if (!Input_Remap()) {
         Error_Fatal("Cannot init input\n");
     }
@@ -1398,17 +1243,12 @@ void Options_Save(void)
     }
     Options_SaveKeys(ini, "p1 keys", g_game->keys[0], KEY_NONE);
     Options_SaveKeys(ini, "p2 keys", g_game->keys[1], KEY_NONE);
-#ifdef MUGEN_GAMEPAD_POLICY
     Options_SaveKeys(ini, "p1 joystick", g_cfgRawJoyKeys[0], JOY_NONE);
     Options_SaveKeys(ini, "p2 joystick", g_cfgRawJoyKeys[1], JOY_NONE);
     if (!Config_SaveGamepadGroup(ini, 0) || !Config_SaveGamepadGroup(ini, 1)) {
         Ini_Free(ini);
         Error_Fatal("Cannot save gamepad bindings\n");
     }
-#else
-    Options_SaveKeys(ini, "p1 joystick", g_game->joy_keys[0], JOY_NONE);
-    Options_SaveKeys(ini, "p2 joystick", g_game->joy_keys[1], JOY_NONE);
-#endif
     if (!Ini_Save(ini, CONFIG_PATH)) {
         Error_Fatal("Error saving %s\n", CONFIG_PATH);
     }

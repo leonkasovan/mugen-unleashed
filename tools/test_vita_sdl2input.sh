@@ -4,7 +4,7 @@ set -eu
 cd "$(dirname "$0")/.."
 out="${OUT:-build/tmp/vita-sdl2-input}"
 mkdir -p "$out"
-${CC:-cc} ${CFLAGS:-} -std=c11 -O1 -g -Wall -Wextra -Werror \
+${CC:-cc} ${CFLAGS:-} -DSDL_MAIN_HANDLED -std=c11 -O1 -g -Wall -Wextra -Werror \
     ${SDL_CFLAGS:-$(pkg-config --cflags sdl2)} -Isrc -Iport/psvita/src \
     tools/test_vita_sdl2input.c ${SDL_LIBS:-$(pkg-config --libs sdl2)} \
     -o "$out/test_vita_sdl2input"

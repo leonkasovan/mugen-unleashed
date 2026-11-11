@@ -764,7 +764,7 @@ int __cdecl Input_UpdateMap(void);
 /* 0x00421380 */ int __cdecl CharLua_SetConstFloat(CharData *c, struct lua_State *L, const char *name, double value);
 /* 0x00421400 */ int __cdecl CharLua_SetConstCoord(CharData *c, struct lua_State *L, const char *name, double x, double y, double z, double unit, int type, int pad);
 /* 0x00421490 */ int __cdecl CharLua_GetConstCoord(CharData *c, struct lua_State *L, Coord *out, const char *name);
-/* 0x00421500 */ int __cdecl SDL_main(int argc, char **argv);
+/* 0x00421500: engine main; declared by platform_main_win32.c at its call site. */
 /* 0x004216f0 */ int __cdecl Screen_IsSpecial(void);
 /* 0x00421720 */ float __cdecl Units_From320(float v);
 /* 0x00421750 */ float __cdecl Camera_GetRawX(void);
@@ -1578,7 +1578,6 @@ void __cdecl Pads_DeviceEvent(const SDL_Event *event);
 /* 0x00474b10 */ int __cdecl Pads_CodePending(void);
 /* Port addition: diagnostic dump of the configured joystick bindings. */
 void __cdecl Pads_LogBindings(void);
-#ifdef MUGEN_GAMEPAD_POLICY
 /* Controller path: SDL game-controller semantics, on every SDL2 target. */
 void __cdecl Pads_HandleControllerEvent(const SDL_Event *ev);
 int __cdecl Pads_SlotUsesController(int slot);
@@ -1594,7 +1593,6 @@ int __cdecl Config_SetJoystickKeys(int player, int gamepad, const int *keys);
 void __cdecl Pads_ClearDirectionSources(int slot);
 void __cdecl Pads_ResetDirectionSources(void);
 int __cdecl Pads_ControllerCount(void);
-#endif
 /* 0x00474b30 */ long long __cdecl Input_FindKey(int *const *maps, int count, int code);
 /* 0x00474cd0 */ Cutscene *__cdecl Storyboard_Load(const char *path);
 /* 0x00474e40 */ Cutscene *__cdecl Storyboard_Create(const char *dir, Ini *ini);

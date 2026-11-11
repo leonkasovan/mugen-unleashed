@@ -10,7 +10,7 @@ find_library(SDL2_LIBRARY NAMES SDL2 SDL2-2.0 REQUIRED)
 find_library(SDL2_MIXER_LIBRARY NAMES SDL2_mixer REQUIRED)
 find_library(SDL2_TTF_LIBRARY NAMES SDL2_ttf REQUIRED)
 file(GLOB ENGINE "${ROOT}/src/*.c")
-list(FILTER ENGINE EXCLUDE REGEX ".*/(sdlmain|glrender|gldetect|sdl2compat|sdlmixercompat)\\.c$")
+list(FILTER ENGINE EXCLUDE REGEX ".*/(platform_main_win32|glrender|gldetect|sdl2video)\\.c$")
 file(GLOB LUA "${ROOT}/third_party/lua-5.1.4/src/*.c")
 list(FILTER LUA EXCLUDE REGEX ".*/(lua|luac)\\.c$")
 file(GLOB PNG "${ROOT}/third_party/libpng-1.2.38/png*.c")
@@ -21,7 +21,7 @@ file(GLOB PLATFORM "${ROOT}/port/android/app/src/main/jni/src/android_*.c")
 list(FILTER PLATFORM EXCLUDE REGEX ".*/android_main\\.c$")
 add_library(android_native SHARED ${ENGINE} ${LUA} ${PNG} ${RESAMPLE} ${ZIP} ${PLATFORM}
  "${CMAKE_CURRENT_LIST_DIR}/test_present_host.c")
-target_compile_definitions(android_native PRIVATE ANDROID_PORT=1 MUGEN_ANDROID_SW=1 LIBRESAMPLE_STATIC=1)
+target_compile_definitions(android_native PRIVATE ANDROID_PORT=1 MUGEN_ANDROID_SW=1 SDL_MAIN_HANDLED LIBRESAMPLE_STATIC=1)
 target_include_directories(android_native PRIVATE
  "${ROOT}/src" "${ROOT}/port/android/app/src/main/jni/src"
  "${ROOT}/third_party/libpng-1.2.38" "${ROOT}/third_party/lua-5.1.4/src"

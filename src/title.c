@@ -15,9 +15,7 @@
 /* <SDL.h> comes from mugen.h, which pulls it in after glad.h. */
 
 #include "mugen.h"
-#ifdef MUGEN_SDL2_API
 #include "sdl2keys.h"
-#endif
 
 /* Gameflow states returned by Title_Run / Options_Run (see Gameflow_Run). */
 #define GAMEFLOW_TITLE      4
@@ -226,7 +224,6 @@ int Title_Update(ScreenLoop *screen, TitleState *st)
     int key = screen->key;
     int chosen = 0;
 
-#ifdef MUGEN_GAMEPAD_POLICY
     {
         PadMenuAction action = Pads_MenuAction(screen->input2, PAD_CONTEXT_TITLE);
         if (action != PAD_MENU_NONE) screen->input2 = 0;
@@ -246,7 +243,6 @@ int Title_Update(ScreenLoop *screen, TitleState *st)
             screen->idle_ticks = 0;
         }
     }
-#endif
     if (screen->fade_out && screen->fade_ticks > 0) {
         /* escape skips the fade out */
         if (key == SDLK_ESCAPE || g_quitRequested) {
@@ -1481,12 +1477,10 @@ static void KeyConfig_KeyName(int joystick, int v, int none, char *text)
         strcpy(text, "Not used");
     } else if (!joystick) {
 #ifdef ANDROID_PORT
-        sprintf(text, "%s", (v > 0 && v < ENGINE_KEY_LIMIT) ? SDL_GetKeyName(Sdl2_SdlKeyForEngineKey(v)) : "");
-#elif defined(MUGEN_SDL2)
-        /* v is an engine key (SDL 1.2 numbering); the shim names it. */
-        sprintf(text, "%s", (v > 0 && v < SDLK_LAST) ? Sdl2_KeyName(v) : "");
+        sprintf(text, "%s", (v > 0 && v < ENGINE_KEY_LIMIT) ? Sdl2_KeyName(v) : "");
 #else
-        sprintf(text, "%s", v < SDLK_LAST ? SDL_GetKeyName((SDLKey)v) : "");
+        /* v is an engine key (SDL 1.2 numbering); the shim names it. */
+        sprintf(text, "%s", (v > 0 && v < ENGINE_KEY_NAME_LIMIT) ? Sdl2_KeyName(v) : "");
 #endif
     } else {
         sprintf(text, "%c-%02i", 'A' + (v >> 5 & 3), v & ~0x60);
@@ -1526,10 +1520,8 @@ int KeyConfig_Run(int joystick, int ticks)
     int item = 0;
     int entry = 0;          /* next entry to assign */
     int p, i;
-#ifdef MUGEN_GAMEPAD_POLICY
     int gamepad[2];
     SDL_JoystickID pad_id[2];
-#endif
 
     bg_color = Video_MapRGB(0x80, 0x60, 0x40);
     border_color = Video_MapRGB(0x40, 0x30, 0x20);
@@ -1545,10 +1537,8 @@ int KeyConfig_Run(int joystick, int ticks)
         keys[1] = g_game->joy_keys[1];
     }
     for (p = 0; p < 2; p++) {
-#ifdef MUGEN_GAMEPAD_POLICY
         gamepad[p] = joystick && Pads_SlotUsesController(p);
         pad_id[p] = g_pads[p].joystick != NULL ? SDL_JoystickInstanceID(g_pads[p].joystick) : -1;
-#endif
         for (i = 0; i < KEYCONFIG_ENTRIES; i++) {
             cur[p][i] = keys[p][keyconfig_slots[i]];
         }
@@ -1591,7 +1581,6 @@ int KeyConfig_Run(int joystick, int ticks)
 
         /* input: a key, a joystick button */
         Events_Poll();
-#ifdef MUGEN_GAMEPAD_POLICY
         /* A reconnect can change both the slot's code space and its bindings.
          * Cancel the pending edits before they can overwrite the new device. */
         if (joystick) {
@@ -1605,7 +1594,6 @@ int KeyConfig_Run(int joystick, int ticks)
                 }
             }
         }
-#endif
         if (g_keyboardQueueRead != g_keyboardQueueWrite) {
             if (!g_keyboardActive) {
                 key = 0;
@@ -1632,9 +1620,6 @@ int KeyConfig_Run(int joystick, int ticks)
         }
         g = g_game;
         if (!g->safe_mode) {
-#ifndef MUGEN_SDL2_API
-            Video_HandleFullscreenKey(&key);
-#endif
             g = g_game;
         }
         if (Input_CodePending() && (g_padsActive || g_keyboardActive)) {
@@ -1647,13 +1632,11 @@ int KeyConfig_Run(int joystick, int ticks)
                 g_keyQueue.read = 0;
             }
         }
-#ifdef MUGEN_GAMEPAD_POLICY
         {
             PadMenuAction action = Pads_MenuAction((unsigned int)pad, PAD_CONTEXT_MENU);
             if (action != PAD_MENU_NONE) pad = 0;
             if (action == PAD_MENU_BACK) key = SDLK_ESCAPE;
         }
-#endif
         button = pad & ~0x60;
         if (key == SDLK_RETURN || (unsigned int)(button - 5) <= 26) {
             accept = 1;
@@ -1733,19 +1716,15 @@ int KeyConfig_Run(int joystick, int ticks)
             key = 0;
             pad = 0;
         } else if (item == KEYCONFIG_DEFAULT && accept) {
-#ifdef MUGEN_GAMEPAD_POLICY
             int controller_defaults[KEY_COUNT];
             int controller = joystick == 1 && Pads_SlotUsesController(player);
             /* Port change: controller defaults include Vita's PS layout. */
             if (controller) Pads_ControllerBindings(player, controller_defaults);
-#endif
             for (i = 0; i < KEYCONFIG_ENTRIES; i++) {
-#ifdef MUGEN_GAMEPAD_POLICY
                 if (controller) {
                     cur[player][i] = controller_defaults[keyconfig_slots[i]];
                     continue;
                 }
-#endif
                 cur[player][i] = !joystick ? keyconfig_default_keys[player][i] : keyconfig_default_joy[player][i];
             }
         }
@@ -1755,7 +1734,6 @@ int KeyConfig_Run(int joystick, int ticks)
                 cur[state - 1][entry] = key == SDLK_SPACE ? none : key;
                 assigned = 1;
             } else if (joystick == 1 && pad != 0 && !(pad & 0x100)) {
-#ifdef MUGEN_GAMEPAD_POLICY
                 int local = pad - (state - 1) * PAD_BUTTONS;
 
                 /* P1 cannot assign P2's event, and Select remains a menu key. */
@@ -1764,10 +1742,6 @@ int KeyConfig_Run(int joystick, int ticks)
                     cur[state - 1][entry] = pad;
                     assigned = 1;
                 }
-#else
-                cur[state - 1][entry] = key == SDLK_SPACE ? none : pad;
-                assigned = 1;
-#endif
             } else if (key == SDLK_SPACE) {
                 cur[state - 1][entry] = none;
                 assigned = 1;
@@ -1812,11 +1786,7 @@ int KeyConfig_Run(int joystick, int ticks)
             } else if (ticks % 450 < 300) {
                 strcpy(text, "Press spacebar to disable entry");
             } else {
-#ifdef MUGEN_GAMEPAD_POLICY
                 strcpy(text, "Esc / Select / R3 to cancel");
-#else
-                strcpy(text, "Press esc to cancel");
-#endif
             }
             if (state == 1) {
                 KeyConfig_Text(text, font, (float)box_x, (float)(row_h * 15 + box_y + line_h), FONT_ALIGN_LEFT,
@@ -1918,11 +1888,9 @@ int KeyConfig_Run(int joystick, int ticks)
         for (i = 0; i < KEYCONFIG_ENTRIES; i++) {
             keys[p][keyconfig_slots[i]] = cur[p][i];
         }
-#ifdef MUGEN_GAMEPAD_POLICY
         if (joystick && !Config_SetJoystickKeys(p, gamepad[p], keys[p])) {
             Error_Fatal("Invalid gamepad configuration\n");
         }
-#endif
     }
     if (joystick == 1) {
         g = g_game;
@@ -1935,9 +1903,7 @@ int KeyConfig_Run(int joystick, int ticks)
     }
     Log_Printf("Setting up input\n");
     Input_Remap();
-#ifdef MUGEN_GAMEPAD_POLICY
 restore_input:
-#endif
     g_keyboardKeepRepeat = saved_key_flag;
     Timer_SetFps(saved_rate);
     return ticks;

@@ -166,7 +166,7 @@ int Game_DebugKeys(ScreenLoop *screen)
             if (g_vretrace != v) {
                 if (g_renderMode == 2 || g_renderMode == 1) {
 #ifndef ANDROID_PORT
-                    SDL_GL_SetAttribute(SDL_GL_SWAP_CONTROL, v != 0);
+                    Video_SetSwapInterval(v != 0);
 #endif
                     g = g_game;
                 }
@@ -757,9 +757,6 @@ int Screen_ReadInput(ScreenLoop *screen)
     }
     g = g_game;
     if (g->safe_mode == 0) {
-#ifndef MUGEN_SDL2_API
-        Video_HandleFullscreenKey(&screen->key);
-#endif
         g = g_game;
     } else {
         /* Port addition: safe mode skips the full-screen handler outright,
@@ -810,7 +807,6 @@ int Screen_ReadInput(ScreenLoop *screen)
         screen->input = (unsigned int)r;
         screen->input_side = (int)(r >> 32);
     }
-#ifdef MUGEN_GAMEPAD_POLICY
     /* Port addition: SELECT backs out of menus and pauses/resumes a match;
      * R3 is Escape. Title_Update handles its own Back action so R3 can select
      * Exit without triggering the keyboard Escape's immediate exit path. */
@@ -826,7 +822,6 @@ int Screen_ReadInput(ScreenLoop *screen)
             screen->idle_ticks = 0;
         }
     }
-#endif
 #ifdef MUGEN_VITA_GL
     /*
      * PS Vita port (port/psvita): trace what each screen frame actually acts on.

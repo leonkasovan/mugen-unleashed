@@ -36,12 +36,12 @@ missed() { echo "MUT $1: NOT CAUGHT ($2)" >&2; MISSED=$((MISSED + 1)); }
 # ---------------------------------------------------------------- MUT-R01 --
 # Revert the transactional resize to the pre-fix shape: the replacement
 # texture failure keeps the old texture while metadata and surface move on.
-cp src/sdl2compat.c "$OUT/r01.fixed.c"
-"$PYBIN" - "$OUT/r01.fixed.c" src/sdl2compat.c <<'PYEOF'
+cp src/sdl2video.c "$OUT/r01.fixed.c"
+"$PYBIN" - "$OUT/r01.fixed.c" src/sdl2video.c <<'PYEOF'
 import subprocess, sys
 fixed, target = sys.argv[1], sys.argv[2]
 s = open(fixed, encoding="utf-8").read()
-old = subprocess.run(["git", "show", "e76be3b^:src/sdl2compat.c"], capture_output=True,
+old = subprocess.run(["git", "show", "e76be3b^:src/sdl2video.c"], capture_output=True,
                      text=True, encoding="utf-8").stdout
 start = old.index("    if (g_sdl2Video.texture == NULL || g_sdl2Video.texture_format != format) {")
 end = old.index("    return g_sdl2Video.surface;", start) + len("    return g_sdl2Video.surface;")
@@ -58,13 +58,13 @@ if bash tools/test_render_regress.sh >"$OUT/r01.mut.log" 2>&1; then
 else
     if grep -q 'R01' "$OUT/r01.mut.log"; then caught R01 "R01 checks fail"; else missed R01 "failed elsewhere"; fi
 fi
-cp "$OUT/r01.fixed.c" src/sdl2compat.c
+cp "$OUT/r01.fixed.c" src/sdl2video.c
 bash tools/test_render_regress.sh >"$OUT/r01.fixed.log" 2>&1 && echo "MUT R01: fixed code passes again" || missed R01 "revert did not restore a passing gate"
 
 # ---------------------------------------------------------------- MUT-R03 --
 # Restore immediate presentation in UpdateRect (pre-M3 shape).
-cp src/sdl2compat.c "$OUT/r03.fixed.c"
-"$PYBIN" - src/sdl2compat.c <<'PYEOF'
+cp src/sdl2video.c "$OUT/r03.fixed.c"
+"$PYBIN" - src/sdl2video.c <<'PYEOF'
 import sys
 p = sys.argv[1]
 s = open(p, encoding="utf-8").read()
@@ -82,7 +82,7 @@ if bash tools/test_render_regress.sh >"$OUT/r03.mut.log" 2>&1; then
 else
     if grep -q 'R03' "$OUT/r03.mut.log"; then caught R03 "PR01 checks fail"; else missed R03 "failed elsewhere"; fi
 fi
-cp "$OUT/r03.fixed.c" src/sdl2compat.c
+cp "$OUT/r03.fixed.c" src/sdl2video.c
 bash tools/test_render_regress.sh >"$OUT/r03.fixed.log" 2>&1 && echo "MUT R03: fixed code passes again" || missed R03 "revert did not restore a passing gate"
 
 # ---------------------------------------------------------------- MUT-R02 --
@@ -208,8 +208,8 @@ bash tools/test_gl_mvp.sh >"$OUT/glesq.fixed.log" 2>&1 && echo "MUT GLES-Q: fixe
 # storage's (RENDERING_PLAN.md 5.2 step 9). With a refused resize in between,
 # the window is 800x600 while the surviving surface is 640x480, so the upload
 # reads past the buffer.
-cp src/sdl2compat.c "$OUT/reset.fixed.c"
-"$PYBIN" - src/sdl2compat.c <<'PYEOF'
+cp src/sdl2video.c "$OUT/reset.fixed.c"
+"$PYBIN" - src/sdl2video.c <<'PYEOF'
 import sys
 p = sys.argv[1]
 s = open(p, encoding="utf-8").read()
@@ -232,7 +232,7 @@ else
         missed RESET "failed elsewhere"
     fi
 fi
-cp "$OUT/reset.fixed.c" src/sdl2compat.c
+cp "$OUT/reset.fixed.c" src/sdl2video.c
 bash tools/test_render_regress.sh >"$OUT/reset.fixed.log" 2>&1 && echo "MUT RESET: fixed code passes again" || missed RESET "revert did not restore a passing gate"
 
 # ---------------------------------------------------------------- MUT-CLIP --

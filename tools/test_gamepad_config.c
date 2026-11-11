@@ -534,3 +534,6 @@ int main(int argc, char **argv)
     printf("gamepad cfg: %s passed (%u-bit host)\n", argv[1], (unsigned)(sizeof(void *) * 8));
     return 0;
 }
+
+/* Renderer policy boundary is outside the gamepad/config fixture. */
+void Video_SetSwapInterval(int interval) { (void)interval; }

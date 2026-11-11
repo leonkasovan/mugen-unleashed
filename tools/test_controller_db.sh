@@ -9,7 +9,7 @@ export TMPDIR="$OUT/tmp"
 SDL_CFLAGS="${SDL_CFLAGS:-$(pkg-config --cflags sdl2 SDL2_mixer SDL2_ttf)}"
 SDL_LIBS="${SDL_LIBS:-$(pkg-config --libs sdl2 | sed 's/-lSDL2main//g; s/-mwindows//g')}"
 case "${TEST_PLATFORM:-desktop}" in
-    desktop) PLATFORM="-DMUGEN_SDL2" ;;
+    desktop) PLATFORM="" ;;
     android) PLATFORM="-DANDROID_PORT -DMUGEN_ANDROID_SW -Iport/android/app/src/main/jni/src" ;;
     *) echo "TEST_PLATFORM must be desktop or android" >&2; exit 2 ;;
 esac

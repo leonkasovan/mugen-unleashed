@@ -16,7 +16,7 @@ mkdir -p "$OUT"
 
 echo "target $TARGET: $CC $ARCHFLAGS ($("$CC" -dumpmachine 2>/dev/null || echo unknown))"
 
-"$CC" $ARCHFLAGS -std=gnu11 -O1 -g -Wall \
+"$CC" $ARCHFLAGS -DSDL_MAIN_HANDLED -std=gnu11 -O1 -g -Wall \
     -Isrc \
     tools/test_render_policy.c src/render_policy.c \
     -o "$OUT/test_render_policy"

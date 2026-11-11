@@ -610,13 +610,10 @@ void Console_Toggle(void)
 #ifdef ANDROID_PORT
         SDL_SetHint(SDL_HINT_ENABLE_SCREEN_KEYBOARD, "1");
         SDL_StartTextInput();
-#elif defined(MUGEN_SDL2_API)
-        /* SDL2 removed SDL_EnableKeyRepeat; key repeat is a platform setting
-         * and SDL_KEYDOWN arrives already repeated. The shim records the
-         * request, so the console keeps its "repeat on while open" intent
-         * visible without changing the platform's behaviour. */
 #else
-        SDL_EnableKeyRepeat(0x140, 0x32);
+        /* SDL2 removed SDL_EnableKeyRepeat; key repeat is a platform setting
+         * and SDL_KEYDOWN arrives already repeated. No obsolete repeat-control
+         * request is necessary. */
 #endif
         g = g_game;
         g->input_blocked = 1;
@@ -630,8 +627,6 @@ void Console_Toggle(void)
     SDL_StopTextInput();
     SDL_SetHint(SDL_HINT_ENABLE_SCREEN_KEYBOARD, "0");
     SDL_StartTextInput(); /* physical keyboard bindings remain active */
-#elif !defined(MUGEN_SDL2_API)
-    SDL_EnableKeyRepeat(0, 0);
 #endif
     g = g_game;
     g->input_blocked = 0;

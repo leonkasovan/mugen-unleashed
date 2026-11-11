@@ -1,4 +1,3 @@
-#if defined(MUGEN_SDL2) || defined(ANDROID_PORT) || defined(MUGEN_ANDROID_SW)
 /*
  * SDL2 <-> engine key translation, shared by every SDL2 consumer.
  *
@@ -8,7 +7,7 @@
  * Sdl2_EngineKey is the one forward conversion (0 = "SDL 1.2 had no such
  * key"); Sdl2_SdlKeyForEngineKey is its exact inverse for focus resync.
  *
- * Extracted from src/sdl2compat.c (PLAN Android B2, desktop SDL2_PLAN Stage 3)
+ * Extracted from src/sdl2video.c (PLAN Android B2, desktop SDL2_PLAN Stage 3)
  * so SDL2 consumers that must NOT pull in the desktop window/present
  * implementation (Android, Vita SDL2) can still translate keys identically.
  * No window, renderer, surface or audio state here -- pure tables.
@@ -161,4 +160,10 @@ SDL_Keycode Sdl2_SdlKeyForEngineKey(int engine_key)
     }
 }
 
-#endif /* SDL2 consumers only */
+
+/* Name a saved engine key through its native SDL2 keycode. */
+const char *Sdl2_KeyName(int engine_key)
+{
+    SDL_Keycode key = Sdl2_SdlKeyForEngineKey(engine_key);
+    return key == SDLK_UNKNOWN ? "" : SDL_GetKeyName(key);
+}

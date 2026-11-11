@@ -1588,11 +1588,11 @@ void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
         Gfx_SetRenderTarget(target, target_sprite);
     }
     if (g_videoFlags & VIDEO_HWBLIT) {
-        if (g_videoSdlFlags & SDL_DOUBLEBUF) {
+        if (g_videoSdlFlags & DISPLAY_DOUBLEBUF) {
             if (g_renderMode == RENDER_OPENGL || g_renderMode == RENDER_OPENGL_SCREEN) {
-                SDL_GL_SwapBuffers();
+                Video_SwapBuffers();
             } else {
-                SDL_Flip(g_videoSurface);
+                Sdl2_Flip(g_videoSurface);
             }
         }
         glClearColor(0.0f, 0.0f, 0.0f, 0.0f);

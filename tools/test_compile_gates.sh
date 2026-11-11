@@ -39,7 +39,7 @@ check() {
     id="$1"
     shift
     # shellcheck disable=SC2086
-    if ! $CC $ARCHFLAGS -std=gnu11 -fsyntax-only "$@" $INCS $SDL_CFLAGS $MODULE >"$OUT/$id.log" 2>&1; then
+    if ! $CC $ARCHFLAGS -DSDL_MAIN_HANDLED -std=gnu11 -fsyntax-only "$@" $INCS $SDL_CFLAGS $MODULE >"$OUT/$id.log" 2>&1; then
         echo "FAIL: $id"
         # Strip the pre-existing '/*' within-comment warning, which is not ours.
         grep -v 'within comment' "$OUT/$id.log" | head -8
@@ -61,7 +61,7 @@ check() {
 for MODULE in $MODULES; do
     name=$(basename "$MODULE" .c)
     # Desktop SDL2: the combination that was broken.
-    check "sdl2-$name" -DMUGEN_SDL2_API -DMUGEN_SDL2
+    check "sdl2-$name"
     # Android, software renderer.
     check "android-$name" -DANDROID_PORT -DMUGEN_ANDROID_SW
     # Android with the GLES backend compiled in.

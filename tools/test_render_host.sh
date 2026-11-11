@@ -22,14 +22,14 @@ echo "target $TARGET: $CC $ARCHFLAGS ($("$CC" -dumpmachine 2>/dev/null || echo u
 
 # shellcheck disable=SC2086
 "$CC" $ARCHFLAGS -std=gnu11 -O1 -g -Wall \
-    -DMUGEN_SDL2 -DSDL_MAIN_HANDLED \
+    -DSDL_MAIN_HANDLED \
     -Isrc -Ithird_party/glad-2.1 -Ithird_party/minizip-0.15 \
     -Ithird_party/lua-5.1.4/src $PLAT_INC \
     $("$PKGCONF" --cflags sdl2 | sed 's/-Dmain=SDL_main//') \
     tools/test_render_host.c src/sprite.c src/keyedarray.c src/softrender.c \
-    -o "$OUT/test_render_host" \
-    $("$PKGCONF" --libs --static sdl2 | sed 's/-lSDL2main//') \
-    -lwinmm -lm
+    ${LDFLAGS:-} -o "$OUT/test_render_host" \
+    $("$PKGCONF" --libs $SDL_LINK_MODE sdl2 | sed 's/-lSDL2main//') \
+    $TEST_SYS_LIBS -lm
 
 echo "built $OUT/test_render_host"
 run_harness "$OUT/test_render_host"

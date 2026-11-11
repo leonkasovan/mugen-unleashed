@@ -164,7 +164,7 @@ int Video_Deinit(void)
     }
 #ifdef MUGEN_VITA_GL
     VitaGl_ReleaseDisplay();
-#ifdef MUGEN_SDL2
+#ifndef ANDROID_PORT
     Sdl2_VideoQuit();
 #endif
     g_videoSurface = g_screenSurface = NULL;
@@ -203,7 +203,7 @@ static int Video_BytesPerPixel(int depth)
  * 0x00462990: sets the video mode; flags are VIDEO_*. Only the OpenGL
  * renderer uses width x height: the others open a window of the game size.
  * The System renderer retries without hardware surfaces; with OpenGL a
- * failed SDL_SetVideoMode is not noticed on the reference desktop path.
+ * failed Sdl2_SetVideoMode is not noticed on the reference desktop path.
  * Port fix: GLES rejects it before calling unloaded GL entry points. Returns 0 on failure
  * (LIBERR_VIDEO_MODE when no mode could be set).
  */
@@ -260,7 +260,7 @@ int Video_SetMode(int game_width, int game_height, int width, int height, int de
             g_libraryError = LIBERR_VIDEO_MODE;
             return 0;
         }
-        sdl_flags = SDL_OPENGL | SDL_DOUBLEBUF | SDL_FULLSCREEN;
+        sdl_flags = DISPLAY_OPENGL | DISPLAY_DOUBLEBUF | DISPLAY_FULLSCREEN;
         g_videoSurface = surface;
         goto vita_surface_ready;
     }
@@ -306,65 +306,52 @@ int Video_SetMode(int game_width, int game_height, int width, int height, int de
 android_surface_ready:
 #else
     if (g_renderMode == RENDER_OPENGL || g_renderMode == RENDER_OPENGL_SCREEN) {
-        sdl_flags = SDL_OPENGL;
-        SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8);
-        SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 8);
-        SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8);
-        SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
-        SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
-        SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, (flags & VIDEO_HWBLIT) ? 1 : 0);
+        sdl_flags = DISPLAY_OPENGL;
+        Sdl2_GL_SetAttribute(SDL_GL_RED_SIZE, 8);
+        Sdl2_GL_SetAttribute(SDL_GL_GREEN_SIZE, 8);
+        Sdl2_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8);
+        Sdl2_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
+        Sdl2_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
+        Sdl2_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, (flags & VIDEO_HWBLIT) ? 1 : 0);
         if ((flags & VIDEO_RESIZABLE) && !(flags & VIDEO_FULLSCREEN)) {
-            sdl_flags = SDL_OPENGL | SDL_RESIZABLE;
+            sdl_flags = DISPLAY_OPENGL | DISPLAY_RESIZABLE;
         }
-        sdl_flags |= SDL_HWSURFACE | VIDEO_SDL_HWACCEL;
+        sdl_flags |= DISPLAY_HARDWARE | DISPLAY_ACCEL;
         if (g_vretrace) {
-            SDL_GL_SetAttribute(SDL_GL_SWAP_CONTROL, 1);
+            Video_SetSwapInterval(1);
         }
     } else {
 #ifdef MUGEN_VITA_GL
         /*
-         * PS Vita port (port/psvita): SDL_SWSURFACE, not SDL_HWSURFACE.
+         * PS Vita port (port/psvita): DISPLAY_SOFTWARE, not DISPLAY_HARDWARE.
          *
          * The software renderer writes straight into surface->pixels and never
          * calls SDL_LockSurface -- that is how the original works, and there is
-         * no lock anywhere in src/. SDL 1.2 requires a SDL_HWSURFACE to be
+         * no lock anywhere in src/. SDL 1.2 requires a DISPLAY_HARDWARE to be
          * locked before its pixels are touched, and on the Vita's SceGxm backend
          * a hardware surface keeps its pixels in a texture that only locking
          * maps out.
          *
-         * With SDL_HWSURFACE the engine therefore rendered perfectly into
+         * With DISPLAY_HARDWARE the engine therefore rendered perfectly into
          * memory that was never presented: the log ran all the way to
          * "Mode select init", the frame loop paced itself correctly, and the
          * panel stayed black. A software surface has ordinary pixels and
-         * SDL_UpdateRect (which Gfx_Present already calls) uploads them.
+         * Sdl2_UpdateRect (which Gfx_Present already calls) uploads them.
          */
-        sdl_flags = SDL_SWSURFACE;
+        sdl_flags = DISPLAY_SOFTWARE;
 #else
-        sdl_flags = SDL_HWSURFACE;
+        sdl_flags = DISPLAY_HARDWARE;
 #endif
     }
     if (flags & VIDEO_FULLSCREEN) {
-        sdl_flags |= SDL_FULLSCREEN;
+        sdl_flags |= DISPLAY_FULLSCREEN;
     }
     if (flags & VIDEO_HWBLIT) {
-        sdl_flags |= SDL_DOUBLEBUF;
+        sdl_flags |= DISPLAY_DOUBLEBUF;
     }
-    if (!(flags & VIDEO_FULLSCREEN)) {
-        SDL_putenv("SDL_VIDEO_WINDOW_POS=center");
-        SDL_putenv("SDL_VIDEO_CENTERED=1");
-    }
-    if (flags & VIDEO_DIRECTX) {
-        /* M6 (plan section 10.3): DirectX is a compatibility alias for the
-         * System renderer, not a Direct3D renderer. The driver hint below is
-         * an SDL 1.2 concept -- SDL2 selects its driver before SDL_Init and
-         * ignores a late SDL_VIDEODRIVER change (verified against real SDL2:
-         * the call succeeds but the active driver does not switch), so
-         * sending "directx" there is misleading as well as useless. */
-#ifndef MUGEN_SDL2
-        SDL_putenv("SDL_VIDEODRIVER=directx");
-#endif
-    }
-    surface = SDL_SetVideoMode(sdl_width, sdl_height, depth, sdl_flags);
+    /* DirectX remains a config alias for System; SDL2 selects the actual
+     * video driver at initialization, never through late SDL1 environment hints. */
+    surface = Sdl2_SetVideoMode(sdl_width, sdl_height, depth, sdl_flags);
     g_videoSurface = surface;
 #ifdef MUGEN_GLES
     /* Port fix: no display means no current context or loaded GL entry points.
@@ -382,8 +369,8 @@ android_surface_ready:
     }
 #else
     if (surface == NULL && g_renderMode != RENDER_OPENGL && g_renderMode != RENDER_OPENGL_SCREEN) {
-        sdl_flags &= ~(SDL_HWSURFACE | VIDEO_SDL_HWACCEL);
-        surface = SDL_SetVideoMode(width, height, depth, sdl_flags);
+        sdl_flags &= ~(DISPLAY_HARDWARE | DISPLAY_ACCEL);
+        surface = Sdl2_SetVideoMode(width, height, depth, sdl_flags);
         g_videoSurface = surface;
         if (surface == NULL) {
             g_libraryError = LIBERR_VIDEO_MODE;
@@ -439,7 +426,7 @@ vita_surface_ready:
     g_screenSurface = surface;
     g_unused50424C = 0;
 #ifndef ANDROID_PORT
-    SDL_ShowCursor((sdl_flags & SDL_FULLSCREEN) ? SDL_DISABLE : SDL_ENABLE);
+    SDL_ShowCursor((sdl_flags & DISPLAY_FULLSCREEN) ? SDL_DISABLE : SDL_ENABLE);
 #endif
 #ifdef ANDROID_PORT
     /*
@@ -497,7 +484,7 @@ vita_surface_ready:
  */
 static void Video_ResetGLScreenProjection(int width, int height)
 {
-#ifdef MUGEN_SDL2
+#ifndef ANDROID_PORT
     /* Logical size and drawable pixels differ on high-DPI (section 6.3):
      * the viewport covers the real drawable, the ortho the logical quad. */
     int dw = width, dh = height;
@@ -549,7 +536,7 @@ void Video_OnResize(int width, int height)
     }
     switch (g_renderMode) {
     case RENDER_SYSTEM: {
-        SDL_Surface *surface = SDL_SetVideoMode(width, height, g_videoDepth, g_videoSdlFlags);
+        SDL_Surface *surface = Sdl2_SetVideoMode(width, height, g_videoDepth, g_videoSdlFlags);
 
         /*
          * Fix (port change): the pointers were overwritten with the return
@@ -573,7 +560,7 @@ void Video_OnResize(int width, int height)
     }
 #ifndef MUGEN_GLES
     case RENDER_OPENGL_SCREEN: {
-        SDL_Surface *surface = SDL_SetVideoMode(width, height, g_videoDepth, g_videoSdlFlags);
+        SDL_Surface *surface = Sdl2_SetVideoMode(width, height, g_videoDepth, g_videoSdlFlags);
 
         /* Same rule as System: a failed mode keeps the working display. */
         if (surface == NULL) {
@@ -602,9 +589,6 @@ void Video_OnResize(int width, int height)
 #endif
 }
 
-#ifndef MUGEN_SDL2_API
-static int s_legacyFullscreenChordHeld;
-#endif
 
 /*
  * 0x0040B9D0 (stored with the command line code): Alt+Enter toggles
@@ -645,18 +629,11 @@ void Video_HandleFullscreenKey(int *key)
     }
     if (g_game == NULL) return;
     if (!g_keyState[ENGINE_KEY_LALT] && !g_keyState[ENGINE_KEY_RALT]) {
-#ifndef MUGEN_SDL2_API
-        s_legacyFullscreenChordHeld = 0;
-#endif
         return;
     }
     if (*key != SDLK_RETURN) {
         return;
     }
-#ifndef MUGEN_SDL2_API
-    if (s_legacyFullscreenChordHeld) { *key = 0; g_keyState[SDLK_RETURN] = 0; return; }
-    s_legacyFullscreenChordHeld = 1;
-#endif
     /* SDL2 captures physical chords in Keyboard_HandleKey before either input
      * queue or held state sees Return. Consume failed switches as well. */
     *key = 0;
@@ -696,12 +673,12 @@ void Video_HandleFullscreenKey(int *key)
     if (g->fullscreen) {
         g_videoFlags |= VIDEO_FULLSCREEN;
 #ifndef ANDROID_PORT
-        g_videoSdlFlags |= SDL_FULLSCREEN;
+        g_videoSdlFlags |= DISPLAY_FULLSCREEN;
 #endif
     } else {
         g_videoFlags &= ~VIDEO_FULLSCREEN;
 #ifndef ANDROID_PORT
-        g_videoSdlFlags &= ~SDL_FULLSCREEN;
+        g_videoSdlFlags &= ~DISPLAY_FULLSCREEN;
 #endif
     }
     if (mode == RENDER_OPENGL || mode == RENDER_OPENGL_SCREEN) {
@@ -727,7 +704,7 @@ int Video_SetFullscreen(int fullscreen)
     }
     g_videoFullscreen = fullscreen;
     return 1;
-#elif defined(MUGEN_SDL2)
+#else
     /* Port fix: SDL owns fullscreen on every SDL2 desktop. Mixing native
      * Win32 styles with an SDL exclusive-fullscreen window leaves its flags,
      * saved placement and display mode inconsistent on later switches. */
@@ -737,93 +714,6 @@ int Video_SetFullscreen(int fullscreen)
     }
     g_videoFullscreen = fullscreen != 0;
     return 1;
-#else
-
-#ifdef _WIN32
-    SDL_SysWMinfo info;
-    HWND hwnd;
-    HWND after;
-    int x, y, w, h;
-
-    memset(&info, 0, sizeof(info));
-    if (!SDL_GetWMInfo(&info) || info.window == NULL) return 0;
-    hwnd = info.window;
-    if (g_videoFullscreen == fullscreen) {
-        Log_Printf("fullscreen: window already at %d\n", fullscreen);
-        return 1;
-    }
-    if (!fullscreen &&
-        (g_savedWindowRect.right <= g_savedWindowRect.left ||
-         g_savedWindowRect.bottom <= g_savedWindowRect.top)) {
-        /* SDL1 reference has no saved windowed placement to restore. */
-        return 0;
-    }
-    if (fullscreen) {
-        HMONITOR monitor;
-        GetClientRect(hwnd, &g_savedClientRect);
-        GetWindowRect(hwnd, &g_savedWindowRect);
-        g_savedWindowStyle = GetWindowLongA(hwnd, GWL_STYLE);
-        g_savedWindowExStyle = GetWindowLongA(hwnd, GWL_EXSTYLE);
-        y = 0;
-        w = GetSystemMetrics(SM_CXSCREEN);
-        h = GetSystemMetrics(SM_CYSCREEN);
-        monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
-        x = 0;
-        if (monitor != NULL) {
-            MONITORINFO mi;
-            memset(&mi, 0, sizeof(mi));
-            mi.cbSize = sizeof(mi);
-            if (GetMonitorInfoA(monitor, &mi)) {
-                x = mi.rcMonitor.left;
-                y = mi.rcMonitor.top;
-                w = mi.rcMonitor.right - x;
-                h = mi.rcMonitor.bottom - y;
-            }
-        }
-        SetWindowLongA(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE | WS_SYSMENU);
-        after = HWND_TOP;
-    } else {
-        x = g_savedWindowRect.left;
-        w = g_savedWindowRect.right - x;
-        y = g_savedWindowRect.top;
-        h = g_savedWindowRect.bottom - y;
-        SetWindowLongA(hwnd, GWL_STYLE, g_savedWindowStyle);
-        SetWindowLongA(hwnd, GWL_EXSTYLE, g_savedWindowExStyle);
-        after = HWND_NOTOPMOST;
-    }
-    if (!SetWindowPos(hwnd, after, x, y, w, h, SWP_FRAMECHANGED | SWP_SHOWWINDOW)) {
-        Log_Printf("fullscreen: SetWindowPos failed (%lu)\n", (unsigned long)GetLastError());
-        return 0;
-    }
-    Log_Printf("fullscreen: SetWindowPos to %d (%d,%d %dx%d)\n", fullscreen, x, y, w, h);
-    g_videoFullscreen = fullscreen;
-    return 1;
-#else
-    /*
-     * POSIX: the original reaches into the Win32 window and sets WS_POPUP
-     * styles by hand to get a borderless full-screen window on the primary
-     * monitor. SDL 1.2 already provides exactly that on X11/Wayland, so the
-     * call is delegated to SDL_WM_ToggleFullScreen. The saved-window
-     * bookkeeping (g_savedWindowRect etc.) is Windows-only and is left at its
-     * initial values, since nothing reads it on this platform.
-     *
-     * Difference from the original, recorded in PLANS.md: the original ignores
-     * the monitor layout and uses the primary monitor's rectangle; SDL asks the
-     * window manager. Both end up borderless at full screen on the default
-     * output.
-     */
-    if (g_screenSurface == NULL) {
-        return 0;
-    }
-    if (g_videoFullscreen == fullscreen) {
-        return 1;
-    }
-    if (!SDL_WM_ToggleFullScreen(g_screenSurface)) {
-        return 0;
-    }
-    g_videoFullscreen = fullscreen;
-    return 1;
-#endif
 #endif
 }
 
@@ -1159,7 +1049,6 @@ SDL_Surface *Surface_ToRGBA32(SDL_Surface *src)
     if (dst == NULL) {
         return NULL;
     }
-#ifdef MUGEN_SDL2_API
     /*
      * SDL2 keeps per-surface alpha outside SDL_PixelFormat
      * (SDL_GetSurfaceAlphaMod / SDL_SetSurfaceAlphaMod), and dropped
@@ -1186,22 +1075,6 @@ SDL_Surface *Surface_ToRGBA32(SDL_Surface *src)
         SDL_SetSurfaceBlendMode(src, saved_blend);
     }
     return dst;
-#else
-    flags = src->flags & (SDL_SRCALPHA | SDL_RLEACCELOK);
-    alpha = src->format->alpha;
-    if (flags & SDL_SRCALPHA) {
-        SDL_SetAlpha(src, 0, 0);
-    }
-    rect.x = 0;
-    rect.y = 0;
-    rect.w = (Uint16)src->w;
-    rect.h = (Uint16)src->h;
-    SDL_UpperBlit(src, &rect, dst, &rect);     /* the same rectangle for both */
-    if ((flags & SDL_SRCALPHA) == SDL_SRCALPHA) {
-        SDL_SetAlpha(src, flags, alpha);
-    }
-    return dst;
-#endif
 }
 
 /* 0x004635C0: [Video] VRetrace; only the OpenGL renderers pass it to SDL. */
@@ -1212,8 +1085,33 @@ void Video_SetVRetrace(int vretrace)
     }
 #ifndef ANDROID_PORT
     if (g_renderMode == RENDER_OPENGL || g_renderMode == RENDER_OPENGL_SCREEN) {
-        SDL_GL_SetAttribute(SDL_GL_SWAP_CONTROL, vretrace != 0);
+        Video_SetSwapInterval(vretrace != 0);
     }
 #endif
     g_vretrace = vretrace;
+}
+
+/* SDL2-only platform dispatch: native vitaGL must never swap SDL's window. */
+void Video_SwapBuffers(void)
+{
+#ifdef MUGEN_VITA_GL
+    VitaGl_SwapBuffers();
+#elif defined(ANDROID_PORT)
+#ifdef MUGEN_GLES
+    Android_GLPresent();
+#endif
+#else
+    Sdl2_GL_SwapBuffers();
+#endif
+}
+
+void Video_SetSwapInterval(int interval)
+{
+#ifdef MUGEN_VITA_GL
+    VitaGl_SetSwapInterval(interval);
+#elif defined(ANDROID_PORT)
+    (void)interval; /* Android owns swap policy with its EGL context. */
+#else
+    Sdl2_SetSwapInterval(interval);
+#endif
 }

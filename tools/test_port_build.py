@@ -9,6 +9,8 @@ import tarfile
 import tempfile
 import time
 import unittest
+import zipfile
+import hashlib
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / 'build' / 'port-review'
@@ -62,7 +64,7 @@ fetch() { return 1; }
 TOOLCHAIN_VER=new;TOOLCHAIN_FILE=kit.tar.gz;TOOLCHAIN_URL=https://invalid.example/test
 TOOLCHAIN_HASH_KIND=sha256;TOOLCHAIN_GLIBC=2.30;OFFLINE=0;CROSS=arm-test-
 TOOLCHAIN_DIR="$TEST/kit";CC_BIN="$TOOLCHAIN_DIR/bin/arm-test-gcc"
-DOWNLOADS="$TEST/downloads"
+DOWNLOADS="$TEST/downloads"; SCRATCH="$TEST/scratch"
 TOOLCHAIN_HASH=$(sha256sum "$DOWNLOADS/kit.tar.gz" 2>/dev/null | cut -d' ' -f1) || true
 '''
         result = self.run_shell(script + function('hash_of') + function('install_toolchain') + '\ninstall_toolchain', TEST=str(self.p))
@@ -149,24 +151,37 @@ fail() { exit 1; }
             ids.append(result.stdout)
         self.assertNotEqual(*ids)
 
-    def test_sysroot_pc_names_copied_directories(self):
-        root = self.p / 'root'
-        lib = root / 'usr/lib/aarch64-linux-gnu'
-        lib.mkdir(parents=True)
-        inc = root / 'usr/include/SDL2'
-        inc.mkdir(parents=True)
-        (inc / 'SDL.h').write_text('/* fixture */')
-        # Only validate metadata layout, not ARM architecture. A real ELF keeps
-        # readelf/SONAME behavior honest without a cross-compiler dependency.
-        shutil.copy('/lib/x86_64-linux-gnu/libSDL2-2.0.so.0', lib / 'libSDL2-2.0.so.0')
-        dest = self.p / 'sysroot'
-        result = subprocess.run(['bash', str(ROOT / 'port/arm64/tools/make_sysroot.sh'), '--root', str(root), '--dest', str(dest)],
-                                env=self.env, capture_output=True, text=True)
+    def test_sysroot_pc_names_installed_directories(self):
+        # The generator is retired; exercise the current release-asset installer
+        # and its relocation against an offline synthetic SDL2 dependency tree.
+        payload = self.p / 'payload/usr'
+        (payload / 'include/SDL2').mkdir(parents=True)
+        (payload / 'include/SDL2/SDL.h').write_text('/* fixture */')
+        (payload / 'lib/pkgconfig').mkdir(parents=True)
+        shutil.copy('/lib/x86_64-linux-gnu/libSDL2-2.0.so.0', payload / 'lib/libSDL2-2.0.so.0')
+        (payload / 'lib/pkgconfig/sdl2.pc').write_text(
+            'prefix=/old/build/host\nName: sdl2\nDescription: fixture\nVersion: 2.32.4\n')
+        downloads = self.p / 'downloads'
+        downloads.mkdir()
+        archive = downloads / 'sysroot.zip'
+        with zipfile.ZipFile(archive, 'w') as bundle:
+            for path in payload.rglob('*'):
+                if path.is_file():
+                    bundle.write(path, 'arm64-sysroot/usr/' + path.relative_to(payload).as_posix())
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        script = """
+fail() { echo "$*" >&2; exit 1; }; say() { :; }; info() { :; }
+DOWNLOADS="$TEST/downloads";SCRATCH="$TEST/scratch";XSYSROOT="$TEST/sysroot"
+SYSROOT_FILE=sysroot.zip;OFFLINE=1
+""" + 'SYSROOT_SHA256=' + digest + '\n'
+        result = self.run_shell(script + function('hash_of') + function('install_sysroot') +
+                                '\ninstall_sysroot', TEST=str(self.p))
         self.assertEqual(result.returncode, 0, result.stderr)
-        pc = (dest / 'usr/lib/pkgconfig/sdl2.pc').read_text()
-        prefix = Path(next(row[7:] for row in pc.splitlines() if row.startswith('prefix=')))
-        self.assertTrue((prefix / 'include/SDL2/SDL.h').is_file())
-        self.assertTrue((prefix / 'lib/libSDL2-2.0.so.0').is_file())
+        dest = self.p / 'sysroot'
+        prefix = subprocess.check_output(['pkg-config', '--variable=prefix', 'sdl2'],
+            env=dict(self.env, PKG_CONFIG_LIBDIR=str(dest / 'usr/lib/pkgconfig')), text=True).strip()
+        self.assertTrue((Path(prefix) / 'include/SDL2/SDL.h').is_file())
+        self.assertTrue((Path(prefix) / 'lib/libSDL2-2.0.so.0').is_file())
 
     def test_failed_upload_never_extracts_over_live_binary(self):
         bindir = self.p / 'bin'
@@ -186,7 +201,7 @@ bash -c "$cmd"
         script = '''
 fail() { echo "$*" >&2; exit 1; }; say() { :; }; info() { :; }
 DEVICE_PASS=test-only;DEVICE=fake;DEVICE_DIR=game;DEVICE_BIN=engine;KEEP_OLD=1
-ROOT="$TEST/state";target="$TEST/engine"
+ROOT="$TEST/state";target="$TEST/engine";SCRATCH="$TEST/scratch"
 '''
         result = self.run_shell(script + function('upload') + '\nupload', TEST=str(self.p), FAKE_DEVICE=str(device),
                                 PATH=str(bindir) + os.pathsep + self.env['PATH'])

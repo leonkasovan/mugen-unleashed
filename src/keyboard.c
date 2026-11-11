@@ -10,16 +10,12 @@
 /* <SDL.h> comes from mugen.h, which pulls it in after glad.h. */
 
 #include "mugen.h"
-#ifdef MUGEN_SDL2_API
 #include "sdl2keys.h"
-#endif
 
-#ifdef MUGEN_SDL2_API
 /* Port fix: physical Return state is separate from gameplay state. A consumed
  * chord stays consumed until Return-up, even if Alt is released first. */
 static int g_fullscreenReturnHeld;
 static int g_fullscreenReturnConsumed;
-#endif
 
 /*
  * 0x0046E290: a key went down (pressed != 0) or up. Key 0 is ignored. The
@@ -37,7 +33,6 @@ void Keyboard_HandleKey(int key, int pressed)
         return;
     }
     g_keyModState = SDL_GetModState();
-#ifdef MUGEN_SDL2_API
     if (key == SDLK_RETURN) {
         if (!pressed) {
             g_fullscreenReturnHeld = 0;
@@ -60,7 +55,6 @@ void Keyboard_HandleKey(int key, int pressed)
             return;
         }
     }
-#endif
     if (key == KEY_PAUSE_TOGGLE && pressed) {
         g_pauseToggled ^= 1;
     }
@@ -86,16 +80,9 @@ int Keyboard_Init(void)
         return 0;
     }
     memset(g_keyState, 0, sizeof(g_keyState));
-#ifdef MUGEN_SDL2_API
     g_fullscreenReturnHeld = g_fullscreenReturnConsumed = 0;
-#endif
     g_keyHandler = NULL;
-    if (g_keyboardKeepRepeat == 0) {
-        g_keyboardKeepRepeat = 0;
-#ifndef ANDROID_PORT
-        SDL_EnableKeyRepeat(0, 0);
-#endif
-    }
+    /* SDL2 repeat is delivered in events; there is no global repeat switch. */
     g_keyboardQueueWrite = 0;
     g_keyboardQueueRead = 0;
     g_keyboardActive = 1;
@@ -109,14 +96,9 @@ int Keyboard_Init(void)
 void Keyboard_SyncState(void)
 {
     int count;
-#ifdef ANDROID_PORT
     const Uint8 *state = SDL_GetKeyboardState(&count);
-#else
-    const Uint8 *state = SDL_GetKeyState(&count);
-#endif
     int i;
 
-#ifdef MUGEN_SDL2_API
     /* Both SDL2 targets use the shared inverse config-ID table. Native SDL2
      * keyboard state is indexed by scancode, never by the engine key number. */
     memset(g_keyState, 0, sizeof(g_keyState));
@@ -131,16 +113,7 @@ void Keyboard_SyncState(void)
     g_fullscreenReturnHeld = g_keyState[SDLK_RETURN] != 0;
     if (!g_fullscreenReturnHeld) g_fullscreenReturnConsumed = 0;
     if (g_fullscreenReturnConsumed) g_keyState[SDLK_RETURN] = 0;
-    return;
-#endif
-    if (count > 0x143) {
-        count = 0x143;
-    } else if (count > INPUT_KEY_COUNT) {
-        count = INPUT_KEY_COUNT;
-    }
-    for (i = 0; i < count; i++) {
-        g_keyState[i] = state[i];
-    }
+
 }
 
 /*
@@ -166,7 +139,7 @@ int Keyboard_SetEventHandler(KeyEventFn fn)
     }
 #else
     if (fn != NULL) {
-        SDL_EnableUNICODE(1);
+        SDL_StartTextInput();
     }
 #endif
     return 1;

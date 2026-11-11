@@ -13,13 +13,10 @@
  * sound. Channels of the slots are SDL_mixer channels (Mix_AllocateChannels).
  */
 /* <SDL.h> comes from mugen.h, which pulls it in after glad.h. */
+#include "mugen.h"
 #include <SDL_mixer.h>
 #include <libresample.h>
 
-/* Elecbyte's SDL_mixer build also reports the chunk size (SDL_mixer.def). */
-extern DECLSPEC int SDLCALL Mix_QuerySpecEx(int *frequency, Uint16 *format, int *channels, int *chunksize);
-
-#include "mugen.h"
 
 #define SOUND_VOLUME_SCALE 1.28     /* percent to SDL_mixer volume (MIX_MAX_VOLUME = 128) */
 #define SOUND_PAN_CENTER   0x7F
@@ -82,11 +79,7 @@ int Sound_Init(int buffer_log2, int channels, int bits, int mix_channels, int sa
     if (g_sndOpen != 0) {
         return 0;
     }
-#ifdef ANDROID_PORT
     SDL_strlcpy(driver, SDL_GetCurrentAudioDriver() != NULL ? SDL_GetCurrentAudioDriver() : "unavailable", sizeof(driver));
-#else
-    SDL_AudioDriverName(driver, 50);
-#endif
     MatchLog_Printf(7, "Using SDL audio driver: %s\n", driver);
     MatchLog_Printf(7, "Requesting mixer parameters (%g, %d, %d, %d)...\n", g_sndFormat.rate, bits,
                     g_sndFormat.channels, g_sndChunkSize);
@@ -95,16 +88,11 @@ int Sound_Init(int buffer_log2, int channels, int bits, int mix_channels, int sa
         MatchLog_Printf(3, "Couldn't open audio: %s\n", SDL_GetError());
         return 0;
     }
-#ifdef ANDROID_PORT
-    if (!Mix_QuerySpec(&freq, &format, &out_channels)) {
+    if (!Sound_QueryMixerSpec(&freq, &format, &out_channels, &chunk_size)) {
         Mix_CloseAudio();
         g_libraryError = LIBERR_SOUND;
         return 0;
     }
-    chunk_size = g_sndChunkSize; /* SDL2_mixer has no chunk-size query. */
-#else
-    Mix_QuerySpecEx(&freq, &format, &out_channels, &chunk_size);
-#endif
     g_sndFormat.rate = (double)freq;
     g_sndFormat.channels = out_channels;
     g_sndChunkSize = chunk_size;

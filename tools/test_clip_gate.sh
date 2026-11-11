@@ -20,7 +20,7 @@ mkdir -p "$OUT"
 SDL_CFLAGS=$("$PKGCONF" --cflags sdl2 | sed 's/-Dmain=SDL_main//')
 # SDL_main.h renames main() unless this is set.
 SDL_CFLAGS="$SDL_CFLAGS -DSDL_MAIN_HANDLED"
-SDL_LIBS=$("$PKGCONF" --libs --static sdl2 | sed 's/-lSDL2main//')
+SDL_LIBS="${SDL_LIBS:-$("$PKGCONF" --libs $SDL_LINK_MODE sdl2 | sed 's/-lSDL2main//')}"
 
 INCS="-Isrc -Ithird_party/glad-2.1 -Ithird_party/minizip-0.15"
 INCS="$INCS -Ithird_party/lua-5.1.4/src -Ithird_party/libpng-1.2.38"
@@ -59,7 +59,7 @@ build_and_run() {
         "$@" $INCS $SDL_CFLAGS \
         tools/test_clip_gate.c src/gfx.c \
         -Wl,--gc-sections -o "$OUT/$id" \
-        $SDL_LIBS -lwinmm -lm >>"$OUT/$id.c.log" 2>&1; then
+        $SDL_LIBS $TEST_SYS_LIBS -lm >>"$OUT/$id.c.log" 2>&1; then
         echo "FAIL: $id (link)"
         grep -v 'within comment' "$OUT/$id.c.log" | tail -8
         fails=$((fails + 1))
@@ -75,7 +75,7 @@ build_and_run() {
 }
 
 # Desktop SDL2: a GL renderer exists, so the clip rect must reach it.
-build_and_run desktop -DMUGEN_SDL2_API -DMUGEN_SDL2 -DCLIP_GATE_EXPECT_GL
+build_and_run desktop -DCLIP_GATE_EXPECT_GL
 
 # Android without the GLES backend: there is no GL renderer to notify.
 build_and_run android -DANDROID_PORT -DMUGEN_ANDROID_SW

@@ -7,6 +7,6 @@ OUT=build/tmp/test-blend-math
 . tools/lib_target.sh
 mkdir -p "$OUT"
 # shellcheck disable=SC2086
-"$CC" $ARCHFLAGS -std=gnu11 -O1 -g -Wall -Isrc \
+"$CC" $ARCHFLAGS -DSDL_MAIN_HANDLED -std=gnu11 -O1 -g -Wall -Isrc \
     tools/test_blend_math.c -o "$OUT/test_blend_math"
 run_harness "$OUT/test_blend_math"

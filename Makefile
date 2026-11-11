@@ -7,11 +7,7 @@
 # it, so MP3/Ogg playback needs no external decoder DLL). No
 # Elecbyte.MUGEN.libs and no plugin DLLs are needed to run.
 #
-# `make SDL_BACKEND=1` still builds the SDL 1.2 backend, which is what the
-# log-comparison workflow against the original binary uses.
-#
-# The static counterpart to the CMake/MSVC build in CMakeLists.txt, which still
-# links the game's DLLs. Same sources, different link step.
+# SDL2-only Windows/Linux build; Android and Vita retain platform CMake.
 #
 # The Windows reference build is a 32-bit GUI executable and needs an
 # i686-w64-mingw32 toolchain (x86devkit): the engine is a 32-bit binary
@@ -26,7 +22,7 @@
 # linked instead of the kit's static archives, so the executable is
 # mugen-<target> and both checks below follow the platform being built.
 #
-#   make              build $(TARGET): mugen-mingw-<target>-sdl<2|1>.exe on
+#   make              build $(TARGET): mugen-mingw-<target>-sdl2.exe on
 #                     Windows, mugen-<target> on Linux (SDL2 is the only
 #                     backend there)
 # (verify with "make help")
@@ -188,27 +184,12 @@ DEBUG    ?=
 
 MUGEN_GAME_DIR ?=
 
-# SDL backend: 2 = SDL2 with SDL2_mixer/SDL2_ttf (the default), 1 = SDL 1.2
-# with the game's SDL_mixer/SDL_ttf (kept as the reference backend for the
-# log-comparison workflow). See SDL2_PLAN.md. The backend changes the include
-# path, the packages linked, the object/output directory and the engine's -D
-# flags, so a build of one backend can never reuse the other's objects.
-#
-# SDL 1.2 is still buildable with `make SDL_BACKEND=1`.
-SDL_BACKEND ?= 2
-ifneq ($(filter 1 2,$(SDL_BACKEND)),$(SDL_BACKEND))
-  $(error SDL_BACKEND must be 1 or 2, not "$(SDL_BACKEND)")
+# SDL2 is the only backend. Reject stale SDL1 build commands explicitly.
+ifneq ($(origin SDL_BACKEND),undefined)
+  ifneq ($(SDL_BACKEND),2)
+    $(error SDL2 is required; SDL_BACKEND=$(SDL_BACKEND) is no longer supported)
+  endif
 endif
-# The output name marks the non-default backend, not the default one: SDL2 is
-# The output name always marks the backend: SDL2 is the default and gets
-# -sdl2, an SDL 1.2 build gets -sdl1. Object and output directories follow the
-# same split, so the two backends can be built side by side without reusing
-# each other's objects.
-#
-# Only the win32 target supports the SDL 1.2 backend (the reference backend
-# for the log-comparison workflow); SDL2-only targets reject SDL_BACKEND=1 so
-# their names stay within the approved set.
-SDL_BACKEND_TAG := $(if $(filter 1,$(SDL_BACKEND)),sdl1,sdl2)
 
 # ------------------------------------------------------- platform detection
 #
@@ -280,13 +261,13 @@ endif
 ifeq ($(MUGEN_TARGET),win32)
   MUGEN_FAMILY := win32
   MUGEN_PTRBITS := 32
-  BUILD    ?= build/mingw-$(SDL_BACKEND_TAG)
-  TARGET   := $(BUILD)/mugen-mingw-win32-$(SDL_BACKEND_TAG).exe
+  BUILD    ?= build/mingw-sdl2
+  TARGET   := $(BUILD)/mugen-mingw-win32-sdl2.exe
 else ifeq ($(MUGEN_TARGET),win64)
   MUGEN_FAMILY := win32
   MUGEN_PTRBITS := 64
-  BUILD    ?= build/mingw64-$(SDL_BACKEND_TAG)
-  TARGET   := $(BUILD)/mugen-mingw-win64-$(SDL_BACKEND_TAG).exe
+  BUILD    ?= build/mingw64-sdl2
+  TARGET   := $(BUILD)/mugen-mingw-win64-sdl2.exe
 else
   MUGEN_FAMILY := linux
   MUGEN_PTRBITS := $(if $(findstring 64,$(MUGEN_TARGET)),64,32)
@@ -295,22 +276,8 @@ else
   ifneq ($(strip $(CROSS_COMPILE)),)
     MUGEN_CROSS_TAG := -$(patsubst %-,%,$(CROSS_COMPILE))
   endif
-  BUILD    ?= build/$(MUGEN_TARGET)$(MUGEN_CROSS_TAG)-$(SDL_BACKEND_TAG)
+  BUILD    ?= build/$(MUGEN_TARGET)$(MUGEN_CROSS_TAG)-sdl2
   TARGET   := $(BUILD)/mugen-$(MUGEN_TARGET)$(MUGEN_CROSS_TAG)
-endif
-
-# SDL 1.2 is only wired up for the win32 target; everywhere else it is SDL2
-# or nothing, so the name stays within the approved set.
-ifeq ($(SDL_BACKEND),1)
-ifneq ($(MUGEN_TARGET),win32)
-  ifeq ($(MUGEN_TARGET),win64)
-    $(error SDL_BACKEND=1 is only supported for MUGEN_TARGET=win32; $(CC) targets $(TRIPLE), so the \
-            64-bit target was selected -- the SDL 1.2 reference backend needs the i686 kit \
-            (x86devkit on PATH, or CC=i686-w64-mingw32-gcc))
-  else
-    $(error SDL_BACKEND=1 is only supported for MUGEN_TARGET=win32, not "$(MUGEN_TARGET)")
-  endif
-endif
 endif
 
 # A target picked from the compiler, rather than asked for, is announced: on a
@@ -444,7 +411,7 @@ LIB_DIR   := $(BUILD)/lib
 CONFIG_STAMP := $(OBJ_DIR)/.config
 # $(MUGEN_TARGET) already distinguishes win32/win64/linux-<arch>, so it covers
 # the pointer width and architecture that ARCHFLAGS would add.
-CONFIG_ID    := backend=$(SDL_BACKEND) target=$(MUGEN_TARGET) gles=$(MUGEN_GLES)
+CONFIG_ID    := backend=sdl2-native-v1 target=$(MUGEN_TARGET) gles=$(MUGEN_GLES)
 ifneq ($(strip $(MUGEN_WIN_SYSROOT)),)
 # The dependency tree decides which headers and archives the objects were built
 # against, so switching trees (or switching between a tree and an augmented kit)
@@ -463,13 +430,13 @@ ICON_DIR  := $(BUILD)/icon
 # pulls each library's own static dependencies (freetype, bz2, ogg, vorbis,
 # FLAC, opus, wavpack, gme, mpg123, zlib, pthread, stdc++ ...). Asking
 # pkg-config for --libs --static is what makes this link close: hand-listing
-# -lSDL_mixer -lSDL_ttf would miss a dozen transitive archives.
+# -lSDL2_mixer -lSDL2_ttf would miss transitive codec archives.
 # SDL_image is deliberately absent: the engine loads PNG itself (src/pngio.c
 # via <png.h> in mugen.h) and never calls IMG_*, so nothing needs it. It was
 # only ever there because SDL_image.pc happens to list libpng16, which used to
 # collide with the vendored libpng 1.2.38. zlib and libpng16 are now asked for
 # directly instead of arriving as someone else's transitive dependency.
-STATIC_PKGS := sdl SDL_gfx SDL_mixer SDL_ttf zlib libpng16
+STATIC_PKGS := sdl2 SDL2_mixer SDL2_ttf zlib libpng16
 # -mwindows is stripped from the pkg-config output and added once at the end of
 # the link line rather than repeated per package.
 #
@@ -482,15 +449,8 @@ PKG_LIBS    := $(filter-out -mwindows,$(shell $(PKG_CONFIG) --libs --static $(ST
 PKG_CFLAGS  := $(shell $(PKG_CONFIG) --cflags $(STATIC_PKGS) 2>/dev/null)
 SDK_LIB_DIR ?= $(shell $(PKG_CONFIG) --variable=libdir $(firstword $(STATIC_PKGS)) 2>/dev/null)
 
-# The static archives check-libs looks for, per backend. SDL 1.2 keeps the
-# add-ons in separate libraries (SDL_gfx has no pkg-config libs of its own on
-# every kit); SDL2 has SDL2_mixer/SDL2_ttf. mpg123 comes in transitively and is
-# listed here because a kit missing it links but plays no MP3.
-ifeq ($(SDL_BACKEND),2)
-  CHECK_LIBS := SDL2 SDL2_mixer SDL2_ttf z mpg123
-else
-  CHECK_LIBS := SDL SDL_gfx SDL_mixer SDL_ttf z mpg123
-endif
+# Required static SDL2 archives. Codecs are pulled in by SDL2_mixer metadata.
+CHECK_LIBS := SDL2 SDL2_mixer SDL2_ttf z mpg123
 
 # ------------------------------------------------------------- compile flags
 
@@ -550,12 +510,11 @@ ifeq ($(MUGEN_FAMILY),win32)
     ENGINE_DEFS := -D_CRT_SECURE_NO_WARNINGS -D_CRT_NONSTDC_NO_DEPRECATE \
                    -DPTW32_STATIC_LIB $(LRS_DEFS)
     SYS_LIBS    := -lopengl32 -lglu32 -lwinmm -lshell32 -luser32 -lgdi32
-    # Windows paths: the MSVC SDK tree is part of the build, and the compat layer
-    # is not used at all.
+    # Win32 keeps the reference pthread/zlib declarations; no SDL1 headers.
     PLAT_CPPFLAGS := -I$(SDK_DIR)/include
   endif
   LINK_MODE   := -mwindows
-  STATIC_PKGS := sdl SDL_gfx SDL_mixer SDL_ttf zlib libpng16
+  STATIC_PKGS := sdl2 SDL2_mixer SDL2_ttf zlib libpng16
   PKG_LIBS    := $(filter-out -mwindows,$(shell $(PKG_CONFIG) --libs --static $(STATIC_PKGS) 2>/dev/null))
   PKG_CFLAGS  := $(shell $(PKG_CONFIG) --cflags $(STATIC_PKGS) 2>/dev/null)
   SDL_CFLAGS  :=
@@ -572,7 +531,7 @@ else
   LINK_MODE   :=
   # No --static on Linux: the distro's shared SDL is the normal thing to link
   # against, and SDL_mixer.so already carries its own codec dependencies.
-  STATIC_PKGS := sdl SDL_gfx SDL_mixer SDL_ttf zlib libpng
+  STATIC_PKGS := sdl2 SDL2_mixer SDL2_ttf zlib libpng
   # Cross-compiling (CROSS_COMPILE=... XSYSROOT=...): the sd2 branch below
   # replaces STATIC_PKGS/PKG_LIBS anyway, and MUGEN_CROSS_STATIC decides
   # --static. Here the only difference is that -lGL/-lGLU (which a GLES cross
@@ -584,9 +543,9 @@ else
   endif
   PKG_CFLAGS  := $(shell $(PKG_CONFIG) --cflags $(STATIC_PKGS) 2>/dev/null)
   # SDL 1.2 headers live in /usr/include/SDL for the distro package.
-  SDL_CFLAGS  := $(shell $(PKG_CONFIG) --cflags sdl 2>/dev/null)
+  SDL_CFLAGS  := $(shell $(PKG_CONFIG) --cflags sdl2 2>/dev/null)
   SYS_LIBS    := -lpthread
-  # The MSVC SDK headers are Windows-only and must not be on this path.
+  # The reference Win32 pthread/zlib headers must not be on this path.
   PLAT_CPPFLAGS :=
   # compat_linux.h is force-included: several sources include <SDL.h> or
   # <libresample.h> before mugen.h, so __int64/__cdecl and the CRT renames must
@@ -618,23 +577,8 @@ else
   endif
 endif
 
-# --- SDL backend selection --------------------------------------------------
-#
-# SDL_BACKEND=2 (the default) uses SDL2 and its add-ons and turns on
-# MUGEN_SDL2, which makes mugen.h pull in src/sdl2compat.h: the removed SDL
-# 1.2 entry points (SDL_SetVideoMode, SDL_Flip, SDL_WM_*, ...) are reimplemented
-# over SDL2 there, so the reconstructed call sites in src/ keep their shape.
-# SDL_BACKEND=1 selects the older SDL 1.2 stack instead; it is kept for the
-# reference build and the log comparison, not as the normal target.
-#
-# Two pkg-config outputs must be edited, not used verbatim:
-#   -Dmain=SDL_main  sdl2.pc renames main; this build keeps the reconstructed
-#                    WinMain in src/sdlmain.c, which calls main() itself, so the
-#                    rename must not happen (SDL_MAIN_HANDLED semantics).
-#   -lSDL2main       the same reasoning: SDL2main's WinMain would clash with the
-#                    reconstructed one.
-# Everything else (the -mwindows flag, SDL2's own transitive imports) is kept.
-ifeq ($(SDL_BACKEND),2)
+# --- SDL2 dependencies ------------------------------------------------------
+# Keep the engine's entry point; SDL2main would add a conflicting WinMain.
   ifeq ($(MUGEN_FAMILY),win32)
     STATIC_PKGS := sdl2 SDL2_mixer SDL2_ttf zlib libpng16
     PKG_LIBS    := $(filter-out -mwindows -lSDL2main,$(shell $(PKG_CONFIG) --libs --static $(STATIC_PKGS) 2>/dev/null))
@@ -658,10 +602,9 @@ ifeq ($(SDL_BACKEND),2)
   PKG_CFLAGS := $(filter-out -Dmain=SDL_main,$(shell $(PKG_CONFIG) --cflags $(STATIC_PKGS) 2>/dev/null))
   SDL_CFLAGS := $(shell $(PKG_CONFIG) --cflags sdl2 2>/dev/null)
   # SDL_MAIN_HANDLED: told before <SDL.h>, so SDL2 leaves main() alone. The
-  # engine keeps its own entry points (src/sdlmain.c on Windows, src/main.c on
+  # engine keeps its own entry points (src/platform_main_win32.c on Windows, src/main.c on
   # Linux) exactly as the SDL 1.2 build does.
-  ENGINE_DEFS += -DMUGEN_SDL2 -DSDL_MAIN_HANDLED
-endif
+  ENGINE_DEFS += -DSDL_MAIN_HANDLED
 
 # --- GLES backend selection -------------------------------------------------
 #
@@ -757,7 +700,7 @@ COMMONFLAGS := $(ARCHFLAGS) -std=gnu11 $(FPUFLAGS) \
                -fno-strict-aliasing -MMD -MP $(OPT)
 
 ENGINE_CFLAGS := $(COMMONFLAGS) $(FORCE_INCLUDE) $(ENGINE_WARN) $(ENGINE_DEFS) $(BUILD_DEFS)
-# Old third-party code: its warnings are not ours to fix, as /W0 in CMake.
+# Third-party warning policy is separate from engine diagnostics.
 TP_CFLAGS     := $(COMMONFLAGS) -w $(ENGINE_DEFS)
 
 # --- the window icon, only meaningful on Windows ------------------------------
@@ -796,17 +739,15 @@ endif
 # ------------------------------------------------------------------- sources
 
 # The engine, one file per module of the original (see docs/ANALYSIS.md).
-# src/sdlmixercompat.c is not an original module: it supplies Mix_QuerySpecEx,
-# which only Elecbyte's SDL_mixer build exported. Linked statically here, not in
-# the CMake build, which uses the game's real SDL_mixer.dll.
+# src/sdl2audio.c is not an original module: it supplies Sound_QueryMixerSpec,
+# for the engine's chunk-size contract, implemented over stock SDL2_mixer.
 #
 # ENGINE_EXCLUDE_SRCS removes the desktop renderer under MUGEN_GLES (see the
 # GLES backend block above); it is empty for every other build.
 ENGINE_SRCS := $(filter-out $(ENGINE_EXCLUDE_SRCS),$(wildcard $(SRC_DIR)/*.c))
 ENGINE_OBJS := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/src/%.o,$(ENGINE_SRCS))
 
-# Third-party libraries, built from source exactly as CMakeLists.txt and
-# cmake/ThirdParty.cmake build them.
+# Third-party static libraries built from the vendored sources.
 LUA_SRCS := $(wildcard $(TP_DIR)/lua-5.1.4/src/*.c)
 
 # libresample 0.1.3, vendored and ported to multi-channel to match the ABI of
@@ -879,7 +820,7 @@ $(TARGET): $(ENGINE_OBJS) $(RC_OBJ) $(TP_LIBS)
 # Writes $(CONFIG_STAMP) whenever $(CONFIG_ID) changes. FORCE forces the recipe
 # to run on every build; the file is rewritten only when the content differs, so
 # an unchanged configuration leaves every object's timestamp alone and nothing is
-# recompiled. This is what makes switching SDL_BACKEND (or the target/arch) in an
+# recompiled. This is what makes changing the target/architecture in an
 # existing build directory safe.
 #
 # Every compiled artefact depends on it: the engine sources, Lua, libresample,
@@ -906,6 +847,7 @@ $(OBJ_DIR)/src/model.o: $(SRC_DIR)/model.c $(MODEL_SHADER_HEADERS)
 $(MODEL_SHADER_DIR)/%.h: $(SRC_DIR)/shaders/% tools/embed_shader.sh
 	@echo "  SHADER  $<"
 	$(Q)sh tools/embed_shader.sh "$<" "$@" "g_shader_$(subst .,_,$*)"
+	$(Q)touch "$@" # Acknowledge newer prerequisites even when shader bytes agree.
 
 $(OBJ_DIR)/model/cgltf.o: $(TP_DIR)/cgltf-1.14/cgltf.c $(CONFIG_STAMP)
 	$(Q)mkdir -p $(dir $@)
@@ -1004,8 +946,7 @@ endif
 # windres runs its own preprocessor, so it needs the define on its command line
 # too: the .rc includes icon 101 only under MUGEN_HAS_ICON, and passing it to the
 # C compiler alone left the resource out entirely (no RT_GROUP_ICON, no RT_ICON,
-# and an executable whose icon silently stayed the default). CMake does this
-# through target_compile_definitions; this is the equivalent.
+# and an executable whose icon silently stayed the default).
 RC_DEFS :=
 ifneq ($(ICON_ICO),)
 RC_DEFS += -DMUGEN_HAS_ICON

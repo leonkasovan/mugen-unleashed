@@ -1,12 +1,12 @@
 /*
- * SDL 1.2 over SDL2: the removed entry points, reimplemented.
+ * Engine-owned window, surfaces, texture presentation and GL context using SDL2.
  *
- * Used only by the desktop SDL2 build (Makefile SDL_BACKEND=2). The SDL 1.2
- * build and the Android/Vita ports do not compile this file.
+ * Used by desktop and Vita System presentation. Android owns its platform
+ * display backend; native vitaGL owns the Vita OpenGL display.
  *
  * The video model is the one the original relies on and SDL2 deleted:
  *
- *   SDL_SetVideoMode once -> write into surface->pixels every frame -> flip.
+ *   Sdl2_SetVideoMode once -> write into surface->pixels every frame -> flip.
  *
  * Two presentation backends cover the engine's two renderers:
  *
@@ -30,16 +30,9 @@
  * window, context, renderer or texture.
  */
 #include "mugen.h"
-#ifdef MUGEN_SDL2
+#ifndef ANDROID_PORT
 #include "sdl2keys.h"
 #include "sdl2surface.h"
-
-/* The header aliases SDL_GL_SetAttribute to the shim; inside this file the
- * real SDL2 entry point is the one that has to be called. */
-#undef SDL_GL_SetAttribute
-#undef SDL_SetVideoMode
-#undef SDL_Flip
-#undef SDL_UpdateRect
 
 #include <math.h>
 /* SDL_syswm.h for Sdl2_GetWindowHandle's SDL_GetWindowWMInfo. The engine's own
@@ -71,7 +64,7 @@ typedef struct Sdl2Video {
     int height;
     int bpp;
     int is_gl;
-    int swap_interval;          /* -1 = SDL default, set by SDL_GL_SWAP_CONTROL */
+    int swap_interval;          /* -1 = SDL default, set by Sdl2_SetSwapInterval */
     int vsync_applied;
     int display_dirty;          /* frame-end flush pending (M3 frame boundary) */
 } Sdl2Video;
@@ -281,27 +274,22 @@ static SDL_Surface *Sdl2_DiagCreateSurfaceWithFormat(Uint32 flags, int w, int h,
  * SDL directly. */
 
 
-/* 0 = accepted and ignored, because the SDL2 build has no repeat control. */
-static int g_sdl2KeyRepeatDelay;
-static int g_sdl2KeyRepeatInterval;
-static int g_sdl2UnicodeEnabled;
-
 /* ------------------------------------------------------------------ helpers */
 
 static Uint32 Sdl2_WindowFlags(Uint32 flags)
 {
     Uint32 out = SDL_WINDOW_SHOWN;
 
-    if (flags & SDL_OPENGL) {
+    if (flags & DISPLAY_OPENGL) {
         out |= SDL_WINDOW_OPENGL;
     }
-    if (flags & SDL_FULLSCREEN) {
+    if (flags & DISPLAY_FULLSCREEN) {
         out |= SDL_WINDOW_FULLSCREEN;
     }
-    if (flags & SDL_RESIZABLE) {
+    if (flags & DISPLAY_RESIZABLE) {
         out |= SDL_WINDOW_RESIZABLE;
     }
-    if (flags & SDL_NOFRAME) {
+    if (flags & DISPLAY_BORDERLESS) {
         out |= SDL_WINDOW_BORDERLESS;
     }
     return out;
@@ -462,7 +450,7 @@ static int Sdl2_CreateRendererAndTexture(void)
 SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
 {
     Uint32 rmask, gmask, bmask, amask, format;
-    int is_gl = (flags & SDL_OPENGL) ? 1 : 0;
+    int is_gl = (flags & DISPLAY_OPENGL) ? 1 : 0;
     /* M1 step 2 (plan section 5.2): validate before mutating anything. A
      * minimized/zero-size request must not become a 1x1 game buffer -- the
      * caller keeps its storage and the window keeps its size; Video_OnResize
@@ -555,7 +543,7 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
             return NULL;
         }
     }
-    if (flags & SDL_FULLSCREEN) {
+    if (flags & DISPLAY_FULLSCREEN) {
         if (SDL_GetWindowFlags(g_sdl2Video.window) & SDL_WINDOW_FULLSCREEN) {
             /* already fullscreen */
         } else {
@@ -599,7 +587,7 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
                        GLVersion.minor);
 #endif
         }
-        /* SDL_GL_SWAP_CONTROL arrives before the context exists, so it is
+        /* The swap-interval request arrives before the context exists, so it is
          * recorded by Sdl2_GL_SetAttribute and applied here. */
         if (!g_sdl2Video.vsync_applied && g_sdl2Video.swap_interval >= 0) {
             Sdl2_ApplySwapInterval(g_sdl2Video.swap_interval);
@@ -744,7 +732,7 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
 
 /* Uploads the engine's framebuffer into the texture and draws it.
  *
- * M3 frame boundary (RENDERING_PLAN.md section 7): SDL_UpdateRect only marks
+ * M3 frame boundary (RENDERING_PLAN.md section 7): Sdl2_UpdateRect only marks
  * the display dirty; the actual upload + present happens in Sdl2_PresentFrame
  * at the frame boundary (Screen_Present) or in Sdl2_Flip (the PageFlip path).
  * A thousand offscreen pixel updates therefore present nothing, and one
@@ -897,7 +885,7 @@ void Sdl2_VideoQuit(void)
     Sdl2_DestroyVideo();
 }
 /* Note (plan section 5.2 step 10): the engine never calls this on its normal
- * exit path -- cleanup() in sdlmain.c calls SDL_Quit() directly, as the
+ * exit path -- cleanup() in platform_main_win32.c calls SDL_Quit() directly, as the
  * original did, and the OS reclaims the display surface. Sdl2_VideoQuit
  * exists for the test harness and for any future explicit teardown; the
  * borrowed g_videoSurface/g_screenSurface aliases must not be dereferenced
@@ -929,30 +917,24 @@ int Sdl2_ToggleFullScreen(SDL_Surface *screen)
     return Sdl2_SetFullscreen(screen, (SDL_GetWindowFlags(g_sdl2Video.window) & SDL_WINDOW_FULLSCREEN) == 0);
 }
 
+/* Port change: vsync is an SDL2 context property, not a fake SDL_GLattr. */
+int Sdl2_SetSwapInterval(int interval)
+{
+    g_sdl2Video.swap_interval = interval;
+    g_sdl2Video.vsync_applied = 0;
+    if (g_sdl2Video.gl != NULL) {
+        Sdl2_ApplySwapInterval(interval != 0);
+        g_sdl2Video.vsync_applied = 1;
+    }
+    return 0;
+}
+
+/* Unlike SDL_GL_SetAttribute, this engine operation also initializes video
+ * on a cold start. No synthetic attributes are accepted. */
 int Sdl2_GL_SetAttribute(SDL_GLattr attr, int value)
 {
-    if (attr == SDL_GL_SWAP_CONTROL) {
-        g_sdl2Video.swap_interval = value;
-        g_sdl2Video.vsync_applied = 0;
-        /*
-         * SDL 1.2 let this be set before the surface existed. SDL2 has no such
-         * attribute -- vsync is a property of a live context -- so the value is
-         * recorded here and applied at context creation. When a context already
-         * exists it must be applied immediately: the vretrace toggle is the
-         * in-match Ctrl+V debug key, and deferring it to the next video mode
-         * change meant the setting did nothing until the mode was re-set.
-         */
-        if (g_sdl2Video.gl != NULL) {
-            Sdl2_ApplySwapInterval(value != 0);
-            g_sdl2Video.vsync_applied = 1;
-        }
-        return 0;
-    }
-    /* SDL1 callers configure GL before opening a window. SDL2 requires the
-     * video subsystem even for these requests; preserve them on a cold start. */
-    if ((SDL_WasInit(SDL_INIT_VIDEO) & SDL_INIT_VIDEO) == 0 && SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) {
+    if ((SDL_WasInit(SDL_INIT_VIDEO) & SDL_INIT_VIDEO) == 0 && SDL_InitSubSystem(SDL_INIT_VIDEO) != 0)
         return -1;
-    }
     return SDL_GL_SetAttribute(attr, value);
 }
 
@@ -999,93 +981,5 @@ void *Sdl2_GetWindowHandle(void)
 
 /* -------------------------------------------------------------------- misc */
 
-char *Sdl2_AudioDriverName(char *namebuf, int maxlen)
-{
-    const char *name = SDL_GetCurrentAudioDriver();
 
-    if (namebuf == NULL || maxlen <= 0) {
-        return NULL;
-    }
-    if (name == NULL) {
-        name = "";
-    }
-    SDL_strlcpy(namebuf, name, (size_t)maxlen);
-    return namebuf;
-}
-
-int Sdl2_EnableKeyRepeat(int delay, int interval)
-{
-    /* SDL2 removed key repeat control: repeat is a platform setting and
-     * SDL_KEYDOWN arrives already repeated. The reconstructed calls (console
-     * on, console off, keyboard init) are recorded rather than dropped so the
-     * intent stays visible. */
-    g_sdl2KeyRepeatDelay = delay;
-    g_sdl2KeyRepeatInterval = interval;
-    return 0;
-}
-
-int Sdl2_EnableUNICODE(int enable)
-{
-    int previous = g_sdl2UnicodeEnabled;
-
-    g_sdl2UnicodeEnabled = enable;
-    /* SDL2 always delivers text through SDL_TEXTINPUT; events.c decodes it
-     * into the engine's unicode field. */
-    return previous;
-}
-
-/*
- * SDL2 keycode -> the engine's key identifier (SDL 1.2 numbering).
- *
- * Why a table: SDL 1.2 and SDL2 do not share a number for any non-printable
- * key, and the difference is not a constant offset. SDL 1.2 called the up
- * arrow SDLK_UP == 273; SDL2 calls it scancode|SDLK_SCANCODE_MASK, and its
- * scancode for the same key is 82. The engine indexes g_keyState, g_keyMap and
- * g_inputState with the SDL 1.2 numbers -- they are also what mugen.cfg
- * contains -- so the conversion has to be name-exact.
- *
- * Printable ASCII is the same in both (SDLK_a == 'a', SDLK_RETURN == '\r',
- * SDLK_SPACE == ' ', SDLK_ESCAPE == 0x1B), so those are passed through and are
- * not listed. Everything else is below. A key SDL2 has and SDL 1.2 did not
- * (LGUI, PRINTSCREEN, KP_CLEAR, ...) returns 0, which every consumer already
- * treats as "ignore".
- *
- * Like SDL 1.2's own SDL_EnableUNICODE translation, the result is not
- * remembered: a key pressed under one layout and released under another can
- * leave its state set. The engine already tolerates that (Keyboard_Init clears
- * the array, and Android's port has the same property).
- */
-/*
- * Sdl2_EngineKey and Sdl2_SdlKeyForEngineKey live in src/sdl2keys.c so SDL2
- * consumers without this file's window/present implementation (Android, Vita
- * SDL2) can share the exact same tables. This file includes that module's
- * header; the functions below (Sdl2_KeyName) call through to it.
- */
-/* The engine key's name, as the console prints bindings (title.c formats the
- * list with SDL_GetKeyName). SDL2's own names are for SDL2 keycodes, which the
- * engine no longer carries, so translate first and name the SDL 1.2 value. */
-const char *Sdl2_KeyName(int engine_key)
-{
-    /*
-     * engine_key is already in the engine's numbering, so it has to go through
-     * the *inverse* to become an SDL2 keycode. Running the forward translation
-     * here would be backwards: Sdl2_EngineKey expects an SDL2 keycode, so 273
-     * (SDL 1.2's Up) would be looked up as if it were an SDL2 value, miss the
-     * table, and return 0 -- SDL_GetKeyName(0) is "" -- so every arrow, F-key
-     * and modifier would read as an empty name in the binding menu.
-     */
-    SDL_Keycode sdl_key = Sdl2_SdlKeyForEngineKey(engine_key);
-
-    if (sdl_key == SDLK_UNKNOWN) {
-        return "";
-    }
-    return SDL_GetKeyName(sdl_key);
-}
-
-/*
- * Nearest-neighbour scaling lives in src/sdl2surface.c so SDL2 consumers
- * without this file's window/present implementation (Android, Vita SDL2)
- * scale identically (PLAN Android B4). This file keeps the video/GL/audio
- * shim; the sampler is shared.
- */
-#endif /* MUGEN_SDL2 */
+#endif /* !ANDROID_PORT */

@@ -20,7 +20,7 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
-TARGET="win32"
+TARGET="${MUGEN_TEST_TARGET:-$(case "$(uname -s)" in Linux) echo linux-x64;; *) echo win32;; esac)}"
 ENGINE=""
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -31,8 +31,8 @@ while [ $# -gt 0 ]; do
 done
 
 case "$TARGET" in
-win32|win64) ;;
-*) echo "unsupported --target $TARGET (win32|win64)" >&2; exit 2;;
+win32|win64|linux-x64|linux-arm64) ;;
+*) echo "unsupported --target $TARGET (win32|win64|linux-x64|linux-arm64)" >&2; exit 2;;
 esac
 export MUGEN_TEST_TARGET="$TARGET"
 
@@ -140,7 +140,7 @@ record ES01-device OPEN "host runner cannot reach a GPU; device run recorded in 
 record E2E01 OPEN "menu/select/match/screenshot matrix needs scripted runs"
 
 echo "== layout evidence =="
-bash tools/test_abi_layout.sh >"$OUT/layout.log" 2>&1 && record LAYOUT PASS "see layout.log" || record LAYOUT FAIL "see layout.log"
+run_host LAYOUT bash tools/test_abi_layout.sh
 
 echo "== summary: PASS=$PASS FAIL=$FAIL SKIP=$SKIP OPEN:$OPEN ==" | tee -a "$OUT/results.txt"
 [ "$FAIL" = 0 ]

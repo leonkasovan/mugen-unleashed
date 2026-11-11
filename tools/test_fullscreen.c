@@ -28,7 +28,7 @@ static void state(int fs)
 {
     assert(game.fullscreen==fs && g_videoFullscreen==fs);
     assert(((g_videoFlags&VIDEO_FULLSCREEN)!=0)==fs);
-    assert(((g_videoSdlFlags&SDL_FULLSCREEN)!=0)==fs);
+    assert(((g_videoSdlFlags&DISPLAY_FULLSCREEN)!=0)==fs);
     assert(((SDL_GetWindowFlags(window())&SDL_WINDOW_FULLSCREEN)!=0)==fs);
 }
 int main(void)
@@ -40,10 +40,10 @@ int main(void)
     Keyboard_Init();g_keyHandler=Input_OnKey;
     for(mode=0;mode<2;mode++)for(fs=0;fs<2;fs++) {
         g_renderMode=mode ? RENDER_OPENGL : RENDER_SYSTEM;
-        g_screenSurface=Sdl2_SetVideoMode(640,480,32,(mode?SDL_OPENGL:0)|(fs?SDL_FULLSCREEN:0));
+        g_screenSurface=Sdl2_SetVideoMode(640,480,32,(mode?DISPLAY_OPENGL:0)|(fs?DISPLAY_FULLSCREEN:0));
         assert(g_screenSurface && window());
         game.fullscreen=g_videoFullscreen=fs;g_videoFlags=fs?VIDEO_FULLSCREEN:0;
-        g_videoSdlFlags=(mode?SDL_OPENGL:0)|(fs?SDL_FULLSCREEN:0);
+        g_videoSdlFlags=(mode?DISPLAY_OPENGL:0)|(fs?DISPLAY_FULLSCREEN:0);
         Keyboard_HandleKey(ENGINE_KEY_LALT,1);clear_queues();
         enter(1);state(!fs);
         for(i=0;i<8;i++)enter(1);

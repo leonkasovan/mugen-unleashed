@@ -1,16 +1,6 @@
-/*
- * M0 baseline harness: shared fixture generator for the render-validation
- * matrix (RENDERING_PLAN.md section 4, "M0 test matrix").
- *
- * Built twice by tools/test_render_baseline.sh -- once against SDL 1.2 +
- * SDL_gfx, once against SDL2 + src/sdl2surface.c -- and each run writes one
- * .raw image per fixture plus counters.json into the output directory given
- * as argv[1]. The sdl1/sdl2 .raw files must be byte-identical for the
- * fixtures both builds can create (F-RAMP565, F-IDX8, F-PADX).
- *
- * This follows the tools/test_zoomdiff.c pattern: one source file, two SDL
- * generations, compatibility macros so the runs differ only in which library
- * and surface code they link.
+/* SDL2 render regression fixture generator.
+ * Expected hashes were recorded from 6753f6b before this migration.
+ * See the baseline manifests under tools/fixtures/; the runner never updates expectations.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,15 +11,9 @@
 #undef main            /* SDL 1.2 renames main() to SDL_main on Windows */
 #endif
 
-#ifdef MUGEN_SDL2
 #define RB_SET_COLORS(s, pal, first, n) SDL_SetPaletteColors((s)->format->palette, (pal), (first), (n))
-#else
-#define RB_SET_COLORS(s, pal, first, n) SDL_SetColors((s), (pal), (first), (n))
-#endif
 
-#ifdef MUGEN_SDL2
-SDL_Surface *zoomSurface(SDL_Surface *src, double zoomx, double zoomy, int smooth);
-#endif
+SDL_Surface *Sdl2_ScaleSurface(SDL_Surface *src, double zoomx, double zoomy, int smooth);
 
 /* The shim logs through the engine's logger; this test is not the engine. */
 void Log_Printf(const char *fmt, ...)

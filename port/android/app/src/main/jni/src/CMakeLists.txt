@@ -37,7 +37,7 @@ message(STATUS "mugen-unleashed source: ${MUGEN_ROOT}")
 file(GLOB MUGEN_ENGINE_SOURCES CONFIGURE_DEPENDS "${MUGEN_ROOT}/src/*.c")
 
 # Entry points and platform back ends that must not be compiled here.
-# Excluded: sdlmain.c/main.c are the desktop entry points (android_main.c
+# Excluded: platform_main_win32.c/main.c are the desktop entry points (android_main.c
 # supplies main here), and glrender.c/gldetect.c are the desktop-GL renderer,
 # which cannot exist on Android.
 #
@@ -56,7 +56,7 @@ file(GLOB MUGEN_ENGINE_SOURCES CONFIGURE_DEPENDS "${MUGEN_ROOT}/src/*.c")
 # main.c stays in: it holds Screen_IsSpecial, Camera_GetX/Y, Version_Parse and
 # Rng_Seed as well as the entry point; its main() is renamed Mugen_Main for this
 # target (see src/main.c) and android_main.c calls it.
-list(FILTER MUGEN_ENGINE_SOURCES EXCLUDE REGEX ".*/(sdlmain|glrender|gldetect|sdl2compat|sdlmixercompat)\\.c$")
+list(FILTER MUGEN_ENGINE_SOURCES EXCLUDE REGEX ".*/(platform_main_win32|glrender|gldetect|sdl2video)\\.c$")
 option(MUGEN_GLES "M8 GLES 3.0 backend probe+loader (draw path not yet landed)" OFF)
 if(MUGEN_GLES)
     list(APPEND MUGEN_ENGINE_SOURCES "${MUGEN_ROOT}/src/gles_probe.c")
@@ -184,6 +184,7 @@ target_include_directories(main PRIVATE ${ANDROID_INCLUDES})
 # header into either the engine or third-party translation units.
 target_compile_definitions(main PRIVATE
     ANDROID_PORT=1
+    SDL_MAIN_HANDLED
     MUGEN_ANDROID_SW=1
     LIBRESAMPLE_STATIC=1
     PNG_ARM_NEON_OPT=0

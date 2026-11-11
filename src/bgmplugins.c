@@ -15,9 +15,9 @@
  * accessor given to init).
  */
 /* <SDL.h> comes from mugen.h, which pulls it in after glad.h. */
+#include "mugen.h"
 #include <SDL_mixer.h>
 
-#include "mugen.h"
 
 /* mpg123 constants used here (mpg123.h). */
 #define MPG123_RVA              5
@@ -32,35 +32,6 @@
 
 /* ------------------------------------------------------------------ mpg123 */
 
-#if !defined(ANDROID_PORT) && !defined(MUGEN_SDL2_API)
-/*
- * Port addition, SDL 1.2 build only. Mix_LoadMUS_RW takes one argument there and
- * never takes ownership of the RWops, so it has to be closed by us after
- * Mix_FreeMusic. It cannot live in SdlmixInstance: that struct's size is pinned
- * to the original binary's 0x38 by MUGEN_ASSERT_SIZE, and there is only ever one
- * instance (g_sdlmixInstance), so a file-scope pointer is both sufficient and
- * layout-neutral.
- */
-static SDL_RWops *g_sdlmixRwops;
-
-/* Takes ownership of rw, closing any wrapper a previous open left behind. */
-static void Sdlmix_TrackRwops(SDL_RWops *rw)
-{
-    if (g_sdlmixRwops != NULL) {
-        g_sdlmixRwops->close(g_sdlmixRwops);
-    }
-    g_sdlmixRwops = rw;
-}
-
-/* Closes the tracked wrapper, if any. */
-static void Sdlmix_DropRwops(void)
-{
-    if (g_sdlmixRwops != NULL) {
-        g_sdlmixRwops->close(g_sdlmixRwops);
-        g_sdlmixRwops = NULL;
-    }
-}
-#endif
 
 /* 0x0048AB60: resolves the libmpg123 functions. Returns 0 when all were found. */
 int Mpg123_LoadSymbols(void)
@@ -992,16 +963,6 @@ static void Sdlmix_FreeMusic(SdlmixInstance *inst)
     inst->finished = 0;
     Mix_HookMusicFinished(NULL);
     inst->music = NULL;
-#if !defined(ANDROID_PORT) && !defined(MUGEN_SDL2_API)
-    /*
-     * Port fix: SDL 1.2's Mix_LoadMUS_RW borrows the RWops, so closing it is
-     * ours to do and was not being done. Every track replacement leaked the
-     * wrapper and its Stream context. It is closed only now, after
-     * Mix_FreeMusic: the mpg123 and vorbisfile music decoders stream from it
-     * while the track plays, so closing any earlier frees memory still in use.
-     */
-    Sdlmix_DropRwops();
-#endif
 }
 
 /* 0x0048BEB0: frees the instance. */
@@ -1054,7 +1015,6 @@ int Sdlmix_Open(void *instance, const BgmPluginIo *io, BgmInfo *info, BgmOpenRes
     if (rw == NULL) {
         return 4;
     }
-#if defined(ANDROID_PORT) || defined(MUGEN_SDL2_API)
     /*
      * SDL2_mixer 2 takes a second argument saying whether the RWops is freed
      * along with the music. freesrc = 1 hands it over on success *and*
@@ -1063,21 +1023,7 @@ int Sdlmix_Open(void *instance, const BgmPluginIo *io, BgmInfo *info, BgmOpenRes
      * belongs to BgmStream and outlives the decoder either way.
      */
     inst->music = Mix_LoadMUS_RW(rw, 1);
-#else
-    /*
-     * SDL 1.2: Mix_LoadMUS_RW takes one argument and never takes ownership, so
-     * this build records the wrapper before loading. Taking it up front covers
-     * both leak paths: a failed load returns below without any other cleanup,
-     * and a previous open that never produced music leaves inst->music NULL so
-     * Sdlmix_FreeMusic has nothing to free.
-     */
-    Sdlmix_TrackRwops(rw);
-    inst->music = Mix_LoadMUS_RW(rw);
-#endif
     if (inst->music == NULL) {
-#if !defined(ANDROID_PORT) && !defined(MUGEN_SDL2_API)
-        Sdlmix_DropRwops();
-#endif
         /* Port addition: the original reports the refusal to the BGM thread and
          * nothing else, so a file the decoder cannot open is silence with no
          * explanation. Name it, with the decoder's own reason. */

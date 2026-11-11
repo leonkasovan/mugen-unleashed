@@ -81,7 +81,7 @@
 #endif
 
 #include <SDL.h>
-#if defined(MUGEN_VITA_GL) && defined(MUGEN_SDL2)
+#if defined(MUGEN_VITA_GL) && !defined(ANDROID_PORT)
 /* Port change: native vitaGL owns its display, SDL2 must use ordinary GXM. */
 #if SDL_MAJOR_VERSION != 2 || !SDL_VIDEO_RENDER_VITA_GXM || \
     SDL_VIDEO_VITA_VGL || SDL_VIDEO_VITA_PIB || SDL_VIDEO_VITA_PVR
@@ -95,105 +95,23 @@
 #include <unzip.h>
 #include <png.h>
 
-/*
- * "Compiled against SDL2" as opposed to SDL 1.2. The Android port was the
- * first SDL2 consumer, so its #ifdef predates this macro; the SDL2 desktop
- * build (MUGEN_SDL2, Makefile SDL_BACKEND=2) needs exactly the same API
- * adaptations, so the two are named once here and the SDL2-semantics sites
- * test this instead of ANDROID_PORT directly. Android-only behaviour (its
- * lifecycle events, its no-GL renderer) keeps testing ANDROID_PORT.
- */
-#if defined(MUGEN_SDL2) || defined(ANDROID_PORT)
-#define MUGEN_SDL2_API 1
+/* SDL2-only platform contract. Engine configuration key IDs are independent
+ * of SDL keycodes and remain stable (engine_keys.h). */
+#if SDL_MAJOR_VERSION != 2
+#error "mugen-unleashed requires SDL2 headers"
+#endif
+#ifndef SDL_MAIN_HANDLED
+#error "Build with SDL_MAIN_HANDLED; the engine owns its entry point"
+#endif
+#include "sdl2keys.h"
+#include "sdl2surface.h"
+#ifndef ANDROID_PORT
+#include "sdl2video.h"
 #endif
 
-/*
- * Does the input layer bind pads through SDL's *game-controller* semantics
- * instead of translating raw axis/hat/button indices?
- *
- * Yes on every SDL2 target. The raw model derives an engine code from the
- * device's own topology (axis n -> n*2+1/+2, hat -> axes*2+1..4, button b ->
- * axes*2+hats*4+1+b), which only lines up with the numbers in `[P<n> Joystick]`
- * on a pad whose topology matches the PC pad those numbers were written for. A
- * modern controller does not: with 8 axes and no hats its face buttons start at
- * code 17 while the config's A/B/X/Y (13..16) are axis codes there, and its
- * d-pad arrives as buttons past the 32 codes one pad slot holds -- so the pad
- * opens, the stick steers, and the face buttons and d-pad are wrong or dead.
- * That is exactly the "buttons swapped with the d-pad" report.
- *
- * SDL_GameController maps a device through SDL's own database, so A/B/X/Y, the
- * d-pad, the shoulders and Start mean the same thing everywhere. `[P<n> Gamepad]`
- * configures that layout, and a missing group falls back to the built-in one.
- *
- * Gated on MUGEN_SDL2_API rather than ANDROID_PORT: this was Android-only while
- * Android was the only SDL2 consumer, which left linux-arm64 and the SDL2
- * Windows builds on the raw path. The SDL 1.2 backend is the reference build
- * for the differential tests and keeps the original's raw-joystick lifecycle,
- * so it stays out.
- */
-#if defined(MUGEN_SDL2_API)
-#define MUGEN_GAMEPAD_POLICY 1
-#endif
-
-/*
- * Does this build's SDL_mixer decode WAV, MP3 and Ogg Vorbis by itself?
- *
- * Both of this project's SDL_mixer link lines pull the codecs in statically --
- * `pkg-config --libs --static SDL_mixer` and `... SDL2_mixer` each list
- * -lmpg123 -lvorbisfile -lFLAC -lopus -lwavpack -- so neither needs Elecbyte's
- * libmpg123-0.dll or vorbisplug.dll to play those files. The sdlmix plugin
- * advertises the three extensions when this is set (bgmplugins.c), which is
- * what lets a static build run with no plugin DLLs at all.
- *
- * Android has always done this; the desktop backends now do too. A build that
- * linked a decoder-less SDL_mixer (a distro package compiled without
- * --enable-music-mp3) can leave it undefined and fall back to the plugin-DLL
- * route, at the cost of needing those DLLs present.
- */
+/* SDL2_mixer's native codecs can be disabled for a deliberately limited kit. */
 #ifndef MUGEN_NO_SDLMIX_NATIVE_CODECS
 #define MUGEN_SDLMIX_NATIVE_CODECS 1
-#endif
-
-#ifdef MUGEN_SDL2
-/*
- * The removed SDL 1.2 entry points, reimplemented over SDL2 (src/sdl2compat.c).
- */
-#include "sdl2compat.h"
-
-#ifndef SDL_putenv
-/*
- * SDL 1.2 had SDL_putenv(const char *"NAME=value"); SDL2 replaced it with
- * SDL_setenv(name, value, overwrite). The three reconstructed call sites pass
- * complete "NAME=value" strings, so the split happens here. A change to SDL's
- * own environment matters here in one real case: [Video] DirectX sets
- * SDL_VIDEODRIVER before SDL_Init, which is what still selects the driver.
- * (SDL2 chooses its video driver through SDL_VIDEODRIVER read at init; the
- * SDL_VIDEO_CENTERED hint is superseded by SDL_WINDOWPOS_CENTERED, which the
- * shim already uses.)
- */
-static inline int Sdl2_putenv_inline(const char *kv)
-{
-    char name[64];
-    const char *eq;
-    size_t n;
-
-    if (kv == NULL) {
-        return -1;
-    }
-    eq = strchr(kv, '=');
-    if (eq == NULL) {
-        return SDL_setenv(kv, "", 1);
-    }
-    n = (size_t)(eq - kv);
-    if (n >= sizeof(name)) {
-        n = sizeof(name) - 1;
-    }
-    memcpy(name, kv, n);
-    name[n] = '\0';
-    return SDL_setenv(name, eq + 1, 1);
-}
-#define SDL_putenv Sdl2_putenv_inline
-#endif
 #endif
 
 #include "crt.h"

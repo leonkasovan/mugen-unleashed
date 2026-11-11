@@ -42,18 +42,9 @@ void System_SetWindowIcon(void)
      */
 #if defined(_WIN32) && !defined(ANDROID_PORT)
     HMODULE module = GetModuleHandleA(NULL);
-#ifndef MUGEN_SDL2
-    SDL_SysWMinfo info;
-#endif
     HWND window;
     HICON icon;
-
-#ifdef MUGEN_SDL2
     window = (HWND)Sdl2_GetWindowHandle();
-#else
-    memset(&info, 0, sizeof(info));     /* the version is left at 0.0.0 */
-    window = SDL_GetWMInfo(&info) ? info.window : NULL;
-#endif
     icon = LoadIconA(module, MAKEINTRESOURCEA(WINDOW_ICON_ID));
     if (icon != NULL) {
         /* SetClassLongPtr is the pointer-aware spelling on both ABIs:
@@ -137,10 +128,10 @@ void System_Init(void)
     int requested;
 
 #ifndef ANDROID_PORT
-    SDL_putenv("SDL_DISABLE_LOCK_KEYS=1");
+    /* SDL2 handles lock-key state natively. */
 #endif
 #if defined(MUGEN_VITA_GL) || defined(ANDROID_PORT)
-#if defined(MUGEN_VITA) && defined(MUGEN_SDL2_API)
+#if defined(MUGEN_VITA)
     /* Port change: our own main replaces SDL2main. */
     SDL_SetMainReady();
 #endif
@@ -150,7 +141,7 @@ void System_Init(void)
      * SDL 1.2's SDL_Init walks its subsystems in a fixed order -- TIMER, AUDIO,
      * VIDEO, CDROM, JOYSTICK -- and returns -1 at the first failure. Audio is
      * therefore a hard prerequisite for video: if SDL_AudioInit fails, video is
-     * never initialised at all, and the first symptom is SDL_SetVideoMode
+     * never initialised at all, and the first symptom is Sdl2_SetVideoMode
      * failing with "Can't change video mode" -- which is precisely what this
      * port hit, and it looks like a graphics bug when it is an audio one.
      *
@@ -166,19 +157,15 @@ void System_Init(void)
         Log_Printf("SDL audio init failed (video is unaffected): %s\n", SDL_GetError());
     }
 #else
-#ifdef MUGEN_SDL2_API
     /* Port fix: preserve the startup request, but expose a failed optional
      * subsystem instead of making its rollback look like zero input devices. */
     if (SDL_Init(0xFFFF) < 0) Log_Printf("SDL startup initialization failed: %s\n", SDL_GetError());
-#else
-    SDL_Init(0xFFFF);
-#endif
 #endif
     g_libraryError = LIBERR_NONE;
     g_unused505200 = 0;
     g_libraryErrorText[0] = '\0';
 #ifndef ANDROID_PORT
-    SDL_WM_SetCaption("M.U.G.E.N", "MUGEN");
+    Sdl2_SetCaption("M.U.G.E.N", "MUGEN");
 #endif
     System_SetWindowIcon();
 
@@ -256,9 +243,6 @@ void System_Init(void)
     g_keyboardQueueWrite = 0;
     g_keyboardQueueRead = 0;
     g_keyboardKeepRepeat = 0;
-#ifndef ANDROID_PORT
-    SDL_EnableKeyRepeat(0, 0);
-#endif
     g_keyboardNoReleases = 0;
     g_unused503468 = 1;
     Log_Printf("OK\n");

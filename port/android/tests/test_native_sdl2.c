@@ -95,11 +95,12 @@ static void Joysticks(void)
     assert(g_padCount > 0 && g_pads[0].joystick != NULL);
     joy = g_pads[0].joystick;
     id = SDL_JoystickInstanceID(joy);
-    code = g_pads[0].button_base + 1;
+    code = 5; /* Stable engine A binding for a semantic SDL2 controller. */
+    assert(SDL_IsGameController(device));
     SDL_zero(event);
-    event.type = SDL_JOYBUTTONDOWN;
-    event.jbutton.which = id;
-    event.jbutton.button = 0;
+    event.type = SDL_CONTROLLERBUTTONDOWN;
+    event.cbutton.which = id;
+    event.cbutton.button = SDL_CONTROLLER_BUTTON_A;
     assert(SDL_PushEvent(&event) == 1);
     Events_Poll();
     assert(g_padButtonState[code] == 1);

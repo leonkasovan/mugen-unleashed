@@ -25,10 +25,10 @@
 #      * The engine compiles from ../src with the non-Windows compat layer
 #        (src/compat_linux.h), exactly like the Linux target. __VITA__ is a
 #        POSIX-like target: no <windows.h>, no win32 calls, mugen.rc skipped.
-#      * src/sdlmain.c is Windows-only by construction (WinMain, stdio
+#      * src/platform_main_win32.c is Windows-only by construction (WinMain, stdio
 #        redirection, DDRAW preload) and compiles to an empty object here; the
 #        entry point is main() in src/main.c, as on Linux.
-#      * src/sdlmixercompat.c IS built: it supplies Mix_QuerySpecEx, which
+#      * src/sdl2audio.c IS built: it supplies Sound_QueryMixerSpec, which
 #        stock SDL2_mixer does not export.
 #      * libpng is the vitasdk one (1.6), not third_party/libpng-1.2.38. The
 #        Windows build already proved the engine tolerates 1.6 (see PLANS.md),
@@ -345,14 +345,14 @@ endif()
 # ------------------------------------------------------------------ sources --
 
 # The engine, one file per module of the original (see docs/ANALYSIS.md), plus
-# the POSIX compat layer and the Mix_QuerySpecEx shim. Globbed rather than
+# the POSIX compat layer and the Sound_QueryMixerSpec shim. Globbed rather than
 # listed so this file cannot go stale as modules are added -- the engine's
 # module list is owned by the top-level CMakeLists.txt and the Makefile.
 file(GLOB MUGEN_ENGINE_SOURCES CONFIGURE_DEPENDS "${MUGEN_SRC}/*.c")
 
 # Not part of the reconstructed binary, and selected per platform.
 list(REMOVE_ITEM MUGEN_ENGINE_SOURCES
-  "${MUGEN_SRC}/sdlmain.c")          # WinMain: Windows-only, empty object here
+  "${MUGEN_SRC}/platform_main_win32.c")          # WinMain: Windows-only, empty object here
 
 # Lua 5.1.4 (vendored, version-pinned by src/symbols.h).
 file(GLOB MUGEN_LUA_SOURCES "${MUGEN_THIRD}/lua-5.1.4/src/*.c")
@@ -445,7 +445,6 @@ endif()
 
 target_compile_definitions(mugen PRIVATE
   LIBRESAMPLE_STATIC
-  MUGEN_SDL2
   SDL_MAIN_HANDLED
   MUGEN_VITA
   MUGEN_VITA_DATA_DIR="${MUGEN_VITA_DATA_DIR}"

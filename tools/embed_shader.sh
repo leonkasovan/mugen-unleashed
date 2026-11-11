@@ -1,5 +1,5 @@
 #!/bin/sh
-# Portable Makefile counterpart of cmake/EmbedShader.cmake.
+# Embed project-owned desktop GL shaders for the GNU Make build.
 set -eu
 [ "$#" = 3 ] || { echo "usage: $0 input output C_variable" >&2; exit 2; }
 case "$3" in ""|[0-9]*|*[!a-zA-Z0-9_]*) echo "Invalid C variable" >&2; exit 2 ;; esac

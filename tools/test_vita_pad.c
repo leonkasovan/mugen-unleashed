@@ -1,19 +1,6 @@
-/*
- * Verifies the Vita joystick binding claim from the PLAN M2 input-domain work.
- *
- * The engine never sees raw SDL button indices. Pads_HandleEvent computes
- *   code = slot * PAD_BUTTONS + hat_base + 1 + raw_index
- * where hat_base = axes*2 and button_base = hat_base + hats*4. With the Vita
- * SDL1 driver's 4 axes and 0 hats, raw button 0 (Triangle) becomes engine
- * code 9. A config that stores the raw index (B=0, X=2) therefore never
- * matches, and 0 is additionally JOY_NONE (unassigned).
- *
- * This test links the engine's real pads.c and events.c (not the config)
- * and drives Pads_HandleEvent with synthetic joystick events, asserting the
- * full path: raw index -> engine code -> input action.
- *
- * Built and run by tools/test_vita_pad.sh.
- */
+/* SDL2 raw-joystick fallback: unmapped device indices become stable engine
+ * configuration codes. This is not the semantic Vita controller mapping;
+ * tools/test_vita_sdl2input.c tests the real Vita SDL2 mapping separately. */
 #include "mugen.h"
 
 #include <stdio.h>
@@ -25,6 +12,7 @@ unsigned char g_keyState[0x201];
 int *g_keyMap;
 Pad g_pads[PAD_MAX];
 int g_padCount;
+int g_logVerbose;
 int g_padsActive;
 int g_keyboardActive;
 int g_keyboardKeepRepeat;
@@ -93,21 +81,21 @@ void Video_OnResize(int width, int height)
  * opening virtual joysticks and asserting buttons by raw index, exactly the
  * way SDL_JOYBUTTONDOWN reaches Pads_HandleEvent.
  */
-static void test_vita_topology(void)
+static int test_vita_topology(void)
 {
     SDL_Event ev;
 
     SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER);
     if (SDL_JoystickAttachVirtual(SDL_JOYSTICK_TYPE_UNKNOWN, 4, 12, 0) < 0) {
         printf("SKIP: no virtual joystick support (%s)\n", SDL_GetError());
-        return;
+        return 77;
     }
     memset(g_pads, 0, sizeof(g_pads));
     g_padCount = 0;
     g_padsActive = 0;
     if (Pads_Init() == 0) {
         printf("SKIP: Pads_Init found no joystick\n");
-        return;
+        return 77;
     }
     printf("  pad 0: axes=%d buttons=%d hats=%d -> hat_base=%d button_base=%d\n", SDL_JoystickNumAxes(g_pads[0].joystick),
            SDL_JoystickNumButtons(g_pads[0].joystick), SDL_JoystickNumHats(g_pads[0].joystick), g_pads[0].hat_base,
@@ -155,17 +143,20 @@ static void test_vita_topology(void)
         }
         printf("  all 11 config bindings match delivered codes\n");
     }
+    return 0;
 }
 
 int main(void)
 {
+    int result;
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         printf("SKIP: SDL_Init failed: %s\n", SDL_GetError());
-        return 0;
+        return 77;
     }
     printf("vita pad topology:\n");
-    test_vita_topology();
+    result = test_vita_topology();
     SDL_Quit();
+    if (result != 0) return result;
     if (failures == 0) {
         printf("ok: vita pad tests passed\n");
     }

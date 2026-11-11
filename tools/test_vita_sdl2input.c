@@ -1,5 +1,7 @@
 /* Real SDL2 mapping resolution; only engine callback boundaries are mocked. */
+#ifndef SDL_MAIN_HANDLED
 #define SDL_MAIN_HANDLED
+#endif
 #include <SDL.h>
 #include <assert.h>
 #include <stdio.h>

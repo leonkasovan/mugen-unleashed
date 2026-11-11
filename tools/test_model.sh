@@ -8,7 +8,7 @@ cc="${CC:-cc}"
 sdl_cflags="${SDL_CFLAGS:-$(pkg-config --cflags sdl2 libpng zlib)}"
 sdl_libs="${SDL_LIBS:-$(pkg-config --libs sdl2 libpng zlib)}"
 flags="${CFLAGS:-} -std=gnu11 -O1 -g -UNDEBUG -Wall -Wextra -Wno-unused-parameter"
-flags="$flags -DMUGEN_SDL2 -DSDL_MAIN_HANDLED -ffunction-sections -fdata-sections"
+flags="$flags -DSDL_MAIN_HANDLED -ffunction-sections -fdata-sections"
 flags="$flags -Isrc -Ithird_party/glad-2.1 -Ithird_party/minizip-0.15 -Ithird_party/lua-5.1.4/src"
 flags="$flags -Ithird_party/libresample/include -Ithird_party/cgltf-1.14 -Ithird_party/stb -I$out/shaders $sdl_cflags"
 for shader in src/shaders/*.vert src/shaders/*.frag; do
