@@ -67,7 +67,8 @@ tools/          msvc_env.bat, extract_icon.py, iconpack.py, compare_logs.py,
                 make_win_sysroot.sh, test_*.sh
 port/           android/, psvita/ and arm64/ — the platform ports
 docs/           ANALYSIS.md, BUILD-MSVC.md, BUILD-MINGW.md, BUILD-LINUX.md, LUA.md
-install/        a real M.U.G.E.N 1.1b1 installation (untracked, for testing)
+install/        a real M.U.G.E.N 1.1b1 installation (untracked, for testing;
+                tools/fetch_game_data.sh fetches it when absent)
 build/          all build output (git-ignored) — layout below
 ```
 
@@ -94,7 +95,7 @@ by *kind* rather than by owner and every script uses the same ones:
 
 | Path | Written by | Contents |
 |---|---|---|
-| `build/downloads/` | `port/arm64/build.sh`, `port/psvita/build.sh`, `setup.bat`, `tools/make_win_sysroot.sh` callers | every file fetched from the network: the Arm toolchain archive, `arm64-sysroot.zip`, `vitasdk.zip` (196 MB), the two w64devkit self-extractors, `win32-sysroot.zip`, `win64-sysroot.zip`. Purely a cache — safe to delete, and re-verifying it costs a download |
+| `build/downloads/` | `port/arm64/build.sh`, `port/psvita/build.sh`, `setup.bat`, `tools/make_win_sysroot.sh` callers | every file fetched from the network: the Arm toolchain archive, `arm64-sysroot.zip`, `vitasdk.zip` (196 MB), `mugen_elecbyte_assets.zip` (the default game tree), the two w64devkit self-extractors, `win32-sysroot.zip`, `win64-sysroot.zip`. Purely a cache — safe to delete, and re-verifying it costs a download |
 | `build/sysroots/` | `port/arm64/build.sh`, `setup.bat` | the installed dependency trees: `arm64-sysroot/`, `win32-sysroot/`, `win64-sysroot/`. Each holds `usr/{include,lib/lib/pkgconfig}` and is consumed through `XSYSROOT=` (Arm) or found automatically by the `Makefile` (Windows) |
 | `build/tmp/` | anything | scratch: staging directories during an install, test output (`build/tmp/<test-name>/`), probe programs and logs. Nothing here is expected to survive; `make` never reads it, and deleting it must never break a build |
 

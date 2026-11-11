@@ -65,6 +65,10 @@ if [ "$CHECK_TOOLS" = 1 ]; then exit 0; fi
 
 SDL2_DEPS_DIR=$(android_shell_path "${SDL2_DEPS_DIR:-$OUT/sdl2/$ANDROID_ABI}")
 SDL2_COMPANION_DIR=$(android_shell_path "${SDL2_COMPANION_DIR:-$OUT/android-deps/$ANDROID_ABI}")
+# A caller-supplied GAME_DATA_DIR is taken as final; the default one gets the
+# project's own assets fetched when a clone has no tree yet (see the staging
+# step below).
+[ -n "${GAME_DATA_DIR:-}" ] && GAME_DATA_EXPLICIT=1 || GAME_DATA_EXPLICIT=0
 GAME_DATA_DIR=$(android_shell_path "${GAME_DATA_DIR:-$ROOT/install}")
 # The platform's mugen.cfg, installed over the staged copy (see the staging step).
 GAME_CFG=$(android_shell_path "${GAME_CFG:-$HERE/mugen.cfg}")
@@ -118,6 +122,10 @@ ASSETS="$APP/src/main/assets"
 rm -rf "$ASSETS"
 mkdir -p "$ASSETS"
 if [ "$PACK_ASSETS" = 1 ]; then
+  if [ ! -f "$GAME_DATA_DIR/data/mugen.cfg" ] && [ "$GAME_DATA_EXPLICIT" = 0 ]; then
+    say "No game tree in $GAME_DATA_DIR; fetching the default assets"
+    "$ROOT/tools/fetch_game_data.sh" || true
+  fi
   say "Staging game data from $GAME_DATA_DIR"
   [ -f "$GAME_DATA_DIR/data/mugen.cfg" ] ||
     fail "data/mugen.cfg missing in GAME_DATA_DIR=$GAME_DATA_DIR; supply game data or use --no-assets"

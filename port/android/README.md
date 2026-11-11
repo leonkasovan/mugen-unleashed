@@ -125,7 +125,7 @@ SDK. A custom incomplete NDK path is rejected instead of being overwritten.
 | `GRADLE_USER_HOME` / `ANDROID_USER_HOME` | Optional existing cache/state overrides |
 | `SDL2_DEPS_DIR` | SDL2 prefix; default `build/android/sdl2/arm64-v8a` |
 | `SDL2_COMPANION_DIR` | Mixer/TTF prefix; default `build/android/android-deps/arm64-v8a` |
-| `GAME_DATA_DIR` | Game tree to copy; default repository `install/` |
+| `GAME_DATA_DIR` | Game tree to copy; default repository `install/`, which is fetched from the release assets when a clone has none |
 
 The script normalizes its exported SDK roots so Gradle and sdkmanager use the
 same SDK. An unsuitable inherited Java 8/11/21 is not used as the Gradle JVM;

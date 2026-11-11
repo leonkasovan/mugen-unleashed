@@ -986,6 +986,10 @@ $(RC_OBJ): $(ALL_RC) $(CONFIG_STAMP)
 
 # --- install ----------------------------------------------------------------
 # Strips the executable and copies it into the game directory, where it stays.
+# A directory with no data/mugen.cfg gets the project's default M.U.G.E.N assets
+# first (tools/fetch_game_data.sh), so `make install` on a fresh clone leaves
+# something that runs; the fetch is skipped when the tree is already there and
+# a failed download only warns.
 # install/ is the shipped M.U.G.E.N 1.1b1 tree (git-ignored). The installed
 # name follows $(TARGET), so it is never the original's mugen.exe and never a
 # Windows name on Linux: mugen-mingw-*.exe on Windows, mugen-linux-<arch> on
@@ -1001,6 +1005,11 @@ $(STRIPPED): $(TARGET)
 	$(Q)$(STRIP) -o $@ $(TARGET)
 
 install: $(STRIPPED)
+	@if [ ! -f "$(INSTALL_DIR)/data/mugen.cfg" ]; then \
+	    echo "  DATA    $(INSTALL_DIR)/ (default M.U.G.E.N assets)"; \
+	    sh tools/fetch_game_data.sh --dest "$(INSTALL_DIR)" || \
+	        echo "  WARN    no game data: the binary will exit at start"; \
+	fi
 	@echo "  INSTALL $(INSTALL_DIR)/$(INSTALL_NAME)"
 	$(Q)mkdir -p $(INSTALL_DIR)
 	$(Q)cp $(STRIPPED) $(INSTALL_DIR)/$(INSTALL_NAME)

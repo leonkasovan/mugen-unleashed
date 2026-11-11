@@ -127,6 +127,10 @@ call :verify win32 "%X86DEVKIT_DIR%" "%SYSR86%" "i686-w64-mingw32"
 if errorlevel 1 set "FAILED=1"
 if defined FAILED goto :failed
 
+call :game_data
+if errorlevel 1 set "FAILED=1"
+if defined FAILED goto :failed
+
 if "%DO_BUILD64%"=="1" (
     call :build win64
     if errorlevel 1 set "FAILED=1"
@@ -435,6 +439,33 @@ exit /b 0
 
 rem --------------------------------------------------------------- building --
 rem :build <name> - win32 or win64; the kit follows from the name
+rem :game_data -> install\ holds a M.U.G.E.N tree (the default assets when the
+rem clone has none). /check only reports; a failed download is a warning, not a
+rem failed setup, because the engine still builds without game data.
+:game_data
+echo.
+echo [game data] %ROOT%\install
+if exist "%ROOT%\install\data\mugen.cfg" (
+    echo   present
+    exit /b 0
+)
+if "%DO_CHECK%"=="1" (
+    echo   MISSING  run setup.bat /build to fetch the default assets
+    exit /b 0
+)
+if not exist "%ROOT%\tools\fetch_game_data.sh" (
+    echo   WARNING: tools\fetch_game_data.sh is missing
+    exit /b 0
+)
+"%W64DEVKIT_DIR%\sh.exe" "%ROOT%\tools\fetch_game_data.sh"
+if errorlevel 1 (
+    echo   WARNING: could not fetch the default game data
+    echo   the built binary will exit at start until install\ has a tree
+    echo   (see tools/fetch_game_data.sh --help^)
+    exit /b 0
+)
+exit /b 0
+
 :build
 set "B_NAME=%~1"
 set "B_KIT=%W64DEVKIT_DIR%"
