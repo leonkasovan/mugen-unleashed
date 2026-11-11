@@ -273,6 +273,22 @@ int Config_Load(void)
         }
         Ini_GetInt(ini, "HideDevelopmentBuildBanner", &g_game->hide_dev_banner);
         /*
+         * Port addition: [Debug] Verbose = 1 turns on this project's per-event
+         * tracing in mugen.log -- "input: kind=..." (Vita, per screen frame),
+         * "pads: button/axis ... -> code", and the animation element trace.
+         * Off by default: a single button press writes two lines and walking
+         * the character select writes hundreds. The once-per-load binding
+         * summaries and every warning print either way.
+         */
+        Ini_GetInt(ini, "Verbose", &g_logVerbose);
+        /*
+         * Port addition: [Debug] TimeStamps prefixes every mugen.log line with
+         * the local wall clock (see g_logTimeStamps in globals.c). Defaults to
+         * off on the reference builds and on for the PS Vita; a key here
+         * overrides that from this point on.
+         */
+        Ini_GetInt(ini, "TimeStamps", &g_logTimeStamps);
+        /*
          * [Debug] ShowFPS: the source comment on Game_DrawFps names this
          * option, but it was never read anywhere -- only the console's "fps"
          * command could turn the counter on, and the console needs a backquote

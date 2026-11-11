@@ -29,13 +29,26 @@
  *
  * Bounded anyway, because Anim_Draw runs per sprite per frame: a long session
  * must not bury the rest of mugen.log.
+ *
+ * Two flavours, because the same budget covers two different things:
+ *
+ *   ANIM_WARN   an anomaly (a missing action, a draw scale the renderer cannot
+ *               honour). Always logged: this is the line that says something is
+ *               wrong, and it is rare by nature.
+ *   ANIM_TRACE  the per-element walk itself (elem N -> M, looped, every
+ *               ChangeAnim). Several lines per action, hundreds per character
+ *               select, so it needs [Debug] Verbose = 1 (g_logVerbose).
+ *
+ * Both take from the same budget and are scoped to the character select either
+ * way, so an enabled trace still cannot bury the rest of the log.
  */
 static int g_animTraceLeft = 4000;
 static int g_animTraceArmed;
 
-#define ANIM_TRACE(...) \
+#define ANIM_LOG(verbose_only, ...) \
     do { \
-        if (g_animTraceLeft > 0 && g_game != NULL && g_game->screen_kind == 2) { \
+        if (g_animTraceLeft > 0 && g_game != NULL && g_game->screen_kind == 2 && \
+            (!(verbose_only) || g_logVerbose != 0)) { \
             if (!g_animTraceArmed) { \
                 g_animTraceArmed = 1; \
                 Log_Printf("anim: tracing starts (character select)\n"); \
@@ -47,6 +60,9 @@ static int g_animTraceArmed;
             } \
         } \
     } while (0)
+
+#define ANIM_TRACE(...) ANIM_LOG(1, __VA_ARGS__)
+#define ANIM_WARN(...)  ANIM_LOG(0, __VA_ARGS__)
 
 /* A draw size the renderer cannot honour: NaN/inf, non-positive, or absurd. */
 static int Anim_ScaleSuspicious(float sx, float sy)
@@ -61,6 +77,7 @@ static int Anim_ScaleSuspicious(float sx, float sy)
 }
 #else
 #define ANIM_TRACE(...) do { } while (0)
+#define ANIM_WARN(...) do { } while (0)
 #endif
 
 #define ANIM_GROUP_PREFIX "begin action "
@@ -676,8 +693,8 @@ int Anim_SetAction(AnimState *st, int action_no)
     }
     slot = KeyedArray_Find(st->anim->actions, 0, action_no);
     if (slot == -1) {
-        ANIM_TRACE("anim: ChangeAnim %d MISSING (actions %d)\n", action_no,
-                   st->anim->action_count);
+        ANIM_WARN("anim: ChangeAnim %d MISSING (actions %d)\n", action_no,
+                  st->anim->action_count);
         return 0;
     }
     if (st->action != slot) {
@@ -746,9 +763,9 @@ void Anim_Draw(AnimState *st, const DrawParams *dp, float sx, float sy)
             DrawParams_Combine(dp, &local);
 #ifdef MUGEN_VITA_GL
             if (Anim_ScaleSuspicious(local.scale_x, local.scale_y)) {
-                ANIM_TRACE("anim: SUSPICIOUS draw sprite %d scale %.4gx%.4g at %.4g,%.4g "
-                           "(elem %d time %d)\n", st->sprite, (double)local.scale_x,
-                           (double)local.scale_y, (double)local.x, (double)local.y, i, st->time);
+                ANIM_WARN("anim: SUSPICIOUS draw sprite %d scale %.4gx%.4g at %.4g,%.4g "
+                          "(elem %d time %d)\n", st->sprite, (double)local.scale_x,
+                          (double)local.scale_y, (double)local.x, (double)local.y, i, st->time);
             }
 #endif
             if (st->sprite != -1) {

@@ -846,7 +846,8 @@ int Screen_ReadInput(ScreenLoop *screen)
      *   side       which player's row matched
      *   pad        raw joystick queue code (9 + button, 0x100 = release)
      */
-    if (screen->key != 0 || screen->key_code != 0 || screen->input != 0 || screen->input2 != 0) {
+    if (g_logVerbose != 0 &&
+        (screen->key != 0 || screen->key_code != 0 || screen->input != 0 || screen->input2 != 0)) {
         Log_Printf("input: kind=%d key=%d key_code=%d input=0x%X side=%d pad=%u\n", screen->kind,
                    screen->key, screen->key_code, screen->input, screen->input_side, screen->input2);
     }

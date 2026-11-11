@@ -1120,7 +1120,7 @@ void Pads_HandleEvent(const SDL_Event *ev)
             int code = pad * PAD_BUTTONS + first + (dir > 0);
             static int logged_axis;
 
-            if (logged_axis < 16 && g_padButtonState[code] != 1) {
+            if (g_logVerbose != 0 && logged_axis < 16 && g_padButtonState[code] != 1) {
                 logged_axis++;
                 Log_Printf("pads: axis %d value %d -> code %d (slot %d)\n", ev->jaxis.axis,
                            (int)ev->jaxis.value, code, pad);
@@ -1148,7 +1148,7 @@ void Pads_HandleEvent(const SDL_Event *ev)
         code = slot * PAD_BUTTONS + button;
         {
             static int logged_btn;
-            if (logged_btn < 16) {
+            if (g_logVerbose != 0 && logged_btn < 16) {
                 logged_btn++;
                 Log_Printf("pads: button %u %s -> code %d (slot %d)\n",
                            (unsigned)ev->jbutton.button, pressed ? "down" : "up", code, slot);

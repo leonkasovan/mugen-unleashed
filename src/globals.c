@@ -367,6 +367,44 @@ int g_quitRequested; /* 0x00504280 */
  * program instead.
  */
 int g_rendererFallbackRequested;
+/*
+ * Port addition: [Debug] Verbose, the switch for this project's per-event
+ * tracing (default off, and absent from a stock mugen.cfg).
+ *
+ * Every one of these traces was added to answer a question a log could not
+ * answer -- "the button does the wrong thing", "which animation element was
+ * drawing when it crashed" -- and each writes several lines per action: one
+ * button press produces "pads: button ... -> code" plus, on the Vita, an
+ * "input: kind=..." line per screen frame, and walking the character select
+ * spends the whole animation trace budget on ~300 "anim: elem ..." lines. Off
+ * by default keeps mugen.log readable; [Debug] Verbose = 1 brings them back.
+ *
+ * What is NOT behind this switch: the once-per-load binding summaries
+ * (Pads_LogBindings), anything that reports a broken mapping, and the animation
+ * anomalies (missing action, impossible draw scale) -- those say something is
+ * wrong rather than tracing what happened.
+ */
+int g_logVerbose;
+/*
+ * Port addition: [Debug] TimeStamps, a wall-clock prefix on every mugen.log
+ * line.
+ *
+ * The original log has no time in it, and the file is truncated on every run,
+ * so a report could not say when a crash happened or how long a step took. One
+ * prefix per line fixes that without touching the message text.
+ *
+ * Off on the reference builds, where mugen.log is diffed against the original
+ * with tools/compare_logs.py and a prefix on every line would be a difference
+ * on every line. On for the PS Vita -- there is no comparison workflow on the
+ * console and the wall clock is the only way to line a crash up with what was
+ * being done. [Debug] TimeStamps = 0 in data/mugen.cfg turns it off anywhere;
+ * the value read there applies from the moment the configuration is loaded.
+ */
+#ifdef MUGEN_VITA_GL
+int g_logTimeStamps = 1;
+#else
+int g_logTimeStamps;
+#endif
 int * g_keyMap; /* 0x00504284 */
 IntArray g_keyQueue; /* 0x00504288 */
 GfxCaptureFn g_gfxCapture; /* 0x00504298 */

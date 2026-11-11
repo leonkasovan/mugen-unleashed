@@ -363,6 +363,10 @@ extern int g_quitRequested; /* 0x00504280 */
 /* Port addition (M8): rebuilds video on the recovered renderer. */
 void __cdecl System_ReinitVideo(void);
 extern int g_rendererFallbackRequested;
+/* Port addition: [Debug] Verbose, this project's per-event tracing (default off). */
+extern int g_logVerbose;
+/* Port addition: [Debug] TimeStamps, a wall-clock prefix on every mugen.log line. */
+extern int g_logTimeStamps;
 extern int * g_keyMap; /* 0x00504284 */
 extern IntArray g_keyQueue; /* 0x00504288 */
 extern GfxCaptureFn g_gfxCapture; /* 0x00504298 */
