@@ -34,6 +34,7 @@
 #include <cgltf.h>
 #include <stb_image.h>
 #include <math.h>
+#include "model_backend.h"
 
 #define MODEL_PI 3.14159265358979323846
 
@@ -50,11 +51,16 @@
 
 static int Model_GL3(void)
 {
+#ifdef MODEL_PORTABLE
+    return 0;
+#else
     const char *version = (const char *)glGetString(GL_VERSION);
     int major = 0, minor = 0;
     return version != NULL && sscanf(version, "%d.%d", &major, &minor) == 2 && major >= 3;
+#endif
 }
 
+#ifndef MODEL_PORTABLE
 static int Model_Extension(const char *name)
 {
     const char *extensions = (const char *)glGetString(GL_EXTENSIONS);
@@ -65,6 +71,8 @@ static int Model_Extension(const char *name)
         if ((p == extensions || p[-1] == ' ') && (p[len] == ' ' || p[len] == '\0')) return 1;
     return 0;
 }
+
+#endif
 
 /* Vertex attribute locations of the model program. */
 enum {
@@ -97,6 +105,7 @@ typedef struct ModelLightLocs {
 /* The model program and its uniforms. */
 typedef struct ModelProgram {
     GLuint program;
+    GLint attrs[MODEL_LOC_COUNT];
     GLint projection, view, model, normal_matrix;
     GLint skinned, joints;
     GLint tex, normal_map, metal_rough_map, occlusion_map, emission_map;
@@ -112,12 +121,15 @@ typedef struct ModelProgram {
     GLint env_lambertian, env_ggx, env_lut, env_intensity, env_mip_count, env_rotation;
 } ModelProgram;
 
+static int Model_BuildProgram(void);
 static ModelProgram g_modelProgram;
 static int g_modelProgramState;     /* 0 not built yet, 1 built, -1 failed */
 
-/* src/shaders (CMakeLists.txt embeds them). */
+/* Shared shader bodies embedded by GNU Make or platform CMake. */
 #include "model.vert.h"
 #include "model.frag.h"
+#include "model_basic.vert.h"
+#include "model_basic.frag.h"
 #include "shadow.vert.h"
 #include "shadow.frag.h"
 #include "env.vert.h"
@@ -130,12 +142,24 @@ static int g_modelProgramState;     /* 0 not built yet, 1 built, -1 failed */
 #define MODEL_UNIT_ENV_LUT          15
 
 /* Sizes and sample counts of the environment maps, as Ikemen GO's. */
+#ifndef MODEL_ENV_SIZE
 #define MODEL_ENV_SIZE              256
+#endif
+#ifndef MODEL_ENV_LOWEST_MIP
 #define MODEL_ENV_LOWEST_MIP        4
+#endif
+#ifndef MODEL_ENV_LUT_SIZE
 #define MODEL_ENV_LUT_SIZE          1024
+#endif
+#ifndef MODEL_ENV_LAMBERTIAN_SAMPLES
 #define MODEL_ENV_LAMBERTIAN_SAMPLES 2048
+#endif
+#ifndef MODEL_ENV_GGX_SAMPLES
 #define MODEL_ENV_GGX_SAMPLES       1024
+#endif
+#ifndef MODEL_ENV_LUT_SAMPLES
 #define MODEL_ENV_LUT_SAMPLES       512
+#endif
 
 /* The model program is built with image based lighting (model.frag as GLSL 1.30). */
 static int g_modelIbl;
@@ -156,6 +180,7 @@ static int Model_IblSupported(void)
 /* The shadow map program and its uniforms. */
 typedef struct ShadowProgram {
     GLuint program;
+    GLint attrs[MODEL_LOC_COUNT];
     GLint model, light_matrix, skinned, joints;
     GLint tex, tex_transform, use_texture, enable_alpha, alpha_threshold, base_color;
     GLint directional, light_position, shadow_map_far;
@@ -608,6 +633,7 @@ static int Model_ExtraNumber(const char *json, const char *key, double *out)
 /* Appends n bytes to the vertex data. */
 static int Model_AddVertexData(Model *mdl, unsigned int *capacity, const void *data, unsigned int n)
 {
+    if (n > MODEL_CPU_BUDGET - mdl->vertex_size) return 0;
     if (mdl->vertex_size + n > *capacity) {
         unsigned int cap = *capacity != 0 ? *capacity : 0x10000;
         unsigned char *p;
@@ -823,6 +849,7 @@ static int Model_LoadPrimitive(Model *mdl, ModelPrim *prim, const cgltf_data *da
 
     /* The indices, made up for a primitive without them. */
     prim->index_count = p->indices != NULL ? (int)p->indices->count : prim->vertex_count;
+    if ((unsigned)prim->index_count > MODEL_CPU_BUDGET / 4u - mdl->index_count) return 0;
     prim->index_offset = mdl->index_count * 4;
     if (mdl->index_count + prim->index_count > *icap) {
         unsigned int cap = *icap != 0 ? *icap : 0x4000;
@@ -914,213 +941,6 @@ static void Model_LoadMaterial(ModelMaterial *mat, const cgltf_data *data, const
     }
     mat->double_sided = m->double_sided != 0;
     mat->unlit = m->unlit != 0;
-}
-
-/* The bytes of an image: from its buffer view, a data URI or a file next to the model (or the usual places). */
-static unsigned char *Model_ReadImage(const cgltf_image *img, const cgltf_options *options, const char *dir,
-                                      size_t *size)
-{
-    unsigned char *bytes;
-
-    if (img->buffer_view != NULL) {
-        const unsigned char *src = cgltf_buffer_view_data(img->buffer_view);
-        if (src == NULL) {
-            return NULL;
-        }
-        *size = img->buffer_view->size;
-        bytes = malloc(*size);
-        if (bytes != NULL) {
-            memcpy(bytes, src, *size);
-        }
-        return bytes;
-    }
-    if (img->uri == NULL) {
-        return NULL;
-    }
-    if (strncmp(img->uri, "data:", 5) == 0) {
-        const char *comma = strchr(img->uri, ',');
-        size_t len;
-        void *out = NULL;
-        if (comma == NULL || strstr(img->uri, ";base64,") == NULL) {
-            return NULL;
-        }
-        len = strlen(comma + 1);
-        *size = len / 4 * 3;
-        if (len >= 1 && comma[len] == '=') {
-            (*size)--;
-        }
-        if (len >= 2 && comma[len - 1] == '=') {
-            (*size)--;
-        }
-        if (cgltf_load_buffer_base64(options, *size, comma + 1, &out) != cgltf_result_success) {
-            return NULL;
-        }
-        return out;
-    } else {
-        char rel[0x200];
-        char path[0x200];
-        FILE *fp;
-        long n;
-
-        strncpy(rel, img->uri, sizeof(rel) - 1);
-        rel[sizeof(rel) - 1] = '\0';
-        cgltf_decode_uri(rel);
-        if (!File_Find(rel, path, NULL, dir)) {
-            return NULL;
-        }
-        fp = fopen(path, "rb");
-        if (fp == NULL) {
-            return NULL;
-        }
-        fseek(fp, 0, SEEK_END);
-        n = ftell(fp);
-        fseek(fp, 0, SEEK_SET);
-        bytes = n > 0 ? malloc((size_t)n) : NULL;
-        if (bytes != NULL && fread(bytes, 1, (size_t)n, fp) != (size_t)n) {
-            free(bytes);
-            bytes = NULL;
-        }
-        fclose(fp);
-        *size = (size_t)n;
-        return bytes;
-    }
-}
-
-/* Position of the lowest set bit of a channel mask (0 for an empty one). */
-static int Model_LowestBit(unsigned int mask)
-{
-    int i;
-
-    for (i = 0; i < 32; i++) {
-        if (mask & (1u << i)) {
-            return i;
-        }
-    }
-    return 0;
-}
-
-/*
- * Decodes a DDS image as Ikemen GO's decoder (lukegb/dds) does: only
- * uncompressed images with RGB and alpha bit masks (no FourCC), their first
- * level, rows in file order; each channel is masked and shifted down, not
- * rescaled. Returns malloc'd RGBA, NULL for anything else.
- */
-static unsigned char *Model_DecodeDds(const unsigned char *data, size_t size, int *w_out, int *h_out)
-{
-    enum { DDPF_ALPHAPIXELS = 0x1, DDPF_RGB = 0x40 };
-    unsigned int height, width, flags, bits, masks[4];
-    unsigned char *pixels;
-    size_t stride, pitch;
-    int shifts[4];
-    unsigned int x, y;
-    int c, k;
-
-    if (size < 128 || memcmp(data, "DDS ", 4) != 0) {
-        return NULL;
-    }
-    height = *(const unsigned int *)(data + 12);
-    width = *(const unsigned int *)(data + 16);
-    flags = *(const unsigned int *)(data + 80);
-    bits = *(const unsigned int *)(data + 88);
-    for (c = 0; c < 4; c++) {
-        masks[c] = *(const unsigned int *)(data + 92 + c * 4);
-        shifts[c] = Model_LowestBit(masks[c]);
-    }
-    if (flags != (DDPF_ALPHAPIXELS | DDPF_RGB) || bits == 0 || bits > 32 || width == 0 || height == 0) {
-        return NULL;
-    }
-    stride = (bits + 7) / 8;
-    pitch = ((size_t)width * bits + 7) / 8;
-    if (128 + pitch * height > size) {
-        return NULL;
-    }
-    pixels = malloc((size_t)width * height * 4);
-    if (pixels == NULL) {
-        return NULL;
-    }
-    for (y = 0; y < height; y++) {
-        for (x = 0; x < width; x++) {
-            const unsigned char *p = data + 128 + pitch * y + stride * x;
-            unsigned int v = 0;
-            for (k = 0; k < (int)stride; k++) {
-                v |= (unsigned int)p[k] << (8 * k);
-            }
-            for (c = 0; c < 4; c++) {
-                pixels[((size_t)y * width + x) * 4 + c] = (unsigned char)((v & masks[c]) >> shifts[c]);
-            }
-        }
-    }
-    *w_out = (int)width;
-    *h_out = (int)height;
-    return pixels;
-}
-
-/* Creates the GL texture of a glTF texture (Ikemen GO's sampling defaults: nearest, repeat without a sampler). */
-static GLuint Model_LoadTexture(const cgltf_texture *t, const cgltf_options *options, const char *dir)
-{
-    GLint mag = GL_NEAREST, min = GL_NEAREST, wrap_s = GL_REPEAT, wrap_t = GL_REPEAT;
-    GLint align;
-    unsigned char *bytes, *pixels;
-    size_t size;
-    int w, h;
-    GLuint id;
-
-    if (t->image == NULL) {
-        return 0;
-    }
-    bytes = Model_ReadImage(t->image, options, dir, &size);
-    if (bytes == NULL) {
-        Log_Printf("Model: can't read image %s\n", t->image->uri != NULL ? t->image->uri : "(embedded)");
-        return 0;
-    }
-    /* the formats Ikemen GO reads: PNG (libpng), JPEG (stb_image), uncompressed DDS */
-    pixels = Png_DecodeRGBA(bytes, size, &w, &h);
-    if (pixels == NULL) {
-        pixels = Model_DecodeDds(bytes, size, &w, &h);
-    }
-    if (pixels == NULL && size <= 0x7FFFFFFF) {
-        int comps;
-        pixels = stbi_load_from_memory(bytes, (int)size, &w, &h, &comps, 4);
-    }
-    free(bytes);
-    if (pixels == NULL) {
-        Log_Printf("Model: unsupported image %s (PNG, JPEG and uncompressed RGBA DDS are supported)\n",
-                   t->image->uri != NULL ? t->image->uri : "(embedded)");
-        return 0;
-    }
-    if (t->sampler != NULL) {
-        const cgltf_sampler *s = t->sampler;
-        mag = s->mag_filter == GL_NEAREST ? GL_NEAREST : GL_LINEAR;
-        switch (s->min_filter) {
-        case GL_NEAREST:
-        case GL_NEAREST_MIPMAP_NEAREST:
-        case GL_LINEAR_MIPMAP_NEAREST:
-        case GL_NEAREST_MIPMAP_LINEAR:
-        case GL_LINEAR_MIPMAP_LINEAR:
-            min = s->min_filter;
-            break;
-        default:
-            min = GL_LINEAR;
-            break;
-        }
-        wrap_s = s->wrap_s == GL_CLAMP_TO_EDGE || s->wrap_s == GL_MIRRORED_REPEAT ? s->wrap_s : GL_REPEAT;
-        wrap_t = s->wrap_t == GL_CLAMP_TO_EDGE || s->wrap_t == GL_MIRRORED_REPEAT ? s->wrap_t : GL_REPEAT;
-    }
-    glGetIntegerv(GL_UNPACK_ALIGNMENT, &align);
-    glGenTextures(1, &id);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, id);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, GL_TRUE);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, mag);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, min);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap_s);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap_t);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, align);
-    free(pixels);
-    return id;
 }
 
 /* The "shadowMapNear" ... "shadowMapBias" number extras of a light or node. */
@@ -1574,43 +1394,12 @@ static int Model_LoadSkin(ModelSkin *skin, const cgltf_data *data, const cgltf_s
     return 1;
 }
 
-/* Uploads the buffers and textures. */
-static int Model_Upload(Model *mdl, const cgltf_data *data, const cgltf_options *options, const char *dir)
-{
-    cgltf_size i;
-
-    if (g_renderMode != RENDER_OPENGL || !g_glInitialized) {
-        return 1;
-    }
-    mdl->textures = calloc(data->textures_count + 1, sizeof(unsigned int));
-    if (mdl->textures == NULL) {
-        return 0;
-    }
-    mdl->texture_count = (int)data->textures_count;
-    for (i = 0; i < data->textures_count; i++) {
-        mdl->textures[i] = Model_LoadTexture(&data->textures[i], options, dir);
-    }
-    glGenBuffers(1, &mdl->vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, mdl->vbo);
-    glBufferData(GL_ARRAY_BUFFER, mdl->vertex_size, mdl->vertex_data, GL_STATIC_DRAW);
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glGenBuffers(1, &mdl->ibo);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mdl->ibo);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, mdl->index_count * 4, mdl->index_data, GL_STATIC_DRAW);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
-    free(mdl->vertex_data);
-    mdl->vertex_data = NULL;
-    free(mdl->index_data);
-    mdl->index_data = NULL;
-    return 1;
-}
-
 /*
  * Loads a glTF (.gltf) or binary glTF (.glb) model. Returns NULL with a
- * log message on errors. A live desktop OpenGL renderer is required; other
- * renderers reject the request before parsing or uploading any resources.
+ * log message on errors. This asset entry point does not use GL; Model_Load
+ * below preserves the engine contract requiring a live OpenGL renderer.
  */
-Model *Model_Load(const char *path)
+Model *Model_LoadAsset(const char *path)
 {
     cgltf_options options;
     cgltf_data *data = NULL;
@@ -1621,15 +1410,32 @@ Model *Model_Load(const char *path)
     Model *mdl;
     cgltf_size i, j;
 
-    /* Port integration: model textures require a live desktop GL context. */
-    if (path == NULL || g_renderMode != RENDER_OPENGL || !g_glInitialized) {
-        Log_Printf("Model: %s requires the desktop OpenGL renderer\n", path ? path : "(null)");
-        return NULL;
+    if (path == NULL) return NULL;
+    {
+        FILE *source = fopen(path, "rb");
+        long bytes;
+        if (source == NULL) return NULL;
+        if (fseek(source, 0, SEEK_END) != 0) { fclose(source); return NULL; }
+        bytes = ftell(source);
+        fclose(source);
+        if (bytes < 0 || (unsigned long)bytes > MODEL_CPU_BUDGET) {
+            Log_Printf("Model: source exceeds CPU asset budget: %s\n", path);
+            return NULL;
+        }
     }
     memset(&options, 0, sizeof(options));
     r = cgltf_parse_file(&options, path, &data);
+    if (r == cgltf_result_success && !ModelAsset_Validate(data)) {
+        Log_Printf("Model: invalid graph/counts or CPU asset budget exceeded (%u bytes)\n", MODEL_CPU_BUDGET);
+        r = cgltf_result_invalid_gltf;
+    }
     if (r == cgltf_result_success) {
         r = cgltf_load_buffers(&options, data, path);
+        if (r == cgltf_result_success) r = cgltf_validate(data);
+        if (r == cgltf_result_success && !ModelAsset_ValidateSkins(data)) {
+            Log_Printf("Model: a vertex joint index is outside its skin palette\n");
+            r = cgltf_result_invalid_gltf;
+        }
     }
     if (r != cgltf_result_success) {
         Log_Printf("Can't load model %s (cgltf error %i)\n", path, (int)r);
@@ -1725,11 +1531,12 @@ Model *Model_Load(const char *path)
             Model_AddSceneLights(mdl, ms, ms->nodes[j]);
         }
     }
-    if (!Model_Upload(mdl, data, &options, dir)) {
+    if (!ModelAsset_LoadImages(mdl, data, &options, dir)) {
         goto fail;
     }
     free(json);
     cgltf_free(data);
+    ModelGpu_Register(mdl);
     return mdl;
 
 fail:
@@ -1738,6 +1545,23 @@ fail:
     cgltf_free(data);
     Model_Free(mdl);
     return NULL;
+}
+
+/* Port addition: keep the public live-renderer contract, with a GL-free asset API. */
+Model *Model_Load(const char *path)
+{
+    Model *mdl;
+    if (path == NULL || g_renderMode != RENDER_OPENGL || !g_glInitialized) {
+        Log_Printf("Model: %s requires the OpenGL renderer\n", path ? path : "(null)");
+        return NULL;
+    }
+    mdl = Model_LoadAsset(path);
+    if (mdl != NULL && g_modelProgramState == 0) g_modelProgramState = Model_BuildProgram() ? 1 : -1;
+    if (mdl != NULL && (g_modelProgramState != 1 || !ModelGpu_Ensure(mdl))) {
+        Model_Free(mdl);
+        return NULL;
+    }
+    return mdl;
 }
 
 static void Model_FreeEnvironment(ModelEnv *env);
@@ -1749,18 +1573,11 @@ void Model_Free(Model *mdl)
     if (mdl == NULL) {
         return;
     }
+    if (g_shadowMaps.drawn == mdl) g_shadowMaps.drawn = NULL;
+    ModelGpu_Release(mdl);
     Model_FreeEnvironment(mdl->env);
-    if (mdl->vbo != 0) {
-        glDeleteBuffers(1, &mdl->vbo);
-    }
-    if (mdl->ibo != 0) {
-        glDeleteBuffers(1, &mdl->ibo);
-    }
-    for (i = 0; i < mdl->texture_count; i++) {
-        if (mdl->textures[i] != 0) {
-            glDeleteTextures(1, &mdl->textures[i]);
-        }
-    }
+    for (i = 0; mdl->images != NULL && i < mdl->texture_count; ++i) free(mdl->images[i].pixels);
+    free(mdl->images);
     free(mdl->textures);
     for (i = 0; mdl->nodes != NULL && i < mdl->node_count; i++) {
         free(mdl->nodes[i].children);
@@ -2136,10 +1953,21 @@ static int Model_BuildProgram(void)
     static const char *const fields[] = { "direction",    "range",        "color", "intensity",  "position",
                                           "innerConeCos", "outerConeCos", "type",  "shadowBias", "shadowMapFar" };
     /* model.frag has no #version line: it comes first, with what image based lighting needs */
-    static const char frag_head[] = "#version 120\n";
-    static const char frag_head_ibl[] = "#version 130\n#define MODEL_IBL\n";
+#ifdef MUGEN_GLES
+    static const char vert_head[] = "#version 300 es\nprecision highp float;\nprecision highp int;\n#define MODEL_ATTRIBUTE in\n#define MODEL_VARYING out\n#define MODEL_NO_SHADOW\n";
+    static const char frag_head[] = "#version 300 es\nprecision highp float;\nprecision highp int;\n#define MODEL_VARYING in\n#define MODEL_TEXTURE2D texture\n#define MODEL_TEXTURECUBE texture\nout vec4 modelColor;\n#define MODEL_OUTPUT modelColor\n#define MODEL_NO_SHADOW\n";
+#elif defined(MUGEN_VITA_GL)
+    static const char vert_head[] = "#define MODEL_ATTRIBUTE attribute\n#define MODEL_VARYING varying\n";
+    static const char frag_head[] = "#define MODEL_VARYING varying\n#define MODEL_TEXTURE2D texture2D\n#define MODEL_OUTPUT gl_FragColor\n";
+#else
+    static const char vert_head[] = "#version 120\n#define MODEL_ATTRIBUTE attribute\n#define MODEL_VARYING varying\n";
+    static const char frag_head[] = "#version 120\n#define MODEL_VARYING varying\n#define MODEL_TEXTURE2D texture2D\n#define MODEL_TEXTURECUBE textureCube\n#define MODEL_OUTPUT gl_FragColor\n";
+#endif
+#ifndef MODEL_PORTABLE
+    static const char frag_head_ibl[] = "#version 130\n#define MODEL_IBL\n#define MODEL_VARYING varying\n#define MODEL_TEXTURE2D texture2D\n#define MODEL_TEXTURECUBE textureCube\n#define MODEL_OUTPUT gl_FragColor\n";
+#endif
     const char *src[2][2];
-    GLsizei parts[2] = { 1, 2 };
+    GLsizei parts[2] = { 2, 2 };
     GLenum types[2] = { GL_VERTEX_SHADER, GL_FRAGMENT_SHADER };
     ModelProgram *p = &g_modelProgram;
     GLuint shaders[2];
@@ -2149,9 +1977,18 @@ static int Model_BuildProgram(void)
     int i, k;
 
     g_modelIbl = Model_IblSupported();
-    src[0][0] = g_shader_model_vert;
-    src[1][0] = g_modelIbl ? frag_head_ibl : frag_head;
+    src[0][0] = vert_head;
+    src[1][0] = frag_head;
+#ifdef MUGEN_MODEL_BASIC
+    src[0][1] = g_shader_model_basic_vert;
+    src[1][1] = g_shader_model_basic_frag;
+#else
+    src[0][1] = g_shader_model_vert;
     src[1][1] = g_shader_model_frag;
+#ifndef MODEL_PORTABLE
+    if (g_modelIbl) src[1][0] = frag_head_ibl;
+#endif
+#endif
     p->program = glCreateProgram();
     for (i = 0; i < 2; i++) {
         shaders[i] = glCreateShader(types[i]);
@@ -2181,6 +2018,7 @@ static int Model_BuildProgram(void)
         p->program = 0;
         return 0;
     }
+    for (i = 0; i < MODEL_LOC_COUNT; ++i) p->attrs[i] = glGetAttribLocation(p->program, attribs[i]);
     p->projection = Model_Uniform("projection");
     p->view = Model_Uniform("view");
     p->model = Model_Uniform("model");
@@ -2210,7 +2048,11 @@ static int Model_BuildProgram(void)
     p->enable_alpha = Model_Uniform("enableAlpha");
     p->alpha_threshold = Model_Uniform("alphaThreshold");
     p->add = Model_Uniform("add");
+#ifdef MUGEN_MODEL_BASIC
+    p->mul = Model_Uniform("uPalMul");
+#else
     p->mul = Model_Uniform("mul");
+#endif
     p->colorbal = Model_Uniform("colorbal");
     p->invertall = Model_Uniform("invertall");
     for (i = 0; i < MODEL_MAX_LIGHTS; i++) {
@@ -2233,6 +2075,26 @@ static int Model_BuildProgram(void)
     p->env_intensity = Model_Uniform("environmentIntensity");
     p->env_mip_count = Model_Uniform("mipCount");
     p->env_rotation = Model_Uniform("environmentRotation");
+    {
+        GLint vertex_vectors, fragment_vectors, texture_units;
+#if defined(MUGEN_GLES) || defined(MUGEN_VITA_GL)
+        glGetIntegerv(GL_MAX_VERTEX_UNIFORM_VECTORS, &vertex_vectors);
+        glGetIntegerv(GL_MAX_FRAGMENT_UNIFORM_VECTORS, &fragment_vectors);
+#else
+        glGetIntegerv(GL_MAX_VERTEX_UNIFORM_COMPONENTS, &vertex_vectors);
+        glGetIntegerv(GL_MAX_FRAGMENT_UNIFORM_COMPONENTS, &fragment_vectors);
+        vertex_vectors /= 4; fragment_vectors /= 4;
+#endif
+        glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &texture_units);
+#ifdef MUGEN_MODEL_BASIC
+        Log_Printf("Model: profile=basic (unlit, no skin/shadow/IBL); ");
+#elif defined(MUGEN_GLES)
+        Log_Printf("Model: profile=gles3 (skin/PBR, no shadow/IBL); ");
+#else
+        Log_Printf("Model: profile=desktop-reference; ");
+#endif
+        Log_Printf("shader linked, uniform vectors=%d/%d textures=%d\n", vertex_vectors, fragment_vectors, texture_units);
+    }
     return 1;
 }
 
@@ -2240,6 +2102,10 @@ static int Model_BuildProgram(void)
 static void Model_SetAttribute(int loc, int present, int comps, unsigned int *offset, unsigned int n, float x, float y,
                                float z, float w)
 {
+    if (loc < 0) {
+        if (present) *offset += comps * 4 * n;
+        return;
+    }
     if (present) {
         glEnableVertexAttribArray(loc);
         glVertexAttribPointer(loc, comps, GL_FLOAT, GL_FALSE, 0, (const void *)(size_t)*offset);
@@ -2251,22 +2117,22 @@ static void Model_SetAttribute(int loc, int present, int comps, unsigned int *of
 }
 
 /* Points the vertex attributes at a primitive's blocks (in Model_LoadPrimitive's order). */
-static void Model_SetAttributes(const ModelPrim *p)
+static void Model_SetAttributes(const ModelPrim *p, const GLint *attrs)
 {
     unsigned int offset = p->vertex_offset;
     unsigned int n = (unsigned int)p->vertex_count;
     int skin = (p->attribs & MODEL_ATTR_SKIN) != 0;
 
-    Model_SetAttribute(MODEL_LOC_POSITION, 1, 3, &offset, n, 0.0f, 0.0f, 0.0f, 1.0f);
-    Model_SetAttribute(MODEL_LOC_UV, (p->attribs & MODEL_ATTR_UV) != 0, 2, &offset, n, 0.0f, 0.0f, 0.0f, 1.0f);
-    Model_SetAttribute(MODEL_LOC_NORMAL, (p->attribs & MODEL_ATTR_NORMAL) != 0, 3, &offset, n, 0.0f, 0.0f, 0.0f,
+    Model_SetAttribute(attrs[MODEL_LOC_POSITION], 1, 3, &offset, n, 0.0f, 0.0f, 0.0f, 1.0f);
+    Model_SetAttribute(attrs[MODEL_LOC_UV], (p->attribs & MODEL_ATTR_UV) != 0, 2, &offset, n, 0.0f, 0.0f, 0.0f, 1.0f);
+    Model_SetAttribute(attrs[MODEL_LOC_NORMAL], (p->attribs & MODEL_ATTR_NORMAL) != 0, 3, &offset, n, 0.0f, 0.0f, 0.0f,
                        1.0f);
-    Model_SetAttribute(MODEL_LOC_TANGENT, (p->attribs & MODEL_ATTR_TANGENT) != 0, 4, &offset, n, 0.0f, 0.0f, 0.0f,
+    Model_SetAttribute(attrs[MODEL_LOC_TANGENT], (p->attribs & MODEL_ATTR_TANGENT) != 0, 4, &offset, n, 0.0f, 0.0f, 0.0f,
                        0.0f);
-    Model_SetAttribute(MODEL_LOC_COLOR, (p->attribs & MODEL_ATTR_COLOR) != 0, 4, &offset, n, 1.0f, 1.0f, 1.0f, 1.0f);
-    Model_SetAttribute(MODEL_LOC_JOINTS, skin, 4, &offset, n, 0.0f, 0.0f, 0.0f, 0.0f);
-    Model_SetAttribute(MODEL_LOC_WEIGHTS, skin, 4, &offset, n, 0.0f, 0.0f, 0.0f, 0.0f);
-    Model_SetAttribute(MODEL_LOC_OUTLINE, (p->attribs & MODEL_ATTR_OUTLINE) != 0, 4, &offset, n, 0.0f, 0.0f, 0.0f,
+    Model_SetAttribute(attrs[MODEL_LOC_COLOR], (p->attribs & MODEL_ATTR_COLOR) != 0, 4, &offset, n, 1.0f, 1.0f, 1.0f, 1.0f);
+    Model_SetAttribute(attrs[MODEL_LOC_JOINTS], skin, 4, &offset, n, 0.0f, 0.0f, 0.0f, 0.0f);
+    Model_SetAttribute(attrs[MODEL_LOC_WEIGHTS], skin, 4, &offset, n, 0.0f, 0.0f, 0.0f, 0.0f);
+    Model_SetAttribute(attrs[MODEL_LOC_OUTLINE], (p->attribs & MODEL_ATTR_OUTLINE) != 0, 4, &offset, n, 0.0f, 0.0f, 0.0f,
                        0.0f);
 }
 
@@ -2377,8 +2243,13 @@ static void Model_SetBlend(int trans)
 /* Binds a material texture to its unit; returns whether there is one. */
 static int Model_BindTexture(const Model *mdl, const ModelTexRef *ref, int unit, GLint transform_loc)
 {
+#ifdef MUGEN_VITA_GL
+    if (transform_loc == 0 || transform_loc == -1) return 0;
+#else
+    if (transform_loc < 0) return 0;
+#endif
     glUniformMatrix3fv(transform_loc, 1, GL_FALSE, ref->transform);
-    if (ref->texture == -1 || mdl->textures[ref->texture] == 0) {
+    if (ref->texture < 0 || ref->texture >= mdl->texture_count || mdl->textures[ref->texture] == 0) {
         return 0;
     }
     glActiveTexture(GL_TEXTURE0 + unit);
@@ -2435,7 +2306,7 @@ static void Model_DrawNode(Model *mdl, int index, int layer, int default_layer, 
         }
         Model_SetBlend(n->trans);
         Model_Morph(p, n);
-        Model_SetAttributes(p);
+        Model_SetAttributes(p, prog->attrs);
         glUniformMatrix4fv(prog->model, 1, GL_FALSE, n->world);
         glUniformMatrix4fv(prog->normal_matrix, 1, GL_FALSE, n->normal_matrix);
         if (n->skin != -1 && (p->attribs & MODEL_ATTR_SKIN)) {
@@ -2462,6 +2333,7 @@ static void Model_DrawNode(Model *mdl, int index, int layer, int default_layer, 
         glUniform1i(prog->use_emission_map,
                     Model_BindTexture(mdl, &mat->emissive, MODEL_UNIT_EMISSION, prog->emission_transform));
         glDrawElements(p->mode, p->index_count, GL_UNSIGNED_INT, (const void *)(size_t)p->index_offset);
+#ifndef MUGEN_MODEL_BASIC
         if (n->outline > 0.0f) {
             /* the outline: the mesh pushed out along its normals, back faces only, in black (Ikemen GO) */
             glFrontFace(((Mat4_Det3(n->world) < 0) != flipped) ? GL_CCW : GL_CW);
@@ -2471,6 +2343,7 @@ static void Model_DrawNode(Model *mdl, int index, int layer, int default_layer, 
             glDrawElements(p->mode, p->index_count, GL_UNSIGNED_INT, (const void *)(size_t)p->index_offset);
             glUniform1f(prog->mesh_outline, 0.0f);
         }
+#endif
     }
 }
 
@@ -2585,6 +2458,7 @@ static int Model_SetLights(const Model *mdl, const ModelScene *sc)
 
 /* ---- shadow maps ---- */
 
+#ifndef MODEL_PORTABLE
 static int Model_BuildShadowProgram(void)
 {
     static const char *const attribs[MODEL_LOC_COUNT] = { "position",  "uv",       "vertColor", "joints_0",
@@ -2626,6 +2500,7 @@ static int Model_BuildShadowProgram(void)
         p->program = 0;
         return 0;
     }
+    for (i = 0; i < MODEL_LOC_COUNT; ++i) p->attrs[i] = glGetAttribLocation(p->program, attribs[i]);
     p->model = glGetUniformLocation(p->program, "model");
     p->light_matrix = glGetUniformLocation(p->program, "lightMatrix");
     p->skinned = glGetUniformLocation(p->program, "skinned");
@@ -2747,7 +2622,7 @@ static void Model_DrawNodeShadow(Model *mdl, int index, int blended)
             glEnable(GL_CULL_FACE);
             glCullFace(GL_BACK);
         }
-        Model_SetAttributes(p);
+        Model_SetAttributes(p, prog->attrs);
         glUniformMatrix4fv(prog->model, 1, GL_FALSE, n->world);
         if (n->skin != -1 && (p->attribs & MODEL_ATTR_SKIN)) {
             const ModelSkin *skin = &mdl->skins[n->skin];
@@ -2779,18 +2654,25 @@ void Model_DrawShadows(Model *mdl)
     float ident[16], params[MODEL_SHADOW_PARAMS], m[16];
     GLint prev_fbo;
     int i, face, pass, k;
+    ModelPass state;
 
     sm->drawn = NULL;
-    if (!g_modelShadows || mdl == NULL || mdl->vbo == 0 || mdl->scene_count == 0 || g_renderMode != RENDER_OPENGL) {
+    if (!g_modelShadows || mdl == NULL || !ModelGpu_Ensure(mdl) || mdl->scene_count == 0 || g_renderMode != RENDER_OPENGL) {
         return;
     }
+    ModelPass_Begin(&state);
     sc = &mdl->scenes[0];
     if (sc->light_count == 0 || !Model_ShadowSetup()) {
+        ModelPass_End(&state);
         return;
     }
     Mat4_Identity(ident);
     for (i = 0; i < sc->node_count; i++) {
         Model_WorldTransform(mdl, sc->nodes[i], ident);
+    }
+    /* Port fix: skins may reference a joint in a later scene root. All world
+     * matrices must exist before evaluating any skin, including on frame one. */
+    for (i = 0; i < sc->node_count; i++) {
         Model_SkinMatrices(mdl, sc->nodes[i]);
     }
 
@@ -2806,6 +2688,7 @@ void Model_DrawShadows(Model *mdl)
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
     glDepthMask(GL_TRUE);
+    glClearDepth(1.0);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
     glUseProgram(prog->program);
@@ -2856,6 +2739,7 @@ void Model_DrawShadows(Model *mdl)
     glUseProgram(0);
     g_glCurrentProgram = 0;
     glPopAttrib();
+    ModelPass_End(&state);
     if (sm->state == 1) {
         sm->drawn = mdl;
     }
@@ -2898,7 +2782,7 @@ static float *Model_LoadHdr(const char *path, int *w_out, int *h_out)
     fseek(fp, 0, SEEK_END);
     size = ftell(fp);
     fseek(fp, 0, SEEK_SET);
-    data = size > 0 ? malloc((size_t)size + 1) : NULL;
+    data = size > 0 && (unsigned long)size < MODEL_CPU_BUDGET ? malloc((size_t)size + 1) : NULL;
     if (data == NULL || fread(data, 1, (size_t)size, fp) != (size_t)size) {
         free(data);
         fclose(fp);
@@ -2913,6 +2797,7 @@ static float *Model_LoadHdr(const char *path, int *w_out, int *h_out)
     /* the header ends with an empty line, then comes the resolution line */
     for (p = data; p + 1 < end && !(p[0] == '\n' && p[1] == '\n'); p++) {
     }
+    if (p + 1 >= end) goto fail;
     p += 2;
     if (p >= end || sscanf((const char *)p, "-Y %d +X %d", &h, &w) != 2 || w <= 0 || h <= 0) {
         goto fail;
@@ -2921,6 +2806,7 @@ static float *Model_LoadHdr(const char *path, int *w_out, int *h_out)
         p++;
     }
     p++;
+    if ((unsigned)w > MODEL_CPU_BUDGET / 16u || (unsigned)h > MODEL_CPU_BUDGET / ((unsigned)w * 16u)) goto fail;
     pixels = malloc((size_t)w * h * 4 * sizeof(float));
     line = malloc((size_t)w * 4);
     if (pixels == NULL || line == NULL) {
@@ -3087,11 +2973,14 @@ int Model_LoadEnvironment(Model *mdl, const char *path, float intensity)
     GLuint panorama, source, fbo, vbo, prog_pano, prog_filter;
     GLint prev_fbo, align;
     int w, h, i, n;
+    ModelPass state;
+    char reload_source[512];
 
-    if (mdl == NULL || !Model_IblSupported()) {
+    if (path == NULL || strlen(path) >= sizeof(reload_source) || mdl == NULL || !Model_IblSupported()) {
         Log_Printf("Model: environment maps need OpenGL 3.0\n");
         return 0;
     }
+    strcpy(reload_source, path);
     img = Model_LoadHdr(path, &w, &h);
     if (img == NULL) {
         Log_Printf("Model: can't read environment %s (only Radiance .hdr is supported)\n", path);
@@ -3125,6 +3014,7 @@ int Model_LoadEnvironment(Model *mdl, const char *path, float intensity)
 
     glGetIntegerv(GL_FRAMEBUFFER_BINDING_EXT, &prev_fbo);
     glGetIntegerv(GL_UNPACK_ALIGNMENT, &align);
+    ModelPass_Begin(&state);
     glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_POLYGON_BIT | GL_SCISSOR_BIT |
                  GL_VIEWPORT_BIT);
     glDisable(GL_BLEND);
@@ -3207,8 +3097,11 @@ int Model_LoadEnvironment(Model *mdl, const char *path, float intensity)
     glDeleteProgram(prog_pano);
     glDeleteProgram(prog_filter);
     glPopAttrib();
+    ModelPass_End(&state);
 
     env->intensity = intensity;
+    strcpy(env->source, reload_source);
+    Model_FreeEnvironment(mdl->env);
     mdl->env = env;
     return 1;
 }
@@ -3219,9 +3112,11 @@ static void Model_FreeEnvironment(ModelEnv *env)
     if (env == NULL) {
         return;
     }
-    glDeleteTextures(1, &env->lambertian);
-    glDeleteTextures(1, &env->ggx);
-    glDeleteTextures(1, &env->lut);
+    if (g_glInitialized) {
+        if (env->lambertian) glDeleteTextures(1, &env->lambertian);
+        if (env->ggx) glDeleteTextures(1, &env->ggx);
+        if (env->lut) glDeleteTextures(1, &env->lut);
+    }
     free(env);
 }
 
@@ -3286,6 +3181,19 @@ static void Model_BindShadowMaps(const ShadowMaps *sm)
     }
 }
 
+#else
+void Model_DrawShadows(Model *mdl) { (void)mdl; }
+int Model_LoadEnvironment(Model *mdl, const char *path, float intensity)
+{
+    (void)mdl; (void)intensity;
+    Log_Printf("Model: environment %s unsupported by this model profile\n", path ? path : "(null)");
+    return 0;
+}
+static void Model_FreeEnvironment(ModelEnv *env) { free(env); }
+static void Model_BindEnvironment(const ModelEnv *env) { (void)env; }
+static void Model_BindShadowMaps(const ShadowMaps *sm) { (void)sm; }
+#endif
+
 /*
  * Draws the nodes of layer `layer` of scene `scene` (nodes without a
  * layerNumber are on default_layer) with the screen projection proj and the
@@ -3303,8 +3211,10 @@ void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float
     float ident[16], p[16], flip[16], inv_view[16];
     int flipped, unlit;
     int i, pass;
+    ModelPass state;
 
-    if (mdl == NULL || mdl->vbo == 0 || scene < 0 || scene >= mdl->scene_count || g_renderMode != RENDER_OPENGL) {
+    if (fx == NULL || proj == NULL || view == NULL || mdl == NULL || scene < 0 ||
+        scene >= mdl->scene_count || g_renderMode != RENDER_OPENGL || !ModelGpu_Ensure(mdl)) {
         return;
     }
     if (g_modelProgramState == 0) {
@@ -3317,6 +3227,10 @@ void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float
     Mat4_Identity(ident);
     for (i = 0; i < sc->node_count; i++) {
         Model_WorldTransform(mdl, sc->nodes[i], ident);
+    }
+    /* Port fix: skins may reference a joint in a later scene root. All world
+     * matrices must exist before evaluating any skin, including on frame one. */
+    for (i = 0; i < sc->node_count; i++) {
         Model_SkinMatrices(mdl, sc->nodes[i]);
     }
     /* texture transforms may be animated (Ikemen GO's calculateTextureTransform) */
@@ -3338,11 +3252,18 @@ void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float
     }
     Mat4_Invert(inv_view, view);
 
-    glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_POLYGON_BIT | GL_SCISSOR_BIT);
+    ModelPass_Begin(&state);
     glDisable(GL_SCISSOR_TEST);
+#ifndef MUGEN_GLES
     glDisable(GL_ALPHA_TEST);
-    glDisable(GL_TEXTURE_1D);
+#endif
     glDepthMask(GL_TRUE);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+#if defined(MUGEN_GLES) || defined(MUGEN_VITA_GL)
+    glClearDepthf(1.0f);
+#else
+    glClearDepth(1.0);
+#endif
     glClear(GL_DEPTH_BUFFER_BIT);
     glEnable(GL_BLEND);
     glUseProgram(prog->program);
@@ -3384,31 +3305,18 @@ void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float
             Model_DrawNode(mdl, sc->nodes[i], layer, default_layer, pass, flipped, unlit, outline);
         }
     }
-    for (i = 0; i < MODEL_LOC_COUNT; i++) {
-        glDisableVertexAttribArray(i);
-    }
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
-    if (g_shadowMaps.drawn == mdl) {
-        Model_BindShadowMaps(NULL);
-    }
-    if (mdl->env != NULL) {
-        Model_BindEnvironment(NULL);
-    }
-    for (i = MODEL_UNIT_EMISSION; i >= MODEL_UNIT_BASE; i--) {
-        glActiveTexture(GL_TEXTURE0 + i);
-        glBindTexture(GL_TEXTURE_2D, 0);
-    }
-    glUseProgram(0);
-    g_glCurrentProgram = 0;
-    glPopAttrib();
+    /* The pass restores only the resources this profile actually touched. */
+    ModelPass_End(&state);
 }
 
 /* Port integration: model-wide GPU caches must not survive context loss. */
 void Model_RendererQuit(void)
 {
+#ifndef MODEL_PORTABLE
     int i;
+#endif
     if (g_modelProgram.program) glDeleteProgram(g_modelProgram.program);
+#ifndef MODEL_PORTABLE
     if (g_shadowProgram.program) glDeleteProgram(g_shadowProgram.program);
     if (g_shadowMaps.fbo) glDeleteFramebuffersEXT(1, &g_shadowMaps.fbo);
     if (g_shadowMaps.depth) glDeleteRenderbuffersEXT(1, &g_shadowMaps.depth);
@@ -3418,6 +3326,15 @@ void Model_RendererQuit(void)
             if (g_shadowMaps.cube[i]) glDeleteTextures(1, &g_shadowMaps.cube[i]);
         }
     }
+#endif
+    ModelGpu_Reset(1);
+    Model_OnContextLost();
+}
+
+/* Port addition: invalidate names without deleting objects in a replacement context. */
+void Model_OnContextLost(void)
+{
+    ModelGpu_Reset(0);
     memset(&g_modelProgram, 0, sizeof g_modelProgram);
     memset(&g_shadowProgram, 0, sizeof g_shadowProgram);
     memset(&g_shadowMaps, 0, sizeof g_shadowMaps);

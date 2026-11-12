@@ -8,6 +8,7 @@
 #   port/psvita/build.sh --clean        remove this port's build output
 #   port/psvita/build.sh --offline      fail instead of downloading anything
 #   port/psvita/build.sh --jobs N       parallel build jobs (default: CPU count)
+#   port/psvita/build.sh --model3d      opt-in basic glTF profile (device qualification required)
 #   port/psvita/build.sh --debug        Debug build (default: Release)
 #   port/psvita/build.sh --data DIR     pack this M.U.G.E.N tree into the VPK
 #   port/psvita/build.sh --no-data      pack no game data (engine only)
@@ -137,6 +138,7 @@ PRINT_ENV=0
 DATA_SET=0
 DATA_DIR=""
 TITLEID=MUGEN0001
+MODEL3D=OFF
 GL_SELFTEST=OFF
 RENDER_CACHE=""
 SHADER_CACHE=""
@@ -163,6 +165,7 @@ while [ $# -gt 0 ]; do
         --offline) OFFLINE=1 ;;
         --debug) BUILD_TYPE=Debug ;;
         --gl-selftest) GL_SELFTEST=ON ;;
+        --model3d) MODEL3D=ON ;;
         --render-cache) RENDER_CACHE=ON ;;
         --no-render-cache) RENDER_CACHE=OFF ;;
         --shader-cache) SHADER_CACHE=ON ;;
@@ -657,6 +660,7 @@ cmake_args=(
     "-DCMAKE_BUILD_TYPE=$BUILD_TYPE"
     "-DMUGEN_VITA_DATA_DIR=$DATA_WIN"
     "-DMUGEN_VITA_GL_SELFTEST=$GL_SELFTEST"
+    "-DMUGEN_MODEL3D=$MODEL3D"
     "-DMUGEN_VITA_CFG=$(win_path "$HERE/mugen.psvita.cfg")"
 )
 # The resolved default is passed on every build so the VPK keeps its bundled

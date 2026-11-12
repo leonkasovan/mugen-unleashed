@@ -1,4 +1,3 @@
-#version 120
 /*
  * Vertex shader of the glTF models (model.c): Ikemen GO's model.vert.glsl
  * for OpenGL 2.1. Morph targets are applied to the vertex buffer on the CPU
@@ -8,25 +7,29 @@
  */
 
 uniform mat4 projection, view, model, normalMatrix;
+#ifndef MODEL_NO_SHADOW
 uniform mat4 lightMatrices[4];
+#endif
 uniform bool skinned;
 uniform vec4 joints[3 * 64];
 uniform float meshOutline;
 uniform vec3 cameraPosition;
 
-attribute vec3 position;
-attribute vec2 uv;
-attribute vec4 vertColor;
-attribute vec4 joints_0;
-attribute vec4 weights_0;
-attribute vec3 normalIn;
-attribute vec4 tangentIn;
-attribute vec4 outlineAttributeIn;
+MODEL_ATTRIBUTE vec3 position;
+MODEL_ATTRIBUTE vec2 uv;
+MODEL_ATTRIBUTE vec4 vertColor;
+MODEL_ATTRIBUTE vec4 joints_0;
+MODEL_ATTRIBUTE vec4 weights_0;
+MODEL_ATTRIBUTE vec3 normalIn;
+MODEL_ATTRIBUTE vec4 tangentIn;
+MODEL_ATTRIBUTE vec4 outlineAttributeIn;
 
-varying vec2 texcoord;
-varying vec4 vColor;
-varying vec3 normal, tangent, bitangent, worldSpacePos;
-varying vec4 lightSpacePos[4];
+MODEL_VARYING vec2 texcoord;
+MODEL_VARYING vec4 vColor;
+MODEL_VARYING vec3 normal, tangent, bitangent, worldSpacePos;
+#ifndef MODEL_NO_SHADOW
+MODEL_VARYING vec4 lightSpacePos[4];
+#endif
 
 mat4 jointMatrix(float index)
 {
@@ -92,8 +95,10 @@ void main()
         }
     }
     worldSpacePos = vec3(world);
+#ifndef MODEL_NO_SHADOW
     for (int i = 0; i < 4; i++) {
         lightSpacePos[i] = lightMatrices[i] * world;
     }
+#endif
     gl_Position = projection * view * world;
 }

@@ -418,6 +418,13 @@ add_executable(mugen
 target_compile_definitions(mugen PRIVATE
   MUGEN_VITA_RENDER_CACHE=$<BOOL:${MUGEN_VITA_RENDER_CACHE}>)
 
+option(MUGEN_MODEL3D "Opt-in basic VitaGL glTF profile (no skinning, lighting or optional effects)" OFF)
+if(MUGEN_MODEL3D)
+  include("${MUGEN_ROOT}/port/cmake/Model3D.cmake")
+  mugen_enable_model3d(mugen "${MUGEN_ROOT}")
+  message(STATUS "Vita model3d BASIC profile enabled; device qualification required")
+endif()
+
 target_include_directories(mugen PRIVATE
   "${MUGEN_SRC}"                                  # engine headers
   "${MUGEN_THIRD}/lua-5.1.4/src"

@@ -11,6 +11,8 @@ Model *Model_Load(const char *path)
     Log_Printf("3D models are unavailable in this build: %s\n", path ? path : "(null)");
     return NULL;
 }
+Model *Model_LoadAsset(const char *path) { return Model_Load(path); }
+void Model_OnContextLost(void) {}
 void Model_Free(Model *mdl) { (void)mdl; }
 void Model_RendererQuit(void) {}
 void Model_Step(Model *mdl) { (void)mdl; }

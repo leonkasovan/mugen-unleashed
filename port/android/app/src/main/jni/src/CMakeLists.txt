@@ -31,8 +31,8 @@ message(STATUS "mugen-unleashed source: ${MUGEN_ROOT}")
 # OpenGL loader, which cannot work on Android (no GLEW, and the Android GLES
 # context is not what glrender.c was written against).
 #
-# The engine ships a software renderer, which is what this port uses; the GL
-# renderer stays out of the build exactly as it does on the Vita port.
+# The default build uses System; the optional GLES renderer is a separate
+# backend. Desktop GL files are never compiled into this platform.
 # ---------------------------------------------------------------------------
 file(GLOB MUGEN_ENGINE_SOURCES CONFIGURE_DEPENDS "${MUGEN_ROOT}/src/*.c")
 
@@ -46,9 +46,9 @@ file(GLOB MUGEN_ENGINE_SOURCES CONFIGURE_DEPENDS "${MUGEN_ROOT}/src/*.c")
 # the vendored GLES 3.0 loader (third_party/glad-es-3.0) INSTEAD of the
 # desktop GL files. The desktop glrender.c/gldetect.c stay excluded either
 # way: the GLES draw path is a separate backend, not a recompile of the
-# fixed-function desktop renderer (plan section 12.1). Until the GLES draw
-# path lands, MUGEN_GLES only links the probe + loader; System stays the
-# renderer and Gfx_Capability reports no GPU_SPRITE.
+# fixed-function desktop renderer (plan section 12.1). Until the GLES/model
+# paths are qualified on device, both remain opt-in. The draw path is implemented;
+# build success is not device qualification.
 #
 # NOT excluded: compat_linux.c. It is the Win32-over-POSIX shim the Linux and
 # PS Vita builds use (FreeLibrary, InterlockedExchangeAdd, FontsDir, ...), and
@@ -57,7 +57,11 @@ file(GLOB MUGEN_ENGINE_SOURCES CONFIGURE_DEPENDS "${MUGEN_ROOT}/src/*.c")
 # Rng_Seed as well as the entry point; its main() is renamed Mugen_Main for this
 # target (see src/main.c) and android_main.c calls it.
 list(FILTER MUGEN_ENGINE_SOURCES EXCLUDE REGEX ".*/(platform_main_win32|glrender|gldetect|sdl2video)\\.c$")
-option(MUGEN_GLES "M8 GLES 3.0 backend probe+loader (draw path not yet landed)" OFF)
+option(MUGEN_GLES "Opt-in GLES 3.0 sprite renderer" OFF)
+option(MUGEN_MODEL3D "Opt-in GLES glTF model renderer (device qualification required)" OFF)
+if(MUGEN_MODEL3D AND NOT MUGEN_GLES)
+    message(FATAL_ERROR "MUGEN_MODEL3D requires MUGEN_GLES=ON on Android")
+endif()
 if(MUGEN_GLES)
     list(APPEND MUGEN_ENGINE_SOURCES "${MUGEN_ROOT}/src/gles_probe.c")
     # MVP/quad CPU math the GLES vertex shader consumes (no fixed-function
@@ -175,12 +179,16 @@ endif()
 list(APPEND ANDROID_INCLUDES "${MUGEN_ROOT}/src" "${CMAKE_CURRENT_SOURCE_DIR}")
 
 add_library(main SHARED ${MUGEN_ENGINE_SOURCES})
+if(MUGEN_MODEL3D)
+    include("${MUGEN_ROOT}/port/cmake/Model3D.cmake")
+    mugen_enable_model3d(main "${MUGEN_ROOT}")
+endif()
 
 target_include_directories(main PRIVATE ${ANDROID_INCLUDES})
 
 # ---------------------------------------------------------------------------
 # Compile definitions: Android identity is independent of the Vita port and
-# of the desktop SDL 1.2-over-SDL2 build. Never force-include a compatibility
+# of the desktop build. All targets use native SDL2. Never force-include a compatibility
 # header into either the engine or third-party translation units.
 target_compile_definitions(main PRIVATE
     ANDROID_PORT=1
@@ -197,7 +205,7 @@ if(MUGEN_GLES)
     target_compile_definitions(main PRIVATE MUGEN_GLES=1)
     target_include_directories(main PRIVATE "${MUGEN_ROOT}/third_party/glad-es-3.0")
     target_link_libraries(main PRIVATE GLESv3 EGL)
-    message(STATUS "M8 GLES backend: probe+loader enabled (draw path not yet landed)")
+    message(STATUS "GLES 3.0 sprite renderer enabled; model3d=${MUGEN_MODEL3D}")
 endif()
 target_compile_options(main PRIVATE
     # libresample's public header is written for MSVC: it uses __declspec

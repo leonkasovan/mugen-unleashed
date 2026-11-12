@@ -65,7 +65,8 @@ android {
                           "-Dsdl2MixerTtfDir=" + (project.findProperty('sdl2MixerTtfDir') ?: ''),
                           // M8: the GLES 3.0 renderer (RENDERING_PLAN.md section 12).
                           // Off unless build.sh --gles passes mugenGles=true.
-                          "-DMUGEN_GLES=" + (project.findProperty('mugenGles') ?: 'OFF')
+                          "-DMUGEN_GLES=" + (project.findProperty('mugenGles') ?: 'OFF'),
+                          "-DMUGEN_MODEL3D=" + (project.findProperty('mugenModel3d') ?: 'OFF')
                 cFlags "-O2"
             }
         }

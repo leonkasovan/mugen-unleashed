@@ -216,6 +216,13 @@ class BuildTests(unittest.TestCase):
         apk=self.project/"build/android/mugen-android-arm64-v8a.apk"
         self.assertEqual(apk.read_text(),"debug fixture")
 
+    def test_model3d_implies_gles_and_is_forwarded(self):
+        self.setup_tools(); self.native_fixtures()
+        self.run_build("--model3d", "--no-assets")
+        args=json.loads(self.gradle_log.read_text())
+        self.assertIn("-PmugenGles=ON",args)
+        self.assertIn("-PmugenModel3d=1",args)
+
     def test_incompatible_latest_cli_is_not_reused(self):
         latest=self.sdk/"cmdline-tools/latest"
         (latest/"lib").mkdir(parents=True)

@@ -632,14 +632,14 @@ else
   GLES_SHADER_SRCS :=
 endif
 
-# Upstream model shaders are a desktop GL backend, not GLES/VitaGL shaders.
+# Desktop GL is the reference. GLES model support is opt-in until device qualification.
 MUGEN_MODEL3D ?= $(if $(filter 1,$(MUGEN_GLES)),0,1)
+ifneq ($(filter-out 0 1,$(MUGEN_MODEL3D)),)
+  $(error MUGEN_MODEL3D must be 0 or 1)
+endif
 MODEL_SHADER_DIR := $(BUILD)/shaders/model
-MODEL_SHADER_NAMES := model.vert model.frag shadow.vert shadow.frag env.vert env_panorama.frag env_filter.frag
+MODEL_SHADER_NAMES := model.vert model.frag shadow.vert shadow.frag env.vert env_panorama.frag env_filter.frag model_basic.vert model_basic.frag
 ifeq ($(MUGEN_MODEL3D),1)
-  ifeq ($(MUGEN_GLES),1)
-    $(error MUGEN_MODEL3D requires the desktop OpenGL backend)
-  endif
   ENGINE_DEFS += -DMUGEN_MODEL3D
   CPPFLAGS += -I$(TP_DIR)/cgltf-1.14 -I$(TP_DIR)/stb -I$(MODEL_SHADER_DIR)
   MODEL_SHADER_HEADERS := $(addprefix $(MODEL_SHADER_DIR)/,$(addsuffix .h,$(MODEL_SHADER_NAMES)))

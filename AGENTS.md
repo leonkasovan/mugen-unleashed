@@ -604,12 +604,23 @@ compiler rearrange it.
 Verify claims before writing them here. Anything in AGENTS.md that is not true of
 the tree is worse than nothing.
 
-## Imported desktop 3D renderer
+## Model renderer portability
 
-`docs/UPSTREAM_MERGE.md` records the explicit content base for the unrelated
-zxmarcos history, conflict decisions and validation. `MUGEN_MODEL3D=1` enables
-its desktop-GL model/stage/background code in GNU Make desktop builds.
-GLES/Android and Vita builds use `model_stub.c` and retain their 2D renderers;
-do not enable desktop GLSL or cgltf/stb there without a separate port.
-`tools/test_model.sh` loads a generated glTF/PNG fixture with the real renderer,
-checks pixels and fresh-context teardown, and returns 77 if GL is unavailable.
+`docs/MODEL3D_IMPLEMENTATION.md` records implemented profiles and OPEN hardware
+qualification. Desktop GL remains the reference and defaults to model support.
+Linux GLES models are opt-in with `MUGEN_GLES=1 MUGEN_MODEL3D=1`; Android uses
+`port/android/build.sh --model3d` (implies GLES); Vita uses the same switch for
+its restricted basic profile. Both mobile defaults remain OFF. Vita rejects
+skinning and omits lighting/outlines/shadow/IBL; GLES omits shadow/IBL.
+
+`Model_LoadAsset` is GL-free; CPU images/geometry outlive GPU contexts.
+`model_gpu.c` owns residency and `model_pass.c` owns explicit state restoration.
+`Model_OnContextLost` must never call GL; orderly teardown deletes live objects
+before context destruction. Do not free CPU backing after upload or reuse a
+program/texture/buffer name across context generations. These APIs and their
+registry belong to the engine/render thread.
+
+`tools/test_model.sh` tests synthetic glTF/GLB fixtures, caller state and live
+model restoration. MODEL_TEST_GLES=1 or MODEL_TEST_BASIC=1 selects host variants;
+use separate OUT directories in parallel. Missing GL returns 77. The Vita API
+syntax and Android build-orchestration checks are not native device passes.

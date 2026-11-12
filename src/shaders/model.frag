@@ -40,10 +40,13 @@ uniform mat3 environmentRotation;
 uniform samplerCube lambertianEnvSampler, GGXEnvSampler;
 uniform sampler2D GGXLUT;
 
+#ifndef MODEL_NO_SHADOW
 /* Shadow maps of the lights: 2D for directional and spot lights, cube maps for point lights. */
 uniform bool useShadowMap;
 uniform sampler2D shadowMap0, shadowMap1, shadowMap2, shadowMap3;
 uniform samplerCube shadowCube0, shadowCube1, shadowCube2, shadowCube3;
+
+#endif
 
 /* PalFX */
 uniform vec3 add;
@@ -51,10 +54,12 @@ uniform vec3 mul;
 uniform float colorbal;
 uniform bool invertall;
 
-varying vec2 texcoord;
-varying vec4 vColor;
-varying vec3 normal, tangent, bitangent, worldSpacePos;
-varying vec4 lightSpacePos[4];
+MODEL_VARYING vec2 texcoord;
+MODEL_VARYING vec4 vColor;
+MODEL_VARYING vec3 normal, tangent, bitangent, worldSpacePos;
+#ifndef MODEL_NO_SHADOW
+MODEL_VARYING vec4 lightSpacePos[4];
+#endif
 
 const float PI = 3.14159265358979;
 const int LightType_Directional = 0;
@@ -100,7 +105,7 @@ vec3 getNormal()
     }
     if (useNormalMap) {
         return normalize(mat3(t, b, ng) *
-                         normalize(texture2D(normalMap, vec2(normalMapTransform * vec3(texcoord, 1.0))).xyz * 2.0 - vec3(1.0)));
+                         normalize(MODEL_TEXTURE2D(normalMap, vec2(normalMapTransform * vec3(texcoord, 1.0))).xyz * 2.0 - vec3(1.0)));
     }
     return ng;
 }
@@ -182,29 +187,30 @@ vec3 BRDF_specularGGX(vec3 f0, vec3 f90, float alphaRoughness, float specularWei
     return specularWeight * F * Vis * D;
 }
 
+#ifndef MODEL_NO_SHADOW
 /* What shadow map i holds at xy / in direction d (samplers cannot be indexed here). */
 float shadowMapDepth(int i, vec2 xy)
 {
     if (i == 0) {
-        return texture2D(shadowMap0, xy).r;
+        return MODEL_TEXTURE2D(shadowMap0, xy).r;
     } else if (i == 1) {
-        return texture2D(shadowMap1, xy).r;
+        return MODEL_TEXTURE2D(shadowMap1, xy).r;
     } else if (i == 2) {
-        return texture2D(shadowMap2, xy).r;
+        return MODEL_TEXTURE2D(shadowMap2, xy).r;
     }
-    return texture2D(shadowMap3, xy).r;
+    return MODEL_TEXTURE2D(shadowMap3, xy).r;
 }
 
 float shadowCubeDepth(int i, vec3 d)
 {
     if (i == 0) {
-        return textureCube(shadowCube0, d).r;
+        return MODEL_TEXTURECUBE(shadowCube0, d).r;
     } else if (i == 1) {
-        return textureCube(shadowCube1, d).r;
+        return MODEL_TEXTURECUBE(shadowCube1, d).r;
     } else if (i == 2) {
-        return textureCube(shadowCube2, d).r;
+        return MODEL_TEXTURECUBE(shadowCube2, d).r;
     }
-    return textureCube(shadowCube3, d).r;
+    return MODEL_TEXTURECUBE(shadowCube3, d).r;
 }
 
 float DirectionalLightShadowCalculation(int index, vec4 lightSpacePos, float NdotL, float shadowBias)
@@ -216,7 +222,9 @@ float DirectionalLightShadowCalculation(int index, vec4 lightSpacePos, float Ndo
     float closestDepth = shadowMapDepth(index, xy);
     float currentDepth = projCoords.z;
     float slope = sqrt(1.0 - (NdotL * NdotL)) / max(NdotL, 0.0001);
-    float bias = max(shadowBias, 0.0005) * clamp(slope, 0.0, 5.0);
+    /* Port fix: a perpendicular receiver has zero slope. Keep a nonzero
+     * floor after slope scaling or strict comparison shadows its own surface. */
+    float bias = max(max(shadowBias, 0.0005) * clamp(slope, 0.0, 5.0), 0.0005);
     return closestDepth - currentDepth > -bias ? 1.0 : 0.0;
 }
 
@@ -229,7 +237,7 @@ float SpotLightShadowCalculation(int index, vec3 pointToLight, vec4 lightSpacePo
     float closestDepth = shadowMapDepth(index, xy) * farPlane;
     float currentDepth = length(pointToLight);
     float slope = sqrt(1.0 - (NdotL * NdotL)) / max(NdotL, 0.0001);
-    float bias = shadowBias * clamp(slope, 0.0, 5.0);
+    float bias = max(shadowBias * clamp(slope, 0.0, 5.0), 0.0005);
     return currentDepth - closestDepth < bias ? 1.0 : 0.0;
 }
 
@@ -238,7 +246,7 @@ float PointLightShadowCalculation(int index, vec3 pointToLight, float NdotL, flo
     float closestDepth = shadowCubeDepth(index, -pointToLight) * farPlane;
     float currentDepth = length(pointToLight);
     float slope = sqrt(1.0 - (NdotL * NdotL)) / max(NdotL, 0.0001);
-    float bias = shadowBias * clamp(slope, 0.0, 5.0);
+    float bias = max(shadowBias * clamp(slope, 0.0, 5.0), 0.0005);
     return currentDepth - closestDepth < bias ? 1.0 : 0.0;
 }
 
@@ -257,10 +265,14 @@ float shadowFactor(int i, vec3 pointToLight, float NdotL)
                                       lights[i].shadowBias);
 }
 
+#else
+float shadowFactor(int i, vec3 pointToLight, float NdotL) { return 1.0; }
+#endif
+
 #ifdef MODEL_IBL
 vec3 getDiffuseLight(vec3 n)
 {
-    return textureCube(lambertianEnvSampler, environmentRotation * n).rgb * environmentIntensity;
+    return MODEL_TEXTURECUBE(lambertianEnvSampler, environmentRotation * n).rgb * environmentIntensity;
 }
 
 vec4 getSpecularSample(vec3 reflection, float lod)
@@ -273,7 +285,7 @@ vec3 getIBLGGXFresnel(vec3 n, vec3 v, float roughness, vec3 F0, float specularWe
 {
     float NdotV = clampedDot(n, v);
     vec2 brdfSamplePoint = clamp(vec2(NdotV, roughness), vec2(0.0, 0.0), vec2(1.0, 1.0));
-    vec2 f_ab = texture2D(GGXLUT, brdfSamplePoint).rg;
+    vec2 f_ab = MODEL_TEXTURE2D(GGXLUT, brdfSamplePoint).rg;
     vec3 Fr = max(vec3(1.0 - roughness), F0) - F0;
     vec3 k_S = F0 + Fr * pow(1.0 - NdotV, 5.0);
     vec3 FssEss = specularWeight * (k_S * f_ab.x + f_ab.y);
@@ -353,7 +365,7 @@ void main()
     vec4 color = vec4(1.0);
 
     if (useTexture) {
-        color = texture2D(tex, vec2(texTransform * vec3(texcoord, 1.0)));
+        color = MODEL_TEXTURE2D(tex, vec2(texTransform * vec3(texcoord, 1.0)));
         color.rgb = pow(color.rgb, vec3(2.2));
     }
     color *= baseColorFactor;
@@ -369,16 +381,16 @@ void main()
         }
         if (useMetallicRoughnessMap) {
             metallicRoughnessF =
-                texture2D(metallicRoughnessMap, vec2(metallicRoughnessMapTransform * vec3(texcoord, 1.0))).bg;
+                MODEL_TEXTURE2D(metallicRoughnessMap, vec2(metallicRoughnessMapTransform * vec3(texcoord, 1.0))).bg;
         }
         if (ambientOcclusionStrength > 0.0) {
             ambientOcclusion = 1.0 + ambientOcclusionStrength *
-                                         (texture2D(ambientOcclusionMap, vec2(ambientOcclusionMapTransform * vec3(texcoord, 1.0))).r - 1.0);
+                                         (MODEL_TEXTURE2D(ambientOcclusionMap, vec2(ambientOcclusionMapTransform * vec3(texcoord, 1.0))).r - 1.0);
         }
         color.rgb = pbr(normalize(cameraPosition - worldSpacePos), normalize(normalF), color.rgb, metallicRoughnessF[0],
                         metallicRoughnessF[1], ambientOcclusion);
         if (useEmissionMap) {
-            color.rgb += emission * pow(texture2D(emissionMap, vec2(emissionMapTransform * vec3(texcoord, 1.0))).rgb, vec3(2.2));
+            color.rgb += emission * pow(MODEL_TEXTURE2D(emissionMap, vec2(emissionMapTransform * vec3(texcoord, 1.0))).rgb, vec3(2.2));
         } else {
             color.rgb += emission;
         }
@@ -406,5 +418,5 @@ void main()
         c = 1.0 - c;
     }
     c = clamp((c + add) * mul, 0.0, 1.0);
-    gl_FragColor = vec4(c * a, a);
+    MODEL_OUTPUT = vec4(c * a, a);
 }

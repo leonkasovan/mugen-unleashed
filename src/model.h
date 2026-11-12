@@ -271,7 +271,15 @@ typedef struct ModelEnv {
     unsigned int lut;           /* GL 2D texture */
     int mip_count;              /* mip levels of ggx that are filtered */
     float intensity;            /* [Model] environmentintensity (1) */
+    char source[512];           /* reload source; survives context-owned textures */
 } ModelEnv;
+
+/* Port addition: decoded asset data survives the GPU context that displays it. */
+typedef struct ModelImage {
+    unsigned char *pixels;     /* owned RGBA8, NULL for a missing image */
+    int width, height;
+    int mag_filter, min_filter, wrap_s, wrap_t;
+} ModelImage;
 
 typedef struct Model {
     ModelEnv *env;              /* [Model] environment, NULL for none */
@@ -295,11 +303,20 @@ typedef struct Model {
     int light_count;
     unsigned int vbo;           /* GL buffers, 0 without the OpenGL renderer */
     unsigned int ibo;
-    unsigned char *vertex_data; /* the buffer contents until they are uploaded */
+    unsigned char *vertex_data; /* immutable CPU backing; retained for context restore */
     unsigned int vertex_size;
     unsigned int *index_data;
     unsigned int index_count;
+    ModelImage *images;         /* decoded CPU textures; separate from textures[] GL names */
+    struct Model *gpu_next;     /* renderer registry; never original engine ABI state */
+    unsigned int gpu_generation;
+    int gpu_failed;             /* failed upload in this generation; retry after context loss */
 } Model;
+
+/* Port additions: asset loading is GL-free; Model_Load still requires OpenGL. */
+Model *Model_LoadAsset(const char *path);
+void Model_OnContextLost(void); /* no GL calls: old context is already gone */
+
 
 /* PalFX terms of a model draw, as the sprite programs take them (Glr_FxTerms). */
 typedef struct ModelFx {

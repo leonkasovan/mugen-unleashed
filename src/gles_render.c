@@ -631,6 +631,9 @@ static void gles_free_programs(void)
 int Gl_Deinit(void)
 {
     int i;
+#ifdef MUGEN_MODEL3D
+    Model_RendererQuit();
+#endif
     /* Port fix: a live-context cleanup includes partially initialized state. */
     gles_free_programs();
     for (i = 0; i < g_glesTextureCount; i++) {
@@ -665,6 +668,9 @@ void Gles_OnContextLost(void)
      */
     int was_ready = g_glesReady;
     int tracked = g_glesTextureCount;
+#ifdef MUGEN_MODEL3D
+    Model_OnContextLost();
+#endif
 
     /*
      * Programs and the vertex buffer are simply forgotten. Calling
