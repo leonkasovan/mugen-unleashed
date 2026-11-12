@@ -1536,6 +1536,17 @@ Model *Model_LoadAsset(const char *path)
     }
     free(json);
     cgltf_free(data);
+    /*
+     * Port addition: the asset's cost, so a device log says whether a model is
+     * cheap or heavy without guessing from the file size (the geometry of
+     * Stage0_3D_BLACK is trivial and its textures are 273 MiB decoded).
+     */
+    Log_Printf("Model: %s: %d nodes, %d meshes, %d prims, %u vertices, %u indices, "
+               "%.1f KiB geometry, %d textures\n",
+               path, mdl->node_count, mdl->mesh_count, mdl->prim_count,
+               mdl->vertex_size, mdl->index_count,
+               (double)mdl->vertex_size / 1024.0 + (double)mdl->index_count * 4.0 / 1024.0,
+               mdl->texture_count);
     ModelGpu_Register(mdl);
     return mdl;
 

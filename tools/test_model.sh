@@ -7,6 +7,14 @@ export TMPDIR="$out/tmp"
 cc="${CC:-cc}"
 sdl_cflags="${SDL_CFLAGS:-$(pkg-config --cflags sdl2 libpng zlib)}"
 sdl_libs="${SDL_LIBS:-$(pkg-config --libs sdl2 libpng zlib)}"
+# -ldl/-lm are POSIX: a MinGW host has neither, and SDL2's own -l line already
+# carries what it needs there. Detected rather than assumed.
+# Windows_NT: a kit first on PATH can shadow MSYS uname (port/psvita/build.sh
+# matches the same set).
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*|Windows_NT) posix_libs="" ;;
+    *)                               posix_libs="-ldl -lm" ;;
+esac
 flags="${CFLAGS:-} -std=gnu11 -O1 -g -UNDEBUG -Wall -Wextra -Wno-unused-parameter"
 flags="$flags -DSDL_MAIN_HANDLED -ffunction-sections -fdata-sections"
 loader=third_party/glad-2.1
@@ -29,9 +37,9 @@ $cc $flags -w -c third_party/stb/stb_image.c -o "$out/stb.o"
 $cc $flags -c "$loader/glad.c" -o "$out/glad.o"
 $cc $flags -DMUGEN_MODEL3D tools/test_model.c src/model.c src/model_asset.c src/model_gpu.c src/model_pass.c src/pngio.c src/file.c \
     src/util.c src/compat_linux.c "$out/cgltf.o" "$out/stb.o" "$out/glad.o" \
-    -Wl,--gc-sections ${LDFLAGS:-} $sdl_libs -ldl -lm -o "$out/desktop"
+    -Wl,--gc-sections ${LDFLAGS:-} $sdl_libs $posix_libs -o "$out/desktop"
 $cc $flags tools/test_model.c src/model_stub.c -Wl,--gc-sections \
-    ${LDFLAGS:-} $sdl_libs -lm -o "$out/unsupported"
+    ${LDFLAGS:-} $sdl_libs $posix_libs -o "$out/unsupported"
 "$out/unsupported" "$out/triangle.gltf"
 for fixture in triangle animated morph alpha light; do
     echo "fixture: $fixture"

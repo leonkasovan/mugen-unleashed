@@ -229,9 +229,24 @@ void Stage3D_Load(Stage *st, Ini *ini, const char *path)
         char file[0x200];
         Path_Split(path, dir, NULL);
         if (File_Find(v, file, NULL, dir)) {
-            Log_Printf("  Loading model %s...", file);
+            int64_t started = Timer_GetTicks();
+            /*
+             * Port addition: the model load now reports its own result line,
+             * because the asset summary (counts, texture cost) is printed
+             * between the two and the old "Loading model ...OK" pairing was
+             * broken by it. A failed model is not a failed stage -- the 2D
+             * background still loads -- and "failed" alone left a black screen
+             * unexplained.
+             */
+            Log_Printf("  Loading model %s\n", file);
             s3->model = Model_Load(file);
-            Log_Printf(s3->model != NULL ? "OK\n" : "failed\n");
+            if (s3->model != NULL) {
+                Log_Printf("  3D model loaded in %d ms\n", (int)(Timer_GetTicks() - started));
+            } else {
+                Log_Printf("  3D model rejected after %d ms; the stage falls back to its 2D "
+                           "background, or draws nothing if it has none\n",
+                           (int)(Timer_GetTicks() - started));
+            }
         } else {
             Log_Printf("Can't find model %s\n", v);
         }

@@ -32,9 +32,17 @@ class ModelBuild(unittest.TestCase):
                 continue
             variable = 'g_shader_' + shader.name.replace('.', '_')
             header = OUT / 'build/model-shaders' / (shader.name + '.h')
+            # Binary stdout: the probe is compared byte-for-byte, and a
+            # Windows host would otherwise translate every '\n' to CRLF and
+            # fail on shaders that are already CRLF in the working tree
+            # (core.autocrlf). setmode is a no-op requirement only there.
             (source / 'read.c').write_text('#include <stdio.h>\n'
-                f'#include "{header}"\nint main(void) {{ return '
-                f'fwrite({variable}, 1, sizeof({variable})-1, stdout) == sizeof({variable})-1 ? 0 : 1; }}\n')
+                f'#include "{header}"\n'
+                '#if defined(_WIN32)\n#include <fcntl.h>\n#include <io.h>\n#endif\n'
+                'int main(void) {\n'
+                '#if defined(_WIN32)\n    _setmode(_fileno(stdout), _O_BINARY);\n#endif\n'
+                f'    return fwrite({variable}, 1, sizeof({variable})-1, stdout)'
+                f' == sizeof({variable})-1 ? 0 : 1;\n}}\n')
             subprocess.run(['cc', str(source / 'read.c'), '-o', str(OUT / 'read')], env=env, check=True)
             result = subprocess.run([str(OUT / 'read')], env=env, capture_output=True, check=True)
             self.assertEqual(result.stdout, shader.read_bytes(), shader.name)

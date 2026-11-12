@@ -239,6 +239,11 @@ static int Model_DecodeTexture(ModelImage *image, const cgltf_texture *t, const 
         unsigned w0 = ((unsigned)bytes[16] << 24) | ((unsigned)bytes[17] << 16) | ((unsigned)bytes[18] << 8) | bytes[19];
         unsigned h0 = ((unsigned)bytes[20] << 24) | ((unsigned)bytes[21] << 16) | ((unsigned)bytes[22] << 8) | bytes[23];
         if (!w0 || !h0 || w0 > MODEL_CPU_BUDGET / 4 || h0 > MODEL_CPU_BUDGET / (w0 * 4)) {
+            /* Port addition: this used to reject silently, and the caller only
+             * reported "Error loading model" with no reason. */
+            Log_Printf("Model: image %s is %ux%u, over the %u MiB texture budget\n",
+                       t->image->uri != NULL ? t->image->uri : "(embedded)",
+                       w0, h0, MODEL_CPU_BUDGET / (1024u * 1024u));
             free(bytes); return 0;
         }
     } else if (size <= 0x7fffffff) {
@@ -246,6 +251,9 @@ static int Model_DecodeTexture(ModelImage *image, const cgltf_texture *t, const 
         if (stbi_info_from_memory(bytes, (int)size, &w, &h, &components) &&
             (w <= 0 || h <= 0 || (unsigned)w > MODEL_CPU_BUDGET / 4 ||
              (unsigned)h > MODEL_CPU_BUDGET / ((unsigned)w * 4))) {
+            Log_Printf("Model: image %s is %dx%d, over the %u MiB texture budget\n",
+                       t->image->uri != NULL ? t->image->uri : "(embedded)",
+                       w, h, MODEL_CPU_BUDGET / (1024u * 1024u));
             free(bytes); return 0;
         }
     }
@@ -297,6 +305,8 @@ int ModelAsset_LoadImages(Model *mdl, const cgltf_data *data, const cgltf_option
 {
     cgltf_size i;
     size_t total = mdl->vertex_size + (size_t)mdl->index_count * 4;
+    size_t decoded = 0;
+    int largest_w = 0, largest_h = 0, decoded_count = 0;
     mdl->texture_count = (int)data->textures_count;
     mdl->images = calloc(data->textures_count + 1, sizeof(ModelImage));
     mdl->textures = calloc(data->textures_count + 1, sizeof(unsigned int));
@@ -311,8 +321,22 @@ int ModelAsset_LoadImages(Model *mdl, const cgltf_data *data, const cgltf_option
                 return 0;
             }
             total += bytes;
+            decoded += bytes;
+            decoded_count++;
+            if (mdl->images[i].width > largest_w) largest_w = mdl->images[i].width;
+            if (mdl->images[i].height > largest_h) largest_h = mdl->images[i].height;
         }
     }
+    /*
+     * Port addition: what the textures cost, against the budget that rejects
+     * them. Without this a stage that fails on textures looked identical to one
+     * that failed to parse.
+     */
+    Log_Printf("Model: textures: %d of %d decoded, %.2f MiB, largest %dx%d, "
+               "budget %u MiB total (geometry %.2f MiB)\n",
+               decoded_count, (int)data->textures_count, (double)decoded / (1024.0 * 1024.0),
+               largest_w, largest_h, MODEL_CPU_BUDGET / (1024u * 1024u),
+               (double)(mdl->vertex_size + (size_t)mdl->index_count * 4) / (1024.0 * 1024.0));
     return 1;
 }
 

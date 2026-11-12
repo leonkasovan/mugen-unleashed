@@ -311,6 +311,13 @@ typedef struct Model {
     struct Model *gpu_next;     /* renderer registry; never original engine ABI state */
     unsigned int gpu_generation;
     int gpu_failed;             /* failed upload in this generation; retry after context loss */
+    /*
+     * Port addition (basic profile): images[].pixels were freed once they were
+     * uploaded, so a context loss cannot rebuild this model. Tracked explicitly
+     * rather than inferred from pixels == NULL, which also means "the glTF had
+     * no image for that texture".
+     */
+    int cpu_textures_released;
 } Model;
 
 /* Port additions: asset loading is GL-free; Model_Load still requires OpenGL. */

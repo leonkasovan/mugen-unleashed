@@ -124,7 +124,11 @@ void ModelPass_End(const ModelPass *p)
         glBindTexture(GL_TEXTURE_CUBE_MAP, p->texture_cube[i]);
     }
     glActiveTexture(p->active_texture);
+#ifndef MUGEN_VITA_GL
+    /* Same vitaGL gap as in ModelGpu_Ensure: the pname is refused, and the
+     * value can never have been changed here, so there is nothing to restore. */
     glPixelStorei(GL_UNPACK_ALIGNMENT, p->unpack);
+#endif
 #ifndef MUGEN_VITA_GL
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, p->unpack_buffer);
     glPixelStorei(GL_UNPACK_ROW_LENGTH, p->unpack_row);

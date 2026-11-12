@@ -3,6 +3,8 @@
 #include "mugen.h"
 #include <assert.h>
 #include <stdarg.h>
+/* ModelGpu_Ensure: the basic-profile case asserts the upload refuses to rebuild. */
+#include "model_backend.h"
 
 /* The probe owns a native SDL2 context rather than an engine display. */
 #undef SDL_GL_SetAttribute
@@ -118,6 +120,13 @@ int main(int argc, char **argv)
 #ifdef MUGEN_MODEL3D
     {
         int pass, w, h;
+        /* The basic profile cannot rebuild after a context loss, so its frame is
+         * captured before the loss; the reference build compares after it. */
+#ifdef MUGEN_MODEL_BASIC
+#define MODEL_TEST_CAPTURE_PASS 0
+#else
+#define MODEL_TEST_CAPTURE_PASS 1
+#endif
         Model *live = NULL;
         unsigned char reference[64 * 64 * 4];
         float animation_time = 0;
@@ -184,9 +193,33 @@ int main(int argc, char **argv)
             assert(mdl && mdl->scene_count == 1 && mdl->node_count >= 1);
             assert(mdl->prim_count == 1 && mdl->index_count == 3);
             assert(mdl->texture_count >= 1);
+#ifdef MUGEN_MODEL_BASIC
+            /*
+             * The basic profile frees the decoded RGBA once it is on the GPU
+             * (ModelGpu_Ensure), so it is gone by the time the model is live and
+             * a context loss cannot rebuild it. Both are asserted here rather
+             * than the desktop contract below.
+             */
+            assert(mdl->vertex_data && mdl->index_data);
+            assert(mdl->images[0].pixels == NULL && mdl->cpu_textures_released);
+#else
             assert(mdl->vertex_data && mdl->index_data && mdl->images[0].pixels);
+#endif
             if (pass == 0) assert(mdl->textures[0] != 0);
             else assert(mdl->vbo == 0 && mdl->ibo == 0 && mdl->textures[0] == 0);
+#ifdef MUGEN_MODEL_BASIC
+            if (pass == 1) {
+                /* The upload must refuse instead of binding freed textures. */
+                assert(!ModelGpu_Ensure(mdl));
+                assert(mdl->gpu_failed);
+                Model_Free(mdl);
+                g_glInitialized = 0;
+                SDL_GL_DeleteContext(context); SDL_DestroyWindow(window);
+                SDL_Quit();
+                puts("ok: basic profile releases CPU textures and refuses a context rebuild");
+                return 0;
+            }
+#endif
             assert(glGetError() == GL_NO_ERROR);
             if (pass == 0) {
                 Model_Reset(mdl); Model_Step(mdl);
@@ -220,13 +253,17 @@ int main(int argc, char **argv)
             glDeleteBuffers(1, &caller_buffer); glDeleteBuffers(1, &caller_element);
             glDeleteTextures(1, &caller_texture);
             glUseProgram(0); g_glCurrentProgram = 0; glDeleteProgram(sprite_program);
-            if (pass == 1) {
+            if (pass == MODEL_TEST_CAPTURE_PASS) {
                 const char *capture = getenv("MODEL_TEST_CAPTURE");
                 if (capture != NULL) {
                     FILE *file = fopen(capture, "wb");
                     assert(file && fwrite(rgba, 1, sizeof rgba, file) == sizeof rgba);
                     fclose(file);
                 }
+            }
+            if (pass == 1) {
+                /* Reached by the reference build only: the basic profile returns
+                 * above once it has asserted that a rebuild is refused. */
                 Model_RendererQuit(); Model_RendererQuit(); /* Orderly teardown of a live asset. */
                 assert(mdl->vbo == 0 && mdl->textures[0] == 0);
                 Model_Free(mdl);

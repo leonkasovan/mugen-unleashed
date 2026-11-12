@@ -396,7 +396,9 @@ int Stage_Load(Stage *st)
         Log_Printf("Stage already loaded: %s\n", path);
         return 1;
     }
-    Log_Printf("Loading stage...\n");
+    /* Port addition: name the file. "Loading stage..." alone could not say
+     * which def a session had picked when several share a display name. */
+    Log_Printf("Loading stage... %s\n", path);
     if (st->loaded != 0) {
         Stage_Unload(st);
     }
@@ -608,6 +610,19 @@ int Stage_Load(Stage *st)
     Ini_GetInt(ini, "zoffsetlink", &st->zoffsetlink);
     /* mugen-unleashed: the 3D model of the stage, whose [Model] offset moves zoffset (stage3d.c) */
     Stage3D_Load(st, ini, path);
+    /*
+     * Port addition: say what will be drawn. A stage whose background is only
+     * a 3D model draws nothing when that model is absent, and the result was a
+     * black stage with a successful "Stage loaded OK" and no explanation.
+     */
+    if (g_stage3d.model != NULL) {
+        Log_Printf("  Background: 3D model%s\n",
+                   g_stage3d.model->mesh_count > 0 ? "" : " (no meshes)");
+    } else if (Ini_CountGroups(ini, "bg]") + Ini_CountGroups(ini, "bg ") == 0) {
+        Log_Printf("  Background: none -- no 3D model and no [bg] elements, the stage will be black\n");
+    } else {
+        Log_Printf("  Background: 2D sprites\n");
+    }
     if (st->cutlow < 0) {
         if (st->zoffsetlink == -1) {
             st->cutlow = Ftol((st->height - st->zoffset) - st->height / 20.0);
