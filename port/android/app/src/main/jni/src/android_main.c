@@ -16,6 +16,24 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+/*
+ * Port fix: this translation unit must NOT see SDL_MAIN_HANDLED.
+ *
+ * The target defines it for the engine sources, where it is correct (they never
+ * provide a main()). But SDL_main.h only renames main() to SDL_main() when
+ * SDL_MAIN_HANDLED is undefined, and SDLActivity dlopen()s libmain.so and
+ * dlsym()s "SDL_main" by name. With the define in force the exported symbol was
+ * plain `main`, so the activity logged
+ *
+ *     nativeRunMain(): Couldn't find function SDL_main in library libmain.so
+ *
+ * and the process exited before the engine ran -- on every Android build since
+ * SDL_MAIN_HANDLED was added to this target in f97752f. Undefining it here, and
+ * only here, is what makes the entry point reachable again.
+ */
+#ifdef SDL_MAIN_HANDLED
+#undef SDL_MAIN_HANDLED
+#endif
 #include <SDL.h>
 #include <SDL_main.h>
 
