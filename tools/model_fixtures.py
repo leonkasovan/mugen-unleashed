@@ -42,17 +42,29 @@ pos = accessor('9f', [-.8, -.8, 0, .8, -.8, 0, 0, .8, 0], 5126, 'VEC3', 3,
 idx = accessor('3H', [0, 1, 2], 5123, 'SCALAR', 3)
 uv = accessor('6f', [0, 0, 1, 0, .5, 1], 5126, 'VEC2', 3)
 normal = accessor('9f', [0, 0, 1] * 3, 5126, 'VEC3', 3)
+# xyzw: the w is the bitangent handedness the shader multiplies in.
+tangent = accessor('12f', [1, 0, 0, 1] * 3, 5126, 'VEC4', 3)
+# A normal whose components cancel, for the presence-test regression.
+cancelling = accessor('9f', [-1.0, 0.0, 1.0] * 3, 5126, 'VEC3', 3)
 joints = accessor('12H', [0] * 12, 5123, 'VEC4', 3)
 weights = accessor('12f', [1, 0, 0, 0] * 3, 5126, 'VEC4', 3)
 morph = accessor('9f', [.12, 0, 0] * 3, 5126, 'VEC3', 3, min=[.12, 0, 0], max=[.12, 0, 0])
 times = accessor('2f', [0, 1], 5126, 'SCALAR', 2, min=[0], max=[1])
 movement = accessor('6f', [0, 0, 0, .1, .1, 0], 5126, 'VEC3', 2)
+# Perturbing normal map (1,0,1 in tangent space): a flat one would render the
+# same whatever the basis, which is how the skinned-normal-map bug stayed hidden.
+npng = (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>2I5B', 1, 1, 8, 6, 0, 0, 0))
+        + chunk(b'IDAT', zlib.compress(b'\0\xff\x80\xff\xff')) + chunk(b'IEND', b''))
+model['images'].append(dict(uri='data:image/png;base64,' + base64.b64encode(npng).decode()))
+model['textures'].append(dict(source=1))
+
 model['buffers'] = [dict(byteLength=len(data), uri='data:application/octet-stream;base64,' + base64.b64encode(data).decode())]
 model['meshes'] = [dict(primitives=[dict(attributes=dict(POSITION=pos, TEXCOORD_0=uv), indices=idx, material=0)])]
 
 
 def write(name, asset):
     (out / (name + '.gltf')).write_text(json.dumps(asset))
+
 
 
 write('triangle', model)
@@ -104,6 +116,46 @@ encoded = (struct.pack('<III', 0x46546c67, 2, 12 + 8 + len(json_bytes) + 8 + len
            + struct.pack('<II', len(json_bytes), 0x4e4f534a) + json_bytes
            + struct.pack('<II', len(bin_bytes), 0x004e4942) + bin_bytes)
 (out / 'triangle.glb').write_bytes(encoded)
+# --- regressions for the 3D review findings ---------------------------------
+# Two mesh nodes sharing one skin, the first translated. The joint palette
+# includes the inverse of its own mesh node, so skinning must cancel that
+# translation: both instances have to land in the same place. With the shared
+# palette this fixture reproduced 604 differing pixels.
+shared = copy.deepcopy(skin)
+shared['nodes'] = [dict(mesh=0, skin=0, translation=[.5, 0, 0]), dict(mesh=0, skin=0), dict()]
+shared['scenes'][0]['nodes'] = [0, 1, 2]
+shared['skins'] = [dict(joints=[2])]
+write('shared-skin', shared)
+
+# A normal map on a skinned mesh: the skinned branch used to leave the tangent
+# untouched and the bitangent at zero, and the fragment shader normalized that
+# zero vector, so the surface rendered black.
+# The pair: the same normal-mapped, lit triangle with and without an identity
+# skin. Skinning must not change it, so the two captures have to be identical.
+normalmap = copy.deepcopy(lit)
+normalmap['meshes'][0]['primitives'][0]['attributes']['TANGENT'] = tangent
+normalmap['materials'][0]['normalTexture'] = dict(index=1, scale=1)
+write('normalmap', normalmap)
+
+skinnormal = copy.deepcopy(normalmap)
+skinnormal['nodes'] = [dict(mesh=0, skin=0), dict(), dict(extensions=dict(KHR_lights_punctual=dict(light=0)))]
+skinnormal['scenes'][0]['nodes'] = [0, 1, 2]
+skinnormal['skins'] = [dict(joints=[1])]
+skinnormal['meshes'][0]['primitives'][0]['attributes'].update(JOINTS_0=joints, WEIGHTS_0=weights)
+write('skin-normalmap', skinnormal)
+
+# A normal whose components cancel: (-1,0,1) sums to zero, so an x+y+z presence
+# test treated the vertex as having no normal at all.
+axis = copy.deepcopy(lit)
+axis['meshes'][0]['primitives'][0]['attributes']['NORMAL'] = cancelling
+write('axis-normal', axis)
+# The control: the same fixture with no NORMAL attribute at all, so the shader
+# falls back to the derivative normal. axis-normal must render differently, or
+# the cancelling normal was ignored.
+control = copy.deepcopy(axis)
+control['meshes'][0]['primitives'][0]['attributes'].pop('NORMAL')
+write('axis-normal-control', control)
+
 bad = copy.deepcopy(skin)
 bad_data = bytearray(data)
 joint_offset = model['bufferViews'][model['accessors'][joints]['bufferView']]['byteOffset']

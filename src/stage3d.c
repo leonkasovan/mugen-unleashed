@@ -229,6 +229,13 @@ void Stage3D_Load(Stage *st, Ini *ini, const char *path)
         char file[0x200];
         Path_Split(path, dir, NULL);
         if (File_Find(v, file, NULL, dir)) {
+            /*
+             * Port fix: Timer_GetTicks counts 1/g_timerTicksPerSecond (100 on
+             * every target we build), so a raw difference of 10 is 100 ms, not
+             * 10 ms. Converted in 64-bit arithmetic: a slow model load is
+             * seconds, and a 32-bit multiply would wrap at ~21474 ticks (3.6
+             * minutes) -- unlikely for one asset, but free to rule out.
+             */
             int64_t started = Timer_GetTicks();
             /*
              * Port addition: the model load now reports its own result line,
@@ -241,11 +248,12 @@ void Stage3D_Load(Stage *st, Ini *ini, const char *path)
             Log_Printf("  Loading model %s\n", file);
             s3->model = Model_Load(file);
             if (s3->model != NULL) {
-                Log_Printf("  3D model loaded in %d ms\n", (int)(Timer_GetTicks() - started));
+                Log_Printf("  3D model loaded in %d ms\n",
+                           (int)((Timer_GetTicks() - started) * 1000 / g_timerTicksPerSecond));
             } else {
                 Log_Printf("  3D model rejected after %d ms; the stage falls back to its 2D "
                            "background, or draws nothing if it has none\n",
-                           (int)(Timer_GetTicks() - started));
+                           (int)((Timer_GetTicks() - started) * 1000 / g_timerTicksPerSecond));
             }
         } else {
             Log_Printf("Can't find model %s\n", v);

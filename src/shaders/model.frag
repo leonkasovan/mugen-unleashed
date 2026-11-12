@@ -83,8 +83,10 @@ vec3 getNormal()
     }
     vec3 t_ = (uv_dy.y * dFdx(worldSpacePos) - uv_dx.y * dFdy(worldSpacePos)) / (uv_dx.x * uv_dy.y - uv_dy.x * uv_dx.y);
     vec3 n, t, b, ng;
-    if (normal.x + normal.y + normal.z != 0.0) {
-        if (tangent.x + tangent.y + tangent.z != 0.0) {
+    /* Port fix: squared length, not x+y+z -- valid directions such as
+     * (-1,0,1) sum to zero and were treated as absent. */
+    if (dot(normal, normal) > 0.0) {
+        if (dot(tangent, tangent) > 0.0) {
             t = normalize(tangent);
             b = normalize(bitangent);
             ng = normalize(normal);

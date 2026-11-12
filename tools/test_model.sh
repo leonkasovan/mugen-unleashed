@@ -36,7 +36,7 @@ $cc $flags -w -c third_party/cgltf-1.14/cgltf.c -o "$out/cgltf.o"
 $cc $flags -w -c third_party/stb/stb_image.c -o "$out/stb.o"
 $cc $flags -c "$loader/glad.c" -o "$out/glad.o"
 $cc $flags -DMUGEN_MODEL3D tools/test_model.c src/model.c src/model_asset.c src/model_gpu.c src/model_pass.c src/pngio.c src/file.c \
-    src/util.c src/compat_linux.c "$out/cgltf.o" "$out/stb.o" "$out/glad.o" \
+    src/util.c src/compat_linux.c src/perf.c "$out/cgltf.o" "$out/stb.o" "$out/glad.o" \
     -Wl,--gc-sections ${LDFLAGS:-} $sdl_libs $posix_libs -o "$out/desktop"
 $cc $flags tools/test_model.c src/model_stub.c -Wl,--gc-sections \
     ${LDFLAGS:-} $sdl_libs $posix_libs -o "$out/unsupported"
@@ -45,6 +45,23 @@ for fixture in triangle animated morph alpha light; do
     echo "fixture: $fixture"
     MODEL_TEST_CAPTURE="$out/$fixture.rgba" "$out/desktop" "$out/$fixture.gltf"
 done
+# Regressions for the 3D review findings. Each used to render wrongly and is
+# asserted on the pixels the real renderer produced:
+#   shared-skin    two mesh nodes sharing one skin must land in the same place
+#   skin-normalmap a normal-mapped skinned surface must not be black
+#   axis-normal    a normal whose components cancel is still a normal
+# Review regressions. Both need skinning (refused by the basic profile) and
+# lighting (the basic profile is unlit), so they run on the profiles that have
+# them and the basic run says it skipped them.
+if [ "${MODEL_TEST_BASIC:-0}" = 1 ]; then
+    echo "regressions: skipped (the basic profile has neither skinning nor lighting)"
+else
+    for fixture in shared-skin normalmap skin-normalmap; do
+        echo "regression: $fixture"
+        MODEL_TEST_CAPTURE_ONLY=1 MODEL_TEST_CAPTURE="$out/$fixture.rgba" "$out/desktop" "$out/$fixture.gltf"
+    done
+    python3 tools/check_model_regressions.py "$out"
+fi
 for fixture in skin skin-morph; do
     if [ "${MODEL_TEST_BASIC:-0}" = 1 ]; then
         MODEL_TEST_REJECT_SKIN=1 "$out/desktop" "$out/$fixture.gltf"

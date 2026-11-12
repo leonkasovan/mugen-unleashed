@@ -246,8 +246,17 @@ int main(int argc, char **argv)
             glReadPixels(0, 63, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, corner);
             printf("pass %d pixel=%u,%u,%u,%u\n", pass, pixel[0], pixel[1], pixel[2], pixel[3]);
             assert(glGetError() == GL_NO_ERROR);
-            assert(pixel[1] > pixel[0] + 50 && pixel[1] > pixel[2] + 50 && pixel[3] > 200);
-            assert(corner[0] == 0 && corner[1] == 0 && corner[2] == 0);
+            /*
+             * MODEL_TEST_CAPTURE_ONLY: keep the frame and drop the "the triangle
+             * is green" expectations. The regression fixtures are compared
+             * against each other (tools/check_model_regressions.py) and some of
+             * them are legitimately dark -- a surface with no usable normal is
+             * exactly what the axis-normal control is for.
+             */
+            if (getenv("MODEL_TEST_CAPTURE_ONLY") == NULL) {
+                assert(pixel[1] > pixel[0] + 50 && pixel[1] > pixel[2] + 50 && pixel[3] > 200);
+                assert(corner[0] == 0 && corner[1] == 0 && corner[2] == 0);
+            }
             assert(g_glCurrentProgram == sprite_program);
             glBindBuffer(GL_ARRAY_BUFFER, 0); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
             glDeleteBuffers(1, &caller_buffer); glDeleteBuffers(1, &caller_element);

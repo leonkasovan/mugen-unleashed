@@ -322,6 +322,10 @@ typedef struct Model {
 
 /* Port additions: asset loading is GL-free; Model_Load still requires OpenGL. */
 Model *Model_LoadAsset(const char *path);
+/* Port additions used by the diagnostics and by the skin regression in tools/:
+ * recompute the scene world matrices, and build one mesh node's joint palette. */
+void Model_UpdateTransforms(Model *mdl);
+void Model_SkinPalette(Model *mdl, const ModelNode *n);
 void Model_OnContextLost(void); /* no GL calls: old context is already gone */
 
 

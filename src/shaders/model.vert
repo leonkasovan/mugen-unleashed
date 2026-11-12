@@ -78,14 +78,37 @@ void main()
                  weights_0.z * jointMatrix(joints_0.z) + weights_0.w * jointMatrix(joints_0.w);
         mat3 n = weights_0.x * jointNormalMatrix(joints_0.x) + weights_0.y * jointNormalMatrix(joints_0.y) +
                  weights_0.z * jointNormalMatrix(joints_0.z) + weights_0.w * jointNormalMatrix(joints_0.w);
-        normal = mat3(normalMatrix) * n * normal;
+        /*
+         * Port fix (normal mapping of skinned meshes): the tangent is skinned
+         * like the normal, orthogonalized against it -- skinning shears the
+         * basis -- and the bitangent is rebuilt from tangentIn.w. This branch
+         * used to leave the tangent untouched and the bitangent at zero, and
+         * the fragment shader then normalized that zero vector, so every
+         * normal-mapped skinned surface rendered black.
+         */
+        if (dot(normal, normal) > 0.0) {
+            vec3 skinned_normal = mat3(normalMatrix) * n * normal;
+            if (dot(skinned_normal, skinned_normal) > 0.0) {
+                normal = normalize(skinned_normal);
+            }
+        }
+        if (dot(tangent, tangent) > 0.0) {
+            vec3 skinned_tangent = normalize(mat3(model) * vec3(m * vec4(tangent, 0.0)));
+            vec3 orthogonal = skinned_tangent - normal * dot(normal, skinned_tangent);
+            if (dot(orthogonal, orthogonal) > 0.0) {
+                tangent = normalize(orthogonal);
+                bitangent = cross(normal, tangent) * tangentIn.w;
+            }
+        }
         world = model * m * pos;
         world.xyz += outlineOffset(world.xyz);
     } else {
-        if (normal.x + normal.y + normal.z != 0.0) {
+        /* Port fix: a squared-length test detects a nonzero vector; x+y+z does
+         * not, and (-1,0,1) is a perfectly valid direction that sums to zero. */
+        if (dot(normal, normal) > 0.0) {
             normal = normalize(mat3(normalMatrix) * normal);
         }
-        if (tangent.x + tangent.y + tangent.z != 0.0) {
+        if (dot(tangent, tangent) > 0.0) {
             tangent = normalize(vec3(model * vec4(tangent, 0.0)));
             bitangent = cross(normal, tangent) * tangentIn.w;
         }

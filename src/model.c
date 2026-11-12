@@ -1541,12 +1541,11 @@ Model *Model_LoadAsset(const char *path)
      * cheap or heavy without guessing from the file size (the geometry of
      * Stage0_3D_BLACK is trivial and its textures are 273 MiB decoded).
      */
-    Log_Printf("Model: %s: %d nodes, %d meshes, %d prims, %u vertices, %u indices, "
-               "%.1f KiB geometry, %d textures\n",
+    Log_Printf("Model: %s: %d nodes, %d meshes, %d prims, %.1f KiB vertex data, "
+               "%u indices (%u triangles), %d textures\n",
                path, mdl->node_count, mdl->mesh_count, mdl->prim_count,
-               mdl->vertex_size, mdl->index_count,
-               (double)mdl->vertex_size / 1024.0 + (double)mdl->index_count * 4.0 / 1024.0,
-               mdl->texture_count);
+               (double)mdl->vertex_size / 1024.0, mdl->index_count,
+               mdl->index_count / 3u, mdl->texture_count);
     ModelGpu_Register(mdl);
     return mdl;
 
@@ -1924,18 +1923,27 @@ static void Model_WorldTransform(Model *mdl, int index, const float *parent)
     }
 }
 
-/* The joint matrices of the skins of the mesh nodes under node index, children first. */
-static void Model_SkinMatrices(Model *mdl, int index)
+/*
+ * Port fix: the joint palette of ONE mesh node, computed immediately before it
+ * is uploaded.
+ *
+ * The joint matrices include the inverse of the mesh node's own world
+ * transform, so a palette belongs to a (node, skin) pair, not to the skin. It
+ * used to be computed for every mesh node in a pre-pass into the shared
+ * ModelSkin, so two nodes sharing one skin overwrote each other and both drew
+ * with whichever palette happened to be written last -- 604 differing pixels in
+ * the probe, from a mesh-node transform that should have cancelled out during
+ * skinning. Calculating it per node at upload time keeps the single buffer and
+ * stays correct; every world matrix is final before the draw loop starts, which
+ * is what the pre-pass used to guarantee.
+ */
+void Model_SkinPalette(Model *mdl, const ModelNode *n)
 {
-    ModelNode *n = &mdl->nodes[index];
     ModelSkin *skin;
     float inv[16], m[16];
     int i, r;
 
-    for (i = 0; i < n->child_count; i++) {
-        Model_SkinMatrices(mdl, n->children[i]);
-    }
-    if (n->mesh == -1 || n->skin == -1) {
+    if (n->skin == -1) {
         return;
     }
     skin = &mdl->skins[n->skin];
@@ -1948,6 +1956,31 @@ static void Model_SkinMatrices(Model *mdl, int index)
             skin->matrices[i * 12 + r * 4 + 1] = m[4 + r];
             skin->matrices[i * 12 + r * 4 + 2] = m[8 + r];
             skin->matrices[i * 12 + r * 4 + 3] = m[12 + r];
+        }
+    }
+}
+
+/*
+ * Port addition: every scene's world matrices, from the scene roots down.
+ *
+ * The two draw paths each open-coded this loop, and the skin regression in
+ * tools/test_model.c needs the pass without a GL context. Palettes computed
+ * after this are final for every joint, including a joint under a later root.
+ */
+void Model_UpdateTransforms(Model *mdl)
+{
+    int i, k;
+
+    if (mdl == NULL) {
+        return;
+    }
+    for (k = 0; k < mdl->scene_count; k++) {
+        ModelScene *sc = &mdl->scenes[k];
+        float ident[16];
+
+        Mat4_Identity(ident);
+        for (i = 0; i < sc->node_count; i++) {
+            Model_WorldTransform(mdl, sc->nodes[i], ident);
         }
     }
 }
@@ -2324,6 +2357,7 @@ static void Model_DrawNode(Model *mdl, int index, int layer, int default_layer, 
             const ModelSkin *skin = &mdl->skins[n->skin];
             int count = skin->joint_count < MODEL_MAX_JOINTS ? skin->joint_count : MODEL_MAX_JOINTS;
             glUniform1i(prog->skinned, 1);
+            Model_SkinPalette(mdl, n);
             glUniform4fv(prog->joints, count * 3, skin->matrices);
         } else {
             glUniform1i(prog->skinned, 0);
@@ -2639,6 +2673,7 @@ static void Model_DrawNodeShadow(Model *mdl, int index, int blended)
             const ModelSkin *skin = &mdl->skins[n->skin];
             int count = skin->joint_count < MODEL_MAX_JOINTS ? skin->joint_count : MODEL_MAX_JOINTS;
             glUniform1i(prog->skinned, 1);
+            Model_SkinPalette(mdl, n);
             glUniform4fv(prog->joints, count * 3, skin->matrices);
         } else {
             glUniform1i(prog->skinned, 0);
@@ -2678,14 +2713,7 @@ void Model_DrawShadows(Model *mdl)
         return;
     }
     Mat4_Identity(ident);
-    for (i = 0; i < sc->node_count; i++) {
-        Model_WorldTransform(mdl, sc->nodes[i], ident);
-    }
-    /* Port fix: skins may reference a joint in a later scene root. All world
-     * matrices must exist before evaluating any skin, including on frame one. */
-    for (i = 0; i < sc->node_count; i++) {
-        Model_SkinMatrices(mdl, sc->nodes[i]);
-    }
+    Model_UpdateTransforms(mdl);
 
     glGetIntegerv(GL_FRAMEBUFFER_BINDING_EXT, &prev_fbo);
     glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_POLYGON_BIT | GL_SCISSOR_BIT |
@@ -3236,14 +3264,7 @@ void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float
     }
     sc = &mdl->scenes[scene];
     Mat4_Identity(ident);
-    for (i = 0; i < sc->node_count; i++) {
-        Model_WorldTransform(mdl, sc->nodes[i], ident);
-    }
-    /* Port fix: skins may reference a joint in a later scene root. All world
-     * matrices must exist before evaluating any skin, including on frame one. */
-    for (i = 0; i < sc->node_count; i++) {
-        Model_SkinMatrices(mdl, sc->nodes[i]);
-    }
+    Model_UpdateTransforms(mdl);
     /* texture transforms may be animated (Ikemen GO's calculateTextureTransform) */
     for (i = 0; i < mdl->material_count; i++) {
         ModelMaterial *mat = &mdl->materials[i];
