@@ -31,7 +31,7 @@ for backend in desktop gles linux-gles vita; do
         linux-gles) DEFS="-DTEST_GLES=1 -DTEST_LINUX_GLES=1" ;;
         vita) DEFS="-DTEST_VITA=1" ;;
     esac
-    $CC $FLAGS $SAN $DEFS tools/test_gl_errors.c src/gl_mvp.c "$OUT/globals.o" "$OUT/glad.o" \
+    $CC $FLAGS $SAN $DEFS tools/test_gl_errors.c src/perf.c src/gl_mvp.c "$OUT/globals.o" "$OUT/glad.o" \
         -Wl,--gc-sections ${LDFLAGS:-} -lm -o "$OUT/test_$backend"
     cp res/shaders/gles/* "$OUT/data/gles/"
     for name in indexed rgba; do

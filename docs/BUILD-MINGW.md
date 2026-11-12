@@ -30,6 +30,14 @@ against a pinned SHA-256, and unpacking happens in `build\tmp\` — the three
 folders under `build\` are the project-wide rule (see `AGENTS.md`). A non-empty
 kit directory is left alone unless `/force` is given.
 
+GitHub Actions overrides both kit paths to `build/toolchains/w64devkit` and
+`build/toolchains/x86devkit` inside its checkout. Local defaults remain unchanged.
+Installation copies the extracted tree with `robocopy`, checks for copy failures,
+and removes staging only after success. This also supports a checkout on `D:`
+with a kit on `C:`: `cmd move` cannot move a directory between those volumes,
+and its `Access is denied` message does not by itself establish a permissions
+problem. Failed copies retain staging for inspection or retry.
+
 That split matters: **a devkit from skeeto ships no SDL, no libpng and not a
 single `.pc` file** — it is gcc, binutils, make, sh/sed/awk and its own
 pkg-config. The `.pc` files and the static archives they name come from the

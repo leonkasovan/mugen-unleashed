@@ -38,6 +38,10 @@ jobs:
   windows:
     name: MinGW ${{ matrix.target }} SDL2
     runs-on: windows-2022
+    # Keep both kits writable and on the checkout volume; no C: root install.
+    env:
+      W64DEVKIT_DIR: ${{ github.workspace }}\build\toolchains\w64devkit
+      X86DEVKIT_DIR: ${{ github.workspace }}\build\toolchains\x86devkit
     permissions:
       contents: write
     strategy:
@@ -52,7 +56,7 @@ jobs:
       - name: Check supported source/dependency contract
         shell: cmd
         run: |
-          set "PATH=C:\w64devkit\bin;%PATH%"
+          set "PATH=%W64DEVKIT_DIR%\bin;%PATH%"
           python tools/check_sdl2_only.py --binary build/${{ matrix.target == 'win32' && 'mingw-sdl2' || 'mingw64-sdl2' }}/mugen-mingw-${{ matrix.target }}-sdl2.exe
       - name: Package standalone executable
         shell: pwsh

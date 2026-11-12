@@ -319,12 +319,21 @@ echo   ERROR: the archive did not produce w64devkit\bin\gcc.exe
 echo          (whatever it did produce is left in %STAGE%)
 exit /b 1
 :kit_got
+rem Port fix: cmd MOVE cannot move directories across volumes. CI stages on
+rem D: but a local kit may live on C:, so copy the complete tree first and only
+rem delete staging after success. Robocopy codes 0-7 are successful outcomes;
+rem a gcc.exe sentinel alone would accept a partially copied compiler.
 if exist "%K_DEST%" rmdir /s /q "%K_DEST%"
-move "%STAGE%\w64devkit" "%K_DEST%" >nul
+robocopy "%STAGE%\w64devkit" "%K_DEST%" /e /r:2 /w:1 /nfl /ndl /njh /njs /np
+if errorlevel 8 (
+    echo   ERROR: cannot copy the complete extracted kit to %K_DEST%
+    echo          the extracted tree is left in %STAGE% for a retry.
+    echo          Check destination permissions, free space and locked files.
+    exit /b 1
+)
 if not exist "%K_DEST%\bin\gcc.exe" (
-    echo   ERROR: cannot move the extracted kit to %K_DEST%
-    echo          the extracted tree is left in %STAGE% - move it by hand,
-    echo          or make sure %K_DEST% is creatable ^(C:\ root needs elevation^)
+    echo   ERROR: the copied kit has no bin\gcc.exe at %K_DEST%
+    echo          the extracted tree is left in %STAGE% for inspection.
     exit /b 1
 )
 rmdir /s /q "%STAGE%"
@@ -457,7 +466,7 @@ if not exist "%ROOT%\tools\fetch_game_data.sh" (
     echo   WARNING: tools\fetch_game_data.sh is missing
     exit /b 0
 )
-"%W64DEVKIT_DIR%\sh.exe" "%ROOT%\tools\fetch_game_data.sh"
+"%W64DEVKIT_DIR%\bin\sh.exe" "%ROOT%\tools\fetch_game_data.sh"
 if errorlevel 1 (
     echo   WARNING: could not fetch the default game data
     echo   the built binary will exit at start until install\ has a tree

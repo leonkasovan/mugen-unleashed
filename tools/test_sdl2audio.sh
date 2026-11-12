@@ -22,7 +22,10 @@ mkdir -p "$OUT/tmp"
 export TMPDIR="$PWD/$OUT/tmp"
 
 SDL_CFLAGS="${SDL_CFLAGS:-$("$PKGCONF" --cflags $PKGS | sed 's/-Dmain=SDL_main//g')}"
-SDL_LIBS="${SDL_LIBS:-$("$PKGCONF" --libs --static $PKGS | sed 's/-lSDL2main//g;s/-mwindows//g')}"
+# Linux uses shared SDL2_mixer, whose private static codec closure is not
+# guaranteed by libsdl2-mixer-dev (e.g. libmp3lame-dev). Windows keeps static
+# qualification through the target selector, as the other harnesses do.
+SDL_LIBS="${SDL_LIBS:-$("$PKGCONF" --libs $SDL_LINK_MODE $PKGS | sed 's/-lSDL2main//g;s/-mwindows//g')}"
 # A native Linux compiler is useful for host regression runs with CC/PKG_CONFIG
 # overrides. Windows kits still supply the actual win32/win64 qualification.
 case "$("$CC" -dumpmachine)" in
