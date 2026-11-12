@@ -247,8 +247,8 @@ void Screen_EndFrame(void)
 {
     /*
      * Port addition: the two halves of the frame end are timed separately. A
-     * vsync-capped frame shows its headroom in `wait`, a frame the engine cannot
-     * keep up with does not -- guessing which from a single fps number is what
+     * capped frame shows its limiter cost in `wait` and swap/vsync cost in
+     * `present` -- guessing which from a single fps number is what
      * left "the Vita is slow" unanswerable (src/perf.c).
      */
     if (g_game->speedup == 0) {
@@ -256,7 +256,6 @@ void Screen_EndFrame(void)
     }
     Perf_WaitDone();
     Screen_Present();
-    Perf_PresentDone();
 #ifdef ANDROID_PORT
 #ifdef MUGEN_GLES
     /*
@@ -300,6 +299,9 @@ void Screen_EndFrame(void)
         SDL_LogError(SDL_LOG_CATEGORY_RENDER, "MUGEN frame presentation: %s", SDL_GetError());
     }
 #endif
+    /* Port fix: Android swaps/uploads above rather than in Screen_Present.
+     * Close the phase after the actual presentation on every platform. */
+    Perf_PresentDone();
     Frame_ResetPalFx();
     Frame_UpdateSkip();
 #if defined(MUGEN_VITA_GL) && !defined(ANDROID_PORT)

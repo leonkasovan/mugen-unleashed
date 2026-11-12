@@ -29,6 +29,7 @@ jobs:
           sh tools/test_sdl2helpers.sh
           sh tools/test_sdl2input.sh
           sh tools/test_sdl2audio.sh
+          sh tools/test_perf.sh
           sh tools/test_gl_errors.sh
           sh tools/test_model.sh
       - uses: actions/upload-artifact@v4
@@ -53,6 +54,16 @@ jobs:
       - name: Install dependency kits and build
         shell: cmd
         run: setup.bat /build${{ matrix.target == 'win32' && '32' || '64' }}
+      - name: Run profiler regressions
+        shell: cmd
+        run: |
+          set "PATH=%W64DEVKIT_DIR%\bin;%PATH%"
+          if "${{ matrix.target }}"=="win32" set "PATH=%X86DEVKIT_DIR%\bin;%PATH%"
+          set "MUGEN_TEST_TARGET=${{ matrix.target }}"
+          set "CC=gcc"
+          set "PKG_CONFIG=pkg-config"
+          set "PKG_CONFIG_LIBDIR=%CD%\build\sysroots\${{ matrix.target }}-sysroot\usr\lib\pkgconfig"
+          sh tools/test_perf.sh
       - name: Check supported source/dependency contract
         shell: cmd
         run: |

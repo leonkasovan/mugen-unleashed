@@ -41,6 +41,7 @@ $cc $flags -DMUGEN_MODEL3D tools/test_model.c src/model.c src/model_asset.c src/
 $cc $flags tools/test_model.c src/model_stub.c -Wl,--gc-sections \
     ${LDFLAGS:-} $sdl_libs $posix_libs -o "$out/unsupported"
 "$out/unsupported" "$out/triangle.gltf"
+MODEL_TEST_COUNTS=1 "$out/desktop" "$out/triangle.gltf"
 for fixture in triangle animated morph alpha light; do
     echo "fixture: $fixture"
     MODEL_TEST_CAPTURE="$out/$fixture.rgba" "$out/desktop" "$out/$fixture.gltf"

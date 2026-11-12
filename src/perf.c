@@ -120,11 +120,25 @@ void Perf_PresentDone(void)
     perf_marks = 0;
 }
 
-void Perf_CountDraw(int triangles)
+void Perf_CountDraw(unsigned int triangles)
 {
     perf_calls += 1.0;
     if (triangles > 0) {
         perf_triangles += (double)triangles;
+    }
+}
+
+/* Port fix: index_count/3 only describes independent triangles. */
+unsigned int Perf_TriangleCount(unsigned int mode, unsigned int count)
+{
+    switch (mode) {
+    case GL_TRIANGLES:
+        return count / 3u;
+    case GL_TRIANGLE_STRIP:
+    case GL_TRIANGLE_FAN:
+        return count >= 3u ? count - 2u : 0u;
+    default:
+        return 0u;
     }
 }
 

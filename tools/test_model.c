@@ -32,6 +32,45 @@ void MatchLog_Printf(int level, const char *format, ...)
 }
 
 #ifdef MUGEN_MODEL3D
+/* Exercise the actual draw submissions, not just the counting helper. */
+static void check_primitive_counts(Model *mdl, const float *ident, const ModelFx *fx,
+                                   const float *camera)
+{
+    static const struct { unsigned int mode, triangles; } cases[] = {
+        {GL_TRIANGLES, 2}, {GL_TRIANGLE_STRIP, 4}, {GL_TRIANGLE_FAN, 4},
+        {GL_LINES, 0}, {GL_LINE_LOOP, 0}, {GL_LINE_STRIP, 0}, {GL_POINTS, 0}
+    };
+    static const unsigned int indices[] = {0, 1, 2, 0, 1, 2};
+    ModelPrim *p = &mdl->prims[0];
+    unsigned int old_mode = p->mode;
+    GLint old_buffer;
+    PerfAverages perf;
+    unsigned int i;
+
+    assert(mdl->prim_count == 1 && p->index_count == 3);
+    glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &old_buffer);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mdl->ibo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, old_buffer);
+    p->index_count = 6;
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        p->mode = cases[i].mode;
+        Perf_BeginFrame(); Perf_LogicDone();
+        Model_Draw(mdl, 0, 0, 0, ident, ident, fx, 0, camera);
+        Perf_DrawDone(); Perf_WaitDone(); Perf_PresentDone();
+        assert(Perf_TakeAverages(&perf));
+        assert(perf.calls == 1 && perf.triangles == cases[i].triangles);
+        assert(glGetError() == GL_NO_ERROR);
+    }
+    p->mode = old_mode;
+    p->index_count = 3;
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mdl->ibo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, mdl->index_count * sizeof(unsigned int),
+                 mdl->index_data, GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, old_buffer);
+    puts("ok: model triangle/strip/fan/line/point submissions report correct counters");
+}
+
 static GLuint caller_program(void)
 {
 #ifdef MUGEN_GLES
@@ -269,6 +308,9 @@ int main(int argc, char **argv)
                     assert(file && fwrite(rgba, 1, sizeof rgba, file) == sizeof rgba);
                     fclose(file);
                 }
+            }
+            if (pass == 0 && getenv("MODEL_TEST_COUNTS") != NULL) {
+                check_primitive_counts(mdl, ident, &fx, camera);
             }
             if (pass == 1) {
                 /* Reached by the reference build only: the basic profile returns

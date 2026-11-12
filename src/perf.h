@@ -14,13 +14,12 @@
  *
  *   logic    input, screen update, tick and the state machines
  *   draw     the sprite/model submission for the frame
- *   wait     the frame limiter / vsync wait in Screen_EndFrame
- *   present  the flip (Screen_Present), including any scaling blit
+ *   wait     the frame limiter in Screen_EndFrame
+ *   present  the platform flip/upload, scaling blit and swap/vsync wait
  *
- * A frame that is capped by vsync shows it in `wait`; a frame the engine cannot
- * keep up with shows it in `logic` or `draw`. Per-frame draw calls and triangles
- * are counted alongside, because "draw" being expensive with 20 draw calls and
- * with 2000 mean very different things.
+ * A frame capped by vsync shows it in `present`; limiter sleep is in `wait`.
+ * Draw calls and triangles are counted alongside: expensive submission with
+ * 20 calls and with 2000 calls mean very different things.
  */
 
 typedef struct PerfAverages {
@@ -43,7 +42,12 @@ void Perf_WaitDone(void);
 void Perf_PresentDone(void);
 
 /* One GL draw: n triangles, counted for the frame in progress. */
-void Perf_CountDraw(int triangles);
+void Perf_CountDraw(unsigned int triangles);
+
+/* Port fix: assembled triangles for a GL primitive mode and element count.
+ * Lines/points contribute draw calls but no triangles. Degenerate triangles
+ * are included: this measures submitted work, not visible pixels. */
+unsigned int Perf_TriangleCount(unsigned int mode, unsigned int count);
 
 /* Means over the last whole second, and starts a new one. 0 when the samples
  * are incomplete or too few to be worth printing. */

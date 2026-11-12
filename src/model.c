@@ -1404,7 +1404,7 @@ Model *Model_LoadAsset(const char *path)
     cgltf_options options;
     cgltf_data *data = NULL;
     cgltf_result r;
-    unsigned int vcap = 0, icap = 0;
+    unsigned int vcap = 0, icap = 0, triangles = 0;
     char dir[0x200];
     char *json = NULL;
     Model *mdl;
@@ -1541,11 +1541,15 @@ Model *Model_LoadAsset(const char *path)
      * cheap or heavy without guessing from the file size (the geometry of
      * Stage0_3D_BLACK is trivial and its textures are 273 MiB decoded).
      */
+    /* Port fix: mixed primitive modes cannot be counted from total indices. */
+    for (i = 0; i < (cgltf_size)mdl->prim_count; i++) {
+        triangles += Perf_TriangleCount(mdl->prims[i].mode, mdl->prims[i].index_count);
+    }
     Log_Printf("Model: %s: %d nodes, %d meshes, %d prims, %.1f KiB vertex data, "
                "%u indices (%u triangles), %d textures\n",
                path, mdl->node_count, mdl->mesh_count, mdl->prim_count,
                (double)mdl->vertex_size / 1024.0, mdl->index_count,
-               mdl->index_count / 3u, mdl->texture_count);
+               triangles, mdl->texture_count);
     ModelGpu_Register(mdl);
     return mdl;
 
@@ -2378,7 +2382,7 @@ static void Model_DrawNode(Model *mdl, int index, int layer, int default_layer, 
         glUniform1i(prog->use_emission_map,
                     Model_BindTexture(mdl, &mat->emissive, MODEL_UNIT_EMISSION, prog->emission_transform));
         glDrawElements(p->mode, p->index_count, GL_UNSIGNED_INT, (const void *)(size_t)p->index_offset);
-        Perf_CountDraw((int)(p->index_count / 3u));
+        Perf_CountDraw(Perf_TriangleCount(p->mode, p->index_count));
 #ifndef MUGEN_MODEL_BASIC
         if (n->outline > 0.0f) {
             /* the outline: the mesh pushed out along its normals, back faces only, in black (Ikemen GO) */
@@ -2387,7 +2391,7 @@ static void Model_DrawNode(Model *mdl, int index, int layer, int default_layer, 
             glDepthMask(GL_TRUE);
             glUniform1f(prog->mesh_outline, n->outline * outline);
             glDrawElements(p->mode, p->index_count, GL_UNSIGNED_INT, (const void *)(size_t)p->index_offset);
-        Perf_CountDraw((int)(p->index_count / 3u));
+            Perf_CountDraw(Perf_TriangleCount(p->mode, p->index_count));
             glUniform1f(prog->mesh_outline, 0.0f);
         }
 #endif
@@ -2685,7 +2689,7 @@ static void Model_DrawNodeShadow(Model *mdl, int index, int blended)
         glUniform4fv(prog->base_color, 1, mat->base_color);
         glUniform1i(prog->use_texture, Model_BindTexture(mdl, &mat->base, MODEL_UNIT_BASE, prog->tex_transform));
         glDrawElements(p->mode, p->index_count, GL_UNSIGNED_INT, (const void *)(size_t)p->index_offset);
-        Perf_CountDraw((int)(p->index_count / 3u));
+        Perf_CountDraw(Perf_TriangleCount(p->mode, p->index_count));
     }
 }
 
