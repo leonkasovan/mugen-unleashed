@@ -2378,6 +2378,7 @@ static void Model_DrawNode(Model *mdl, int index, int layer, int default_layer, 
         glUniform1i(prog->use_emission_map,
                     Model_BindTexture(mdl, &mat->emissive, MODEL_UNIT_EMISSION, prog->emission_transform));
         glDrawElements(p->mode, p->index_count, GL_UNSIGNED_INT, (const void *)(size_t)p->index_offset);
+        Perf_CountDraw((int)(p->index_count / 3u));
 #ifndef MUGEN_MODEL_BASIC
         if (n->outline > 0.0f) {
             /* the outline: the mesh pushed out along its normals, back faces only, in black (Ikemen GO) */
@@ -2386,6 +2387,7 @@ static void Model_DrawNode(Model *mdl, int index, int layer, int default_layer, 
             glDepthMask(GL_TRUE);
             glUniform1f(prog->mesh_outline, n->outline * outline);
             glDrawElements(p->mode, p->index_count, GL_UNSIGNED_INT, (const void *)(size_t)p->index_offset);
+        Perf_CountDraw((int)(p->index_count / 3u));
             glUniform1f(prog->mesh_outline, 0.0f);
         }
 #endif
@@ -2683,6 +2685,7 @@ static void Model_DrawNodeShadow(Model *mdl, int index, int blended)
         glUniform4fv(prog->base_color, 1, mat->base_color);
         glUniform1i(prog->use_texture, Model_BindTexture(mdl, &mat->base, MODEL_UNIT_BASE, prog->tex_transform));
         glDrawElements(p->mode, p->index_count, GL_UNSIGNED_INT, (const void *)(size_t)p->index_offset);
+        Perf_CountDraw((int)(p->index_count / 3u));
     }
 }
 

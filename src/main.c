@@ -80,6 +80,13 @@ int main(int argc, char *argv[])
 #ifdef MUGEN_VITA_GL
     /* Port addition: identify the executing build before engine initialization. */
     VitaDiag_Boot();
+    /*
+     * Port addition: unsigned code runs below the clocks retail games get, and
+     * this engine is CPU-bound (the perf line in mugen.log says by how much).
+     * Asking here, before the asset load, is what makes the request count for
+     * the whole session.
+     */
+    VitaPower_Init();
 #endif
     g_cmdline = malloc(sizeof(CmdLineArgs));
     if (g_cmdline == NULL) {

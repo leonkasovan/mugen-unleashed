@@ -1016,6 +1016,7 @@ int Screen_Run(ScreenLoop *screen)
             g = g_game;
             g->round_reset_pending = 0;
         }
+        Perf_BeginFrame();
         Gl_ClearQueue(g->sprite_layer1);
         Screen_ReadInput(screen);
         if (screen->inner == 0) {
@@ -1039,6 +1040,8 @@ int Screen_Run(ScreenLoop *screen)
                 }
             }
             g = g_game;
+            /* Port addition: everything above is logic, everything below draws. */
+            Perf_LogicDone();
             if (g->skip_draw == 0) {
                 if (screen->bg != NULL) {
                     Bg_SetScale(screen->bg, screen->scale, screen->scale);
@@ -1069,6 +1072,7 @@ int Screen_Run(ScreenLoop *screen)
             if (g_game->skip_draw != 0) {
                 screen->skipped_frames++;
             }
+            Perf_DrawDone();
             Screen_EndFrame();
             g = g_game;
             g->no_sounds = 0;
@@ -1176,8 +1180,27 @@ static void Game_PerfLog(void)
         return;
     }
     if (frames > last_frames) {
-        Log_Printf("perf: renderer=%s fps=%.1f frames=%d\n",
-                   Game_PerfRendererName(g_renderMode), (double)Timer_GetFps(), frames - last_frames);
+        PerfAverages perf;
+        /*
+         * Port addition: the same line now carries where the frame went. The
+         * prefix is unchanged so tools/measure_perf.sh keeps parsing it; the
+         * fields after it say whether logic, draw submission, the frame-limiter
+         * wait or the present owns the frame, and how much work the draw was.
+         *
+         *   logic/draw/wait/present  milliseconds, mean per frame
+         *   calls/tris               GL draw calls and triangles, mean per frame
+         */
+        if (Perf_TakeAverages(&perf)) {
+            Log_Printf("perf: renderer=%s fps=%.1f frames=%d logic=%.1fms draw=%.1fms "
+                       "wait=%.1fms present=%.1fms calls=%.0f tris=%.0f\n",
+                       Game_PerfRendererName(g_renderMode), (double)Timer_GetFps(),
+                       frames - last_frames, perf.logic_ms, perf.draw_ms, perf.wait_ms,
+                       perf.present_ms, perf.calls, perf.triangles);
+        } else {
+            Log_Printf("perf: renderer=%s fps=%.1f frames=%d\n",
+                       Game_PerfRendererName(g_renderMode), (double)Timer_GetFps(),
+                       frames - last_frames);
+        }
     }
     last_ticks = now;
     last_frames = frames;
@@ -1211,8 +1234,16 @@ void Game_PrePresent(SpriteSet *set, int sprite)
         Console_Draw();
         return;
     }
-    if (g->show_fps != 0) {
-        Game_DrawFps();
+    /*
+     * Port addition: [Debug] Verbose asks for the perf line too. ShowFPS alone
+     * was the gate, which meant a tree without that key (the desktop reference
+     * config) could not produce the breakdown at all; Verbose is the project's
+     * general diagnostics switch and costs one line per second.
+     */
+    if (g->show_fps != 0 || g_logVerbose != 0) {
+        if (g->show_fps != 0) {
+            Game_DrawFps();
+        }
         Game_PerfLog();
     }
     Console_Draw();

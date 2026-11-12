@@ -411,6 +411,7 @@ add_executable(mugen
   src/vita_caps.c
   src/vita_fps.c
   src/vita_newlib.c
+  src/vita_power.c
   ${MUGEN_LUA_SOURCES}
   ${MUGEN_MINIZIP_SOURCES}
   ${MUGEN_LIBRESAMPLE_SOURCES})

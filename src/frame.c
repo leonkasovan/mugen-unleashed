@@ -245,10 +245,18 @@ void Frame_UpdateSkip(void)
  */
 void Screen_EndFrame(void)
 {
+    /*
+     * Port addition: the two halves of the frame end are timed separately. A
+     * vsync-capped frame shows its headroom in `wait`, a frame the engine cannot
+     * keep up with does not -- guessing which from a single fps number is what
+     * left "the Vita is slow" unanswerable (src/perf.c).
+     */
     if (g_game->speedup == 0) {
         Timer_WaitFrame();
     }
+    Perf_WaitDone();
     Screen_Present();
+    Perf_PresentDone();
 #ifdef ANDROID_PORT
 #ifdef MUGEN_GLES
     /*

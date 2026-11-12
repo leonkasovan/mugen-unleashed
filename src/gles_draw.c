@@ -246,6 +246,7 @@ void GlesDraw_Quad(GlesBuffer *buf, const GlesProgram *prog, const float *mvp16,
                           (const void *)(size_t)tc_off);
 
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    Perf_CountDraw(2);      /* a quad is two triangles */
 
     glDisableVertexAttribArray(GLES_ATTR_POSITION);
     glDisableVertexAttribArray(GLES_ATTR_TEXCOORD);

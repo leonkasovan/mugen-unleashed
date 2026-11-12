@@ -1156,6 +1156,7 @@ void Gl_DrawQuadRgba(const PalFx *fx, GlTex *tex, float x0, float y0, float x1, 
     Glr_QuadVertices(v, dp, c0, c1, special);
     glEnd();
 #endif
+    Perf_CountDraw(2);      /* a sprite quad is two triangles */
     glDisable(GL_TEXTURE_2D);
 }
 
@@ -1198,6 +1199,7 @@ void Gl_DrawQuadIndexed(const PalFx *fx, GlTex *tex, GlTex *pal, float x0, float
     Glr_QuadVertices(v, dp, c0, c1, special);
     glEnd();
 #endif
+    Perf_CountDraw(2);      /* a sprite quad is two triangles */
 }
 
 /* -1 for a set flip bit, 1 otherwise. */

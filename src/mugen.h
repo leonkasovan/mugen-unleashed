@@ -76,6 +76,7 @@
 #include <vitaGL.h>
 #include "vita_gl_shim.h"
 #include "vita_fps.h"
+#include "vita_power.h"
 #else
 #include <glad.h>
 #endif
@@ -186,6 +187,7 @@
 #include "sff.h"
 #include "textring.h"
 #include "log.h"
+#include "perf.h"
 #include "gfx.h"
 #include "glrender.h"
 #include "video.h"
