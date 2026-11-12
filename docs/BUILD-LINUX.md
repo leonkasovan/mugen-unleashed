@@ -175,6 +175,22 @@ make MUGEN_TARGET=linux-arm64                 # MUGEN_GLES=1 (GLES 3.0 backend)
 make MUGEN_TARGET=linux-arm64 MUGEN_GLES=0    # desktop GL, as on x64
 ```
 
+**3D stage models are off by default on this target.** The Makefile's default is
+`MUGEN_MODEL3D ?= $(if $(filter 1,$(MUGEN_GLES)),0,1)`, so a GLES build compiles
+them out; a stage whose background is only `[BGdef] model = *.glb` then has no
+elements to draw and renders black, with
+`Need at least one [BG] type bg (3D backgrounds unavailable)` in the match log.
+Turn them on with `MUGEN_MODEL3D=1`, or `port/arm64/build.sh --model3d 1` (the
+flag exists because a make variable cannot be passed through the environment
+reliably: a native `make.exe` under MSYS2 may see only a whitelisted environment,
+so `MUGEN_MODEL3D=1 port/arm64/build.sh` silently built the default).
+
+A model stage still has to fit the device: the decoded RGBA of its textures is
+capped by `MODEL_CPU_BUDGET` (256 MiB) and each texture must be no larger than
+`GL_MAX_TEXTURE_SIZE` (8192 on Mali-G31). `Stage0_3D_GREEN` is 273 MiB decoded
+(12800x4288 + 12800x1312) and fails both; the `KOFXI_*` stages are 256x256
+textures and load in under 2 s.
+
 With `MUGEN_GLES=1` the build:
 
 - compiles `third_party/glad-es-3.0` instead of `glad-2.1` and defines

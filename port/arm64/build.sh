@@ -12,6 +12,12 @@
 #   port/arm64/build.sh --jobs N     parallel make jobs (default: CPU count)
 #   port/arm64/build.sh --gles 0|1   renderer: 1 = GLES 3.0 (the default for
 #                                    linux-arm64), 0 = desktop GL
+#   port/arm64/build.sh --model3d 0|1  3D stage models ([BGdef] model = *.glb).
+#                                    Off by default on GLES; on here because a
+#                                    model-only stage draws nothing without it.
+#                                    Passed as a make command-line variable, not
+#                                    an environment one: a native make.exe here
+#                                    sees only a whitelisted environment.
 #   port/arm64/build.sh --upload     build, then copy the binary to the device
 #                                    (DEVICE, default ark@192.168.7.2, into
 #                                    DEVICE_DIR, default ~/mugen)
@@ -152,6 +158,7 @@ CLEAN=0
 OFFLINE=0
 JOBS=""
 GLES=""
+MODEL3D=""
 
 say()  { printf '\n==> %s\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
@@ -172,6 +179,8 @@ while [ $# -gt 0 ]; do
         --jobs=*) JOBS="${1#*=}" ;;
         --gles) GLES="${2:-}"; shift ;;
         --gles=*) GLES="${1#*=}" ;;
+        --model3d) MODEL3D="${2:-}"; shift ;;
+        --model3d=*) MODEL3D="${1#*=}" ;;
         --upload) DO_UPLOAD=1 ;;
         --no-keep-old) KEEP_OLD=0 ;;
         --device) DEVICE="${2:-}"; shift ;;
@@ -187,6 +196,16 @@ done
 if [ "$OFFLINE" = 1 ] && { [ "$DO_SETUP" = 1 ] || [ "$DO_SYSROOT" = 1 ]; }; then
     fail "--offline cannot be combined with --setup or --sysroot"
 fi
+
+# Both renderer switches are validated here rather than left to the Makefile: a
+# typo would otherwise reach it as an unset variable and silently take a default.
+for v in GLES MODEL3D; do
+    eval "val=\$$v"
+    case "$val" in
+        ""|0|1) ;;
+        *) fail "--$(printf '%s' "$v" | tr 'A-Z' 'a-z') must be 0 or 1, not '$val'" ;;
+    esac
+done
 
 # ---------------------------------------------------------------- platform
 # WSL runs the toolchain's Linux binaries; it cannot use the Mingw-w64 build.
@@ -508,7 +527,8 @@ make -C "$ROOT" -j"$JOBS" \
     CROSS_COMPILE="$CROSS" \
     XSYSROOT="$XSYSROOT" \
     MUGEN_TARGET=linux-arm64 \
-    ${GLES:+MUGEN_GLES="$GLES"}
+    ${GLES:+MUGEN_GLES="$GLES"} \
+    ${MODEL3D:+MUGEN_MODEL3D="$MODEL3D"}
 
 target="$OUT/mugen-linux-arm64-aarch64-none-linux-gnu"
 [ -f "$target" ] || fail "the build reported success but $target is missing"

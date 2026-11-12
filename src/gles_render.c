@@ -22,7 +22,10 @@
  *   - the sprite path: CPU modelview (src/gl_mvp.c) + VBO quad submission
  *     (src/gles_draw.c);
  *   - the dispatch entries Gfx_SelectRenderer(RENDER_OPENGL) installs:
- *     clear, pixel, line, rect, fill, blend, capture, present.
+ *     clear, pixel, line, rect, fill, blend, capture, present;
+ *   - g_glInitialized, the engine-wide "a live GL context is ready" flag.
+ *     glrender.c sets it on the desktop path; because that file is excluded
+ *     here this backend owns it, and the model loader (Model_Load) asks it.
  *
  * Deliberate limits, logged once rather than hidden:
  *   - one shader variant per path (no PERSPECTIVE_* / INDEX_* / PALFX_DISABLE
@@ -688,6 +691,16 @@ void Gles_OnContextLost(void)
     g_glBoundFramebuffer = 0;
     g_glesTexMemory = 0;
     g_glesReady = 0;
+    /*
+     * Port fix: g_glInitialized is the engine-wide "the GL renderer is up"
+     * flag (the original's 0x00504758) and the model loader asks it, not
+     * g_glesReady, before touching a context. Only the desktop renderer
+     * (glrender.c) ever set it, and that file is not compiled here, so every
+     * Model_Load on a GLES build was refused with "requires the OpenGL
+     * renderer" -- a stage whose background is only a .glb drew nothing.
+     * Kept in step with g_glesReady in all three places that change it.
+     */
+    g_glInitialized = 0;
     g_glesProjectionValid = 0;
 
     /* Textures keep their dimensions so GlTex_Upload/GlVbuf_Bind can revive
@@ -758,6 +771,7 @@ int Gles_OnContextRestore(int drawable_w, int drawable_h)
     }
     g_glesProjectionValid = 0;
     g_glesReady = 1;
+    g_glInitialized = 1;        /* port fix, see Gles_OnContextLost */
     Log_Printf("GLES: context restored (%dx%d drawable, max texture %d)\n", drawable_w, drawable_h,
                g_glMaxTextureSize);
     return 1;
@@ -828,6 +842,7 @@ int Gl_Init(int framebuffers)
     }
     glGetIntegerv(GL_MAX_TEXTURE_SIZE, &g_glMaxTextureSize);
     g_glesReady = 1;
+    g_glInitialized = 1;        /* port fix, see Gles_OnContextLost */
     /*
      * Leading newline, like the "video:" lines above it: "video: vsync ..."
      * and the device/version line are printed without a trailing one, so a
