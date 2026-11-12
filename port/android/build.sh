@@ -166,6 +166,14 @@ if [ "$PACK_ASSETS" = 1 ]; then
   if [ -f "$GAME_CFG" ]; then
     cp -f "$GAME_CFG" "$ASSETS/data/mugen.cfg"
     printf '    data/mugen.cfg <- %s\n' "$(cd "$(dirname "$GAME_CFG")" && pwd)/$(basename "$GAME_CFG")"
+    # The platform overlay, merged over data/mugen.cfg per key at start-up
+    # (src/configmerge.c). It carries only the keys whose right value depends on
+    # the hardware, so a game tree's own settings survive everywhere else --
+    # including whatever the options screen saves.
+    if [ -f "$HERE/mugen.android.cfg" ]; then
+      cp -f "$HERE/mugen.android.cfg" "$ASSETS/data/mugen.android.cfg"
+      printf '    data/mugen.android.cfg <- port/android/mugen.android.cfg\n'
+    fi
   else
     # Name the expected file, not just the path: GAME_CFG defaults to the
     # platform template, and a caller who deleted it needs to know what to

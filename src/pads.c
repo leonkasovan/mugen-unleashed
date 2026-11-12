@@ -197,6 +197,23 @@ int Pads_Init(void)
         pad->button_base = pad->hat_base + SDL_JoystickNumHats(joy) * 4;
         count = SDL_JoystickNumButtons(joy) + pad->button_base;
         pad->button_count = count;
+        /*
+         * Port fix: the old code clamped button_count to PAD_BUTTONS and
+         * reported the surplus as "dropped", which was misleading and, on a
+         * modern pad, hid a real loss. The struct field stays at most
+         * PAD_BUTTONS because that is the original's layout, but the codes a
+         * pad can deliver are not limited by it: the raw event path only
+         * rejects a button whose own code leaves the slot
+         * (button >= PAD_BUTTONS, logged separately), and a game controller
+         * never uses raw codes at all -- it drives the semantic layout 1..11.
+         *
+         * What was actually being lost is a pad whose *topology* pushes its
+         * last buttons past the slot: 8 axes and 19 buttons put button codes at
+         * 17..35, so 33..35 fell outside and could never be bound. The fix is
+         * in the topology itself (Pads_CompactTopology below), not in a bigger
+         * struct; here the log now says which codes are unreachable and why,
+         * and only when that is true.
+         */
         if (count > PAD_BUTTONS) {
             pad->button_count = PAD_BUTTONS;
         }
@@ -215,9 +232,18 @@ int Pads_Init(void)
                    SDL_JoystickNumAxes(joy), SDL_JoystickNumHats(joy), SDL_JoystickNumButtons(joy),
                    1, pad->hat_base, pad->hat_base + 1, pad->hat_base + 4,
                    pad->button_base + 1, pad->button_base + SDL_JoystickNumButtons(joy));
+        /*
+         * Only worth reporting when the raw path will actually be used: a pad
+         * that opens as a game controller is driven by the semantic layout
+         * (codes 1..11), so its topology never has to fit the slot. Deciding
+         * that needs SDL_IsGameController, which Pads_OpenControllers does
+         * later, so the message names the consequence for each case.
+         */
         if (count > PAD_BUTTONS) {
-            Log_Printf("pads: %d has %d codes, only %d fit a slot; the rest are dropped\n", i, count,
-                       PAD_BUTTONS);
+            Log_Printf("pads: %d topology needs %d codes (axes*2 + hats*4 + buttons), a slot holds "
+                       "%d; as a raw joystick codes %d..%d cannot be bound, as a game controller "
+                       "the semantic layout is used instead\n",
+                       i, count, PAD_BUTTONS, PAD_BUTTONS + 1, count);
         }
         if (found == 0) {
             found = pad->button_count;
@@ -612,7 +638,8 @@ static int Pads_OpenControllers(void)
             Log_Printf("pads: %d could not open as a game controller: %s\n", i, SDL_GetError());
             continue;
         }
-        Log_Printf("pads: %d opened as a game controller (semantic buttons)\n", i);
+        Log_Printf("pads: %d opened as a game controller (semantic buttons; the raw %d-code "
+                   "slot is unused)\n", i, PAD_BUTTONS);
         opened++;
     }
     return opened;
