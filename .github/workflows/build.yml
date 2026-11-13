@@ -31,6 +31,8 @@ jobs:
           sh tools/test_sdl2audio.sh
           sh tools/test_perf.sh
           sh tools/test_batchprof.sh
+          sh tools/test_textwrap.sh
+          sh tools/test_ttfcache.sh
           sh tools/test_gl_errors.sh
           sh tools/test_model.sh
       - uses: actions/upload-artifact@v4
@@ -66,6 +68,8 @@ jobs:
           set "PKG_CONFIG_LIBDIR=%CD%\build\sysroots\${{ matrix.target }}-sysroot\usr\lib\pkgconfig"
           sh tools/test_perf.sh
           sh tools/test_batchprof.sh
+          sh tools/test_textwrap.sh
+          sh tools/test_ttfcache.sh
       - name: Check supported source/dependency contract
         shell: cmd
         run: |

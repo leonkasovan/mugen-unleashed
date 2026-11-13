@@ -9,6 +9,10 @@
 #include <SDL_ttf.h>
 /* offsetof, for the frame offsets (FNT_FRAME_X / FNT_FRAME_W below). */
 #include <stddef.h>
+/* Port addition: the TrueType line-break search, testable without SDL_ttf. */
+#include "textwrap.h"
+/* Port addition: rasterized-line cache for TrueType text. */
+#include "ttfcache.h"
 
 #ifdef ANDROID_PORT
 #include "sdl2surface.h"
@@ -182,6 +186,69 @@ have_palette:
 }
 
 /*
+ * Port addition: the TrueType rasterizer behind the cache.
+ *
+ * Returns an RGBA32 buffer (the same bytes Surface_ToRGBA32 produces, copied out
+ * of it), which is what the cache stores. SDL_ttf renders the line in the
+ * requested colour here, so colour is a cache key and not a tint applied later.
+ */
+static void *Font_TtfRender(const char *text, int r, int g, int b, int blended, int *w, int *h, void *ctx)
+{
+    Font *font = (Font *)ctx;
+    SDL_Surface *surface;
+    SDL_Surface *rgba;
+    SDL_Color color;
+    void *pixels = NULL;
+
+    color.r = (Uint8)r;
+    color.g = (Uint8)g;
+    color.b = (Uint8)b;
+    color.a = 255;
+    if (blended) {
+        surface = TTF_RenderUTF8_Blended(font->ttf, text, color);
+    } else {
+        surface = TTF_RenderUTF8_Solid(font->ttf, text, color);
+    }
+    if (surface == NULL) {
+        return NULL;
+    }
+    rgba = Surface_ToRGBA32(surface);
+    if (rgba != NULL && rgba->w > 0 && rgba->h > 0) {
+        size_t bytes = (size_t)rgba->w * (size_t)rgba->h * 4u;
+
+        pixels = malloc(bytes);
+        if (pixels != NULL) {
+            memcpy(pixels, rgba->pixels, bytes);
+            *w = rgba->w;
+            *h = rgba->h;
+        }
+    }
+    if (rgba != NULL) {
+        SDL_FreeSurface(rgba);
+    }
+    SDL_FreeSurface(surface);
+    return pixels;
+}
+
+/*
+ * Port addition: the shared line cache. Created on first use and never freed:
+ * it is a fixed 16 entries of CPU pixels, it holds no GL name (a texture is
+ * still made per draw, exactly as before, so a context loss leaves nothing
+ * stale here), and it outlives every font.
+ */
+#define FONT_TTF_CACHE_ENTRIES 16
+
+static TtfCache *Font_TtfCache(void)
+{
+    static TtfCache *cache;
+
+    if (cache == NULL) {
+        cache = TtfCache_Create(FONT_TTF_CACHE_ENTRIES);
+    }
+    return cache;
+}
+
+/*
  * 0x0046C6F0: Font_DrawLine for TrueType fonts. The text is cut at the
  * first newline, rendered by SDL_ttf (solid, or blended when the font's
  * blend or g_fontTtfRender says so) with the colour r, g, b (clamped to 255)
@@ -242,6 +309,56 @@ void Font_DrawLineTTF(const char *text, const DrawParams *dp, int len, Font *fon
     }
     dst.x = (Sint16)(int)((double)font->offset_x * scale_x + x);
     dst.y = (Sint16)(int)((double)(font->offset_y - TTF_FontAscent(font->ttf)) * scale_y + y);
+    if (g_renderMode == RENDER_MODE_GL || g_renderMode == RENDER_MODE_GL_ALT) {
+        /*
+         * Port addition: the OpenGL renderers rasterize through the cache.
+         *
+         * This path is where repeated text costs most: every call rasterized the
+         * line with SDL_ttf, converted the surface to RGBA32 and built a
+         * temporary SpriteSet, which on the GLES backend also means a texture
+         * upload per line, per frame. The cache removes the rasterization (the
+         * dominant part) for lines already seen at this size, colour and blend
+         * mode; the submission below is unchanged, so the picture is identical.
+         *
+         * The software path below is untouched on purpose: it blits the SDL_ttf
+         * surface itself rather than an RGBA32 copy, so routing it through this
+         * cache would have to reconstruct that surface and could change output.
+         */
+        TtfCache *cache = Font_TtfCache();
+        const void *pixels;
+        int cw = 0, ch = 0, hit = 0;
+
+        (void)color;
+        pixels = TtfCache_Get(cache, (unsigned long)(uintptr_t)font, r, g, b, blended, text,
+                              &cw, &ch, &hit, Font_TtfRender, font);
+        if (pixels != NULL && cw > 0 && ch > 0) {
+            int size = 4 * cw * ch;
+            SpriteSet *set = calloc(1, sizeof(SpriteSet));
+
+            if (set == NULL) {
+                g_outOfMemory = 1;
+                goto done;
+            }
+            set->sprites = KeyedArray_Create(1, sizeof(Sprite));
+            if (set->sprites != NULL) {
+                set->palettes = KeyedArray_Create(1, sizeof(Palette));
+                if (set->palettes != NULL) {
+                    Sprite spr;
+
+                    /* Sprite_Init copies the pixels as the texture's backing, so
+                     * the cache's buffer stays its own. */
+                    if (Sprite_Init(0, &spr, SPRITE_FORMAT_RAW, (void *)pixels, size, cw, ch, 32, 0, 0)) {
+                        SpriteSet_AddSprite(set, &spr, 0, 0);
+                        sprite_dp.x = (float)dst.x;
+                        sprite_dp.y = (float)dst.y;
+                        Sprite_Draw(set, 0, &sprite_dp);
+                    }
+                    SpriteSet_Free(set);
+                }
+            }
+        }
+        goto done;
+    }
     if (blended) {
         surface = TTF_RenderUTF8_Blended(font->ttf, text, color);
     } else {
@@ -250,43 +367,7 @@ void Font_DrawLineTTF(const char *text, const DrawParams *dp, int len, Font *fon
     if (surface == NULL) {
         return;
     }
-    if (g_renderMode == RENDER_MODE_GL || g_renderMode == RENDER_MODE_GL_ALT) {
-        SDL_Surface *rgba = Surface_ToRGBA32(surface);
-
-        if (rgba != NULL) {
-            int bpp = rgba->format->BitsPerPixel;
-            int w = rgba->w;
-            int h = rgba->h;
-            void *pixels = rgba->pixels;
-            int size = ((bpp + 7) >> 3) * w * h;
-
-            if (bpp > 8 && bpp >= 24) {
-                SpriteSet *set = calloc(1, sizeof(SpriteSet));
-
-                if (set == NULL) {
-                    g_outOfMemory = 1;
-                    SDL_FreeSurface(rgba);
-                    goto done;
-                }
-                set->sprites = KeyedArray_Create(1, sizeof(Sprite));
-                if (set->sprites != NULL) {
-                    set->palettes = KeyedArray_Create(1, sizeof(Palette));
-                    if (set->palettes != NULL) {
-                        Sprite spr;
-
-                        if (Sprite_Init(0, &spr, SPRITE_FORMAT_RAW, pixels, size, w, h, bpp, 0, 0)) {
-                            SpriteSet_AddSprite(set, &spr, 0, 0);
-                            sprite_dp.x = (float)dst.x;
-                            sprite_dp.y = (float)dst.y;
-                            Sprite_Draw(set, 0, &sprite_dp);
-                        }
-                        SpriteSet_Free(set);
-                    }
-                }
-            }
-            SDL_FreeSurface(rgba);
-        }
-    } else if (scale_x == 1.0f && scale_y == 1.0f) {
+    if (scale_x == 1.0f && scale_y == 1.0f) {
         SDL_UpperBlit(surface, NULL, SpriteSet_GetSurface(g_renderTarget, g_renderTargetSprite), &dst);
     } else {
         SDL_Surface *zoomed = Sdl2_ScaleSurface(surface, scale_x, scale_y, 0);
@@ -297,7 +378,6 @@ void Font_DrawLineTTF(const char *text, const DrawParams *dp, int len, Font *fon
         }
     }
 done:
-    SDL_FreeSurface(surface);
     if (dup != NULL) {
         free(dup);
     }
@@ -1143,72 +1223,21 @@ int Font_WrapLength(const char *text, Font *font, int max_width, int word_wrap)
  * Quirk kept: when the last line fits, that count makes the caller step
  * past the terminator of the text (and the original reads the byte after
  * it here).
+ *
+ * The boundary search lives in src/textwrap.c (port addition): it measures the
+ * same prefixes with the same function, but finds the first over-wide one by
+ * binary search rather than one measure per character, which is O(log n)
+ * SDL_ttf calls instead of O(n). tools/test_textwrap.sh checks the extracted
+ * search against a copy of this original loop over random inputs and widths.
  */
+static int Font_WrapMeasureTTF(const char *prefix, void *ctx)
+{
+    return Font_TextWidth(prefix, (Font *)ctx);
+}
+
 int Font_WrapLengthTTF(Font *font, const char *text, int max_width, int word_wrap)
 {
-    const char *nl;
-    char *buf = NULL;
-    int len = 0;
-    int last_break = 0;
-    int prev = 0;
-    int before = 0;
-    int i;
-
-    if (*text == '\0') {
-        return 0;
-    }
-    nl = strchr(text, '\n');
-    if (nl != NULL) {
-        len = (int)(nl - text);
-        buf = malloc(len + 1);
-    }
-    if (buf == NULL) {
-        len = (int)strlen(text);
-        buf = malloc(len + 1);
-        if (buf == NULL) {
-            return 0;
-        }
-    }
-    strncpy(buf, text, len);
-    buf[len] = '\0';
-    i = 1;
-    if (len >= 1) {
-        do {
-            char ch = buf[i];
-
-            if ((ch & 0xC0) != 0x80) {
-                char c;
-
-                before = prev;
-                prev = i;
-                buf[i] = '\0';
-                if (Font_TextWidth(buf, font) > max_width) {
-                    i = before;
-                    break;
-                }
-                buf[i] = ch;
-                c = buf[before];
-                if (Font_IsSpace(c) || c == '-' || i == len) {
-                    last_break = i;
-                }
-            }
-            i++;
-        } while (i <= len);
-    }
-    if (last_break == 0) {
-        last_break = before;
-    }
-    if (last_break < 0) {
-        last_break = 0;
-    }
-    free(buf);
-    if (word_wrap) {
-        i = last_break;
-    }
-    if (text[i] == '\n') {
-        i++;
-    }
-    return i;
+    return TextWrap_FitLength(text, max_width, word_wrap, Font_WrapMeasureTTF, font);
 }
 
 /*
