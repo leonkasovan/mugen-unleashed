@@ -609,10 +609,11 @@ the tree is worse than nothing.
 
 `docs/MODEL3D_IMPLEMENTATION.md` records implemented profiles and OPEN hardware
 qualification. Desktop GL remains the reference and defaults to model support.
-Linux GLES models are opt-in with `MUGEN_GLES=1 MUGEN_MODEL3D=1`; Android uses
-`port/android/build.sh --model3d` (implies GLES); Vita uses the same switch for
-its restricted basic profile. Both mobile defaults remain OFF. Vita rejects
-skinning and omits lighting/outlines/shadow/IBL; GLES omits shadow/IBL.
+Linux GLES models are opt-in with `MUGEN_GLES=1 MUGEN_MODEL3D=1` (on by default
+through `port/arm64/build.sh`, off for a bare `make`); Android uses
+`port/android/build.sh --model3d` (implies GLES); Vita compiles its restricted
+basic profile by default and `--no-model3d` turns it off. Vita rejects skinning
+and omits lighting/outlines/shadow/IBL; GLES omits shadow/IBL.
 
 `Model_LoadAsset` is GL-free; CPU images/geometry outlive GPU contexts.
 `model_gpu.c` owns residency and `model_pass.c` owns explicit state restoration.

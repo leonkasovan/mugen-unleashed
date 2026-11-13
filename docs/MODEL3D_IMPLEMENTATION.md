@@ -72,9 +72,15 @@ make MUGEN_GLES=1 MUGEN_MODEL3D=1
 # Android: compiles model support and implies --gles
 port/android/build.sh --model3d
 
-# Vita: compiles the basic profile; normal build still defaults OFF
+# Vita: compiles the basic profile, which the build turns on by default
 port/psvita/build.sh --model3d
+port/psvita/build.sh --no-model3d    # compile it out again
 ```
+
+On Vita this profile is restricted (skinning rejected, lighting/outlines/shadow
+/IBL omitted) and its hardware qualification is still open, so enabling it by
+default compiles support in rather than certifying it -- see the status table in
+this document before relying on it on a device.
 
 Both platform CMake entry points accept `-DMUGEN_MODEL3D=ON`. Android additionally
 requires `-DMUGEN_GLES=ON`; incompatible direct configurations fail clearly.

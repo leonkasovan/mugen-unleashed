@@ -8,7 +8,10 @@
 #   port/psvita/build.sh --clean        remove this port's build output
 #   port/psvita/build.sh --offline      fail instead of downloading anything
 #   port/psvita/build.sh --jobs N       parallel build jobs (default: CPU count)
-#   port/psvita/build.sh --model3d      opt-in basic glTF profile (device qualification required)
+#   port/psvita/build.sh --model3d      basic glTF profile (on by default). --no-model3d
+#                                       compiles model support out; the profile is a
+#                                       restricted one and hardware qualification is
+#                                       still open (docs/MODEL3D_IMPLEMENTATION.md)
 #   port/psvita/build.sh --debug        Debug build (default: Release)
 #   port/psvita/build.sh --data DIR     pack this M.U.G.E.N tree into the VPK
 #   port/psvita/build.sh --no-data      pack no game data (engine only)
@@ -138,7 +141,7 @@ PRINT_ENV=0
 DATA_SET=0
 DATA_DIR=""
 TITLEID=MUGEN0001
-MODEL3D=OFF
+MODEL3D=ON
 GL_SELFTEST=OFF
 RENDER_CACHE=""
 SHADER_CACHE=""
@@ -166,6 +169,7 @@ while [ $# -gt 0 ]; do
         --debug) BUILD_TYPE=Debug ;;
         --gl-selftest) GL_SELFTEST=ON ;;
         --model3d) MODEL3D=ON ;;
+        --no-model3d) MODEL3D=OFF ;;
         --render-cache) RENDER_CACHE=ON ;;
         --no-render-cache) RENDER_CACHE=OFF ;;
         --shader-cache) SHADER_CACHE=ON ;;
