@@ -51,6 +51,16 @@ void Gles_OnContextLost(void);
 void Gles_OnSpriteSetFreed(void);
 
 /*
+ * Port addition: the deferred sprite-draw queue (gles_render.c).
+ *
+ * Sprite quads are recorded rather than submitted, so a flush can merge them.
+ * Anything that is not a queued sprite quad must flush first or the queue's
+ * contents are drawn out of order: a scissor change, a primitive, the present
+ * blit, a texture upload, a model draw.
+ */
+void GlesBatch_Flush(void);
+
+/*
  * Called once a new context is current and the GLES entry points have been
  * loaded again: recompiles and relinks the programs, re-establishes the GL
  * state, and drops any cached texture storage description so the next upload

@@ -35,6 +35,9 @@
 #include <stb_image.h>
 #include <math.h>
 #include "model_backend.h"
+#ifdef MUGEN_GLES
+#include "gles_render.h"
+#endif
 
 #define MODEL_PI 3.14159265358979323846
 
@@ -3252,6 +3255,11 @@ static void Model_BindShadowMaps(const ShadowMaps *sm) { (void)sm; }
 void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float *proj, const float *view,
                 const ModelFx *fx, float outline, const float *camera)
 {
+#ifdef MUGEN_GLES
+    /* Port addition: a model draw rebinds the whole pipeline, so queued sprite
+     * quads must be submitted first (gles_render.h). */
+    GlesBatch_Flush();
+#endif
     const ModelProgram *prog = &g_modelProgram;
     const ModelScene *sc;
     float ident[16], p[16], flip[16], inv_view[16];

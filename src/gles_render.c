@@ -225,6 +225,8 @@ static int gles_register_tex(GlTex *tex);
  */
 void Gles_OnSpriteSetFreed(void)
 {
+    /* Queued quads may reference this set's textures. */
+    GlesBatch_Flush();
     int i;
 
     for (i = 0; i < GLES_STREAM_SLOTS; i++) {
@@ -587,6 +589,8 @@ static void gles_tex_account(GlTex *tex, int w, int h, int bytes_per_pixel)
 
 int GlTex_Upload(GlTex *tex, int h, int internal_format, int w, int format, const void *pixels)
 {
+    /* Uploading rebinds texture units. */
+    GlesBatch_Flush();
     GLuint id;
     int fresh, bpp;
     GlesTexFormat *slot;
@@ -1050,6 +1054,8 @@ void Gl_ResetModelview(void)
 
 void Gl_ApplyClipRect(void)
 {
+    /* The scissor is about to change: queued quads belong to the old one. */
+    GlesBatch_Flush();
     if (g_clipX1 == 0 && g_clipY1 == 0 && g_clipX2 == g_targetWidth && g_clipY2 == g_targetHeight) {
         glDisable(GL_SCISSOR_TEST);
         return;
@@ -1073,6 +1079,8 @@ void Gl_ApplyClipRect(void)
 /* Draws one solid rectangle through the solid program. */
 static void gles_solid_quad(float x0, float y0, float x1, float y1, float r, float g, float b, float a)
 {
+    /* A solid quad is not a queued sprite: queued quads must land first. */
+    GlesBatch_Flush();
     float pos[8];
     float tc[16] = { 0 };
     int i;
@@ -1418,6 +1426,190 @@ static GLenum gles_gl_factor(GlesBlendFactor f)
     }
 }
 
+/*
+ * Port addition: the deferred sprite-draw queue.
+ *
+ * Every sprite quad currently goes straight to the driver: bind program, set
+ * uniforms, upload four vertices, glDrawArrays. Measured on an RG351MP that is
+ * ~150 us per call and ~34 calls a frame, so the draw call itself is the largest
+ * single cost of a 2D frame (batchprof's `dr` split), and a draw can never be
+ * merged with its neighbour while each call is submitted on its own.
+ *
+ * This queue records the calls instead, so a later flush can submit several of
+ * them with one instanced draw. It follows Ikemen-GO's Phase 5 design
+ * (render_gles32.go, flushSpriteBatches/renderBatch): texture identity is NOT
+ * part of the batch key, so a batch may span several textures bound to separate
+ * units.
+ *
+ * Stage 1 (this file, as it stands): the flush replays each call through the
+ * immediate path, in order, with the same GL calls as before. That changes no
+ * pixels -- it exists so the deferral and its flush points can be validated on
+ * their own, before the instanced submitter replaces the replay. MUGEN_SPRITEBATCH=0
+ * restores the old straight-through behaviour for A/B measurement.
+ *
+ * Ordering: the queue is strictly FIFO and is flushed before anything that is
+ * not a queued sprite quad -- a scissor change, a primitive, the present blit, a
+ * texture upload, a model draw. Painter's order is otherwise lost, which shows
+ * up immediately as sprites drawn over each other in the wrong sequence.
+ */
+#define GLES_BATCH_MAX 512
+
+typedef struct GlesSpriteCall {
+    /* batch key */
+    const GlesProgram *prog;
+    int blend_enabled;
+    unsigned int blend_src, blend_dst, blend_eq;
+    int mask;
+    /* what to draw */
+    const GlTex *tex;
+    const GlTex *pal;
+    int paletted;
+    float mvp[16];
+    float pos[8];
+    float tc[16];
+    float add[3], mul[3];
+    float colorbal, alphamul;
+    int invertall;
+    float texsize[2];
+    float alpha_src, alpha_dst;
+    /* the clip rectangle in force when the call was recorded */
+    int clip[4];
+} GlesSpriteCall;
+
+static GlesSpriteCall g_batch[GLES_BATCH_MAX];
+static int g_batch_count;
+static unsigned long g_batch_flushes;
+static unsigned long g_batch_recorded;
+static int g_batch_enabled = -1;    /* -1 unknown, 0 off (MUGEN_SPRITEBATCH=0) */
+/* Re-entrancy guard: the replay calls Gl_ApplyClipRect, which itself flushes. */
+static int g_batch_flushing;
+
+static int gles_batch_enabled(void)
+{
+    if (g_batch_enabled < 0) {
+        const char *v = getenv("MUGEN_SPRITEBATCH");
+
+        /*
+         * OPT-IN for now: with the queue enabled a transition frame
+         * (MUGEN_AUTOSHOT=300) came out different on every run, while the same
+         * binary with the queue disabled was stable across repeats. Until that
+         * is explained, the deferral stays off by default so the shipped
+         * behaviour is the immediate path.
+         */
+        g_batch_enabled = (v != NULL && v[0] == '1') ? 1 : 0;
+    }
+    return g_batch_enabled;
+}
+
+void GlesBatch_Flush(void)
+{
+    int saved_clip[4];
+    int prev_clip[4] = { -1, -1, -1, -1 };
+    int i;
+
+    if (g_batch_count == 0 || g_batch_flushing) {
+        return;
+    }
+    g_batch_flushing = 1;
+    g_batch_flushes++;
+    saved_clip[0] = g_clipX1;
+    saved_clip[1] = g_clipY1;
+    saved_clip[2] = g_clipX2;
+    saved_clip[3] = g_clipY2;
+
+    for (i = 0; i < g_batch_count; i++) {
+        const GlesSpriteCall *c = &g_batch[i];
+
+        /* The scissor the call was recorded with. */
+        if (c->clip[0] != prev_clip[0] || c->clip[1] != prev_clip[1] ||
+            c->clip[2] != prev_clip[2] || c->clip[3] != prev_clip[3]) {
+            g_clipX1 = c->clip[0];
+            g_clipY1 = c->clip[1];
+            g_clipX2 = c->clip[2];
+            g_clipY2 = c->clip[3];
+            Gl_ApplyClipRect();
+            prev_clip[0] = c->clip[0];
+            prev_clip[1] = c->clip[1];
+            prev_clip[2] = c->clip[2];
+            prev_clip[3] = c->clip[3];
+        }
+
+        /* Blend, exactly as the immediate path set it. */
+        if (!c->blend_enabled) {
+            glDisable(GL_BLEND);
+        } else {
+            glEnable(GL_BLEND);
+            glBlendFunc((GLenum)c->blend_src, (GLenum)c->blend_dst);
+            glBlendColor(c->alpha_src, c->alpha_src, c->alpha_src, c->alpha_dst);
+            glBlendEquation((GLenum)c->blend_eq);
+        }
+        /* Textures, exactly as the immediate path bound them. */
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, (GLuint)c->tex->id);
+        BatchProf_Texture(0, (unsigned int)c->tex->id);
+        if (c->pal != NULL) {
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, (GLuint)c->pal->id);
+            BatchProf_Texture(1, (unsigned int)c->pal->id);
+            glActiveTexture(GL_TEXTURE0);
+        }
+        GlesDraw_Quad(&g_glesBuffer, c->prog, c->mvp, c->pos, c->tc, c->paletted, c->mask,
+                      c->add[0], c->add[1], c->add[2], c->mul[0], c->mul[1], c->mul[2],
+                      c->invertall, c->colorbal, c->texsize[0], c->texsize[1], c->alphamul);
+        glBlendEquation(GL_FUNC_ADD);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    }
+
+    g_batch_count = 0;
+    g_batch_flushing = 0;
+    g_clipX1 = saved_clip[0];
+    g_clipY1 = saved_clip[1];
+    g_clipX2 = saved_clip[2];
+    g_clipY2 = saved_clip[3];
+    Gl_ApplyClipRect();
+}
+
+void GlesBatch_Record(const GlesProgram *prog, int blend_enabled, unsigned int blend_src,
+                      unsigned int blend_dst, unsigned int blend_eq, int mask, const GlTex *tex,
+                      const GlTex *pal, int paletted, const float *mvp16, const float *positions8,
+                      const float *texcoords16, float add_r, float add_g, float add_b, float mul_r,
+                      float mul_g, float mul_b, int invertall, float colorbal, float tex_w,
+                      float tex_h, float alpha_src, float alpha_dst)
+{
+    GlesSpriteCall *c;
+
+    if (g_batch_count == GLES_BATCH_MAX) {
+        GlesBatch_Flush();
+    }
+    c = &g_batch[g_batch_count++];
+    c->prog = prog;
+    c->blend_enabled = blend_enabled;
+    c->blend_src = blend_src;
+    c->blend_dst = blend_dst;
+    c->blend_eq = blend_eq;
+    c->mask = mask;
+    c->tex = tex;
+    c->pal = pal;
+    c->paletted = paletted;
+    memcpy(c->mvp, mvp16, sizeof(c->mvp));
+    memcpy(c->pos, positions8, sizeof(c->pos));
+    memcpy(c->tc, texcoords16, sizeof(c->tc));
+    c->add[0] = add_r; c->add[1] = add_g; c->add[2] = add_b;
+    c->mul[0] = mul_r; c->mul[1] = mul_g; c->mul[2] = mul_b;
+    c->colorbal = colorbal;
+    c->alphamul = alpha_src;
+    c->invertall = invertall;
+    c->texsize[0] = tex_w;
+    c->texsize[1] = tex_h;
+    c->alpha_src = alpha_src;
+    c->alpha_dst = alpha_dst;
+    c->clip[0] = g_clipX1;
+    c->clip[1] = g_clipY1;
+    c->clip[2] = g_clipX2;
+    c->clip[3] = g_clipY2;
+    g_batch_recorded++;
+}
+
 void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
 {
     Sprite *spr;
@@ -1434,6 +1626,8 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
     GlMvp mvp;
     GlesProgram *prog;
     int paletted;
+    int blend_enabled = 0;
+    unsigned int blend_src = 0, blend_dst = 0, blend_eq = 0;
     /* MUGEN_DEBUG: the texture uploads are the part of a sprite draw that
      * happens before GlesDraw_Quad, so they need their own timer. */
     unsigned long long bp_upload = BATCHPROF_NOW();
@@ -1695,14 +1889,37 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
     {
         GlesBlendState blend = GlesBlend_ResolveOp(dp->blend, dp->masked, dp->blend == BLEND_SUB);
 
+        blend_enabled = blend.enabled;
+        blend_src = (unsigned int)gles_gl_factor(blend.src);
+        blend_dst = (unsigned int)gles_gl_factor(blend.dst);
+        blend_eq = (unsigned int)(blend.eq == GLES_BLEND_EQ_REVERSE_SUBTRACT ? GL_FUNC_REVERSE_SUBTRACT
+                                                                           : GL_FUNC_ADD);
         if (!blend.enabled) {
             glDisable(GL_BLEND);
         } else {
             glEnable(GL_BLEND);
-            glBlendFunc(gles_gl_factor(blend.src), gles_gl_factor(blend.dst));
+            glBlendFunc((GLenum)blend_src, (GLenum)blend_dst);
             glBlendColor(dp->alpha_src, dp->alpha_src, dp->alpha_src, dp->alpha_dst);
-            glBlendEquation(blend.eq == GLES_BLEND_EQ_REVERSE_SUBTRACT ? GL_FUNC_REVERSE_SUBTRACT : GL_FUNC_ADD);
+            glBlendEquation((GLenum)blend_eq);
         }
+    }
+
+    /*
+     * Port addition: queue the quad instead of submitting it, so a flush can
+     * merge neighbours into one instanced draw. Same values either way; with
+     * batching off this is exactly the old straight-through submission.
+     */
+    if (gles_batch_enabled()) {
+        /* PalFX scalars exactly as Glr_FxTerms computes them: add is 0..255 and
+         * mul / color are fixed point with 256 = 1.0. */
+        GlesBatch_Record(prog, blend_enabled, blend_src, blend_dst, blend_eq, dp->masked,
+                         tex, pal_tex, paletted, mvp.m, positions, texcoords,
+                         (float)fx->add[0] / 255.0f, (float)fx->add[1] / 255.0f, (float)fx->add[2] / 255.0f,
+                         (float)fx->mul[0] * (1.0f / 256.0f), (float)fx->mul[1] * (1.0f / 256.0f),
+                         (float)fx->mul[2] * (1.0f / 256.0f), fx->invertall,
+                         (float)fx->color * (1.0f / 256.0f), (float)tex->w, (float)tex->h,
+                         dp->alpha_src, dp->alpha_dst);
+        return;
     }
 
     glActiveTexture(GL_TEXTURE0);
@@ -1715,8 +1932,6 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
         glActiveTexture(GL_TEXTURE0);
     }
 
-    /* PalFX scalars exactly as Glr_FxTerms computes them: add is 0..255 and
-     * mul / color are fixed point with 256 = 1.0. */
     GlesDraw_Quad(&g_glesBuffer, prog, mvp.m, positions, texcoords, paletted, dp->masked, (float)fx->add[0] / 255.0f,
                   (float)fx->add[1] / 255.0f, (float)fx->add[2] / 255.0f, (float)fx->mul[0] * (1.0f / 256.0f),
                   (float)fx->mul[1] * (1.0f / 256.0f), (float)fx->mul[2] * (1.0f / 256.0f), fx->invertall,
@@ -1793,6 +2008,8 @@ void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
         }
         return;
     }
+    /* Everything queued belongs to the frame being presented. */
+    GlesBatch_Flush();
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
     g_glProjection = 0; /* Overlays and the screen quad use video coordinates. */
     if (!Gfx_SetRenderTarget(NULL, 0)) { g_glProjection = saved_projection; return; }

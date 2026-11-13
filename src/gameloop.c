@@ -14,6 +14,9 @@
 #include <pthread.h>
 
 #include "mugen.h"
+#ifdef MUGEN_GLES
+#include "gles_render.h"
+#endif
 
 /* The BGM mutex. BGM_MUTEX_LOCK takes no argument: see src/bgm.h for why the
  * storage differs between the 32-bit reconstruct and 64-bit builds. */
@@ -1073,6 +1076,15 @@ int Screen_Run(ScreenLoop *screen)
             if (g_game->skip_draw != 0) {
                 screen->skipped_frames++;
             }
+            /*
+             * Port addition: the frame's sprite quads are queued; submit them
+             * here so everything that reads the frame afterwards -- the
+             * screenshot hook, pre-present overlays, the present blit -- sees a
+             * complete frame (gles_render.h).
+             */
+#ifdef MUGEN_GLES
+            GlesBatch_Flush();
+#endif
             Perf_DrawDone();
             /* MUGEN_DEBUG: the submission for this frame is complete here. */
             BatchProf_FrameEnd();
