@@ -22,13 +22,15 @@
 set -eu
 
 URL="${GAME_ASSETS_URL:-https://github.com/leonkasovan/mugen-unleashed/releases/download/toolchains-v1.0/mugen_elecbyte_assets.zip}"
-SHA256="${GAME_ASSETS_SHA256:-68f96ddb87c799f4b38d64a1a59e526455334bb7fc9ebb2c66ba11a27cdc92dd}"
+SHA256="${GAME_ASSETS_SHA256:-8e71205a6611078a81e4a10b09aedf928cfcfa4531885eeef57eb15cbceb4f79}"
 FILE="mugen_elecbyte_assets.zip"
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
 DEST="$ROOT/install"
 DOWNLOADS="$ROOT/build/downloads"
+# Where a mismatched cached archive is kept instead of being deleted (see below).
+REJECTED="$DOWNLOADS/$FILE.rejected"
 SCRATCH="$ROOT/build/tmp"
 STAGE="$SCRATCH/game-data-stage"
 ARCHIVE="$DOWNLOADS/$FILE"
@@ -102,7 +104,26 @@ mkdir -p "$DOWNLOADS"
 if [ -f "$ARCHIVE" ] && [ "$(hash_of "$ARCHIVE")" = "$SHA256" ]; then
     info "cached download verified (sha256)"
 else
-    rm -f "$ARCHIVE"
+    # A cached archive with the wrong digest is kept, renamed, rather than
+    # deleted. It is often a freshly built asset whose pinned SHA-256 has not
+    # been updated yet -- and deleting it there destroys the only copy of work
+    # that cost a zip run. $REJECTED is overwritten by the next mismatch, so the
+    # aside never accumulates.
+    if [ -f "$ARCHIVE" ]; then
+        # stderr: these must be seen alongside the fail() below, whatever the
+        # caller does with stdout.
+        # Hash the archive while it is still where it is: the rename below
+        # would leave hash_of reading a path that does not exist yet.
+        _rejected_hash=$(hash_of "$ARCHIVE")
+        mv -f "$ARCHIVE" "$REJECTED"
+        printf '\n' >&2
+        printf '    cached %s did not match the pinned sha256\n' "$FILE" >&2
+        printf '    kept it as %s\n' "$REJECTED" >&2
+        printf '      actual   %s\n' "$_rejected_hash" >&2
+        printf '      expected %s\n' "$SHA256" >&2
+        printf '      if it is the asset you built, re-pin with\n' >&2
+        printf '        GAME_ASSETS_SHA256=%s\n' "$_rejected_hash" >&2
+    fi
     if [ "$OFFLINE" = 1 ]; then
         fail "--offline and $FILE is not cached
        expected $ARCHIVE with sha256 $SHA256"
@@ -111,10 +132,11 @@ else
     info "$URL"
     fetch "$URL" "$ARCHIVE"
     if [ "$(hash_of "$ARCHIVE")" != "$SHA256" ]; then
-        rm -f "$ARCHIVE"
+        mv -f "$ARCHIVE" "$REJECTED"
         fail "$FILE failed its SHA-256; nothing was unpacked
        expected $SHA256
-       (a re-published asset needs GAME_ASSETS_SHA256=<new hash>)"
+       (a re-published asset needs GAME_ASSETS_SHA256=<new hash>)
+       the download is kept as $REJECTED"
     fi
     info "sha256 verified"
 fi
