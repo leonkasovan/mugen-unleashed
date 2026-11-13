@@ -6,7 +6,6 @@
  * stay in double; float to int conversions truncate like __ftol2.
  */
 #include <stdio.h>
-#include <stdlib.h>
 
 #include "mugen.h"
 
@@ -155,20 +154,6 @@ void Screen_Present(void)
     GameVars *g = g_game;
     int x, y, w, h;
 
-#ifdef MUGEN_DEBUG
-    {
-        static int shot = -2, tick = -2, done;
-        if (shot == -2) {
-            const char *v = getenv("MUGEN_AUTOSHOT"), *t = getenv("MUGEN_AUTOSHOT_TICK");
-            shot = (v != NULL) ? atoi(v) : -1;
-            tick = (t != NULL) ? atoi(t) : -1;
-        }
-        if (!done && ((shot >= 0 && g->frames >= shot) || (tick >= 0 && g->round_ticks >= tick))) {
-            g->screenshot_requested = 1;
-            done = 1;
-        }
-    }
-#endif
     if (g->screenshot_requested != 0) {
         Screen_SaveShot();
         g = g_game;
