@@ -897,7 +897,13 @@ static double Sdlmix_ReadVolume(const BgmSettings *settings, const char *key, do
     if (s == NULL) {
         return 100.0;
     }
-    v = sscanf(s, "%lf", scratch) != 0 ? *scratch : 100.0;
+    /*
+     * Port fix: `sscanf(...) != 0` accepts EOF (-1) as success, so an empty
+     * value -- "midivolume =" with nothing after it, which is how the shipped
+     * mugen.cfg used to write these -- read an uninitialised double. Only a
+     * completed conversion (== 1) is a value; anything else is the default.
+     */
+    v = sscanf(s, "%lf", scratch) == 1 ? *scratch : 100.0;
     if (0.0 > v) {
         v = 0.0;
     }
