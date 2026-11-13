@@ -80,6 +80,11 @@ port/arm64/build.sh --no-sysroot    use the existing tree as-is
 port/arm64/build.sh --offline       fail instead of downloading
 port/arm64/build.sh --jobs N        parallel make jobs (default: CPU count)
 port/arm64/build.sh --gles 0|1      renderer; 1 = GLES 3.0 (the arm64 default)
+port/arm64/build.sh --model3d      3D stage models ([BGdef] model = *.glb); on by default
+port/arm64/build.sh --no-model3d   compile model support out
+port/arm64/build.sh --debug        -O0 -g3 -DMUGEN_DEBUG into a separate tree, and
+                                   turns on the batch-rendering profiler (`batch:`
+                                   line in mugen.log, next to `perf:`)
 port/arm64/build.sh --upload        build, then copy the binary to the device
 port/arm64/build.sh --no-keep-old   do not keep the previous binary as .prev
 port/arm64/build.sh --device U@H    device to upload to (default ark@192.168.7.2)

@@ -188,6 +188,7 @@
 #include "textring.h"
 #include "log.h"
 #include "perf.h"
+#include "batchprof.h"
 #include "gfx.h"
 #include "glrender.h"
 #include "video.h"

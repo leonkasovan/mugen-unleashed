@@ -6,18 +6,29 @@
 #   port/arm64/build.sh --setup      download the toolchain, then stop
 #   port/arm64/build.sh --check-tools  report what is present, build nothing
 #   port/arm64/build.sh --sysroot    re-download the dependency tree, then build
-#   port/arm64/build.sh --clean      remove this port's build output
+#   port/arm64/build.sh --clean      remove this port's build output (the tree
+#                                    the flags select: add --debug to clean the
+#                                    debug one, which is kept separate)
 #   port/arm64/build.sh --no-sysroot  use the existing tree as-is (do not check)
 #   port/arm64/build.sh --offline    fail instead of downloading anything
 #   port/arm64/build.sh --jobs N     parallel make jobs (default: CPU count)
 #   port/arm64/build.sh --gles 0|1   renderer: 1 = GLES 3.0 (the default for
 #                                    linux-arm64), 0 = desktop GL
-#   port/arm64/build.sh --model3d 0|1  3D stage models ([BGdef] model = *.glb).
-#                                    Off by default on GLES; on here because a
-#                                    model-only stage draws nothing without it.
+#   port/arm64/build.sh --model3d    3D stage models ([BGdef] model = *.glb),
+#                                    on by default as in port/psvita/build.sh
+#                                    (a model-only stage draws nothing without
+#                                    it). --no-model3d turns them off.
 #                                    Passed as a make command-line variable, not
 #                                    an environment one: a native make.exe here
 #                                    sees only a whitelisted environment.
+#   port/arm64/build.sh --debug      unoptimised build with debug info (-O0 -g3,
+#                                    -DMUGEN_DEBUG) into its own tree, so it
+#                                    never shares objects with the release one.
+#                                    It also turns on the batch-rendering
+#                                    profiler: a `batch:` line in mugen.log next
+#                                    to `perf:` says how fragmented the sprite
+#                                    submission is (calls, quads per call,
+#                                    streamed vertex bytes, state changes).
 #   port/arm64/build.sh --upload     build, then copy the binary to the device
 #                                    (DEVICE, default ark@192.168.7.2, into
 #                                    DEVICE_DIR, default ~/mugen)
@@ -57,7 +68,13 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
-OUT="$ROOT/build/linux-arm64-aarch64-none-linux-gnu-sdl2"
+OUT_NAME="build/linux-arm64-aarch64-none-linux-gnu-sdl2"
+# A debug build gets its own tree, for the reason the Makefile gives for
+# `make DEBUG=1 BUILD=build/mingw-debug`: switching optimisation level in one
+# directory would rebuild everything on every alternation and, worse, leave
+# release and debug objects side by side under the same config stamp.
+OUT_NAME_DEBUG="$OUT_NAME-debug"
+OUT="$ROOT/$OUT_NAME"
 
 # ---------------------------------------------------------------- toolchains
 #
@@ -158,7 +175,11 @@ CLEAN=0
 OFFLINE=0
 JOBS=""
 GLES=""
-MODEL3D=""
+# On by default, like port/psvita/build.sh. The Makefile's own default is 0 when
+# MUGEN_GLES=1, so this script always passes the value explicitly rather than
+# leaving the choice to it.
+MODEL3D=ON
+DEBUG_BUILD=0
 
 say()  { printf '\n==> %s\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
@@ -179,8 +200,9 @@ while [ $# -gt 0 ]; do
         --jobs=*) JOBS="${1#*=}" ;;
         --gles) GLES="${2:-}"; shift ;;
         --gles=*) GLES="${1#*=}" ;;
-        --model3d) MODEL3D="${2:-}"; shift ;;
-        --model3d=*) MODEL3D="${1#*=}" ;;
+        --model3d) MODEL3D=ON ;;
+        --no-model3d) MODEL3D=OFF ;;
+        --debug) DEBUG_BUILD=1 ;;
         --upload) DO_UPLOAD=1 ;;
         --no-keep-old) KEEP_OLD=0 ;;
         --device) DEVICE="${2:-}"; shift ;;
@@ -197,15 +219,31 @@ if [ "$OFFLINE" = 1 ] && { [ "$DO_SETUP" = 1 ] || [ "$DO_SYSROOT" = 1 ]; }; then
     fail "--offline cannot be combined with --setup or --sysroot"
 fi
 
-# Both renderer switches are validated here rather than left to the Makefile: a
-# typo would otherwise reach it as an unset variable and silently take a default.
-for v in GLES MODEL3D; do
-    eval "val=\$$v"
-    case "$val" in
-        ""|0|1) ;;
-        *) fail "--$(printf '%s' "$v" | tr 'A-Z' 'a-z') must be 0 or 1, not '$val'" ;;
-    esac
-done
+# The renderer switch is validated here rather than left to the Makefile: a typo
+# would otherwise reach it as an unset variable and silently take a default.
+case "$GLES" in
+    ""|0|1) ;;
+    *) fail "--gles must be 0 or 1, not '$GLES'" ;;
+esac
+
+# A debug build writes to its own tree and is what carries the profiler.
+#
+# BUILD is handed to make as a path *relative to the repository*, not as the
+# absolute $OUT: the Makefile records the object path it compiled into the
+# generated .d files, and a native gcc writes it in Windows spelling
+# (C:/.../gameloop.o) whatever form it was given. An absolute POSIX BUILD
+# (/c/.../gameloop.o) then names a different target than the .d rule, so make
+# silently loses every header dependency and never rebuilds on a header edit.
+# The relative form is what the Makefile's own default uses and is what keeps
+# the two spellings identical.
+if [ "$DEBUG_BUILD" = 1 ]; then
+    BUILD_REL="$OUT_NAME_DEBUG"
+    OUT="$ROOT/$OUT_NAME_DEBUG"
+    BUILD_TYPE=Debug
+else
+    BUILD_REL="$OUT_NAME"
+    BUILD_TYPE=Release
+fi
 
 # ---------------------------------------------------------------- platform
 # WSL runs the toolchain's Linux binaries; it cannot use the Mingw-w64 build.
@@ -522,13 +560,21 @@ info "compiler  $CC_BIN"
 info "sysroot   $XSYSROOT"
 info "output    $OUT"
 info "jobs      $JOBS"
+info "model3d   $MODEL3D"
+info "build     $BUILD_TYPE"
+MODEL3D_VALUE=0
+[ "$MODEL3D" = ON ] && MODEL3D_VALUE=1
+DEBUG_VALUE=0
+[ "$DEBUG_BUILD" = 1 ] && DEBUG_VALUE=1
 PATH="$TOOLCHAIN_DIR/bin:$PATH" \
 make -C "$ROOT" -j"$JOBS" \
     CROSS_COMPILE="$CROSS" \
     XSYSROOT="$XSYSROOT" \
     MUGEN_TARGET=linux-arm64 \
+    BUILD="$BUILD_REL" \
+    DEBUG="$DEBUG_VALUE" \
     ${GLES:+MUGEN_GLES="$GLES"} \
-    ${MODEL3D:+MUGEN_MODEL3D="$MODEL3D"}
+    MUGEN_MODEL3D="$MODEL3D_VALUE"
 
 target="$OUT/mugen-linux-arm64-aarch64-none-linux-gnu"
 [ -f "$target" ] || fail "the build reported success but $target is missing"

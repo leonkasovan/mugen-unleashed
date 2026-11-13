@@ -69,6 +69,11 @@ int GlesDraw_LoadProgram(GlesProgram *out, const char *vert_src, const char *fra
 /* Deletes the program and clears the struct. */
 void GlesDraw_FreeProgram(GlesProgram *prog);
 
+/* Forgets the cached program/uniform state. Call it whenever something other
+ * than GlesDraw_Quad can change the bound program or a uniform the quad path
+ * sets -- a context loss, or a model draw that does not restore them. */
+void GlesDraw_InvalidateState(void);
+
 /* Uploads one quad (four vertices in triangle-strip order) and draws it.
  * `indexed` selects the fragment path's palette texture unit. */
 void GlesDraw_Quad(GlesBuffer *buf, const GlesProgram *prog, const float *mvp16, const float *positions8,

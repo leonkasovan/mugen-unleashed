@@ -175,15 +175,18 @@ make MUGEN_TARGET=linux-arm64                 # MUGEN_GLES=1 (GLES 3.0 backend)
 make MUGEN_TARGET=linux-arm64 MUGEN_GLES=0    # desktop GL, as on x64
 ```
 
-**3D stage models are off by default on this target.** The Makefile's default is
-`MUGEN_MODEL3D ?= $(if $(filter 1,$(MUGEN_GLES)),0,1)`, so a GLES build compiles
-them out; a stage whose background is only `[BGdef] model = *.glb` then has no
-elements to draw and renders black, with
+**3D stage models are on by default when built through `port/arm64/build.sh`.**
+The Makefile's own default is conservative for a GLES build --
+`MUGEN_MODEL3D ?= $(if $(filter 1,$(MUGEN_GLES)),0,1)` -- so a bare
+`make MUGEN_TARGET=linux-arm64` compiles them out. A stage whose background is
+only `[BGdef] model = *.glb` then has no elements to draw and renders black, with
 `Need at least one [BG] type bg (3D backgrounds unavailable)` in the match log.
-Turn them on with `MUGEN_MODEL3D=1`, or `port/arm64/build.sh --model3d 1` (the
-flag exists because a make variable cannot be passed through the environment
-reliably: a native `make.exe` under MSYS2 may see only a whitelisted environment,
-so `MUGEN_MODEL3D=1 port/arm64/build.sh` silently built the default).
+`port/arm64/build.sh` therefore always passes the value explicitly and defaults
+it on, like `port/psvita/build.sh`: `--no-model3d` turns them off. The switch is
+a make command-line variable rather than an environment one because a make
+variable cannot be handed over reliably here -- a native `make.exe` under MSYS2
+may see only a whitelisted environment, so `MUGEN_MODEL3D=1 port/arm64/build.sh`
+silently built the default.
 
 A model stage still has to fit the device: the decoded RGBA of its textures is
 capped by `MODEL_CPU_BUDGET` (256 MiB) and each texture must be no larger than
@@ -241,6 +244,76 @@ DEVICE_PASS=ark port/arm64/build.sh --upload     # -> ark@192.168.7.2:~/mugen/
 
 That is all. The rest of this section explains what those commands do and what
 can go wrong, for when they do.
+
+#### Debug builds and the batch-rendering profiler
+
+`--debug` builds `-O0 -g3` with `-DMUGEN_DEBUG` into a **separate tree**,
+`build/linux-arm64-aarch64-none-linux-gnu-sdl2-debug/`:
+
+```sh
+port/arm64/build.sh --debug              # unoptimised, with the profiler
+port/arm64/build.sh --debug --upload     # ... and onto the device
+```
+
+A separate tree is not tidiness. The Makefile's configuration stamp records the
+target, the renderer, the model switch and the sysroot, but **not** `DEBUG=`, so
+a debug build sharing a release tree would leave the two optimisation levels'
+objects side by side under one stamp — neither would rebuild when you switched.
+
+`MUGEN_DEBUG` additionally compiles in the batch-rendering profiler
+(`src/batchprof.c`), which prints one line a second next to the existing `perf:`
+line:
+
+```
+perf: renderer=opengl fps=13.9 frames=38 logic=0.9ms draw=9.3ms wait=0.0ms present=16.2ms calls=42 tris=2144
+batch: calls=42 quads=38 quads/call=1.11 verts=152 stream=4.8KiB prog=2.0 tex=38.0 cpu=310us
+```
+
+`quads/call` is the batching ratio. Both backends submit one sprite quad per GL
+draw call — and on GLES re-stream the whole four-vertex buffer for each — so it
+sits at 1.00 and `tex` tracks `quads` one for one. A frame bound by per-quad
+driver overhead shows high `calls` with a ratio near 1 and a `draw` that follows
+`cpu`; batching would raise the ratio and collapse `stream`. The profiler is
+compiled out entirely in a release build (no symbols, no format string, no
+counter reads), and `tools/test_batchprof.sh` asserts its arithmetic on the host.
+
+A second debug line splits the submission, because the first measurement made it
+clear that guessing which GL call is expensive gets it wrong:
+
+```
+batch:   split up=1460us up_sp=1023us st=263us buf=996us dr=3420us
+batch:   split px=68us pal=224us
+```
+
+`up` is the texture uploading before the draw (`up_sp` the sprite's share), `st`
+program/uniform/attribute setup, `buf` the vertex upload, `dr` the draw call.
+`px`/`pal` are `Sprite_GetPixels` and `SpriteSet_GetPaletteConverted`.
+
+#### What that found (RG351MP, `-p1.ai 6 -p2.ai 6`)
+
+`kfm.def`, level stage, ~30 quads/frame, release-build frame rate:
+
+| | before | after |
+|---|---|---|
+| frame rate | 21.2 / 20.0 fps | **44.8 / 43.8 fps** |
+| palette upload | ~3.8 ms/frame | ~0.2 ms |
+| program/uniform/attribute setup | ~0.9 ms | ~0.25 ms |
+| sprite upload | ~0.7 ms | ~1.0 ms |
+
+The two costs were re-uploading a 256x1 palette on every paletted draw, and
+re-sending a program bind and seven uniforms that had not changed. The fixes are
+a content-hashed cache of palette textures (one texture per distinct palette,
+dropped on context loss) and a redundant-state cache for the program and
+uniforms in `GlesDraw_Quad`.
+
+Nothing on screen changed: compared against the pre-change build with a fixed
+`-sessionseed`, both the title screen (frames 10/20/40/80) and matches at
+`round_ticks` 60/180/400 produce **byte-identical** PNGs.
+
+Still dominant, and not addressed: the sprite upload (~1 ms/frame; sprites
+reach the streaming scratch path instead of staying uploaded textures), the
+vertex re-upload (`buf`, ~1 ms), and the draw call itself (`dr`, ~3.4 ms for
+~34 calls — roughly 100 µs per call, which is where real batching would pay).
 
 Verified with **Arm GNU Toolchain 9.2-2019.12** (gcc 9.2.1, glibc 2.30) on
 Windows and an Ubuntu 20.04 arm64 root, and checked against an RG351MP running

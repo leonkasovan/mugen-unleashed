@@ -40,6 +40,7 @@
 #endif
 #include "shader_src.h"
 #include "gl_size.h"
+#include "batchprof.h"
 
 static void Glr_ForgetFormat(const GlTex *tex);
 static int *Glr_FormatSlot(const GlTex *tex);
@@ -1133,6 +1134,7 @@ void Gl_DrawQuadRgba(const PalFx *fx, GlTex *tex, float x0, float y0, float x1, 
     int special = Glr_QuadSpecial(dp, &c0, &c1);
     GlrFx t;
     const GlProgram *prog;
+    unsigned long long bp_start = BATCHPROF_NOW();
 
     Glr_FxTerms(fx, &t);
     prog = &g_glProgramsRgba[Glr_Variant(fx, &t, special)];
@@ -1157,6 +1159,12 @@ void Gl_DrawQuadRgba(const PalFx *fx, GlTex *tex, float x0, float y0, float x1, 
     glEnd();
 #endif
     Perf_CountDraw(2);      /* a sprite quad is two triangles */
+    /* MUGEN_DEBUG: immediate mode has no vertex buffer to re-upload, so the
+     * streamed-byte count is 0 here by definition; calls and vertices are the
+     * comparable numbers. */
+    BatchProf_Program(prog->program);
+    BatchProf_Texture(0, (unsigned int)tex->id);
+    BatchProf_Submit(1, 4, 0, 2, BATCHPROF_NOW() - bp_start);
     glDisable(GL_TEXTURE_2D);
 }
 
@@ -1173,6 +1181,7 @@ void Gl_DrawQuadIndexed(const PalFx *fx, GlTex *tex, GlTex *pal, float x0, float
     int special = Glr_QuadSpecial(dp, &c0, &c1);
     GlrFx t;
     const GlProgram *prog;
+    unsigned long long bp_start = BATCHPROF_NOW();
 
     Glr_FxTerms(fx, &t);
     prog = &g_glProgramsIndexed[Glr_Variant(fx, &t, special)];
@@ -1200,6 +1209,10 @@ void Gl_DrawQuadIndexed(const PalFx *fx, GlTex *tex, GlTex *pal, float x0, float
     glEnd();
 #endif
     Perf_CountDraw(2);      /* a sprite quad is two triangles */
+    BatchProf_Program(prog->program);
+    BatchProf_Texture(0, (unsigned int)tex->id);
+    BatchProf_Texture(1, (unsigned int)pal->id);
+    BatchProf_Submit(1, 4, 0, 2, BATCHPROF_NOW() - bp_start);
 }
 
 /* -1 for a set flip bit, 1 otherwise. */

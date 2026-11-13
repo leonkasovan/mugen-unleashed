@@ -1017,6 +1017,7 @@ int Screen_Run(ScreenLoop *screen)
             g->round_reset_pending = 0;
         }
         Perf_BeginFrame();
+        BatchProf_FrameBegin();
         Gl_ClearQueue(g->sprite_layer1);
         Screen_ReadInput(screen);
         if (screen->inner == 0) {
@@ -1073,6 +1074,8 @@ int Screen_Run(ScreenLoop *screen)
                 screen->skipped_frames++;
             }
             Perf_DrawDone();
+            /* MUGEN_DEBUG: the submission for this frame is complete here. */
+            BatchProf_FrameEnd();
             Screen_EndFrame();
             g = g_game;
             g->no_sounds = 0;
@@ -1201,6 +1204,46 @@ static void Game_PerfLog(void)
                        Game_PerfRendererName(g_renderMode), (double)Timer_GetFps(),
                        frames - last_frames);
         }
+#ifdef MUGEN_DEBUG
+        /*
+         * Port addition (debug builds only): how fragmented the submission was.
+         *
+         *   calls/quads      GL draw calls and sprite quads per frame
+         *   quads/call       the batching ratio: 1.00 means every quad is its
+         *                    own draw call, which is what both backends do
+         *   stream           vertex bytes re-uploaded per frame
+         *   prog/tex         program and texture binds that actually changed
+         *   cpu              microseconds inside the submission code
+         *
+         * Read it against the perf line above: high `calls` with a low
+         * `quads/call` and a `draw` that tracks `cpu` means the frame is bound
+         * by per-quad driver overhead, which is exactly what batching removes.
+         */
+        {
+            BatchProfAverages batch;
+
+            if (BatchProf_TakeAverages(&batch)) {
+                Log_Printf("batch: calls=%.0f quads=%.0f quads/call=%.2f verts=%.0f stream=%.1fKiB "
+                           "prog=%.1f tex=%.1f cpu=%.0fus\n",
+                           batch.calls, batch.quads,
+                           batch.calls > 0.0 ? batch.quads / batch.calls : 0.0,
+                           batch.vertices, batch.stream_kib, batch.programs, batch.textures,
+                           batch.cpu_us);
+/* Where the per-quad cost actually goes. `up` is sprite plus
+                 * palette upload; `up_sp` is the sprite part of it, so the
+                 * palette's share is up - up_sp. */
+                Log_Printf("batch:   split up=%.0fus up_sp=%.0fus st=%.0fus buf=%.0fus dr=%.0fus\n",
+                           batch.split_us[BATCHPROF_SPLIT_UPLOAD],
+                           batch.split_us[BATCHPROF_SPLIT_UPLOAD_SPRITE],
+                           batch.split_us[BATCHPROF_SPLIT_STATE],
+                           batch.split_us[BATCHPROF_SPLIT_BUFFER],
+                           batch.split_us[BATCHPROF_SPLIT_DRAW]);
+                Log_Printf("batch:   split px=%.0fus pal=%.0fus\n",
+                           batch.split_us[BATCHPROF_SPLIT_PIXELS],
+                           batch.split_us[BATCHPROF_SPLIT_PALETTE]);
+            }
+        }
+#endif
     }
     last_ticks = now;
     last_frames = frames;

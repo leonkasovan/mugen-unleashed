@@ -41,6 +41,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "batchprof.h"
 
 #include "gles_probe.h"
 #include "gles_blend.h"
@@ -141,6 +142,81 @@ static int g_glesTextureCapacity;
  * Returns 1 on success. A NULL return from realloc is propagated so the caller
  * can fail the allocation rather than create a texture it cannot track.
  */
+/*
+ * Hash of a 256-colour RGBA palette, for the upload cache below. FNV-1a over
+ * the bytes: 1 KiB per paletted draw, which is nothing next to the upload it
+ * can skip, and it cannot be fooled by an in-place edit the way a pointer can.
+ */
+static unsigned int gles_palette_hash(const unsigned char *bytes)
+{
+    unsigned int hash = 2166136261u;
+    int i;
+
+    for (i = 0; i < 0x100 * 4; i++) {
+        hash ^= bytes[i];
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
+/*
+ * Palettes currently on the GPU, by content hash.
+ *
+ * A single scratch palette texture was enough to be correct, but a fight draws
+ * sprites that alternate between several palettes, so a one-entry cache missed
+ * constantly and re-uploaded on nearly every draw. One texture per distinct
+ * palette turns that into an upload the first time each palette is seen.
+ *
+ * 32 slots is 32 KiB of texture. The count has to cover every palette in
+ * play at once -- characters, the stage, the lifebars and the fonts each have
+ * their own -- because a collision re-uploads the palette it evicts. A miss
+ * simply recycles the slot the hash maps to, so the cost of being wrong is one
+ * upload, never a wrong colour.
+ */
+#define GLES_PALETTE_SLOTS 32
+
+typedef struct GlesPalSlot {
+    GlTex tex;
+    unsigned int hash;
+    int valid;
+} GlesPalSlot;
+
+static GlesPalSlot g_glesPalSlots[GLES_PALETTE_SLOTS];
+
+static int gles_register_tex(GlTex *tex);
+
+/*
+ * The slot holding `hash`, or a recycled one ready to be uploaded into.
+ * `*hit` says which, so the caller knows whether an upload is needed.
+ */
+static GlesPalSlot *gles_palette_slot(unsigned int hash, int *hit)
+{
+    GlesPalSlot *slot = &g_glesPalSlots[hash % GLES_PALETTE_SLOTS];
+
+    if (slot->valid && slot->hash == hash) {
+        *hit = 1;
+        return slot;
+    }
+    *hit = 0;
+    slot->valid = 0;
+    slot->hash = hash;
+    if (!gles_register_tex(&slot->tex)) {
+        return NULL;
+    }
+    return slot;
+}
+
+/* A new context invalidates every slot's contents. */
+static void gles_palette_slots_reset(void)
+{
+    int i;
+
+    for (i = 0; i < GLES_PALETTE_SLOTS; i++) {
+        g_glesPalSlots[i].valid = 0;
+        g_glesPalSlots[i].hash = 0;
+    }
+}
+
 static int gles_register_tex(GlTex *tex)
 {
     int i;
@@ -702,6 +778,11 @@ void Gles_OnContextLost(void)
      */
     g_glInitialized = 0;
     g_glesProjectionValid = 0;
+    /* The scratch palette textures' contents go with the context, so the
+     * upload cache must not claim they still hold these bytes. */
+    gles_palette_slots_reset();
+    /* Every program name is gone, so the cached bind is meaningless. */
+    GlesDraw_InvalidateState();
 
     /* Textures keep their dimensions so GlTex_Upload/GlVbuf_Bind can revive
      * them; only the names and the depth renderbuffer go. */
@@ -920,7 +1001,11 @@ static void gles_solid_quad(float x0, float y0, float x1, float y1, float r, flo
     if (!g_glesProjectionValid) {
         Gl_SetupView();
     }
+    /* Bound here because the colour uniform is set before the quad call, which
+     * would otherwise rebind from its cache and leave the cache stale. */
+    GlesDraw_InvalidateState();
     glUseProgram(g_glesProgramSolid.program);
+    BatchProf_Program(g_glesProgramSolid.program);
     if (g_glesProgramSolid.u_mvp >= 0) {
         glUniformMatrix4fv(g_glesProgramSolid.u_mvp, 1, GL_FALSE, g_glesProjection.m);
     }
@@ -1260,6 +1345,9 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
     GlMvp mvp;
     GlesProgram *prog;
     int paletted;
+    /* MUGEN_DEBUG: the texture uploads are the part of a sprite draw that
+     * happens before GlesDraw_Quad, so they need their own timer. */
+    unsigned long long bp_upload = BATCHPROF_NOW();
 
     if (!g_glesReady || set == NULL || dp == NULL) {
         return;
@@ -1301,7 +1389,9 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
         }
     }
     if (tex == NULL) {
+        unsigned long long bp_px = BATCHPROF_NOW();
         void *pixels = Sprite_GetPixels(set, sprite);
+        { unsigned long long t = BATCHPROF_NOW(); BatchProf_Split(5, t - bp_px); }
 
         if (pixels == NULL) {
             return;
@@ -1315,41 +1405,94 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
             /* Statics never pass through GlTex_Create, so register them here or
              * a context loss would leave them with dead names forever. */
             if (!gles_register_tex(tex)) return;
+            bp_upload = BATCHPROF_NOW();
             if (!GlTex_Upload2D(spr->h, spr->bpp, tex, pixels, spr->w)) {
                 return;
+            }
+            {
+                unsigned long long now = BATCHPROF_NOW();
+
+                BatchProf_Split(BATCHPROF_SPLIT_UPLOAD, now - bp_upload);
+                BatchProf_Split(BATCHPROF_SPLIT_UPLOAD_SPRITE, now - bp_upload);
+                bp_upload = now;
             }
         }
     }
 
     if (paletted) {
-        static GlTex pal_scratch;
         Palette *pal;
 
-        if (!gles_register_tex(&pal_scratch)) return;
-        pal = SpriteSet_GetPaletteConverted(set, spr->pal_index);
+        {
+            unsigned long long bp_pal = BATCHPROF_NOW();
+            pal = SpriteSet_GetPaletteConverted(set, spr->pal_index);
+            { unsigned long long t = BATCHPROF_NOW(); BatchProf_Split(6, t - bp_pal); }
+        }
 
         if (pal == NULL) {
             Log_Printf("GLES: sprite %d has no usable palette; draw skipped\n", sprite);
             return;
         }
-        pal_tex = &pal_scratch;
         {
             unsigned char padded[0x100 * 4];
             int n = pal->count;
             const void *colors = pal->data;
-
+            const unsigned char *bytes;
+            unsigned int hash;
+            GlesPalSlot *slot;
+            int hit;
+            /*
+             * Port addition: one GPU texture per distinct palette, uploaded
+             * once, instead of re-uploading a single scratch texture on every
+             * draw.
+             *
+             * Measured on an RG351MP: the palette upload was the single largest
+             * cost in a frame -- ~3.5 ms of a ~13 ms draw for ~19 sprites,
+             * because the driver defers the upload's work to the next draw. The
+             * palette for a given (set, pal_index) is stable, so almost every
+             * one of those uploads re-sent bytes the GPU already had.
+             *
+             * The cache key is a hash of the pixels rather than the palette
+             * pointer: Pal_Convert writes rgb565 and PalFX is applied through
+             * uniforms, so the RGBA data is not expected to change in place --
+             * but a hash cannot be fooled if it ever does, and hashing 1 KiB is
+             * far cheaper than the upload it avoids. A context loss drops every
+             * slot (gles_palette_slots_reset), since their contents go with the
+             * context.
+             */
             if (n < 0 || n > 0x100) {
                 return;
             }
             if (n == 0x100) {
-                if (!GlTex_UploadRGBA(1, 0x100, pal_tex, colors)) return;
+                if (colors == NULL) {
+                    return;             /* no colour data to upload */
+                }
+                bytes = (const unsigned char *)colors;
             } else {
                 memset(padded, 0, sizeof(padded));
                 if (n > 0 && colors != NULL) {
                     memcpy(padded, colors, (size_t)n * 4);
                 }
-                if (!GlTex_UploadRGBA(1, 0x100, pal_tex, padded)) return;
+                bytes = padded;
             }
+            hash = gles_palette_hash(bytes);
+            slot = gles_palette_slot(hash, &hit);
+            if (slot == NULL) {
+                return;
+            }
+            if (!hit) {
+                bp_upload = BATCHPROF_NOW();
+                if (!GlTex_UploadRGBA(1, 0x100, &slot->tex, bytes)) {
+                    return;
+                }
+                {
+                    unsigned long long now = BATCHPROF_NOW();
+
+                    BatchProf_Split(BATCHPROF_SPLIT_UPLOAD, now - bp_upload);
+                    bp_upload = now;
+                }
+                slot->valid = 1;
+            }
+            pal_tex = &slot->tex;
         }
     }
 
@@ -1458,9 +1601,11 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, (GLuint)tex->id);
+    BatchProf_Texture(0, (unsigned int)tex->id);
     if (pal_tex != NULL) {
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, (GLuint)pal_tex->id);
+        BatchProf_Texture(1, (unsigned int)pal_tex->id);
         glActiveTexture(GL_TEXTURE0);
     }
 
