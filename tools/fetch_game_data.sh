@@ -22,7 +22,7 @@
 set -eu
 
 URL="${GAME_ASSETS_URL:-https://github.com/leonkasovan/mugen-unleashed/releases/download/toolchains-v1.0/mugen_elecbyte_assets.zip}"
-SHA256="${GAME_ASSETS_SHA256:-9e8b09118f7a6ca4f9895d48e87a900e9bcc47044a158ab9be4258529edb583a}"
+SHA256="${GAME_ASSETS_SHA256:-68f96ddb87c799f4b38d64a1a59e526455334bb7fc9ebb2c66ba11a27cdc92dd}"
 FILE="mugen_elecbyte_assets.zip"
 
 HERE=$(cd "$(dirname "$0")" && pwd)
