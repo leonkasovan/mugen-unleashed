@@ -779,6 +779,7 @@ void Bgm_SetStreamVolume(double volume)
  */
 static void Bgm_LogRequest(const BgmInfo *info, const char *what)
 {
+    const char *ext;
     FILE *f;
 
     if (info == NULL || info->path[0] == '\0') {
@@ -790,6 +791,22 @@ static void Bgm_LogRequest(const BgmInfo *info, const char *what)
         return;
     }
     fclose(f);
+    /*
+     * Port addition: a file that exists is not a file the plugins can play.
+     * Sdlmix_Classify knows only mp3, wav, ogg/vorbis, mid/midi and the tracker
+     * set, and a type of 0 makes Sdlmix_Open return "unsupported" without a
+     * word, so a stage pointing at .flac or .opus logged "loading" and then
+     * played nothing. Bgm_FindSubsystem is the authoritative answer -- it asks
+     * the registered plugins for their own extension lists, so this cannot
+     * drift from what the build actually decodes.
+     */
+    ext = Bgm_GetExtension(info->path);
+    if (ext == NULL || Bgm_FindSubsystem(info->path) == NULL) {
+        Log_Printf("bgm: unsupported format \"%s\" for %s; no registered plugin plays it "
+                   "(wav, mp3, ogg and mid/midi on this build)\n",
+                   ext != NULL ? ext : "(none)", info->path);
+        return;
+    }
     Log_Printf("bgm: %s %s\n", what, info->path);
 }
 
