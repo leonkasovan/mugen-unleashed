@@ -39,6 +39,18 @@ unsigned int Gles_LastCaps(void);
 void Gles_OnContextLost(void);
 
 /*
+ * Port addition: a sprite set was destroyed.
+ *
+ * The renderer caches a texture per streaming sprite (see g_glesStream in
+ * gles_render.c) keyed on the pixels it was built from. Freeing a set releases
+ * the decoded buffers behind those keys, and a later set can be decoded into
+ * the same addresses with the same dimensions, which would make a stale texture
+ * look like a cache hit. Dropping the cache here makes that impossible rather
+ * than unlikely.
+ */
+void Gles_OnSpriteSetFreed(void);
+
+/*
  * Called once a new context is current and the GLES entry points have been
  * loaded again: recompiles and relinks the programs, re-establishes the GL
  * state, and drops any cached texture storage description so the next upload

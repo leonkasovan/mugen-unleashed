@@ -6,6 +6,9 @@
  * points, which dispatch to the OpenGL renderer or to the software one.
  */
 #include "mugen.h"
+#ifdef MUGEN_GLES
+#include "gles_render.h"
+#endif
 
 #define SPRITE_LOG_ERROR    1
 #define SPRITE_LOG_WARNING  5
@@ -443,6 +446,11 @@ int SpriteSet_Free(SpriteSet *set)
     if (set->refs > 0) {
         return 0;
     }
+#ifdef MUGEN_GLES
+    /* Port addition: the GLES renderer's streaming textures are keyed on the
+     * sprite pixels this call is about to release. */
+    Gles_OnSpriteSetFreed();
+#endif
     if (set->palettes != NULL) {
         Palette *pal;
         for (pal = KeyedArray_First(set->palettes); pal != NULL; pal = KeyedArray_Next(set->palettes)) {

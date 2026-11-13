@@ -175,6 +175,40 @@ static unsigned int gles_palette_hash(const unsigned char *bytes)
  */
 #define GLES_PALETTE_SLOTS 32
 
+/*
+ * Textures for sprites that are not SPRITE_FORMAT_TEXTURE, keyed by the pixels
+ * they were built from.
+ *
+ * A sprite that arrives here is either a compressed one the loader did not
+ * decode into a texture (SFF v2 RLE/LZ/PNG) or an SDL surface; its pixels come
+ * from Sprite_GetPixels and are the same buffer every frame. One scratch
+ * texture per draw meant re-uploading that buffer before *every* draw of the
+ * sprite -- on a mode-select screen that tiles an 800x320 RLE8 background ~150
+ * times, measured at 300 ms of CPU per frame on an RG351MP (one 256 KiB upload
+ * per tile, per frame), against ~2 ms for the whole 2D frame elsewhere.
+ *
+ * Keying on the pixel pointer is sound because a loaded sprite's pixels never
+ * move or change: SpriteCache owns the decoded buffer for the life of the
+ * sprite. Width, height and bpp are part of the key anyway so a recycled buffer
+ * address cannot be mistaken for a different sprite. A context loss bumps the
+ * generation, which invalidates every slot's contents without touching the
+ * names (those are dropped by Gles_OnContextLost).
+ */
+#define GLES_STREAM_SLOTS 8
+
+typedef struct GlesStreamSlot {
+    GlTex tex;
+    const void *pixels;
+    int w, h, bpp;
+    int valid;
+    unsigned long tick;
+    unsigned int generation;
+} GlesStreamSlot;
+
+static GlesStreamSlot g_glesStream[GLES_STREAM_SLOTS];
+static unsigned int g_glesStreamGeneration;
+static unsigned long g_glesStreamClock;
+
 typedef struct GlesPalSlot {
     GlTex tex;
     unsigned int hash;
@@ -184,6 +218,59 @@ typedef struct GlesPalSlot {
 static GlesPalSlot g_glesPalSlots[GLES_PALETTE_SLOTS];
 
 static int gles_register_tex(GlTex *tex);
+
+/*
+ * Drops every streaming-texture key. Called when a sprite set is freed, because
+ * that releases the decoded pixel buffers the keys point at (gles_render.h).
+ */
+void Gles_OnSpriteSetFreed(void)
+{
+    int i;
+
+    for (i = 0; i < GLES_STREAM_SLOTS; i++) {
+        g_glesStream[i].valid = 0;
+        g_glesStream[i].pixels = NULL;
+    }
+}
+
+/*
+ * The slot that already holds `pixels`, or a recycled one to upload into.
+ * *hit reports which, so the caller knows whether an upload is needed.
+ */
+static GlesStreamSlot *gles_stream_slot(const void *pixels, int w, int h, int bpp, int *hit)
+{
+    GlesStreamSlot *free_slot = NULL;
+    GlesStreamSlot *lru = NULL;
+    int i;
+
+    for (i = 0; i < GLES_STREAM_SLOTS; i++) {
+        GlesStreamSlot *slot = &g_glesStream[i];
+
+        if (slot->valid && slot->generation == g_glesStreamGeneration &&
+            slot->pixels == pixels && slot->w == w && slot->h == h && slot->bpp == bpp) {
+            slot->tick = ++g_glesStreamClock;
+            *hit = 1;
+            return slot;
+        }
+        if (!slot->valid) {
+            if (free_slot == NULL) {
+                free_slot = slot;
+            }
+        } else if (slot->generation != g_glesStreamGeneration) {
+            /* Contents died with the old context: reuse this slot now. */
+            if (free_slot == NULL) {
+                free_slot = slot;
+            }
+        } else if (lru == NULL || slot->tick < lru->tick) {
+            lru = slot;
+        }
+    }
+    *hit = 0;
+    if (free_slot != NULL) {
+        return free_slot;
+    }
+    return lru;
+}
 
 /*
  * The slot holding `hash`, or a recycled one ready to be uploaded into.
@@ -781,6 +868,8 @@ void Gles_OnContextLost(void)
     /* The scratch palette textures' contents go with the context, so the
      * upload cache must not claim they still hold these bytes. */
     gles_palette_slots_reset();
+    /* The streaming sprite textures' contents go with the context too. */
+    g_glesStreamGeneration++;
     /* Every program name is gone, so the cached bind is meaningless. */
     GlesDraw_InvalidateState();
 
@@ -1396,25 +1485,42 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
         if (pixels == NULL) {
             return;
         }
-        /* A streaming texture per draw, reused through the sprite cache: the
-         * GLES path keeps one scratch texture like the desktop's g_glSysTex. */
+        /*
+         * One texture per distinct sprite, not one scratch texture per draw:
+         * see g_glesStream above for the measurement that made this necessary.
+         */
         {
-            static GlTex scratch[2];
+            GlesStreamSlot *slot;
+            int hit = 0;
 
-            tex = &scratch[paletted ? 0 : 1];
-            /* Statics never pass through GlTex_Create, so register them here or
-             * a context loss would leave them with dead names forever. */
-            if (!gles_register_tex(tex)) return;
-            bp_upload = BATCHPROF_NOW();
-            if (!GlTex_Upload2D(spr->h, spr->bpp, tex, pixels, spr->w)) {
+            slot = gles_stream_slot(pixels, spr->w, spr->h, spr->bpp, &hit);
+            if (slot == NULL) {
                 return;
             }
-            {
-                unsigned long long now = BATCHPROF_NOW();
+            tex = &slot->tex;
+            /* These GlTex structs are statics too, so register them here or a
+             * context loss would leave them with dead names forever. */
+            if (!gles_register_tex(tex)) {
+                return;
+            }
+            if (!hit) {
+                bp_upload = BATCHPROF_NOW();
+                if (!GlTex_Upload2D(spr->h, spr->bpp, tex, pixels, spr->w)) {
+                    return;
+                }
+                {
+                    unsigned long long now = BATCHPROF_NOW();
 
-                BatchProf_Split(BATCHPROF_SPLIT_UPLOAD, now - bp_upload);
-                BatchProf_Split(BATCHPROF_SPLIT_UPLOAD_SPRITE, now - bp_upload);
-                bp_upload = now;
+                    BatchProf_Split(BATCHPROF_SPLIT_UPLOAD, now - bp_upload);
+                    BatchProf_Split(BATCHPROF_SPLIT_UPLOAD_SPRITE, now - bp_upload);
+                    bp_upload = now;
+                }
+                slot->pixels = pixels;
+                slot->w = spr->w;
+                slot->h = spr->h;
+                slot->bpp = spr->bpp;
+                slot->generation = g_glesStreamGeneration;
+                slot->valid = 1;
             }
         }
     }
