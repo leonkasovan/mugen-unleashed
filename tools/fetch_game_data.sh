@@ -107,8 +107,12 @@ else
     # A cached archive with the wrong digest is kept, renamed, rather than
     # deleted. It is often a freshly built asset whose pinned SHA-256 has not
     # been updated yet -- and deleting it there destroys the only copy of work
-    # that cost a zip run. $REJECTED is overwritten by the next mismatch, so the
-    # aside never accumulates.
+    # that cost a zip run.
+    #
+    # $REJECTED holds one file. A later failed download only takes that slot
+    # when it is empty or holds identical bytes; otherwise it goes to
+    # $REJECTED.downloaded, so a locally built archive is never overwritten by
+    # the download that replaced it.
     if [ -f "$ARCHIVE" ]; then
         # stderr: these must be seen alongside the fail() below, whatever the
         # caller does with stdout.
@@ -132,11 +136,24 @@ else
     info "$URL"
     fetch "$URL" "$ARCHIVE"
     if [ "$(hash_of "$ARCHIVE")" != "$SHA256" ]; then
-        mv -f "$ARCHIVE" "$REJECTED"
+        # Keep the download aside too, but never over $REJECTED: that slot may
+        # already hold a locally built archive, which is the one worth keeping.
+        # Same contents collapse to one file; different contents get a suffix.
+        _failed_hash=$(hash_of "$ARCHIVE")
+        if [ ! -f "$REJECTED" ]; then
+            mv -f "$ARCHIVE" "$REJECTED"
+            _kept="$REJECTED"
+        elif [ "$(hash_of "$REJECTED")" = "$_failed_hash" ]; then
+            rm -f "$ARCHIVE"
+            _kept="$REJECTED (same contents)"
+        else
+            _kept="$REJECTED.downloaded"
+            mv -f "$ARCHIVE" "$_kept"
+        fi
         fail "$FILE failed its SHA-256; nothing was unpacked
        expected $SHA256
        (a re-published asset needs GAME_ASSETS_SHA256=<new hash>)
-       the download is kept as $REJECTED"
+       the download is kept as $_kept"
     fi
     info "sha256 verified"
 fi

@@ -777,6 +777,60 @@ void Bgm_SetStreamVolume(double volume)
  * at sound/kfm.mid that was not in sound/. One check here names the file while
  * it is still the caller's thread; it changes no behaviour.
  */
+/*
+ * Port addition: the extension lists the registered plugins actually advertise,
+ * joined for a log line ("wav, mp3, ogg"). The supported set is not universal --
+ * Android's sdlmix lists only wav, mp3, ogg and vorbis, where the desktop one
+ * also lists MIDI and the tracker formats -- so a hardcoded hint would tell an
+ * Android user to try a format their build cannot decode.
+ */
+static const char *Bgm_KnownExtensions(const char *prefix, char *buf, size_t size)
+{
+    int i;
+    size_t pos = 0;
+
+    buf[0] = '\0';
+    if (g_bgmExtensions == NULL || size < 2) {
+        return buf;
+    }
+    for (i = 0; i < (int)strlen(prefix) && pos < size - 1; i++) {
+        buf[pos++] = prefix[i];
+    }
+    buf[pos] = '\0';
+    for (i = 0; i < g_bgmExtensions->count; i++) {
+        const char *list = ((const char **)g_bgmExtensions->data)[i];
+        const char *p;
+
+        if (list == NULL || list[0] == '\0') {
+            continue;
+        }
+        /* One separator between lists as well as inside them, or "wav" and
+         * "mp3" from two plugins would be printed as "wavmp3". */
+        for (p = list; *p != '\0' && pos < size - 2; p++) {
+            if (*p == ',') {
+                if (pos < size - 3) {
+                    buf[pos++] = ',';
+                    buf[pos++] = ' ';
+                }
+            } else {
+                buf[pos++] = *p;
+            }
+            buf[pos] = '\0';
+        }
+        if (pos < size - 3) {
+            buf[pos++] = ',';
+            buf[pos++] = ' ';
+            buf[pos] = '\0';
+        }
+    }
+    /* Drop the trailing separator. */
+    while (pos >= 2 && buf[pos - 1] == ' ' && buf[pos - 2] == ',') {
+        pos -= 2;
+        buf[pos] = '\0';
+    }
+    return buf;
+}
+
 static void Bgm_LogRequest(const BgmInfo *info, const char *what)
 {
     const char *ext;
@@ -802,9 +856,18 @@ static void Bgm_LogRequest(const BgmInfo *info, const char *what)
      */
     ext = Bgm_GetExtension(info->path);
     if (ext == NULL || Bgm_FindSubsystem(info->path) == NULL) {
+        /*
+         * The supported list comes from the registry, not from a literal here:
+         * it differs per platform (Android has no MIDI or tracker decoders), and
+         * a wrong hint sends the reader after a format their build cannot play.
+         */
+        char known[0x100];
+
+        Bgm_KnownExtensions("", known, sizeof(known));
         Log_Printf("bgm: unsupported format \"%s\" for %s; no registered plugin plays it "
-                   "(wav, mp3, ogg and mid/midi on this build)\n",
-                   ext != NULL ? ext : "(none)", info->path);
+                   "(this build: %s)\n",
+                   ext != NULL ? ext : "(none)", info->path,
+                   known[0] != '\0' ? known : "no plugin registered");
         return;
     }
     Log_Printf("bgm: %s %s\n", what, info->path);
