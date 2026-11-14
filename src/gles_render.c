@@ -42,6 +42,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "batchprof.h"
+#include "gputime.h"
 
 #include "gles_probe.h"
 #include "gles_blend.h"
@@ -872,8 +873,10 @@ void Gles_OnContextLost(void)
     /* The scratch palette textures' contents go with the context, so the
      * upload cache must not claim they still hold these bytes. */
     gles_palette_slots_reset();
-    /* The streaming sprite textures' contents go with the context too. */
+    /* Streaming sprite textures' contents go with the context too. */
     g_glesStreamGeneration++;
+    /* In-flight GPU timer queries die with it. */
+    GpuTime_Reset();
     /* Every program name is gone, so the cached bind is meaningless. */
     GlesDraw_InvalidateState();
 
@@ -1022,6 +1025,8 @@ int Gl_Init(int framebuffers)
      * device instead of on assumptions (gles_probe.h). */
     Gles_LogCapabilities();
 #endif
+    /* GPU-side timing, when the driver can do it (gputime.h). */
+    GpuTime_Init();
     /*
      * Leading newline, like the "video:" lines above it: "video: vsync ..."
      * and the device/version line are printed without a trailing one, so a
@@ -1990,12 +1995,14 @@ void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
     float pos[8];
     float tc[16] = {0,0,0,1, 1,0,0,1, 0,1,0,1, 1,1,0,1};
     if (!g_glesReady) return;
+    /* GPU-side timing of the present blit; the swap itself is not GL work. */
+    GpuTime_BeginPresent();
     if (set != NULL) {
-        if (set->sprites == NULL || set->sprites->data == NULL || sprite < 0 || sprite >= set->sprites->capacity) return;
+        if (set->sprites == NULL || set->sprites->data == NULL || sprite < 0 || sprite >= set->sprites->capacity) { goto present_out; }
         spr = (Sprite *)(set->sprites->data + set->sprites->elem_size * sprite);
-        if (spr->format != SPRITE_FORMAT_TEXTURE || spr->pixels == NULL) return;
+        if (spr->format != SPRITE_FORMAT_TEXTURE || spr->pixels == NULL) { goto present_out; }
         tex = spr->pixels;
-        if (tex->id == 0) return;
+        if (tex->id == 0) { goto present_out; }
         if (w == 0.0f && h == 0.0f) { w = (float)spr->w; h = (float)spr->h; }
     }
     Gles_DrawableSize(&win_w, &win_h);
@@ -2011,13 +2018,13 @@ void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
             warned = 1;
             Log_Printf("\nGLES: drawable size is %dx%d; the frame cannot be presented\n", win_w, win_h);
         }
-        return;
+        goto present_out;
     }
     /* Everything queued belongs to the frame being presented. */
     GlesBatch_Flush();
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
     g_glProjection = 0; /* Overlays and the screen quad use video coordinates. */
-    if (!Gfx_SetRenderTarget(NULL, 0)) { g_glProjection = saved_projection; return; }
+    if (!Gfx_SetRenderTarget(NULL, 0)) { g_glProjection = saved_projection; goto present_out; }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     Gl_SetupView();
     g_glBoundFramebuffer = 0;
@@ -2060,6 +2067,8 @@ void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
      * this point, and the restore below must still run. A skipped frame never
      * reaches the presenter at all, so it presents nothing, as on Android.
      */
+    /* Everything the present blit issues to the GPU has been submitted. */
+    GpuTime_EndPresent();
     if ((g_videoFlags & VIDEO_HWBLIT) && (g_videoSdlFlags & DISPLAY_DOUBLEBUF)) {
         Video_SwapBuffers();
     } else {
@@ -2090,6 +2099,9 @@ void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
     g_glBoundFramebuffer = saved_bound;
     Gl_SetupView();
     Gfx_SetClipRect(cx1, cy1, cx2, cy2);
+present_out:
+    /* Early exits land here: end the GPU span and skip the frame entirely. */
+    GpuTime_EndPresent();
 }
 
 /*

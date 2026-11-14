@@ -16,6 +16,7 @@
 #include "mugen.h"
 #ifdef MUGEN_GLES
 #include "gles_render.h"
+#include "gputime.h"
 #endif
 
 /* The BGM mutex. BGM_MUTEX_LOCK takes no argument: see src/bgm.h for why the
@@ -1046,6 +1047,10 @@ int Screen_Run(ScreenLoop *screen)
             g = g_game;
             /* Port addition: everything above is logic, everything below draws. */
             Perf_LogicDone();
+#ifdef MUGEN_GLES
+            /* GPU-side timing of the draw span (gputime.h). */
+            GpuTime_BeginDraw();
+#endif
             if (g->skip_draw == 0) {
                 if (screen->bg != NULL) {
                     Bg_SetScale(screen->bg, screen->scale, screen->scale);
@@ -1084,6 +1089,7 @@ int Screen_Run(ScreenLoop *screen)
              */
 #ifdef MUGEN_GLES
             GlesBatch_Flush();
+            GpuTime_EndDraw();
 #endif
             Perf_DrawDone();
             /* MUGEN_DEBUG: the submission for this frame is complete here. */
@@ -1205,6 +1211,21 @@ static void Game_PerfLog(void)
          *   logic/draw/wait/present  milliseconds, mean per frame
          *   calls/tris               GL draw calls and triangles, mean per frame
          */
+#ifdef MUGEN_GLES
+        /*
+         * GPU-side counterpart of the perf line: `gput draw` is the time the GPU
+         * spent executing the draw span, `gput present` the present blit. Both
+         * are the driver's own timestamps, so comparing them with the wall-clock
+         * numbers above shows what is work and what is waiting.
+         */
+        {
+            double gpu_draw = 0.0, gpu_present = 0.0;
+
+            if (GpuTime_TakeAverages(&gpu_draw, &gpu_present) > 0) {
+                Log_Printf("gput: draw=%.1fms present=%.1fms (GPU time)\n", gpu_draw, gpu_present);
+            }
+        }
+#endif
         if (Perf_TakeAverages(&perf)) {
             Log_Printf("perf: renderer=%s fps=%.1f frames=%d logic=%.1fms draw=%.1fms "
                        "wait=%.1fms present=%.1fms calls=%.0f tris=%.0f\n",
