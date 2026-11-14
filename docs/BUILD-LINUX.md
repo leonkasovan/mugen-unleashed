@@ -157,6 +157,30 @@ The Linux run reaches a clean `Successful program termination.` where the
 Windows run under a timeout does not — which is why the two logs differ in
 length and why only the common prefix is compared.
 
+### Re-checked against the original after the autoturn fix
+
+The original's own log was recorded side by side with a current win32 build
+(`-nosound -p1 kfm -p1.ai 7 -p2.ai 7 -p2 kfm -s kfm`, same 40 s timeout).
+Both runs reach `Match loop init`; after dropping the port's own diagnostic
+lines (`pads:`, `renderer:`, `perf:`, `Background:`, `config: data/mugen.*`)
+both logs are **101 lines and agree line for line**. The five remaining
+differences are all deliberate and traceable:
+
+| Difference | Why |
+|---|---|
+| `Command line:` names a different executable | the path is logged verbatim |
+| `Initializing graphics…success...OK` vs `OK` | the port splits the video line to report `renderer: requested=… effective=…` |
+| `Initializing pads...failed` vs a bare `failed` | the port logs `pads:` diagnostics before the verdict |
+| `config: no game controller; [P<n> Joystick] left unchanged` | port addition (`config.c`), no original counterpart |
+| `Loading stage...` vs `Loading stage... stages/kfm.def` | port addition (`matchload.c`): the file name was needed to tell stages apart |
+
+To reproduce, stage the original with its app-local assemblies — it needs
+`Elecbyte.MUGEN.libs/` and `Microsoft.VC90.CRT/` **at version 9.0.21022.8**
+(the manifest pins that version; the WinSxS 9.0.30729 assembly does not
+satisfy it, and the failure is only `WinError 14001 side-by-side configuration
+is incorrect`). `build/tmp/orig-run/` holds that layout, with this checkout's
+`chars/ data/ font/ sound/ stages/` copied in beside it.
+
 ## arm64
 
 The `Makefile` selects `linux-arm64` from the compiler's triple, and it builds,

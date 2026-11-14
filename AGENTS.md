@@ -561,6 +561,18 @@ Exit 0 means the logs match after numeric normalisation (timings, RNG seed,
 palette ids); exit 1 lists the differing fragments. A difference is either a
 regression or a deliberate change — decide which and say so.
 
+**The original will not start without its app-local assemblies.** `mugen.exe`
+carries a manifest pinning `Elecbyte.MUGEN.libs` 1.0.0.0 and
+`Microsoft.VC90.CRT` **9.0.21022.8**, so `SDL.dll`, `zlib1.dll`, … must sit in
+`Elecbyte.MUGEN.libs/` next to it with the matching `Microsoft.VC90.CRT/`
+(which also needs `msvcp90.dll`; the released tree lists it but does not ship
+it, and only the WinSxS 9.0.30729 copy exists on a modern machine). The WinSxS
+assembly alone is **not** enough and the only symptom is
+`WinError 14001: side-by-side configuration is incorrect`. A working layout is
+`build/tmp/orig-run/`: the pristine tree's `Elecbyte.MUGEN.libs/` and
+`Microsoft.VC90.CRT/`, this checkout's data directories copied beside them, and
+`mugen.exe`. Never stage it in `install/` — that tree stays pristine.
+
 Scenarios worth running (all with `-nosound` for reproducibility):
 
 | Scenario | Command |
