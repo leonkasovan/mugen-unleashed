@@ -154,22 +154,39 @@ if "%DO_BUILD32%"=="1" (
 )
 if defined FAILED goto :failed
 
-set "BASH64=%W64DEVKIT_DIR:\=/%"
-set "BASH86=%X86DEVKIT_DIR:\=/%"
+rem ---------------------------------------------------------------- summary --
+rem The last thing on screen should answer "what did I get and where is it".
+rem The old text printed "Ready." and a manual make recipe that repeated what
+rem this script had just done, with the CPU count left as a literal variable.
+if "%DO_CHECK%"=="1" (
+    echo.
+    echo Check complete: nothing was built.
+    echo Run build.bat to install what is missing and build win32 and win64.
+    exit /b 0
+)
+
+if "%DO_BUILD32%"=="0" if "%DO_BUILD64%"=="0" (
+    echo.
+    echo Setup complete: nothing was built ^(no build target requested^).
+    echo Run build.bat, /build32 or /build64 to build.
+    exit /b 0
+)
+
 echo.
-echo Ready.
+echo Done.
 echo.
-echo The Makefile finds build\sysroots\win64-sysroot (or win32-sysroot) by
-echo itself, so a build needs nothing but the kit on PATH:
+if "%DO_BUILD32%"=="1" call :report_exe win32 "install\mugen-mingw-win32-sdl2.exe"
+if "%DO_BUILD64%"=="1" call :report_exe win64 "install\mugen-mingw-win64-sdl2.exe"
+if exist "%ROOT%\install\data\mugen.cfg" (
+    echo   data   %ROOT%\install
+) else (
+    echo   data   MISSING - the binary exits at start until install\ has a tree
+)
 echo.
-echo   export PATH="%BASH64%/bin:$PATH"      # win64
-echo   make -j%%NUMBER_OF_PROCESSORS%%
-echo.
-echo   export PATH="%BASH86%/bin:$PATH"      # win32, the reference build
-echo   make -j%%NUMBER_OF_PROCESSORS%%
-echo.
-echo The target comes from the compiler's own triple, so there is no variable
-echo to set. Let this script do it instead:  build.bat
+echo Each build is installed next to the game data. Run it from there:
+echo   cd install
+if "%DO_BUILD32%"=="1" echo   mugen-mingw-win32-sdl2.exe
+if "%DO_BUILD64%"=="1" echo   mugen-mingw-win64-sdl2.exe
 exit /b 0
 
 rem ---------------------------------------------------------------- helpers --
@@ -219,6 +236,13 @@ rem :dir_empty <dir>  ->  IS_EMPTY=1 (missing or empty) / 0 (has entries)
 set "IS_EMPTY=1"
 if not exist "%~1" exit /b 0
 for /f "delims=" %%f in ('dir /b /a "%~1" 2^>nul') do set "IS_EMPTY=0"
+exit /b 0
+
+rem :report_exe <name> <path relative to the repository root>
+rem One line of the done summary. :build has already failed when the file is
+rem absent, so this only formats what exists.
+:report_exe
+for %%s in ("%ROOT%\%~2") do echo   %~1  %~2  ^(%%~zs bytes^)
 exit /b 0
 
 rem :set_env <kit>  - kit first on PATH, pkg-config pointed at its tree
@@ -510,4 +534,25 @@ if not exist "%B_EXE%" (
     exit /b 1
 )
 for %%s in ("%B_EXE%") do echo   built  %%~nxs  %%~zs bytes
+
+rem Install beside the game data. The Makefile's install target is the one
+rem place that decides what install\ receives: it strips the binary, stages the
+rem GLES shaders when that renderer is on, and fetches the default assets when
+rem install\ has no data yet.
+echo   installing into install\
+pushd "%ROOT%"
+make install
+set "B_RC=%ERRORLEVEL%"
+popd
+if not "%B_RC%"=="0" (
+    echo   ERROR: the %B_NAME% install failed
+    exit /b 1
+)
+set "B_INSTALL=%ROOT%\install\mugen-mingw-win64-sdl2.exe"
+if /i "%B_NAME%"=="win32" set "B_INSTALL=%ROOT%\install\mugen-mingw-win32-sdl2.exe"
+if not exist "%B_INSTALL%" (
+    echo   ERROR: make install reported success but %B_INSTALL% is missing
+    exit /b 1
+)
+for %%s in ("%B_INSTALL%") do echo   installed  %%~nxs  %%~zs bytes
 exit /b 0
