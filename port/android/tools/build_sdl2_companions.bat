@@ -32,7 +32,7 @@ rem    SDL2MIXER_VER            default release-2.6.3
 rem    FREETYPE_VER             default 2.12.1
 rem
 rem  If the SDL2 prefix is absent, SDL2's own release tarball is downloaded
-rem  from GitHub with curl (never git), cross-compiled, and installed there
+rem  from GitHub with BITS (never git), cross-compiled, and installed there
 rem  first. Everything then builds against it. Nothing is installed outside the
 rem  repository: sources, archives and outputs all live under build\android\.
 rem
@@ -71,6 +71,12 @@ if not defined SDL2_VER set "SDL2_VER=2.32.10"
 if not defined SDL2TTF_VER set "SDL2TTF_VER=release-2.20.2"
 if not defined SDL2MIXER_VER set "SDL2MIXER_VER=release-2.6.3"
 if not defined FREETYPE_VER set "FREETYPE_VER=2.12.1"
+rem GitHub's /archive/ endpoints stream without Content-Length, which BITS
+rem refuses ("The server did not return the file size"). The release assets of
+rem the same tags are static files and carry it, so those are what is fetched.
+rem The tag keeps its release- prefix for the URL; the asset name does not.
+set "SDL2TTF_ASSET=%SDL2TTF_VER:release-=%"
+set "SDL2MIXER_ASSET=%SDL2MIXER_VER:release-=%"
 if defined MUGEN_ANDROID_TOOLS_DIR ( set "TOOLS=%MUGEN_ANDROID_TOOLS_DIR%" ) else (
     set "TOOLS=%OUT%\toolchains"
 )
@@ -96,15 +102,6 @@ set "TEMP=%TOOLS%\tmp"
 if not exist "%WORK%" mkdir "%WORK%"
 if not exist "%PREFIX%" mkdir "%PREFIX%"
 
-set "CURL=%SystemRoot%\System32\curl.exe"
-if exist "%CURL%" goto have_curl
-set "CURL=curl.exe"
-where curl.exe >nul 2>&1
-if errorlevel 1 (
-    echo error: curl.exe not found; it ships with Windows 10 1803 and later
-    exit /b 1
-)
-:have_curl
 set "TAR=%SystemRoot%\System32\tar.exe"
 if not exist "%TAR%" (
     echo error: %TAR% not found; System32's bsdtar ships with Windows 10 1803
@@ -180,19 +177,31 @@ if not exist "%ANDROID_NDK_HOME%\toolchains\llvm\prebuilt\windows-x86_64\bin\cla
 )
 
 rem --------------------------------------------------------- SDL2 prefix
-rem Build SDL2 from its release tarball when the prefix is absent. curl fetches
+rem Build SDL2 from its release tarball when the prefix is absent. BITS fetches
 rem the archive and the recipe is the README's (shared, no static, no tests).
 if exist "%SDL2_DEPS_DIR%\lib\libSDL2.so" goto sdl2_ready
 echo.
 echo ==^> SDL2 %SDL2_VER%
 set "SDL2_SRC=%WORK%\SDL2-%SDL2_VER%"
-if exist "%SDL2_SRC%" goto sdl2_source_ready
+rem A tree left by an interrupted extraction is not a source tree; these two
+rem files are what every SDL2 build needs, so they mark it complete.
+if exist "%SDL2_SRC%\CMakeLists.txt" if exist "%SDL2_SRC%\include\SDL.h" goto sdl2_source_ready
+if exist "%SDL2_SRC%" rmdir /s /q "%SDL2_SRC%"
 set "DL_URL=https://github.com/libsdl-org/SDL/releases/download/release-%SDL2_VER%/SDL2-%SDL2_VER%.tar.gz"
 set "DL_DEST=%WORK%\SDL2-%SDL2_VER%.tar.gz"
 call :download
 if errorlevel 1 exit /b 1
-"%TAR%" -xf "%DL_DEST%" -C "%WORK%"
-if errorlevel 1 goto fail
+rem The release tarball stores two symlinks in android-project-ant, a legacy Ant
+rem sample this build never touches. Windows bsdtar cannot create a symlink
+rem without the privilege and aborts with "Invalid argument", so that directory
+rem is excluded; everything SDL2 compiles is still unpacked.
+"%TAR%" -xf "%DL_DEST%" -C "%WORK%" ^
+    --exclude "SDL2-%SDL2_VER%/android-project-ant" ^
+    --exclude "SDL2-%SDL2_VER%/android-project-ant/*"
+if errorlevel 1 (
+    if exist "%SDL2_SRC%" rmdir /s /q "%SDL2_SRC%"
+    goto fail
+)
 if exist "%DL_DEST%" del /q "%DL_DEST%"
 :sdl2_source_ready
 if not exist "%SDL2_DEPS_DIR%" mkdir "%SDL2_DEPS_DIR%"
@@ -230,24 +239,36 @@ rem  SDL2_ttf (+ the FreeType it vendors)
 rem =========================================================================
 echo.
 echo ==^> SDL2_ttf %SDL2TTF_VER%
-set "TTF_SRC=%WORK%\SDL_ttf-%SDL2TTF_VER%"
-if exist "%TTF_SRC%" goto ttf_source_ready
-set "DL_URL=https://github.com/libsdl-org/SDL_ttf/archive/refs/tags/%SDL2TTF_VER%.zip"
-set "DL_DEST=%WORK%\ttf.zip"
+set "TTF_SRC=%WORK%\SDL2_ttf-%SDL2TTF_ASSET%"
+if exist "%TTF_SRC%\CMakeLists.txt" goto ttf_source_ready
+if exist "%TTF_SRC%" rmdir /s /q "%TTF_SRC%"
+set "DL_URL=https://github.com/libsdl-org/SDL_ttf/releases/download/%SDL2TTF_VER%/SDL2_ttf-%SDL2TTF_ASSET%.tar.gz"
+set "DL_DEST=%WORK%\ttf.tar.gz"
 call :download
 if errorlevel 1 goto fail
-"%TAR%" -xf "%WORK%\ttf.zip" -C "%WORK%"
-if errorlevel 1 goto fail
-if exist "%WORK%\ttf.zip" del /q "%WORK%\ttf.zip"
+rem The tarball carries macOS framework symlinks under Xcode/, which Windows
+rem bsdtar cannot create and the Android build never uses; excluding them is
+rem safe and keeps the extraction from failing.
+"%TAR%" -xf "%WORK%\ttf.tar.gz" -C "%WORK%" ^
+    --exclude "SDL2_ttf-%SDL2TTF_ASSET%/Xcode" ^
+    --exclude "SDL2_ttf-%SDL2TTF_ASSET%/Xcode/*"
+if errorlevel 1 (
+    if exist "%TTF_SRC%" rmdir /s /q "%TTF_SRC%"
+    goto fail
+)
+if exist "%WORK%\ttf.tar.gz" del /q "%WORK%\ttf.tar.gz"
 :ttf_source_ready
 
 rem SDL2_ttf vendors FreeType through a download script that is not present in
 rem the release tarball, so it is fetched directly and unpacked into
 rem external\freetype. The .sh copied the contents of a staged directory; bsdtar
 rem can strip the archive's top-level directory instead.
+rem Savannah answers with a 302 to one of several mirrors and some of them are
+rem unreachable, so the project's SourceForge distribution is the source here:
+rem it redirects to a working mirror and BITS follows it.
 if exist "%TTF_SRC%\external\freetype\CMakeLists.txt" goto freetype_ready
 echo     FreeType %FREETYPE_VER%
-set "DL_URL=https://download.savannah.gnu.org/releases/freetype/freetype-%FREETYPE_VER%.tar.gz"
+set "DL_URL=https://downloads.sourceforge.net/project/freetype/freetype2/%FREETYPE_VER%/freetype-%FREETYPE_VER%.tar.gz"
 set "DL_DEST=%WORK%\ft.tar.gz"
 call :download
 if errorlevel 1 goto fail
@@ -290,15 +311,23 @@ rem  vendors, so no libogg/libvorbis/libmpg123 cross-build is needed.
 rem =========================================================================
 echo.
 echo ==^> SDL2_mixer %SDL2MIXER_VER%
-set "MIX_SRC=%WORK%\SDL_mixer-%SDL2MIXER_VER%"
-if exist "%MIX_SRC%" goto mixer_source_ready
-set "DL_URL=https://github.com/libsdl-org/SDL_mixer/archive/refs/tags/%SDL2MIXER_VER%.zip"
-set "DL_DEST=%WORK%\mixer.zip"
+set "MIX_SRC=%WORK%\SDL2_mixer-%SDL2MIXER_ASSET%"
+if exist "%MIX_SRC%\CMakeLists.txt" goto mixer_source_ready
+if exist "%MIX_SRC%" rmdir /s /q "%MIX_SRC%"
+set "DL_URL=https://github.com/libsdl-org/SDL_mixer/releases/download/%SDL2MIXER_VER%/SDL2_mixer-%SDL2MIXER_ASSET%.tar.gz"
+set "DL_DEST=%WORK%\mixer.tar.gz"
 call :download
 if errorlevel 1 goto fail
-"%TAR%" -xf "%WORK%\mixer.zip" -C "%WORK%"
-if errorlevel 1 goto fail
-if exist "%WORK%\mixer.zip" del /q "%WORK%\mixer.zip"
+rem Same macOS Xcode framework symlinks as SDL2_ttf; the Android build does not
+rem use them, and Windows bsdtar cannot create them.
+"%TAR%" -xf "%WORK%\mixer.tar.gz" -C "%WORK%" ^
+    --exclude "SDL2_mixer-%SDL2MIXER_ASSET%/Xcode" ^
+    --exclude "SDL2_mixer-%SDL2MIXER_ASSET%/Xcode/*"
+if errorlevel 1 (
+    if exist "%MIX_SRC%" rmdir /s /q "%MIX_SRC%"
+    goto fail
+)
+if exist "%WORK%\mixer.tar.gz" del /q "%WORK%\mixer.tar.gz"
 :mixer_source_ready
 
 echo.
@@ -334,22 +363,18 @@ echo port\android\build.bat uses it when SDL2_COMPANION_DIR is unset.
 exit /b 0
 
 rem ------------------------------------------------------------- download
-rem :download -- skip when DL_DEST already exists, otherwise fetch DL_URL to a
-rem .part file so an interrupted download is never mistaken for a complete one.
-rem The URL is read from a variable rather than a call argument: `call` performs
-rem a second expansion, and a percent-escaped URL would be mangled by it.
+rem :download -- skip when DL_DEST already exists, otherwise fetch DL_URL through
+rem BITS, Windows' transfer service (tools\download.ps1): progress, retries, and
+rem an interrupted job left in the BITS queue so the next run resumes it. The
+rem URL is read from a variable rather than a call argument: `call` performs a
+rem second expansion, and a percent-escaped URL would be mangled by it.
 :download
 if exist "%DL_DEST%" exit /b 0
-for %%F in ("%DL_DEST%") do echo     downloading %%~nxF
-"%CURL%" --fail --location --silent --show-error --proto "=https" ^
-    --retry 2 --connect-timeout 20 --max-time 1800 ^
-    --output "%DL_DEST%.part" "%DL_URL%"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\download.ps1" -Url "%DL_URL%" -Destination "%DL_DEST%"
 if errorlevel 1 (
-    if exist "%DL_DEST%.part" del /q "%DL_DEST%.part"
-    echo error: download failed
+    echo error: download failed: %DL_URL%
     exit /b 1
 )
-move /y "%DL_DEST%.part" "%DL_DEST%" >nul
 exit /b 0
 
 rem :require_so NAME -- fail when the install step did not produce PREFIX\lib\NAME.

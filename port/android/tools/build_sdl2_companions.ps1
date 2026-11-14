@@ -8,9 +8,9 @@
     parameters onto the environment variables that .bat reads and then runs it,
     which is how port\android\build.ps1 wraps build.bat.
 
-    Nothing here needs MSYS2, Git Bash, WSL or Python. Downloads are curl.exe's,
-    archives are unpacked by System32's bsdtar, and CMake/Ninja come from the
-    Android SDK's pinned cmake package.
+    Nothing here needs MSYS2, Git Bash, WSL or Python. Downloads go through BITS
+    (tools\download.ps1), archives are unpacked by System32's bsdtar, and
+    CMake/Ninja come from the Android SDK's pinned cmake package.
 
 .PARAMETER Help
     Print the full reference (the .bat header) and exit.
