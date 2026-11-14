@@ -2044,7 +2044,11 @@ Player *Player_Create(CharData *c)
         memset(&p->states, 0, offsetof(Player, nohit_time) - offsetof(Player, states));
         p->states = NULL;
     }
-    p->targets = KeyedArray_Create(8, 0x1C);
+    /* PORTABILITY FIX: the original passes 0x1C, sizeof(TargetEntry) while a
+       pointer is 4 bytes. On LP64 the player pointer grows and the entry is
+       0x20, so the hardcoded stride lost bind_active and misaligned the
+       array. sizeof is 0x1C on the 32-bit reference, unchanged there. */
+    p->targets = KeyedArray_Create(8, sizeof(TargetEntry));
     if (p->targets == NULL) {
         Error_Printf("Can't create target array.\n");
         return NULL;

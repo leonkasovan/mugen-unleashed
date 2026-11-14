@@ -19,6 +19,16 @@
  * behaviour we want, since the open question is CPU work.
  */
 #include "mugen.h"
+#include "profiler.h"
+
+/*
+ * PORT FIX: this sampler is Linux-glibc-only: it needs ITIMER_PROF/SIGPROF
+ * and execinfo.h. MinGW and the Vita SDK provide neither, and Android's
+ * bionic defines __linux__ without execinfo.h. The file is compiled into
+ * every target (ENGINE_SRCS is a wildcard), so the other targets get stubs
+ * and main.c links unchanged. MUGEN_PROF does nothing there.
+ */
+#if defined(__linux__) && !defined(ANDROID_PORT)
 
 #include <signal.h>
 #include <sys/time.h>
@@ -26,8 +36,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#include "profiler.h"
 
 #define PROF_MAX_DEPTH 24
 #define PROF_SLOTS 4096
@@ -199,3 +207,21 @@ void Prof_Stop(const char *path)
     fclose(fp);
     Log_Printf("prof: %lu samples written to %s\n", g_prof_samples, path);
 }
+
+#else /* !(__linux__ && !ANDROID_PORT) */
+
+void Prof_Start(void)
+{
+}
+
+unsigned long Prof_Samples(void)
+{
+    return 0;
+}
+
+void Prof_Stop(const char *path)
+{
+    (void)path;
+}
+
+#endif /* __linux__ && !ANDROID_PORT */
