@@ -329,6 +329,9 @@ option(MUGEN_VITA_BUILD_VITAGL
 
 # Port optimization: state caching has a switch for controlled hardware A/B runs.
 option(MUGEN_VITA_RENDER_CACHE "Cache Vita shader and texture draw state" ON)
+# --profile: keep the release optimization but compile the MUGEN_DEBUG
+# diagnostics (batchprof and the model-path counters) into the build.
+option(MUGEN_VITA_PROFILE "Release build with MUGEN_DEBUG diagnostics" OFF)
 # Upstream trusts cached shader files; keep disk caching an explicit experiment.
 option(MUGEN_VITA_SHADER_CACHE "Experimental vitaGL disk shader cache" OFF)
 if(MUGEN_VITA_SHADER_CACHE AND NOT MUGEN_VITA_BUILD_VITAGL)
@@ -382,7 +385,10 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
   # points -- build.bat --debug reached it through both the removed MSYS2 script
   # and the current cmd.exe one. The
   # release value is a single flag, which is why only Debug was affected.
-  set(MUGEN_VITA_OPT -O0 -g3)
+  # -DMUGEN_DEBUG matches the Makefile's DEBUG=1: it compiles batchprof in, so
+  # a Vita debug build reports the same batch/perf breakdown as the desktop
+  # and arm64 ones.
+  set(MUGEN_VITA_OPT -O0 -g3 -DMUGEN_DEBUG)
 endif()
 
 set(MUGEN_ENGINE_FLAGS
@@ -425,6 +431,11 @@ add_executable(mugen
 
 target_compile_definitions(mugen PRIVATE
   MUGEN_VITA_RENDER_CACHE=$<BOOL:${MUGEN_VITA_RENDER_CACHE}>)
+
+if(MUGEN_VITA_PROFILE)
+  target_compile_definitions(mugen PRIVATE MUGEN_DEBUG=1)
+  message(STATUS "MUGEN_DEBUG diagnostics enabled (profile build)")
+endif()
 
 option(MUGEN_MODEL3D "Opt-in basic VitaGL glTF profile (no skinning, lighting or optional effects)" OFF)
 if(MUGEN_MODEL3D)
