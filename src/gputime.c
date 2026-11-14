@@ -38,6 +38,7 @@ static PFN_GETQUERYOBJECTUI64VEXT p_glGetQueryObjectui64vEXT;
 typedef struct GpuSpan {
     GLuint query[GPUTIME_SLOTS];
     int pending[GPUTIME_SLOTS];
+    int retries[GPUTIME_SLOTS];      /* frames a result looked like a sentinel */
     int next;
     int open;                   /* a query of this span is running now */
     int open_slot;
@@ -58,6 +59,28 @@ static int gputime_disjoint(void)
     return disjoint != 0;
 }
 
+/*
+ * A plausible GPU span. Anything outside this is a broken read rather than a
+ * measurement: the driver was returning values around 5.6e18 ns, which is not a
+ * duration, and averaging them made every reported number meaningless.
+ */
+#define GPUTIME_MAX_NS 1000000000ULL    /* 1 second */
+
+static int gputime_diag;                /* diagnostics logged so far */
+static int gputime_invalid;             /* implausible reads rejected */
+
+/* Drains the error queue and reports the first few, with context. */
+static int gputime_check(const char *what)
+{
+    int err = (int)glGetError();
+
+    if (err != GL_NO_ERROR && gputime_diag < 8) {
+        gputime_diag++;
+        Log_Printf("gpu: %s -> GL error 0x%04X\n", what, (unsigned)err);
+    }
+    return err;
+}
+
 /* Collects every finished query of a span, without blocking. */
 static void gputime_collect(GpuSpan *span)
 {
@@ -66,6 +89,7 @@ static void gputime_collect(GpuSpan *span)
     for (i = 0; i < GPUTIME_SLOTS; i++) {
         GLuint available = 0;
         GLuint64 ns = 0;
+        int err;
 
         if (!span->pending[i]) {
             continue;
@@ -74,12 +98,50 @@ static void gputime_collect(GpuSpan *span)
             span->pending[i] = 0;
             continue;
         }
+        err = (int)glGetError();        /* stale errors must not be attributed */
+        (void)err;
         p_glGetQueryObjectuivEXT(span->query[i], GL_QUERY_RESULT_AVAILABLE, &available);
+        if (gputime_check("GL_QUERY_RESULT_AVAILABLE") != GL_NO_ERROR) {
+            span->pending[i] = 0;
+            continue;
+        }
         if (!available) {
             continue;
         }
         p_glGetQueryObjectui64vEXT(span->query[i], GL_QUERY_RESULT, &ns);
+        if (gputime_check("GL_QUERY_RESULT(ui64)") != GL_NO_ERROR) {
+            span->pending[i] = 0;
+            continue;
+        }
         span->pending[i] = 0;
+        if (ns == 0 || ns > GPUTIME_MAX_NS) {
+            /*
+             * Not a duration. The observed values are ~0xFFFFFFFF..., which is a
+             * "result not ready" sentinel rather than a measurement, so re-arm
+             * the query and look again on a later frame instead of throwing it
+             * away -- the first version dropped it, which is why a query that
+             * simply needed more time never produced a sample at all.
+             */
+            span->retries[i]++;
+            if (span->retries[i] <= 8) {
+                if (gputime_diag < 4) {
+                    gputime_diag++;
+                    Log_Printf("gpu: result not ready (%llu ns) on query %u; retrying\n",
+                               (unsigned long long)ns, (unsigned)span->query[i]);
+                }
+                continue;               /* stays pending */
+            }
+            gputime_invalid++;
+            span->retries[i] = 0;
+            if (gputime_diag < 8) {
+                gputime_diag++;
+                Log_Printf("gpu: giving up on query %u after repeated sentinels (%llu ns)\n",
+                           (unsigned)span->query[i], (unsigned long long)ns);
+            }
+            span->pending[i] = 0;
+            continue;
+        }
+        span->retries[i] = 0;
         span->sum_ms += (double)ns / 1000000.0;
         span->samples++;
     }
@@ -180,7 +242,13 @@ static void gputime_begin(GpuSpan *span)
     if (span->pending[slot]) {
         return;                 /* still in flight: skip this frame's sample */
     }
+    (void)glGetError();                 /* clear stale state before the call */
+    span->retries[slot] = 0;
     p_glBeginQueryEXT(GPUTIME_TIME_ELAPSED_EXT, span->query[slot]);
+    if (gputime_check("glBeginQueryEXT(TIME_ELAPSED)") != GL_NO_ERROR) {
+        /* No query is running, so do not pretend one is. */
+        return;
+    }
     span->open = 1;
     span->open_slot = slot;
 }
@@ -191,6 +259,10 @@ static void gputime_end(GpuSpan *span)
         return;
     }
     p_glEndQueryEXT(GPUTIME_TIME_ELAPSED_EXT);
+    if (gputime_check("glEndQueryEXT") != GL_NO_ERROR) {
+        span->open = 0;
+        return;
+    }
     span->pending[span->open_slot] = 1;
     span->open = 0;
 }
@@ -243,6 +315,15 @@ int GpuTime_TakeAverages(double *draw_ms, double *present_ms)
     g_gpu_draw.samples = 0;
     g_gpu_present.sum_ms = 0.0;
     g_gpu_present.samples = 0;
+    if (gputime_invalid > 0) {
+        /* One line per second at most, so a broken read cannot flood the log. */
+        static unsigned long reported;
+
+        if (reported != (unsigned long)gputime_invalid) {
+            reported = (unsigned long)gputime_invalid;
+            Log_Printf("gpu: %d query result(s) rejected as implausible\n", gputime_invalid);
+        }
+    }
     return samples;
 }
 
