@@ -123,6 +123,9 @@ replaces a hardcoded byte count with the matching `sizeof`.
 |---|---|
 | `ini.c` `Ini_Parse` | `lines_bytes += 0x400` per 0x100 new entries assumes 4-byte pointers; `line_map` (int) shared the same byte count as `lines` (char\*) |
 | `ini.c` src lines | `Mem_Calloc(1, 0x400)` and a `+ 0x400` growth assume 4-byte pointers |
+| `ini.c` `Ini_CountGroups` | restored only `ini->group`, leaving `group_line`/`cursor` on the last group. `Stage_Load` counts `[bg]` groups in the middle of `[StageInfo]`, so `autoturn`, `resetbg`, `xscale` and `yscale` silently missed. `autoturn` defaulted to 0, which disables `Round_Tick`'s auto-turn loop: players kept the wrong facing after crossing up. `tools/test_ini_groups.sh` pins it |
+| `char.c` `Player_Create` | `KeyedArray_Create(8, 0x1C)` — `sizeof(TargetEntry)` only while a pointer is 4 bytes. On LP64 the entry is 0x20, so the stride lost `bind_active` and misaligned every entry after the first |
+| `ai.c` `Ai_ResetPlayer`, `player.h` | the clear and the keep buffer used the 32-bit spans 0xDF8 / 0x64C. `AiState`, `AiData`, `AiLearn` and `AiMove` hold pointers, so LP64 grows them to 0xF34 / 0x654; both are `offsetof` spans now and `tools/test_abi_layout.c` prints them per ABI |
 | `system.c` `GameVars_Init` | `calloc(1, 0xC)` is `sizeof(PalGroups)` at 32-bit; the struct is 16 bytes on LP64, so `Match_FreeAssets` wrote past it |
 | `select.h`, `syselem.h` | `cutscene`, `key_table`, `text_ptr` are declared `int` but store pointers. Now `intptr_t`: same 4 bytes and offset on 32-bit, 8 on LP64 |
 | `gameloop.c`, `storyboard.c`, `title.c`, `versus.c` | the matching stores cast through `(int)`, which re-truncated the pointer |

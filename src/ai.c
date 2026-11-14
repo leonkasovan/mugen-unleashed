@@ -338,11 +338,15 @@ int Ai_Merge(AiData *dst, const AiData *src)
  */
 void Ai_ResetPlayer(Player *p)
 {
-    unsigned char keep[0x2424 - 0x1DD8];
+    /* PORTABILITY FIX: the original clears 0xDF8 bytes and saves 0x64C bytes
+       from &p->ai_learn to &p->ai_level. AiState holds many pointers, so on
+       LP64 the block grows; derive both spans so the grown fields are cleared
+       and preserved. On the 32-bit reference the values are unchanged. */
+    unsigned char keep[offsetof(Player, ai_level) - offsetof(Player, ai_learn)];
     int level = p->ai_level;
 
     memcpy(keep, &p->ai_learn, sizeof(keep));
-    memset(&p->ai, 0, 0x2450 - 0x1658);
+    memset(&p->ai, 0, PLAYER_AI_BLOCK_SIZE);
     memcpy(&p->ai_learn, keep, sizeof(keep));
     (p)->ai_cmds_out[0] = -1;
     (&(p)->ai_state)->msg_count = 0;

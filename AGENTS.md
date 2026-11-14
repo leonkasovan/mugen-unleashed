@@ -139,7 +139,16 @@ prints both layouts.
 The other 64-bit trap is a `memset`/`memcpy` with a byte count that spans
 pointer-bearing fields. `char.c` clears the `states` block and the `nohit_time`
 block with `offsetof(Player, <end>) - offsetof(Player, <start>)`, which is the
-original's 0x420 / 0x158 on 32-bit and the grown span on 64-bit.
+original's 0x420 / 0x158 on 32-bit and the grown span on 64-bit. `ai.c`
+`Ai_ResetPlayer` and `PLAYER_AI_BLOCK_SIZE` (`player.h`) derive their two spans
+the same way (0xDF8 / 0x64C on 32-bit, 0xF34 / 0x654 on LP64), and
+`Player_Create` builds its target array with `sizeof(TargetEntry)` rather than
+the original's 0x1C. `tools/test_abi_layout.c` prints both spans per ABI, so a
+change to `Player` shows up there.
+
+Layout assertions are not the only thing that hides on 64-bit: a size passed as
+a literal to a container is just as wrong and never fails an assertion. When
+adding a `KeyedArray_Create`, pass `sizeof`.
 
 So the 64-bit targets are **portable in progress, not audited**: the layout
 assertions are compiled out there and only the win32 build is log-diffed. Before
@@ -622,7 +631,9 @@ Performance instrumentation, all off by default:
 Host gates added alongside those (all in CI): `tools/test_batchplan.sh` (draw-call
 boundaries and texture slots — silent when wrong), `test_batchprof.sh` (the
 profiler's own arithmetic), `test_textwrap.sh` (the TrueType line-break search),
-`test_ttfcache.sh` (the rasterized-line cache).
+`test_ttfcache.sh` (the rasterized-line cache), `test_ini_groups.sh` (a group
+count must leave the selected group and its cursor where they were — the
+`[StageInfo]` `autoturn` read depended on it and failed silently).
 
 **Measure before optimising, and check the driver's own numbers.** The renderer
 work in `docs/BUILD-LINUX.md` ("Where the 2D frame goes now") is the record: three

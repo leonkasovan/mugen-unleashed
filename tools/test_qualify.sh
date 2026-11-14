@@ -97,6 +97,10 @@ run_host ES01-struct bash tools/test_gles_shader.sh
 # the desktop, and a change that only compiled under -DANDROID_PORT broke the
 # desktop SDL2 build. This compiles the shared modules under every backend.
 run_host BUILD01 bash tools/test_compile_gates.sh
+# Ini_CountGroups must not leave the group cursor at the end of the file
+# (INI01): Stage_Load's [bg] count silently lost autoturn and with it the
+# engine's auto-turn.
+run_host INI01 bash tools/test_ini_groups.sh
 # GLES blend factors vs the engine equation (BLEND01).
 run_host BLEND01 bash tools/test_blend_math.sh
 # GLES clip rect must reach the GL renderer (CLIP01).

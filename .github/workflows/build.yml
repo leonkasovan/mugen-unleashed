@@ -34,6 +34,7 @@ jobs:
           sh tools/test_textwrap.sh
           sh tools/test_ttfcache.sh
           sh tools/test_batchplan.sh
+          sh tools/test_ini_groups.sh
           sh tools/test_gl_errors.sh
           sh tools/test_model.sh
       - uses: actions/upload-artifact@v4
@@ -72,6 +73,7 @@ jobs:
           sh tools/test_textwrap.sh
           sh tools/test_ttfcache.sh
           sh tools/test_batchplan.sh
+          sh tools/test_ini_groups.sh
       - name: Check supported source/dependency contract
         shell: cmd
         run: |

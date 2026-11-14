@@ -614,25 +614,16 @@ int Stage_Load(Stage *st)
      * Port addition: say what will be drawn. A stage whose background is only
      * a 3D model draws nothing when that model is absent, and the result was a
      * black stage with a successful "Stage loaded OK" and no explanation.
-     *
-     * PORT FIX: Ini_CountGroups restores ini->group but not the group cursor
-     * (group_line), so counting here in the middle of [StageInfo] made the
-     * reads below miss autoturn, resetbg, xscale and yscale. autoturn then
-     * stayed 0 and the players never turned to face each other. Restore the
-     * whole selection after the count; this block is only diagnostic.
+     * Ini_CountGroups keeps the selected group intact, so counting here does
+     * not disturb the [StageInfo] reads below.
      */
-    {
-        int saved_group = ini->group;
-
-        if (g_stage3d.model != NULL) {
-            Log_Printf("  Background: 3D model%s\n",
-                       g_stage3d.model->mesh_count > 0 ? "" : " (no meshes)");
-        } else if (Ini_CountGroups(ini, "bg]") + Ini_CountGroups(ini, "bg ") == 0) {
-            Log_Printf("  Background: none -- no 3D model and no [bg] elements, the stage will be black\n");
-        } else {
-            Log_Printf("  Background: 2D sprites\n");
-        }
-        Ini_SelectGroupIndex(ini, saved_group);
+    if (g_stage3d.model != NULL) {
+        Log_Printf("  Background: 3D model%s\n",
+                   g_stage3d.model->mesh_count > 0 ? "" : " (no meshes)");
+    } else if (Ini_CountGroups(ini, "bg]") + Ini_CountGroups(ini, "bg ") == 0) {
+        Log_Printf("  Background: none -- no 3D model and no [bg] elements, the stage will be black\n");
+    } else {
+        Log_Printf("  Background: 2D sprites\n");
     }
     if (st->cutlow < 0) {
         if (st->zoffsetlink == -1) {

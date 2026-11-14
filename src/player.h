@@ -488,8 +488,10 @@ MUGEN_ASSERT_OFFSET(Player, action_failed, 0x2480);
 MUGEN_ASSERT_OFFSET(Player, warnings, 0x2484);
 MUGEN_ASSERT_OFFSET(Player, standby, 0x2488);
 MUGEN_ASSERT_SIZE(Player, 0x2490);
-/* Bytes of the AI block of a Player cleared by Player_Free (from Player.ai). */
-#define PLAYER_AI_BLOCK_SIZE 0xDF8
+/* Bytes of the AI block of a Player cleared by Player_Free (Player.ai through
+   Player.enemy). Derived so a 64-bit build clears the grown block as well; on
+   the 32-bit reference it is still 0xDF8. */
+#define PLAYER_AI_BLOCK_SIZE (offsetof(Player, enemy) - offsetof(Player, ai))
 
 /* Data of a loaded character (0x8F8 bytes), shared by its players (states, commands...). */
 typedef struct CharData {

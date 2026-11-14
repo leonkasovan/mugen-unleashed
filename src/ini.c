@@ -439,7 +439,18 @@ const char *Ini_NextGroup(Ini *ini)
 /* 0x0046A450: counts groups whose name starts with prefix; keeps the selected group index. */
 int Ini_CountGroups(Ini *ini, const char *prefix)
 {
-    int saved = ini->group;
+    /*
+     * PORT FIX: the count walks every group, which moves group_line, cursor
+     * and at_end. The original restores only the group index, leaving a
+     * caller that counts in the middle of a group reading from the end of the
+     * file. Stage_Load did exactly that for the [bg] diagnostic and silently
+     * lost autoturn/resetbg/xscale/yscale. Restore the whole selection.
+     */
+    int group = ini->group;
+    int group_line = ini->group_line;
+    int group_offset = ini->group_offset;
+    int cursor = ini->cursor;
+    int at_end = ini->at_end;
     int count = 0;
     const char *header;
 
@@ -449,7 +460,11 @@ int Ini_CountGroups(Ini *ini, const char *prefix)
             count++;
         }
     }
-    ini->group = saved;
+    ini->group = group;
+    ini->group_line = group_line;
+    ini->group_offset = group_offset;
+    ini->cursor = cursor;
+    ini->at_end = at_end;
     return count;
 }
 

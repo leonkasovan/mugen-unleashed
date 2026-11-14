@@ -55,5 +55,16 @@ int main(void)
     SZ(SpriteSet);
     SZ(Palette);
     OFF(Palette, data);
+    /* Player AI spans: Player_Free and Ai_ResetPlayer derive them with
+     * offsetof (PLAYER_AI_BLOCK_SIZE) instead of the 32-bit constants. */
+    SZ(Player);
+    OFF(Player, ai);
+    OFF(Player, enemy);
+    OFF(Player, ai_learn);
+    OFF(Player, ai_level);
+    printf("Player AI block = 0x%x\n",
+           (unsigned)(offsetof(Player, enemy) - offsetof(Player, ai)));
+    printf("Player AI keep  = 0x%x\n",
+           (unsigned)(offsetof(Player, ai_level) - offsetof(Player, ai_learn)));
     return 0;
 }
