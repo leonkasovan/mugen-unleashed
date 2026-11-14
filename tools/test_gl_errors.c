@@ -655,6 +655,47 @@ static void test_vita_render_cache(void)
 }
 #endif
 
+#if defined(TEST_VITA) && defined(MUGEN_VITA_RENDER_CACHE) && MUGEN_VITA_RENDER_CACHE
+static void test_vita_sprite_cache(void)
+{
+    unsigned char pixels[9][32];
+    unsigned int uploads, hits;
+    int i, calls, before;
+
+    for (i = 0; i < 9; i++) {
+        memset(pixels[i], i + 1, sizeof(pixels[i]));
+    }
+    calls = image_calls + sub_calls;
+    assert(Glr_VitaSpriteTexture(pixels[0], 2, 2, 32) != NULL);
+    assert(image_calls + sub_calls == calls + 1);
+    assert(Glr_VitaSpriteTexture(pixels[0], 2, 2, 32) != NULL);
+    assert(image_calls + sub_calls == calls + 1);            /* key hit */
+    assert(Glr_VitaSpriteTexture(pixels[0], 4, 2, 32) != NULL);
+    assert(image_calls + sub_calls == calls + 2);            /* dimensions differ */
+    assert(g_vitaSpriteUploads == 2 && g_vitaSpriteHits >= 1);
+
+    /* 8 slots: a ninth distinct sprite evicts, it does not grow the table. */
+    before = image_calls + sub_calls;
+    for (i = 1; i < 9; i++) {
+        assert(Glr_VitaSpriteTexture(pixels[i], 2, 2, 32) != NULL);
+    }
+    assert(image_calls + sub_calls == before + 8);
+
+    before = deleted_textures;
+    uploads = g_vitaSpriteUploads;
+    hits = g_vitaSpriteHits;
+    Glr_VitaForgetSprites();
+    assert(deleted_textures > before && deleted_textures <= before + GLR_VITA_SPRITE_SLOTS);
+    assert(g_vitaSpriteHits == hits && g_vitaSpriteUploads == uploads);
+
+    calls = image_calls + sub_calls;
+    assert(Glr_VitaSpriteTexture(pixels[0], 2, 2, 32) != NULL);
+    assert(image_calls + sub_calls == calls + 1);            /* empty after free */
+    Glr_VitaForgetSprites();
+    puts("ok: Vita streaming-sprite cache hits, bounded slots, teardown and reuse");
+}
+#endif
+
 int main(void)
 {
 #ifdef TEST_EXPECT_BITS
@@ -664,6 +705,9 @@ int main(void)
     install();test_sizes_uploads();test_targets_capture();test_programs_lifetime();
 #ifdef TEST_VITA
     test_vita_render_cache();
+#if defined(MUGEN_VITA_RENDER_CACHE) && MUGEN_VITA_RENDER_CACHE
+    test_vita_sprite_cache();
+#endif
 #endif
     puts("ok: GL error regression tests passed");
     return 0;

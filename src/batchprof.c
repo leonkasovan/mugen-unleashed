@@ -40,6 +40,24 @@ static double bp_outside;
 static double bp_zero_area;
 static double bp_sum_outside;
 static double bp_sum_zero_area;
+/* Model path (port addition): per frame and per second. */
+static double bp_model_calls;
+static double bp_model_triangles;
+static double bp_model_cpu_ticks;
+static double bp_model_pass_ticks;
+/* Pass-1 offscreen path (port addition): per frame and per second. */
+static double bp_pass1_calls;
+static double bp_pass1_ticks;
+static double bp_area_pixels;
+static double bp_vita_quad_ticks;
+static double bp_sum_model_calls;
+static double bp_sum_model_triangles;
+static double bp_sum_model_cpu_ticks;
+static double bp_sum_model_pass_ticks;
+static double bp_sum_pass1_calls;
+static double bp_sum_pass1_ticks;
+static double bp_sum_area_pixels;
+static double bp_sum_vita_quad_ticks;
 static double bp_sum_split[BATCHPROF_SPLIT_COUNT];
 /* Last bound state, for counting only the binds that actually changed. */
 static unsigned int bp_last_program;
@@ -84,6 +102,10 @@ void BatchProf_FrameBegin(void)
     bp_calls = bp_quads = bp_vertices = bp_stream_bytes = 0.0;
     bp_programs = bp_textures = bp_cpu_ticks = 0.0;
     bp_outside = bp_zero_area = 0.0;
+    bp_model_calls = bp_model_triangles = 0.0;
+    bp_model_cpu_ticks = bp_model_pass_ticks = 0.0;
+    bp_pass1_calls = bp_pass1_ticks = 0.0;
+    bp_area_pixels = bp_vita_quad_ticks = 0.0;
     for (i = 0; i < BATCHPROF_SPLIT_COUNT; i++) {
         bp_split[i] = 0.0;
     }
@@ -106,6 +128,14 @@ void BatchProf_FrameEnd(void)
     bp_sum_cpu_ticks += bp_cpu_ticks;
     bp_sum_outside += bp_outside;
     bp_sum_zero_area += bp_zero_area;
+    bp_sum_model_calls += bp_model_calls;
+    bp_sum_model_triangles += bp_model_triangles;
+    bp_sum_model_cpu_ticks += bp_model_cpu_ticks;
+    bp_sum_model_pass_ticks += bp_model_pass_ticks;
+    bp_sum_pass1_calls += bp_pass1_calls;
+    bp_sum_pass1_ticks += bp_pass1_ticks;
+    bp_sum_area_pixels += bp_area_pixels;
+    bp_sum_vita_quad_ticks += bp_vita_quad_ticks;
     for (i = 0; i < BATCHPROF_SPLIT_COUNT; i++) {
         bp_sum_split[i] += bp_split[i];
     }
@@ -172,6 +202,40 @@ void BatchProf_Split(int which, unsigned long long ticks)
     bp_split[which] += (double)ticks;
 }
 
+void BatchProf_ModelSubmit(unsigned int triangles, unsigned long long ticks)
+{
+    bp_model_calls += 1.0;
+    if (triangles > 0) {
+        bp_model_triangles += (double)triangles;
+    }
+    bp_model_cpu_ticks += (double)ticks;
+}
+
+void BatchProf_ModelPass(unsigned long long ticks)
+{
+    bp_model_pass_ticks += (double)ticks;
+}
+
+void BatchProf_Pass1(int calls, unsigned long long ticks)
+{
+    if (calls > 0) {
+        bp_pass1_calls += (double)calls;
+    }
+    bp_pass1_ticks += (double)ticks;
+}
+
+void BatchProf_Area(double pixels)
+{
+    if (pixels > 0.0) {
+        bp_area_pixels += pixels;
+    }
+}
+
+void BatchProf_VitaQuad(unsigned long long ticks)
+{
+    bp_vita_quad_ticks += (double)ticks;
+}
+
 int BatchProf_TakeAverages(BatchProfAverages *out)
 {
     int have;
@@ -199,10 +263,22 @@ int BatchProf_TakeAverages(BatchProfAverages *out)
         }
         out->outside_clip = bp_sum_outside / bp_frames;
         out->zero_area = bp_sum_zero_area / bp_frames;
+        out->model_calls = bp_sum_model_calls / bp_frames;
+        out->model_triangles = bp_sum_model_triangles / bp_frames;
+        out->model_cpu_us = bp_sum_model_cpu_ticks / bp_frames * 1000000.0 / frequency;
+        out->model_pass_us = bp_sum_model_pass_ticks / bp_frames * 1000000.0 / frequency;
+        out->pass1_calls = bp_sum_pass1_calls / bp_frames;
+        out->pass1_us = bp_sum_pass1_ticks / bp_frames * 1000000.0 / frequency;
+        out->area_pixels = bp_sum_area_pixels / bp_frames;
+        out->vita_quad_us = bp_sum_vita_quad_ticks / bp_frames * 1000000.0 / frequency;
     }
     bp_sum_calls = bp_sum_quads = bp_sum_vertices = bp_sum_stream_bytes = 0.0;
     bp_sum_programs = bp_sum_textures = bp_sum_cpu_ticks = 0.0;
     bp_sum_outside = bp_sum_zero_area = 0.0;
+    bp_sum_model_calls = bp_sum_model_triangles = 0.0;
+    bp_sum_model_cpu_ticks = bp_sum_model_pass_ticks = 0.0;
+    bp_sum_pass1_calls = bp_sum_pass1_ticks = 0.0;
+    bp_sum_area_pixels = bp_sum_vita_quad_ticks = 0.0;
     for (i = 0; i < BATCHPROF_SPLIT_COUNT; i++) {
         bp_sum_split[i] = 0.0;
     }

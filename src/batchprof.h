@@ -54,6 +54,24 @@ typedef struct BatchProfAverages {
     /* Quads per frame that the clip rectangle would reject (port addition). */
     double outside_clip;
     double zero_area;
+    /* Model path (port addition): draw calls, submitted triangles, the time
+     * inside the glDrawElements calls, and the whole Model_Draw pass. The
+     * difference between draw and pass is state/matrix/bind work, which is
+     * what a model-stage profile needs to separate from the driver calls. */
+    double model_calls;
+    double model_triangles;
+    double model_cpu_us;
+    double model_pass_us;
+    /* Port addition: the 2D pass-1 offscreen path (Sprite_DrawGL), per frame.
+     * A scaled/rotated paletted sprite goes through Screen_Create/FBO/draw/free
+     * here; play draws dozens of them while a stage preview draws a handful. */
+    double pass1_calls;
+    double pass1_us;
+    /* Port addition: total destination area of the sprite quads (pixels) and
+     * the time inside VitaGl_DrawQuad, so 2D fill and per-quad submission can
+     * be separated from the model's prim cost. */
+    double area_pixels;
+    double vita_quad_us;
     int frames;
 } BatchProfAverages;
 
@@ -100,6 +118,21 @@ void BatchProf_Split(int which, unsigned long long ticks);
  * "is the engine submitting invisible work?" is answered by a number. */
 void BatchProf_CountQuad(int outside_clip, int zero_area);
 
+/* Port addition: one model glDrawElements and the whole Model_Draw pass. Model
+ * draws are not sprite quads, so they get their own calls/triangles/time rather
+ * than being mixed into the batch ratio. */
+void BatchProf_ModelSubmit(unsigned int triangles, unsigned long long ticks);
+void BatchProf_ModelPass(unsigned long long ticks);
+
+/* Port addition: one use of Sprite_DrawGL's pass-1 offscreen buffer and the
+ * time spent in the whole block (allocate, render, restore, free). */
+void BatchProf_Pass1(int calls, unsigned long long ticks);
+
+/* Port additions: summed destination quad area (pixels) and time inside
+ * VitaGl_DrawQuad (the programmable 2D quad submission). */
+void BatchProf_Area(double pixels);
+void BatchProf_VitaQuad(unsigned long long ticks);
+
 /* High-resolution counter for the submission timing. */
 unsigned long long BatchProf_Now(void);
 
@@ -124,6 +157,14 @@ static inline void BatchProf_Program(unsigned int program) { (void)program; }
 static inline void BatchProf_Texture(int unit, unsigned int texture) { (void)unit; (void)texture; }
 static inline void BatchProf_Split(int which, unsigned long long ticks) { (void)which; (void)ticks; }
 static inline void BatchProf_CountQuad(int outside_clip, int zero_area) { (void)outside_clip; (void)zero_area; }
+static inline void BatchProf_ModelSubmit(unsigned int triangles, unsigned long long ticks)
+{
+    (void)triangles; (void)ticks;
+}
+static inline void BatchProf_ModelPass(unsigned long long ticks) { (void)ticks; }
+static inline void BatchProf_Pass1(int calls, unsigned long long ticks) { (void)calls; (void)ticks; }
+static inline void BatchProf_Area(double pixels) { (void)pixels; }
+static inline void BatchProf_VitaQuad(unsigned long long ticks) { (void)ticks; }
 static inline unsigned long long BatchProf_Now(void) { return 0ULL; }
 static inline int BatchProf_TakeAverages(BatchProfAverages *out) { (void)out; return 0; }
 

@@ -30,6 +30,7 @@
  */
 #include "mugen.h"
 #ifdef MUGEN_MODEL3D
+#include "batchprof.h"
 /* Port integration: use the engine's glad loader, never mix GL loaders. */
 #include <cgltf.h>
 #include <stb_image.h>
@@ -2384,17 +2385,27 @@ static void Model_DrawNode(Model *mdl, int index, int layer, int default_layer, 
         Model_BindTexture(mdl, &mat->occlusion, MODEL_UNIT_OCCLUSION, prog->occlusion_transform);
         glUniform1i(prog->use_emission_map,
                     Model_BindTexture(mdl, &mat->emissive, MODEL_UNIT_EMISSION, prog->emission_transform));
-        glDrawElements(p->mode, p->index_count, GL_UNSIGNED_INT, (const void *)(size_t)p->index_offset);
-        Perf_CountDraw(Perf_TriangleCount(p->mode, p->index_count));
+        {
+            unsigned int tris = Perf_TriangleCount(p->mode, p->index_count);
+            unsigned long long bp = BATCHPROF_NOW();
+
+            glDrawElements(p->mode, p->index_count, GL_UNSIGNED_INT, (const void *)(size_t)p->index_offset);
+            BatchProf_ModelSubmit(tris, BATCHPROF_NOW() - bp);
+            Perf_CountDraw(tris);
+        }
 #ifndef MUGEN_MODEL_BASIC
         if (n->outline > 0.0f) {
             /* the outline: the mesh pushed out along its normals, back faces only, in black (Ikemen GO) */
+            unsigned int tris = Perf_TriangleCount(p->mode, p->index_count);
+            unsigned long long bp = BATCHPROF_NOW();
+
             glFrontFace(((Mat4_Det3(n->world) < 0) != flipped) ? GL_CCW : GL_CW);
             glEnable(GL_DEPTH_TEST);
             glDepthMask(GL_TRUE);
             glUniform1f(prog->mesh_outline, n->outline * outline);
             glDrawElements(p->mode, p->index_count, GL_UNSIGNED_INT, (const void *)(size_t)p->index_offset);
-            Perf_CountDraw(Perf_TriangleCount(p->mode, p->index_count));
+            BatchProf_ModelSubmit(tris, BATCHPROF_NOW() - bp);
+            Perf_CountDraw(tris);
             glUniform1f(prog->mesh_outline, 0.0f);
         }
 #endif
@@ -2691,8 +2702,14 @@ static void Model_DrawNodeShadow(Model *mdl, int index, int blended)
         glUniform1f(prog->alpha_threshold, mat->alpha_cutoff);
         glUniform4fv(prog->base_color, 1, mat->base_color);
         glUniform1i(prog->use_texture, Model_BindTexture(mdl, &mat->base, MODEL_UNIT_BASE, prog->tex_transform));
-        glDrawElements(p->mode, p->index_count, GL_UNSIGNED_INT, (const void *)(size_t)p->index_offset);
-        Perf_CountDraw(Perf_TriangleCount(p->mode, p->index_count));
+        {
+            unsigned int tris = Perf_TriangleCount(p->mode, p->index_count);
+            unsigned long long bp = BATCHPROF_NOW();
+
+            glDrawElements(p->mode, p->index_count, GL_UNSIGNED_INT, (const void *)(size_t)p->index_offset);
+            BatchProf_ModelSubmit(tris, BATCHPROF_NOW() - bp);
+            Perf_CountDraw(tris);
+        }
     }
 }
 
@@ -2711,15 +2728,18 @@ void Model_DrawShadows(Model *mdl)
     GLint prev_fbo;
     int i, face, pass, k;
     ModelPass state;
+    unsigned long long bp_pass;
 
     sm->drawn = NULL;
     if (!g_modelShadows || mdl == NULL || !ModelGpu_Ensure(mdl) || mdl->scene_count == 0 || g_renderMode != RENDER_OPENGL) {
         return;
     }
+    bp_pass = BATCHPROF_NOW();
     ModelPass_Begin(&state);
     sc = &mdl->scenes[0];
     if (sc->light_count == 0 || !Model_ShadowSetup()) {
         ModelPass_End(&state);
+        BatchProf_ModelPass(BATCHPROF_NOW() - bp_pass);
         return;
     }
     Mat4_Identity(ident);
@@ -2789,6 +2809,7 @@ void Model_DrawShadows(Model *mdl)
     g_glCurrentProgram = 0;
     glPopAttrib();
     ModelPass_End(&state);
+    BatchProf_ModelPass(BATCHPROF_NOW() - bp_pass);
     if (sm->state == 1) {
         sm->drawn = mdl;
     }
@@ -3266,6 +3287,7 @@ void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float
     int flipped, unlit;
     int i, pass;
     ModelPass state;
+    unsigned long long bp_pass;
 
     if (fx == NULL || proj == NULL || view == NULL || mdl == NULL || scene < 0 ||
         scene >= mdl->scene_count || g_renderMode != RENDER_OPENGL || !ModelGpu_Ensure(mdl)) {
@@ -3299,6 +3321,7 @@ void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float
     }
     Mat4_Invert(inv_view, view);
 
+    bp_pass = BATCHPROF_NOW();
     ModelPass_Begin(&state);
     glDisable(GL_SCISSOR_TEST);
 #ifndef MUGEN_GLES
@@ -3354,6 +3377,7 @@ void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float
     }
     /* The pass restores only the resources this profile actually touched. */
     ModelPass_End(&state);
+    BatchProf_ModelPass(BATCHPROF_NOW() - bp_pass);
 }
 
 /* Port integration: model-wide GPU caches must not survive context loss. */

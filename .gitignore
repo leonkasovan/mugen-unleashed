@@ -6,3 +6,4 @@ install/
 # Python bytecode from tools/*.py
 __pycache__/
 *.pyc
+.commandcode/

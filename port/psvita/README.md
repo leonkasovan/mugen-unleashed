@@ -18,7 +18,7 @@ port\psvita\build.bat
 ```
 
 `build.bat` needs no POSIX shell (VitaSDK's own `cmake`/`ninja`/`vita-pack-vpk`,
-Windows' `curl`, PowerShell's `Get-FileHash` and System32's bsdtar). From
+BITS for the downloads, PowerShell's `Get-FileHash` and System32's bsdtar). From
 PowerShell:
 
 ```powershell
@@ -55,6 +55,7 @@ builds the engine-only one, `--data DIR` packs another tree.
 | `--clean` | remove `build/psvita/` before building |
 | `--offline` | fail instead of downloading (needs the cached zip or an SDK already present) |
 | `--debug` | `Debug` build instead of `Release` |
+| `--profile` | `Release` (-O2) with `MUGEN_DEBUG` diagnostics; output defaults to `build/psvita-profile` |
 | `--jobs N` | parallel jobs (default: CPU count) |
 | `--data DIR` / `--no-data` | pack this game tree / pack no game data |
 | `--titleid ID` | nine-character title ID (default `MUGEN0001`) |
@@ -335,6 +336,7 @@ cmake -S port/psvita -B build/psvita -G Ninja \
 | `MUGEN_VITA_ICON_SIZE` | `128` | `icon0.png` edge length (the Vita expects 128) |
 | `MUGEN_VITA_BG_W` / `_BG_H` | `840` / `500` | LiveArea background size |
 | `MUGEN_VITA_STARTUP_W` / `_H` | `280` / `158` | LiveArea start-up image size |
+| `MUGEN_VITA_PROFILE` | `OFF` | Release build with `MUGEN_DEBUG` diagnostics (batch/model counters). `build.bat --profile` sets it and defaults the output to `build\psvita-profile` |
 
 ### The bubble artwork
 
@@ -1220,6 +1222,24 @@ live GXM context.
 | Calibration | Desktop legacy-shader calibration is bypassed; pixel offsets are zero and index sampling is Standard |
 | Shader errors | Explicit shader/program classification and info logs in `mugen.log`; interface validated after linking |
 
+### 3D stage render scale (port addition)
+
+A stage's glTF model is the fill-bound part of the OpenGL frame: the model
+geometry is cheap, but its fragments at 960x544 dominate `present`. The port
+therefore draws the stage model into a target at
+`[Video] Stage3DRenderScale` percent of the current frame (default **50** on the
+Vita, i.e. 480x272) and upscales it over the frame. Characters, effects and the
+HUD are still drawn at full 960x544 size, so only the 3D background loses
+resolution; menus and non-3D stages are unchanged.
+
+`Stage3DRenderScale = 100` restores the original full-size model draw (and the
+original 25-30 fps behaviour on the tested 3D stage). Values below 25 are
+clamped. The target has its own depth buffer, is composited with the engine's
+premultiplied alpha path, and is upscaled bilinearly. The stage PalFX is applied
+when the model is drawn and suppressed on the composite so it is not applied
+twice. This is a port addition, not an original option; a model layer with
+additive blending is approximated by the alpha composite.
+
 The programmable draw path matters: vitaGL's `glBegin`/`glEnd` uses its FFP
 programs and ignores the engine's palette shader. Calling `vglInit` alone
 would avoid the startup fault while still drawing sprites incorrectly.
@@ -1762,6 +1782,33 @@ speed are unchanged. A shader reload that fails retains the working programs.
 At renderer shutdown, `mugen-vita-gl.log` records `GL CACHE` counts for skipped
 uniform sets and texture parameter calls. Counts demonstrate avoided work,
 not an FPS improvement.
+
+The same switch enables a streaming-sprite cache, keyed on engine content
+rather than on the single scratch texture it replaces:
+
+- **Streamed sprites:** one texture per distinct decoded sprite
+  (`pixels`, width, height, bpp), 8 slots, least recently used evicted. The keys
+  are decoded-buffer addresses, so `SpriteSet_Free` drops every slot before
+  releasing them; without that, a later set could decode into the same address
+  and produce a stale hit.
+
+Only sprites the loader leaves as `SPRITE_INIT_NO_TEXTURE` (SFF v2 RLE/LZ/PNG
+still compressed, external PCX, or an SDL surface) take this path. Loaded
+sprites and all palettes are already uploaded to textures once at load on this
+build — the GLES-style per-draw palette upload does not exist here — so the
+default Elecbyte assets see no change. The cache exists for the content that
+does stream.
+
+Shutdown now reports it alongside the draw-state counts:
+
+```
+GL CACHE sprite_hits=… sprite_uploads=…
+```
+
+Debug builds define `MUGEN_DEBUG`, which compiles in `batchprof` and adds the
+`batch:` line to `mugen.log`; its `up`/`up_sp` split is the measurement for
+this cache (the upload cost before/after). As with the draw-state caches,
+the counters show avoided uploads, not a measured FPS gain.
 
 Draw-state caching defaults ON. Build a baseline and an optimized version with
 identical renderer/data/resolution options (the setting persists in CMake):

@@ -1271,12 +1271,25 @@ static void Game_PerfLog(void)
                            batch.split_us[BATCHPROF_SPLIT_STATE],
                            batch.split_us[BATCHPROF_SPLIT_BUFFER],
                            batch.split_us[BATCHPROF_SPLIT_DRAW]);
-                Log_Printf("batch:   split px=%.0fus pal=%.0fus\n",
+                Log_Printf("batch:   split px=%.0fus pal=%.0fus pass1=%.0fus pass1_calls=%.0f\n",
                            batch.split_us[BATCHPROF_SPLIT_PIXELS],
-                           batch.split_us[BATCHPROF_SPLIT_PALETTE]);
+                           batch.split_us[BATCHPROF_SPLIT_PALETTE],
+                           batch.pass1_us, batch.pass1_calls);
+                Log_Printf("batch:   area=%.0fpx vquad=%.0fus\n",
+                           batch.area_pixels, batch.vita_quad_us);
+                Log_Printf("stage: zoom=%.3f scale=%.3f target=%dx%d\n",
+                           (double)g_game->camera_zoom, (double)g_game->stage_scale,
+                           g_targetWidth, g_targetHeight);
                 /* How much of the submission the clip rectangle rejects. */
                 Log_Printf("batch:   cull outside=%.1f zero_area=%.1f of %.0f quads\n",
                            batch.outside_clip, batch.zero_area, batch.quads);
+                /* Model draws are separate from the sprite batch; on a 3D stage
+                 * this separates driver calls from the rest of the pass. */
+                if (batch.model_calls > 0.0) {
+                    Log_Printf("model: calls=%.0f tris=%.0f draw=%.0fus pass=%.0fus\n",
+                               batch.model_calls, batch.model_triangles,
+                               batch.model_cpu_us, batch.model_pass_us);
+                }
             }
         }
 #endif

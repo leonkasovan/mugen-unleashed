@@ -160,12 +160,40 @@ static void test_end_without_begin(void)
     check(near(avg.quads, 5.0), "and the counters survived until the close");
 }
 
+static void test_model_path(void)
+{
+    BatchProfAverages avg;
+
+    /* Two model draws and one whole pass, then an empty model frame: the model
+     * counters are per-frame like the sprite ones and reset on Begin. */
+    fake_counter = 0;
+    BatchProf_FrameBegin();
+    BatchProf_ModelSubmit(100, 250000ULL);
+    BatchProf_ModelSubmit(50, 150000ULL);
+    BatchProf_ModelPass(900000ULL);
+    BatchProf_FrameEnd();
+    check(BatchProf_TakeAverages(&avg), "model frame reported");
+    check(near(avg.model_calls, 2.0), "two model draw calls");
+    check(near(avg.model_triangles, 150.0), "model triangles summed");
+    check(near(avg.model_cpu_us, 400.0), "model draw ticks converted");
+    check(near(avg.model_pass_us, 900.0), "model pass ticks converted");
+
+    BatchProf_FrameBegin();
+    BatchProf_Submit(2, 8, 128, 4, 0);
+    BatchProf_FrameEnd();
+    check(BatchProf_TakeAverages(&avg), "sprite-only frame reported");
+    check(near(avg.model_calls, 0.0) && near(avg.model_triangles, 0.0) &&
+          near(avg.model_cpu_us, 0.0) && near(avg.model_pass_us, 0.0),
+          "model counters reset with the frame");
+}
+
 int main(void)
 {
     test_counts();
     test_state_changes();
     test_zero_call_ratio();
     test_end_without_begin();
+    test_model_path();
 
     if (failures != 0) {
         printf("test_batchprof: %d failure(s)\n", failures);
