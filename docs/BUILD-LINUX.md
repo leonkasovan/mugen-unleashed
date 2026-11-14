@@ -310,10 +310,118 @@ Nothing on screen changed: compared against the pre-change build with a fixed
 `-sessionseed`, both the title screen (frames 10/20/40/80) and matches at
 `round_ticks` 60/180/400 produce **byte-identical** PNGs.
 
-Still dominant, and not addressed: the sprite upload (~1 ms/frame; sprites
-reach the streaming scratch path instead of staying uploaded textures), the
-vertex re-upload (`buf`, ~1 ms), and the draw call itself (`dr`, ~3.4 ms for
-~34 calls — roughly 100 µs per call, which is where real batching would pay).
+#### Where the 2D frame goes now
+
+Those fixes took a 2D stage from 21 to ~52 fps. What is left, measured on the
+RG351MP with the batch profiler in a `-O2` build (`make ... BUILD_DEFS=-DMUGEN_DEBUG`
+gives batchprof without `DEBUG=1`'s `-O0`), `kfm.def` with AI on both sides:
+
+| component | ms/frame | note |
+|---|---|---|
+| `logic` | 0.7 | |
+| `draw` | 7.4 | |
+| `present` | 8.6 | **vblank wait, not work** |
+| — of `draw`: `dr` | 2.75 | the `glDrawArrays` call itself |
+| — `buf` | 0.87 | per-quad vertex upload |
+| — `up` | 0.68 | texture uploads |
+| — `st` | 0.19 | program/uniform/attribute setup |
+| — `px` / `pal` | 0.10 / 0.12 | sprite decode / palette conversion |
+| — **unaccounted** | **2.69** | quad building, CPU model-view, bg/HUD drawing |
+
+`present` is the slack in a vsync-locked loop, not optimisable work: the driver
+forces vsync (the engine requests 0, SDL reports 1), `logic + draw + present`
+stays at one 60 Hz period across scenes whose `draw` differs by 5 ms, and 742 of
+5324 frames are skipped when work overruns. Making it smaller would only mean
+more idle waiting.
+
+The 2.69 ms residue is where the engine itself could be blamed, so it was
+profiled rather than guessed at (see "Sampling profiler" below): **78% of all
+CPU samples land in shared libraries** — the Mali driver and libc — against
+`mat_mul` 3.5%, `gles_palette_hash` 2.7%, `SysDraw_Find` 1.1%. The draw span is
+dominated by CPU time inside the driver, which is also why batching did not pay
+(see below). There is nothing left worth optimising in the sprite submission
+path short of drawing fewer quads.
+
+#### Sampling profiler (`MUGEN_PROF=1`)
+
+`src/profiler.c` is a 100 Hz `ITIMER_PROF`/`SIGPROF` sampler modelled on Go's
+CPU profile: it samples rather than instruments, attributes by stack, and does
+the expensive work off the target. The handler only appends program counters to
+a fixed table (no allocation, no locks); `tools/prof_symbolize.py` symbolizes
+afterwards on the workstation with the cross `addr2line`:
+
+```sh
+# on the device
+MUGEN_PROF=1 MUGEN_PROF_OUT=mugen.prof ./mugen-linux-arm64 -nosound ...
+# on the host
+python3 tools/prof_symbolize.py mugen.prof \
+    --binary build/linux-arm64-aarch64-none-linux-gnu-sdl2/mugen-linux-arm64-aarch64-none-linux-gnu
+```
+
+It reports SELF (leaf frame: where the CPU was) and INCLUSIVE (anywhere on the
+stack: who caused it). `ITIMER_PROF` counts CPU time, so a thread parked in a
+swap contributes nothing — which is what you want when the question is CPU work.
+
+Limits to know before trusting a number:
+
+- the dump records raw PCs, so anything in a **shared library** symbolizes as
+  `??`. On the reference device that was 78% of samples; naming them needs the
+  process's `/proc/self/maps` captured alongside the dump, which is not done yet.
+- the handler unwinds with `backtrace()`, which needs `.eh_frame` — present in
+  the `-O2 -g` build — and glibc's first call may allocate, so the profiler warms
+  the unwinder up before arming the timer.
+
+#### GPU timing: not available on this driver
+
+`src/gputime.c` (opt-in, `MUGEN_GPUTIME=1`) wraps the draw span and the present
+blit in `EXT_disjoint_timer_query`. The device advertises the extension and the
+queries are created, but the elapsed values come back as `0xFFFFFFFF…`-derived
+sentinels that never become measurements — with no GL error from any call — so
+GPU time cannot be measured this way here. The read path is hardened anyway (GL
+errors drained and reported, implausible results rejected rather than averaged, a
+not-ready result retried instead of discarded), and the probe is off by default
+so it costs nothing.
+
+#### Driver capabilities (reference device)
+
+`Gles_LogCapabilities` (debug builds) prints these at start-up. RG351MP:
+
+```
+vendor=ARM renderer=Mali-G31
+version=OpenGL ES 3.2 v1.r13p0 ... sl=OpenGL ES GLSL ES 3.20
+MAX_TEXTURE_SIZE 8192   MAX_TEXTURE_IMAGE_UNITS 16   MAX_VERTEX_ATTRIBS 16
+MAX_SAMPLES 16          MAX_UNIFORM_BLOCK_SIZE 16384
+present: EXT_disjoint_timer_query, KHR_debug, EXT_texture_format_BGRA8888,
+         EXT_texture_storage, EXT_buffer_storage,
+         EXT_multisampled_render_to_texture, KHR_blend_equation_advanced,
+         ARM_shader_framebuffer_fetch, EXT_sRGB, OES_EGL_image
+absent:  any texture compression (no ASTC/S3TC), KHR_partial_update,
+         EXT_map_buffer_range, anisotropic filtering
+```
+
+The 16 texture units confirm the 7 sprite + 7 palette budget Ikemen-GO's
+instanced path assumes.
+
+#### Two approaches measured and rejected
+
+Recorded with their numbers so they are not retried on the same premise.
+
+**Sprite atlases** — packing a `SpriteSet`'s paletted sprites into one texture cut
+per-frame texture switches 36.6 -> 19.3 and took that scene from 31.5 to 36.3
+fps. Rejected: the engine renders 640x480 into a 640x360 screen, so every draw is
+scaled, and under `NEAREST` an atlas quad picks its texel against the atlas
+resolution plus an offset instead of against the sprite's own width. 6.3% of
+pixels then differ (visually identical, not byte-identical) inside the scaled
+sprite, which this project does not accept.
+
+**Instanced sprite batching** — Ikemen's Phase 5 port: one
+`glDrawArraysInstanced` per run, corners/texcoords/MVP in an instance buffer, up
+to 7 units per batch. It works and is pixel-identical, and it cut draw calls
+39 -> 17 (`quads/call` 1.00 -> 2.4-2.6). Rejected: over five alternating pairs the
+release frame rate was 52.7 vs 51.9 fps — inside the run-to-run spread. The
+planner can only group ~2.4 quads per batch (every sprite is its own texture),
+and the driver's CPU cost tracks total attribute/uniform work, so instancing
+moved it rather than removed it.
 
 Verified with **Arm GNU Toolchain 9.2-2019.12** (gcc 9.2.1, glibc 2.30) on
 Windows and an Ubuntu 20.04 arm64 root, and checked against an RG351MP running

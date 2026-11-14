@@ -238,6 +238,24 @@ the generator that used to do it locally is no longer in the tree. The toolchain
 directory is written to by `--setup` alone, and nowhere else — see
 `docs/BUILD-LINUX.md` ("The dependency tree") for what it holds and why.
 
+**Build switches on `port/arm64/build.sh`.** `--debug` builds `-O0 -g3` with the
+diagnostics of "Testing" above into a *separate* tree (the config stamp does not
+record `DEBUG=`, so a shared tree would leave both optimisation levels under one
+stamp). Models are **on by default** here, unlike a bare `make`; `--no-model3d`
+compiles them out.
+
+A trap worth remembering, because it silently produced a wrong binary twice:
+**environment variables do not reliably reach a native `make.exe` under MSYS2** —
+only a whitelisted set (`PATH`, `HOME`, `SYSTEMROOT`, …) gets through. So
+`MUGEN_MODEL3D=1 port/arm64/build.sh` built the Makefile's *default* instead, and
+`MUGEN_MODEL3D` had to become a command-line variable and a `--model3d` flag. The
+same reason is why `BUILD=` must be handed over repository-relative: gcc writes
+`C:/…/x.o` in the generated `.d` files whatever form it is given, so an absolute
+POSIX `BUILD=` made every header dependency name a target make never matched —
+touching a header then rebuilt nothing. Prefer a flag or a make command-line
+variable over an exported one.
+
+
 **Pad binding.** Every SDL2 target binds controllers through SDL's
 game-controller semantics (`MUGEN_GAMEPAD_POLICY`, `src/mugen.h`), configured by
 `[P<n> Gamepad]` in `mugen.cfg`; a missing group falls back to the built-in
@@ -560,6 +578,58 @@ Known test-environment quirks:
   can.
 
 Clean up afterwards: remove the copied executable and any logs from `install/`.
+
+**3. Pixel identity and performance — did the renderer change what it draws, and
+is the change worth anything?**
+
+Renderer changes are checked against a **previous build**, with a fixed RNG seed
+so the same scenario produces the same frame:
+
+```sh
+# the screenshot hook is temporary (see below); then, per build:
+MUGEN_AUTOSHOT_TICK=180 ./mugen-linux-arm64 -nosound -sessionseed 424242 \
+    -p1 kfm -p2 kfm -s kfm.def      # -> mugen000.png
+md5sum mugen000.png                 # or tools/prof_symbolize.py for CPU time
+```
+
+Two rules, both learned by getting them wrong:
+
+- **Sample a steady-state moment, not a draw frame.** Frame indices drift with
+  frame rate, so a transition (a fade, a round start) lands at a different point
+  in each build: `MUGEN_AUTOSHOT=300` and `round_ticks 400` both produced
+  different images from the *same* binary run twice. `round_ticks 180` and title
+  frames 40/120 were stable across repeats and are what the renderer work was
+  validated against.
+- **Never conclude from one run per side.** The handheld scatters ±4 fps; the
+  first single-run pairs suggested batching was both faster and slower than it
+  is. Alternate the two builds five times and compare means (batching measured
+  52.7 vs 51.9 fps over five pairs — noise).
+
+The screenshot hook (`MUGEN_AUTOSHOT` / `MUGEN_AUTOSHOT_TICK` in
+`src/frame.c`) is **added for a measurement and removed before committing**; it
+was accidentally committed once already.
+
+Performance instrumentation, all off by default:
+
+| switch | what it does |
+|---|---|
+| `--debug` (`port/arm64/build.sh`) | `-O0 -g3 -DMUGEN_DEBUG`: the `perf:` and `batch:` lines, driver capability dump |
+| `BUILD_DEFS=-DMUGEN_DEBUG` on the make line | the same diagnostics in an `-O2` build — batchprof is otherwise tied to `DEBUG=1`'s `-O0`, which exaggerates engine cost |
+| `MUGEN_SPRITEBATCH=1` | deferred sprite queue (see `docs/BUILD-LINUX.md`, rejected batching) |
+| `MUGEN_GPUTIME=1` | `EXT_disjoint_timer_query` probe; returns sentinels on the reference device |
+| `MUGEN_PROF=1`, `MUGEN_PROF_OUT=<file>` | 100 Hz sampling profiler; symbolize with `tools/prof_symbolize.py` |
+
+Host gates added alongside those (all in CI): `tools/test_batchplan.sh` (draw-call
+boundaries and texture slots — silent when wrong), `test_batchprof.sh` (the
+profiler's own arithmetic), `test_textwrap.sh` (the TrueType line-break search),
+`test_ttfcache.sh` (the rasterized-line cache).
+
+**Measure before optimising, and check the driver's own numbers.** The renderer
+work in `docs/BUILD-LINUX.md` ("Where the 2D frame goes now") is the record: three
+plausible optimisations (buffer orphaning, blend/texture state caching, a
+dedicated VAO) changed nothing measurable, one real cost (a sprite re-uploaded
+per draw) was worth 3.5 -> 58 fps on one screen, and two larger ones (a sprite
+atlas, instanced batching) were measured, implemented, and rejected on evidence.
 That directory is the pristine game tree; leave it as you found it.
 
 ## Changing code
