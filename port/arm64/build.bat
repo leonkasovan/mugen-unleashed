@@ -5,8 +5,8 @@ rem
 rem  Same job as the removed arm64 the MSYS2 build.sh that was removed, without MSYS2, Git Bash or WSL: the only
 rem  shells used are the ones the w64devkit / x86devkit kits already carry
 rem  (busybox sh as make's SHELL). Everything else is what Windows ships:
-rem  curl.exe for the downloads, PowerShell for the checksums, and the
-rem  System32 bsdtar for the archives (it reads .zip and .tar.xz alike).
+rem  BITS for the downloads (tools\download.ps1), PowerShell for the checksums,
+rem  and the System32 bsdtar for the archives (it reads .zip and .tar.xz alike).
 rem
 rem    port\arm64\build.bat                 download anything missing, then build
 rem    port\arm64\build.bat --setup         download the toolchain, then stop
@@ -184,13 +184,9 @@ set "KITBIN_FWD=%KITBIN:\=/%"
 set "PATH=%KITBIN%;%PATH%"
 
 rem PowerShell's certutil-free hashing, System32 bsdtar for the archives and
-rem Windows' curl for the downloads: all three ship with Windows 10 and later.
+rem BITS for the downloads: all three ship with Windows.
 for %%T in ("%SystemRoot%\System32\tar.exe") do if not exist "%%~fT" (
     echo error: %%~fT is missing; the archives need Windows' bundled bsdtar.
-    exit /b 1
-)
-where curl.exe >nul 2>&1 || (
-    echo error: curl.exe not found; it ships with Windows 10 1803 and later.
     exit /b 1
 )
 
@@ -230,6 +226,15 @@ if "%DO_SETUP%"=="1" (
 )
 
 if "%CHECK_TOOLS%"=="1" goto report
+
+rem Never reach the build with no cross compiler: without this, a failed or
+rem incomplete install shows up as "aarch64-none-linux-gnu-gcc: not found" from
+rem make instead of naming the real problem.
+if not exist "%CC_BIN%" (
+    echo error: no cross compiler at "%CC_BIN%"; nothing was built.
+    echo        run: port\arm64\build.bat --setup
+    goto fail
+)
 
 if "%SKIP_SYSROOT%"=="1" goto sysroot_done
 call :check_sysroot
@@ -387,18 +392,17 @@ for /f "usebackq skip=1 delims=" %%H in (`certutil -hashfile "%~2" %~1 2^>nul`) 
 if not defined HASH exit /b 1
 exit /b 0
 
-rem :download URL DEST
+rem :download -- DL_URL to DL_DEST through BITS, Windows' own transfer service.
+rem tools\download.ps1 prints progress, retries, and leaves an interrupted job
+rem in the BITS queue so the next run resumes it. The URL comes from a variable,
+rem never as a call argument: call expands its arguments a second time, which
+rem ate the percent-encoding in 15.3's GitLab project path.
 :download
-echo     downloading %~nx2
-echo     %~1
-curl.exe --fail --location --silent --show-error --proto "=https" --retry 2 ^
-    --connect-timeout 20 --max-time 1800 --output "%~2.part" "%~1"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\download.ps1" -Url "%DL_URL%" -Destination "%DL_DEST%"
 if errorlevel 1 (
-    if exist "%~2.part" del /q "%~2.part"
-    echo error: download failed: %~1
+    echo error: download failed: %DL_URL%
     exit /b 1
 )
-move /y "%~2.part" "%~2" >nul
 exit /b 0
 
 rem :extract ARCHIVE DEST  -- System32 bsdtar reads .zip and .tar.xz alike
@@ -435,7 +439,9 @@ if "%OFFLINE%"=="1" (
     echo error: --offline: %ARCHIVE% is missing or fails its checksum
     exit /b 1
 )
-call :download "%TOOLCHAIN_URL%" "%ARCHIVE%"
+set "DL_URL=%TOOLCHAIN_URL%"
+set "DL_DEST=%ARCHIVE%"
+call :download
 if errorlevel 1 exit /b 1
 call :hash_file %TOOLCHAIN_HASH_KIND% "%ARCHIVE%"
 if /I not "!HASH!"=="%TOOLCHAIN_HASH%" (
@@ -530,7 +536,9 @@ if "%OFFLINE%"=="1" (
     exit /b 1
 )
 if exist "%ARCHIVE%" del /q "%ARCHIVE%"
-call :download "%SYSROOT_URL%" "%ARCHIVE%"
+set "DL_URL=%SYSROOT_URL%"
+set "DL_DEST=%ARCHIVE%"
+call :download
 if errorlevel 1 exit /b 1
 call :hash_file SHA256 "%ARCHIVE%"
 if /I not "!HASH!"=="%SYSROOT_SHA256%" (

@@ -9,8 +9,8 @@
     $LASTEXITCODE propagation, -Help instead of --help).
 
     Nothing here needs MSYS2, Git Bash or WSL, and no Python: VitaSDK's own
-    cmake/ninja/vita-pack-vpk do the work, with Windows' curl, PowerShell's
-    Get-FileHash and System32's bsdtar.
+    cmake/ninja/vita-pack-vpk do the work, with BITS (tools\download.ps1),
+    PowerShell's Get-FileHash and System32's bsdtar.
 
     Arguments not listed below are passed straight through, so the build.bat
     spelling works too:   .\build.ps1 --titleid MUGEN0001 --data install
@@ -38,6 +38,10 @@
 
 .PARAMETER Debug
     Debug build (default Release).
+
+.PARAMETER Profile
+    Release (-O2) with MUGEN_DEBUG diagnostics: batchprof and model counters in
+    mugen.log. Defaults to build\psvita-profile.
 
 .PARAMETER NoModel3d
     Compile 3D stage model support out (basic glTF profile is on by default).
@@ -77,6 +81,7 @@ param(
     [switch]$Offline,
     [int]$Jobs = 0,
     [switch]$Debug,
+    [switch]$Profile,
     [switch]$NoModel3d,
     [string]$Data,
     [switch]$NoData,
@@ -103,6 +108,7 @@ if ($Clean)            { $argv.Add('--clean') }
 if ($Offline)          { $argv.Add('--offline') }
 if ($Jobs -gt 0) { $argv.Add('--jobs'); $argv.Add("$Jobs") }
 if ($Debug)            { $argv.Add('--debug') }
+if ($Profile)          { $argv.Add('--profile') }
 if ($NoModel3d)        { $argv.Add('--no-model3d') }
 if ($Data)             { $argv.Add('--data'); $argv.Add($Data) }
 if ($NoData)           { $argv.Add('--no-data') }

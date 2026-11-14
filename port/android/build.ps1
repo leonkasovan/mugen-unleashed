@@ -10,7 +10,7 @@
 
     Nothing here needs MSYS2, Git Bash, WSL or Python: the JDK, the SDK's own
     sdkmanager.bat and CMake, and gradlew.bat are all native. Missing tools are
-    installed with curl/Get-FileHash/bsdtar and sdkmanager; missing SDL2 and its
+    installed with BITS/Get-FileHash/bsdtar and sdkmanager; missing SDL2 and its
     companions are cross-compiled by tools\build_sdl2_companions.bat. Nothing
     is fetched with git. -CheckTools and -Offline never download.
 

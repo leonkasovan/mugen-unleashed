@@ -6,11 +6,12 @@
     The cmd.exe replacement for the removed tools/toolchain_metadata.py: it
     parses the documents the vendors publish and prints the archive URL plus
     its checksum as one pipe-separated line, so build.bat can hand the values
-    to curl and Get-FileHash without trying to parse JSON/XML itself.
+    to BITS (tools\download.ps1) and Get-FileHash without trying to parse
+    JSON/XML itself.
 
-    This script downloads and verifies nothing. build.bat does that with
-    curl.exe and Get-FileHash, unpacks with System32's bsdtar, and installs
-    with the SDK's own sdkmanager.bat.
+    This script downloads and verifies nothing. build.bat does that with BITS
+    and Get-FileHash, unpacks with System32's bsdtar, and installs with the
+    SDK's own sdkmanager.bat.
 
     Operations:
       jdk <metadata.json>            -> URL|sha256

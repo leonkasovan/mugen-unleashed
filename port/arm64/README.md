@@ -5,8 +5,8 @@ toolchain. No arm64 machine, no chroot, no WSL build required.
 
 Two entry points, same job. `build.bat` runs in **cmd.exe** and needs nothing
 but a devkit: it takes `make`, `sh`, `sed`, `grep` and `strings` from
-`w64devkit`/`x86devkit` and everything else from Windows itself (curl,
-PowerShell for the checksums, System32's bsdtar for the archives). The kit's
+`w64devkit`/`x86devkit` and everything else from Windows itself (BITS for the
+downloads, PowerShell for the checksums, System32's bsdtar for the archives). The kit's
 busybox `sh` is handed to make as its `SHELL`, which is what lets the POSIX
 recipes run without MSYS2 or Git Bash anywhere in the picture.
 

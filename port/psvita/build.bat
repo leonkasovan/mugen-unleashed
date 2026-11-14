@@ -3,9 +3,9 @@ rem ===========================================================================
 rem  build.bat -- build mugen-unleashed for the PlayStation Vita from cmd.exe
 rem
 rem  Same job as the removed psvita the MSYS2 build.sh that was removed, without MSYS2, Git Bash or WSL: the only
-rem  tools used are the ones Windows ships (curl.exe, PowerShell for the
-rem  checksums, the System32 bsdtar for the archives) plus a devkit's own
-rem  cmake/ninja/make/pkg-config. Where the MSYS2 build.sh that was removed needs a POSIX shell this file
+rem  tools used are the ones Windows ships (BITS through tools\download.ps1,
+rem  PowerShell for the checksums, the System32 bsdtar for the archives) plus a
+rem  devkit's own cmake/ninja/make/pkg-config. Where the MSYS2 build.sh that was removed needs a POSIX shell this file
 rem  uses cmd.exe builtins instead; nothing here calls uname, cygpath or sh.
 rem
 rem    port\psvita\build.bat                install what is missing, then build
@@ -19,6 +19,9 @@ rem    port\psvita\build.bat --no-model3d   compile model support out; the profi
 rem                                         is restricted and hardware
 rem                                         qualification is still open
 rem    port\psvita\build.bat --debug        Debug build (default: Release)
+rem    port\psvita\build.bat --profile      Release (-O2) with MUGEN_DEBUG
+rem                                         diagnostics: batch/model counters
+rem                                         in mugen.log; own build directory
 rem    port\psvita\build.bat --data DIR     pack this M.U.G.E.N tree into the VPK
 rem    port\psvita\build.bat --no-data      pack no game data (engine only)
 rem    port\psvita\build.bat --titleid ID   nine-character title id (MUGEN0001)
@@ -32,7 +35,8 @@ rem
 rem  Environment:
 rem    VITASDK_DIR              where VitaSDK lives (default C:\vitasdk)
 rem    VITASDK                  honoured only when a working SDK is there
-rem    BUILD                    output directory (default build\psvita)
+rem    BUILD                    output directory (default build\psvita;
+rem                             build\psvita-profile with --profile)
 rem    VITASDK_URL / VITASDK_SHA256          re-published SDK archive
 rem    VITA_LIBS_URL / VITA_LIBS_SHA256      re-published compiler asset
 rem    CMAKE_GENERATOR          override the generator (default Ninja)
@@ -95,6 +99,7 @@ rem ------------------------------------------------------------------ defaults
 set "BUILD_TYPE=Release"
 set "BUILD_OUT=%BUILD%"
 if not defined BUILD_OUT set "BUILD_OUT=build\psvita"
+if defined BUILD (set "BUILD_SET=1") else (set "BUILD_SET=0")
 set "JOBS=%NUMBER_OF_PROCESSORS%"
 if not defined JOBS set "JOBS=4"
 set "CLEAN=0"
@@ -109,6 +114,7 @@ set "MODEL3D=ON"
 set "GL_SELFTEST=OFF"
 set "RENDER_CACHE="
 set "SHADER_CACHE="
+set "PROFILE=0"
 rem Empty until :install_vita_libs resolves it: the default input is the release
 rem asset it unpacks into build\downloads. An explicit --shader-compiler /
 rem --no-shader-compiler sets SHADER_COMPILER_SET, which keeps that resolution
@@ -134,6 +140,7 @@ if /I "!ARG!"=="--env"               ( set "PRINT_ENV=1" & shift & goto parse )
 if /I "!ARG!"=="--clean"             ( set "CLEAN=1" & shift & goto parse )
 if /I "!ARG!"=="--offline"           ( set "OFFLINE=1" & shift & goto parse )
 if /I "!ARG!"=="--debug"             ( set "BUILD_TYPE=Debug" & shift & goto parse )
+if /I "!ARG!"=="--profile"           ( set "PROFILE=1" & shift & goto parse )
 if /I "!ARG!"=="--gl-selftest"       ( set "GL_SELFTEST=ON" & shift & goto parse )
 if /I "!ARG!"=="--model3d"           ( set "MODEL3D=ON" & shift & goto parse )
 if /I "!ARG!"=="--no-model3d"        ( set "MODEL3D=OFF" & shift & goto parse )
@@ -191,6 +198,11 @@ echo %JOBS%| findstr /r /c:"^[1-9][0-9]*$" >nul || (
     echo error: --jobs must be a positive integer, not '%JOBS%'
     exit /b 2
 )
+
+rem --profile keeps the release optimization and adds -DMUGEN_DEBUG. Give it
+rem its own output tree unless BUILD names one, so the normal VPK is not
+rem overwritten by a diagnostics build.
+if "%PROFILE%"=="1" if "%BUILD_SET%"=="0" set "BUILD_OUT=build\psvita-profile"
 
 rem ------------------------------------------------------------------ VitaSDK
 rem VITASDK_DIR is where the SDK gets installed; C:\vitasdk is what VitaSDK's
@@ -370,6 +382,7 @@ echo ==^> Configuring mugen-unleashed for the PS Vita
 echo     VitaSDK   %VITASDK_WIN%
 echo     toolchain %TOOLCHAIN_FILE_WIN%
 echo     build     %BUILD_TYPE%, %GENERATOR%
+if "%PROFILE%"=="1" echo     profile   MUGEN_DEBUG diagnostics with release optimization
 echo     output    %OUT%
 if defined DATA_DIR (
     echo     game data %DATA_DIR% ^(packed into the VPK^)
@@ -425,6 +438,9 @@ set "CMAKE_ARGS=%CMAKE_ARGS% "-DMUGEN_VITA_SHADER_COMPILER=%COMPILER_FWD%""
 if defined TITLEID set "CMAKE_ARGS=%CMAKE_ARGS% "-DMUGEN_VITA_TITLEID=%TITLEID%""
 if defined RENDER_CACHE set "CMAKE_ARGS=%CMAKE_ARGS% "-DMUGEN_VITA_RENDER_CACHE=%RENDER_CACHE%""
 if defined SHADER_CACHE set "CMAKE_ARGS=%CMAKE_ARGS% "-DMUGEN_VITA_SHADER_CACHE=%SHADER_CACHE%""
+set "PROFILE_PROP=-DMUGEN_VITA_PROFILE=OFF"
+if "%PROFILE%"=="1" set "PROFILE_PROP=-DMUGEN_VITA_PROFILE=ON"
+set "CMAKE_ARGS=%CMAKE_ARGS% "%PROFILE_PROP%""
 if "%GL_SELFTEST%"=="ON" set "CMAKE_ARGS=%CMAKE_ARGS% "-DMUGEN_VITA_BUILD_VITAGL=ON""
 if "%SHADER_CACHE%"=="ON" set "CMAKE_ARGS=%CMAKE_ARGS% "-DMUGEN_VITA_BUILD_VITAGL=ON""
 rem No Python: cmake\Icon.cmake derives sce_sys from res\icons\1.ico with
@@ -537,8 +553,16 @@ echo     running: vdpm install%WANTED%
 rem vdpm installs from the network and is the only step here that does; a
 rem failure is reported with the manual command rather than swallowed, because
 rem the build cannot link without what it was asked to fetch.
-"%VDPM%" install%WANTED%
-if errorlevel 1 (
+rem It asks "Proceed with installation? [Y/n]" and has no --yes flag, so the
+rem prompt is answered on stdin: this script runs unattended. Extra lines are
+rem harmless if it asks once per package.
+set "YES=%SCRATCH%\vdpm-yes.txt"
+if not exist "%SCRATCH%" mkdir "%SCRATCH%"
+( for /l %%Y in (1,1,20) do @echo yes ) > "%YES%"
+"%VDPM%" install%WANTED% < "%YES%"
+set "PKG_RC=%ERRORLEVEL%"
+if exist "%YES%" del /q "%YES%"
+if not "%PKG_RC%"=="0" (
     echo error: vdpm install%WANTED% failed
     echo        install them by hand, then rerun:
     echo          %VDPM% install%WANTED%
@@ -566,18 +590,16 @@ for /f "usebackq skip=1 delims=" %%H in (`certutil -hashfile "%~2" %~1 2^>nul`) 
 if not defined HASH exit /b 1
 exit /b 0
 
-rem :download URL DEST
+rem :download -- DL_URL to DL_DEST through BITS, Windows' own transfer service,
+rem via tools\download.ps1: progress, retries, and an interrupted job left in
+rem the BITS queue so the next run resumes it. The URL comes from a variable,
+rem never as a call argument: call expands its arguments a second time.
 :download
-echo     downloading %~nx2
-echo     %~1
-curl.exe --fail --location --silent --show-error --proto "=https" --retry 2 ^
-    --connect-timeout 20 --max-time 3600 --output "%~2.part" "%~1"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\download.ps1" -Url "%DL_URL%" -Destination "%DL_DEST%"
 if errorlevel 1 (
-    if exist "%~2.part" del /q "%~2.part"
-    echo error: download failed: %~1; rerun to retry
+    echo error: download failed: %DL_URL%
     exit /b 1
 )
-move /y "%~2.part" "%~2" >nul
 exit /b 0
 
 rem :extract ARCHIVE DEST  -- System32 bsdtar reads .zip and .tar.xz alike
@@ -636,7 +658,9 @@ if exist "%ARCHIVE%" (
 )
 echo     downloading %VITASDK_FILE% ^(about 196 MB, 600 MB unpacked^)
 echo     %VITASDK_URL%
-call :download "%VITASDK_URL%" "%ARCHIVE%"
+set "DL_URL=%VITASDK_URL%"
+set "DL_DEST=%ARCHIVE%"
+call :download
 if errorlevel 1 exit /b 1
 call :hash_file SHA256 "%ARCHIVE%"
 if /I not "!HASH!"=="%VITASDK_SHA256%" (
@@ -796,7 +820,9 @@ if "%OFFLINE%"=="1" (
 )
 echo     compiler  downloading %VITA_LIBS_FILE% ^(vitaGL shader compiler^)
 echo               %VITA_LIBS_URL%
-call :download "%VITA_LIBS_URL%" "%ARCHIVE%"
+set "DL_URL=%VITA_LIBS_URL%"
+set "DL_DEST=%ARCHIVE%"
+call :download
 if errorlevel 1 exit /b 1
 call :hash_file SHA256 "%ARCHIVE%"
 if /I not "!HASH!"=="%VITA_LIBS_SHA256%" (

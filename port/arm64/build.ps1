@@ -9,8 +9,8 @@
     $LASTEXITCODE propagation, -Help instead of --help).
 
     Nothing here needs MSYS2, Git Bash or WSL. See build.bat for what the build
-    does: it drives Arm's Mingw-w64 toolchain with Windows' curl, PowerShell's
-    Get-FileHash and System32's bsdtar.
+    does: it drives Arm's Mingw-w64 toolchain with BITS (tools\download.ps1),
+    PowerShell's Get-FileHash and System32's bsdtar.
 
     Arguments not listed below are passed straight through, so the build.bat
     spelling works too:   .\build.ps1 --gles 0 --upload

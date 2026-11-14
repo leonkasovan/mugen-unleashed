@@ -51,7 +51,7 @@ port/android/
 
 ## 1. Toolchain setup
 
-`port\android\build.bat` needs no Bash, Python or MSYS2: curl, bsdtar and
+`port\android\build.bat` needs no Bash, Python or MSYS2: BITS, bsdtar and
 PowerShell are Windows' own, and CMake/Ninja come from the SDK. Missing pieces
 are downloaded rather than left as documented prerequisites, and nothing is
 fetched with git. The cmd.exe entry points build on Windows x64 only; the
@@ -152,7 +152,7 @@ select JDK 17 or request setup. A valid existing JDK does not get replaced.
 ## 2. SDL2 and the native companions
 
 `--setup` (or the first plain build) downloads SDL2 2.32.10's release tarball
-with curl, cross-compiles it, then builds SDL2_ttf and SDL2_mixer against it
+with BITS, cross-compiles it, then builds SDL2_ttf and SDL2_mixer against it
 into `build/android/android-deps/arm64-v8a/`. All of it lives under
 `build/android/`; nothing is fetched with git. The Java integration is from SDL
 2.32.10, so that release is used until both sides are deliberately updated

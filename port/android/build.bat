@@ -24,7 +24,7 @@ rem  official metadata, the Android command-line tools from Google's repository
 rem  XML, and the SDK platform/build-tools/platform-tools/CMake/NDK packages
 rem  through the SDK's own sdkmanager.bat. Missing SDL2, SDL2_mixer and
 rem  SDL2_ttf are cross-compiled by tools\build_sdl2_companions.bat, which
-rem  downloads SDL2's release tarball with curl. Nothing is fetched with git.
+rem  downloads SDL2's release tarball with BITS. Nothing is fetched with git.
 rem  --check-tools and --offline never download; --setup stops after the tools
 rem  and libraries are in place, and --download-tools continues to the APK.
 rem
@@ -347,17 +347,8 @@ set "TMP=%TOOLS%\tmp"
 set "TEMP=%TOOLS%\tmp"
 
 rem ---------------------------------------------- downloader / unpacker
-rem Native Windows tools only: curl.exe and System32's bsdtar ship with
-rem Windows 10 1803 and later, so no MSYS2, Python or 7-Zip is involved.
-set "CURL=%SystemRoot%\System32\curl.exe"
-if exist "%CURL%" goto have_curl
-set "CURL=curl.exe"
-where curl.exe >nul 2>&1
-if errorlevel 1 (
-    echo error: curl.exe not found; it ships with Windows 10 1803 and later
-    exit /b 1
-)
-:have_curl
+rem Downloads go through BITS (tools\download.ps1) and System32's bsdtar
+rem unpacks the archives, so no MSYS2, Python or 7-Zip is involved.
 set "TAR=%SystemRoot%\System32\tar.exe"
 if not exist "%TAR%" (
     echo error: %TAR% not found; System32's bsdtar ships with Windows 10 1803
@@ -419,7 +410,7 @@ if not defined JDK (
     rem Port fix: the removed bootstrap_toolchains.sh fetched Temurin from
     rem Adoptium's JSON metadata here. cmd.exe cannot parse that itself, so
     rem tools\toolchain_metadata.ps1 reads it and this label does the download,
-    rem SHA-256 check, extraction and verification with curl/Get-FileHash/bsdtar.
+    rem SHA-256 check, extraction and verification with BITS/Get-FileHash/bsdtar.
     if "%DOWNLOAD_TOOLS%"=="1" (
         call :install_jdk
         if errorlevel 1 exit /b 1
@@ -565,24 +556,21 @@ exit /b 0
 
 rem ========================================================= provisioning
 rem Port fix: the removed bootstrap_toolchains.sh + toolchain_metadata.py did
-rem this with Python. Here curl.exe fetches the vendor documents and archives,
+rem this with Python. Here BITS fetches the vendor documents and archives,
 rem tools\toolchain_metadata.ps1 reads the metadata, Get-FileHash verifies,
 rem System32's bsdtar unpacks, and the SDK's own sdkmanager.bat installs.
 
-rem :fetch -- download DL_URL to DL_DEST through a .part file. The URL is read
-rem from a variable, never passed as a call argument: the Adoptium link contains
-rem %2B, and `call` performs a second expansion that would eat %2.
+rem :fetch -- download DL_URL to DL_DEST through BITS, Windows' own transfer
+rem service, via tools\download.ps1: progress, retries, and an interrupted job
+rem left in the BITS queue so the next run resumes it. The URL is read from a
+rem variable, never passed through `call`, whose second expansion ate the
+rem percent-encoding in the Adoptium and GitLab links.
 :fetch
-for %%F in ("%DL_DEST%") do echo     downloading %%~nxF
-"%CURL%" --fail --location --silent --show-error --proto "=https" ^
-    --retry 2 --connect-timeout 20 --max-time 1800 ^
-    --output "%DL_DEST%.part" "%DL_URL%"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\download.ps1" -Url "%DL_URL%" -Destination "%DL_DEST%"
 if errorlevel 1 (
-    if exist "%DL_DEST%.part" del /q "%DL_DEST%.part"
-    echo error: download failed
+    echo error: download failed: %DL_URL%
     exit /b 1
 )
-move /y "%DL_DEST%.part" "%DL_DEST%" >nul
 exit /b 0
 
 rem :check_hash FILE ALGORITHM EXPECTED -> 0 when they match.
