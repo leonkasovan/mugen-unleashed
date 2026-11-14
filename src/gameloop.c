@@ -1274,6 +1274,9 @@ static void Game_PerfLog(void)
                 Log_Printf("batch:   split px=%.0fus pal=%.0fus\n",
                            batch.split_us[BATCHPROF_SPLIT_PIXELS],
                            batch.split_us[BATCHPROF_SPLIT_PALETTE]);
+                /* How much of the submission the clip rectangle rejects. */
+                Log_Printf("batch:   cull outside=%.1f zero_area=%.1f of %.0f quads\n",
+                           batch.outside_clip, batch.zero_area, batch.quads);
             }
         }
 #endif

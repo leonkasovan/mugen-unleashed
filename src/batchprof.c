@@ -35,6 +35,11 @@ static int bp_have_frame;
 /* Per-region submission time for the frame in progress and the second being
  * accumulated (BATCHPROF_SPLIT_*). */
 static double bp_split[BATCHPROF_SPLIT_COUNT];
+/* Quads the clip rectangle would have rejected (port addition). */
+static double bp_outside;
+static double bp_zero_area;
+static double bp_sum_outside;
+static double bp_sum_zero_area;
 static double bp_sum_split[BATCHPROF_SPLIT_COUNT];
 /* Last bound state, for counting only the binds that actually changed. */
 static unsigned int bp_last_program;
@@ -78,6 +83,7 @@ void BatchProf_FrameBegin(void)
 
     bp_calls = bp_quads = bp_vertices = bp_stream_bytes = 0.0;
     bp_programs = bp_textures = bp_cpu_ticks = 0.0;
+    bp_outside = bp_zero_area = 0.0;
     for (i = 0; i < BATCHPROF_SPLIT_COUNT; i++) {
         bp_split[i] = 0.0;
     }
@@ -98,6 +104,8 @@ void BatchProf_FrameEnd(void)
     bp_sum_programs += bp_programs;
     bp_sum_textures += bp_textures;
     bp_sum_cpu_ticks += bp_cpu_ticks;
+    bp_sum_outside += bp_outside;
+    bp_sum_zero_area += bp_zero_area;
     for (i = 0; i < BATCHPROF_SPLIT_COUNT; i++) {
         bp_sum_split[i] += bp_split[i];
     }
@@ -146,6 +154,16 @@ void BatchProf_Texture(int unit, unsigned int texture)
     bp_textures += 1.0;
 }
 
+void BatchProf_CountQuad(int outside_clip, int zero_area)
+{
+    if (outside_clip) {
+        bp_outside += 1.0;
+    }
+    if (zero_area) {
+        bp_zero_area += 1.0;
+    }
+}
+
 void BatchProf_Split(int which, unsigned long long ticks)
 {
     if (which < 0 || which >= BATCHPROF_SPLIT_COUNT) {
@@ -179,9 +197,12 @@ int BatchProf_TakeAverages(BatchProfAverages *out)
         for (i = 0; i < BATCHPROF_SPLIT_COUNT; i++) {
             out->split_us[i] = bp_sum_split[i] / bp_frames * 1000000.0 / frequency;
         }
+        out->outside_clip = bp_sum_outside / bp_frames;
+        out->zero_area = bp_sum_zero_area / bp_frames;
     }
     bp_sum_calls = bp_sum_quads = bp_sum_vertices = bp_sum_stream_bytes = 0.0;
     bp_sum_programs = bp_sum_textures = bp_sum_cpu_ticks = 0.0;
+    bp_sum_outside = bp_sum_zero_area = 0.0;
     for (i = 0; i < BATCHPROF_SPLIT_COUNT; i++) {
         bp_sum_split[i] = 0.0;
     }

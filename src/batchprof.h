@@ -51,6 +51,9 @@ typedef struct BatchProfAverages {
      * attribute setup, `buf` the vertex buffer upload and `dr` the draw call
      * itself. Their sum is close to `cpu_us` plus `up`. */
     double split_us[7];
+    /* Quads per frame that the clip rectangle would reject (port addition). */
+    double outside_clip;
+    double zero_area;
     int frames;
 } BatchProfAverages;
 
@@ -92,6 +95,11 @@ void BatchProf_Texture(int unit, unsigned int texture);
  * is how an optimisation ends up aimed at the wrong call. */
 void BatchProf_Split(int which, unsigned long long ticks);
 
+/* Port addition: how many submitted quads the clip rectangle would reject
+ * outright. Counted per frame and reported with the batch line, so the question
+ * "is the engine submitting invisible work?" is answered by a number. */
+void BatchProf_CountQuad(int outside_clip, int zero_area);
+
 /* High-resolution counter for the submission timing. */
 unsigned long long BatchProf_Now(void);
 
@@ -115,6 +123,7 @@ static inline void BatchProf_Submit(int quads, int vertices, unsigned long bytes
 static inline void BatchProf_Program(unsigned int program) { (void)program; }
 static inline void BatchProf_Texture(int unit, unsigned int texture) { (void)unit; (void)texture; }
 static inline void BatchProf_Split(int which, unsigned long long ticks) { (void)which; (void)ticks; }
+static inline void BatchProf_CountQuad(int outside_clip, int zero_area) { (void)outside_clip; (void)zero_area; }
 static inline unsigned long long BatchProf_Now(void) { return 0ULL; }
 static inline int BatchProf_TakeAverages(BatchProfAverages *out) { (void)out; return 0; }
 
