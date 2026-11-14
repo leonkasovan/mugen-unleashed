@@ -1017,6 +1017,11 @@ int Gl_Init(int framebuffers)
     glGetIntegerv(GL_MAX_TEXTURE_SIZE, &g_glMaxTextureSize);
     g_glesReady = 1;
     g_glInitialized = 1;        /* port fix, see Gles_OnContextLost */
+#ifdef MUGEN_DEBUG
+    /* What this driver actually offers, so optimisation decisions rest on the
+     * device instead of on assumptions (gles_probe.h). */
+    Gles_LogCapabilities();
+#endif
     /*
      * Leading newline, like the "video:" lines above it: "video: vsync ..."
      * and the device/version line are printed without a trailing one, so a

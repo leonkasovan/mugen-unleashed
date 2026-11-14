@@ -11,6 +11,14 @@
 /* Probes the current context. Returns 1 and fills *caps when the context is a
  * usable ES 3.0+ with NPOT and FBO; 0 otherwise. */
 int Gles_Probe(unsigned int *caps);
+
+/*
+ * Port addition: writes the driver's strings, the limits this renderer cares
+ * about and which optional extensions are present, to mugen.log. Debug builds
+ * only -- it exists so an optimisation decision can be made from what the device
+ * actually exposes instead of from assumptions about it.
+ */
+void Gles_LogCapabilities(void);
 #endif
 
 #endif
