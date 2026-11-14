@@ -394,10 +394,17 @@ MAX_SAMPLES 16          MAX_UNIFORM_BLOCK_SIZE 16384
 present: EXT_disjoint_timer_query, KHR_debug, EXT_texture_format_BGRA8888,
          EXT_texture_storage, EXT_buffer_storage,
          EXT_multisampled_render_to_texture, KHR_blend_equation_advanced,
-         ARM_shader_framebuffer_fetch, EXT_sRGB, OES_EGL_image
-absent:  any texture compression (no ASTC/S3TC), KHR_partial_update,
-         EXT_map_buffer_range, anisotropic filtering
+         ARM_shader_framebuffer_fetch, EXT_sRGB, OES_EGL_image,
+         KHR_texture_compression_astc_ldr/hdr, EXT_discard_framebuffer
+absent:  S3TC/DXT, KHR_partial_update, EXT_map_buffer_range,
+         anisotropic filtering
 ```
+
+The driver lists **93** extensions in total; `docs/GLES_EXTENSIONS.md` is the full
+catalogue with a line on each. An earlier version of this section said "no texture
+compression", which was wrong: the probe looked for
+`EXT_texture_compression_astc_ldr` while Mali advertises the `KHR_` spelling, so
+ASTC went unnoticed. The curated list in `src/gles_probe.c` now checks both.
 
 The 16 texture units confirm the 7 sprite + 7 palette budget Ikemen-GO's
 instanced path assumes.

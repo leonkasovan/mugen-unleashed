@@ -92,7 +92,13 @@ void Gles_LogCapabilities(void)
         { "GL_EXT_disjoint_timer_query", "GPU-side timing (measure GPU cost, not guesses)" },
         { "GL_EXT_disjoint_timer_query_webgl2", "GPU-side timing" },
         { "GL_KHR_debug", "driver error callbacks instead of glGetError polling" },
-        { "GL_EXT_texture_compression_astc_ldr", "ASTC textures (stage/character sheets at 1/6 memory)" },
+        /* Mali advertises the KHR spelling; checking only EXT_ was a false
+         * negative that put "no texture compression" in the docs. */
+        { "GL_KHR_texture_compression_astc_ldr", "ASTC textures (stage/character sheets at 1/6 memory)" },
+        { "GL_EXT_texture_compression_astc_ldr", "ASTC textures (EXT spelling)" },
+        { "GL_OES_texture_compression_astc", "ASTC textures (OES spelling)" },
+        { "GL_EXT_discard_framebuffer", "skip tile writeback for unused attachments" },
+        { "GL_OES_vertex_array_object", "vertex array objects" },
         { "GL_EXT_texture_compression_s3tc", "S3TC textures" },
         { "GL_EXT_texture_format_BGRA8888", "upload BGRA without swizzling" },
         { "GL_EXT_texture_storage", "immutable textures: no reallocation per upload" },
@@ -138,6 +144,11 @@ void Gles_LogCapabilities(void)
 #undef CAP1
 
     if (ext == NULL) {
+        /*
+         * MUGEN_GL_EXT=1 prints every extension the driver lists, not just the
+         * curated set above: used to write docs/GLES_EXTENSIONS.md, and worth
+         * keeping for the next device.
+         */
         Log_Printf("caps: no GL_EXTENSIONS string (ES 3.0+ exposes glGetStringi instead)\n");
         glGetIntegerv(0x821D /* GL_NUM_EXTENSIONS */, &i);
         Log_Printf("caps: %-28s %d\n", "NUM_EXTENSIONS", (int)i);
@@ -175,6 +186,45 @@ void Gles_LogCapabilities(void)
             }
         }
         Log_Printf("caps: %d extension(s) of interest\n", shown);
+    }
+
+    /*
+     * MUGEN_GL_EXT=1 prints every extension the driver lists, not just the
+     * curated set above. Written to document a device (docs/GLES_EXTENSIONS.md);
+     * kept for the next one.
+     */
+    {
+        const char *want = getenv("MUGEN_GL_EXT");
+
+        if (want != NULL && want[0] == '1') {
+            GLint total = 0;
+            GLint k;
+            int printed = 0;
+
+            glGetIntegerv(0x821D /* GL_NUM_EXTENSIONS */, &total);
+            for (k = 0; k < total; k++) {
+                const char *name = (const char *)glGetStringi(GL_EXTENSIONS, (GLuint)k);
+
+                if (name != NULL) {
+                    Log_Printf("ext: %s\n", name);
+                    printed++;
+                }
+            }
+            if (printed == 0) {
+                /* Fall back to the legacy string. */
+                const char *p = ext;
+
+                while (p != NULL && *p != '\0') {
+                    const char *end = strchr(p, ' ');
+                    size_t len = (end != NULL) ? (size_t)(end - p) : strlen(p);
+
+                    Log_Printf("ext: %.*s\n", (int)len, p);
+                    printed++;
+                    p = (end != NULL) ? end + 1 : NULL;
+                }
+            }
+            Log_Printf("caps: %d extension(s) listed in total\n", printed);
+        }
     }
 }
 #else
