@@ -3,10 +3,31 @@
 Builds the engine for **Linux arm64** from a Windows host, with Arm's GNU
 toolchain. No arm64 machine, no chroot, no WSL build required.
 
-```sh
-port/arm64/build.sh --setup     # once: download the toolchain (~330 MB)
-port/arm64/build.sh             # build
+Two entry points, same job. `build.bat` runs in **cmd.exe** and needs nothing
+but a devkit: it takes `make`, `sh`, `sed`, `grep` and `strings` from
+`w64devkit`/`x86devkit` and everything else from Windows itself (curl,
+PowerShell for the checksums, System32's bsdtar for the archives). The kit's
+busybox `sh` is handed to make as its `SHELL`, which is what lets the POSIX
+recipes run without MSYS2 or Git Bash anywhere in the picture.
+
+```bat
+port\arm64\build.bat --setup     :: once: download the toolchain (~330 MB)
+port\arm64\build.bat             :: build
 ```
+
+From PowerShell:
+
+```powershell
+.\port\arm64\build.ps1 -CheckTools      # validate, build nothing
+.\port\arm64\build.ps1 -Jobs 8          # build, GLES by default
+```
+
+`build.ps1` is the PowerShell front end for the same build: `-CheckTools`,
+`-Jobs N`, `-Debug`, `-Clean`, `-Offline`, `-NoData`/`-Data DIR` and friends,
+and anything unrecognised is passed through, so `\build.ps1 --gles 0` works
+too. It forwards to `build.bat` -- one implementation, two front doors -- and
+PowerShell may need `-ExecutionPolicy Bypass` (or `Unblock-File build.ps1`)
+before it will run a local script.
 
 → `build/linux-arm64-aarch64-none-linux-gnu-sdl2/mugen-linux-arm64-aarch64-none-linux-gnu`
 
@@ -37,8 +58,8 @@ then build with the toolchain that matches:
 | `15.3` | gcc 15.3.1 | 2.42 | a current distro; needs glibc ≥ 2.38 on the target |
 
 ```sh
-port/arm64/build.sh                       # 9.2, glibc 2.30
-ARM64_TOOLCHAIN=15.3 port/arm64/build.sh  # 15.3, glibc 2.42
+port\arm64\build.bat                       # 9.2, glibc 2.30
+ARM64_TOOLCHAIN=15.3 port\arm64\build.bat  # 15.3, glibc 2.42
 ```
 
 `--check-tools` prints the installed glibc next to the requested one and says so
@@ -55,13 +76,14 @@ plays a full match with no errors; the 15.3 build is rejected by the loader.
 | SDL2 | shared, 2.0.x | 2.0.10 |
 | SDL2_mixer, SDL2_ttf | shared | 2.0.4, 2.0.15 |
 
-## What it needs, and what `build.sh` does about it
+## What it needs, and what the build scripts do about it
 
 | Need | Handled by |
 |---|---|
-| An `aarch64-none-linux-gnu` compiler | `--setup` downloads Arm's Mingw-w64 build and verifies it against the vendor's published SHA-256. Installed into `TOOLCHAIN_DIR` (default `C:/arm-gnu-toolchain`). |
+| A shell | `build.bat` uses only the devkit's own busybox `sh` (as make's `SHELL`) and cmd.exe — no MSYS2, no Git Bash, no WSL. `build.bat` is the MSYS2/Git Bash equivalent. |
+| An `aarch64-none-linux-gnu` compiler | `--setup` downloads Arm's Mingw-w64 build and verifies it against the vendor's published checksum (MD5 for the 9.2 series, SHA-256 for 15.3). Installed into `TOOLCHAIN_DIR` (default `C:\arm-gnu-toolchain-<version>`). |
 | SDL2, SDL2_mixer, SDL2_ttf, zlib, libpng, FreeType for aarch64 | downloaded as `arm64-sysroot.zip` (a pinned, SHA-256-verified release asset) and unpacked into `build/sysroots/arm64-sysroot/`. |
-| pkg-config | the host's, with its search path replaced by the tree above. |
+| pkg-config | the kit's, with its search path replaced by the tree above (`PKG_CONFIG_LIBDIR` and `PKG_CONFIG_PATH` are both cleared, so a host SDL2 cannot leak in). |
 
 The Arm toolchain ships a complete glibc but **no SDL**: it is a bare
 `--target=aarch64-none-linux-gnu` toolchain, not a distribution root. That is why
@@ -70,37 +92,43 @@ assembled on the build machine.
 
 ## Usage
 
+The two entry points take the same flags; the examples use `build.bat`, which is
+the one that runs in cmd.exe. Under MSYS2/Git Bash, read `build.bat` for the same
+thing.
+
 ```
-port/arm64/build.sh                 download anything missing, then build
-port/arm64/build.sh --setup         download the toolchain, then stop
-port/arm64/build.sh --check-tools   report what is present, build nothing
-port/arm64/build.sh --sysroot       re-download the dependency tree, then build
-port/arm64/build.sh --clean         remove this port's build output
-port/arm64/build.sh --no-sysroot    use the existing tree as-is
-port/arm64/build.sh --offline       fail instead of downloading
-port/arm64/build.sh --jobs N        parallel make jobs (default: CPU count)
-port/arm64/build.sh --gles 0|1      renderer; 1 = GLES 3.0 (the arm64 default)
-port/arm64/build.sh --model3d      3D stage models ([BGdef] model = *.glb); on by default
-port/arm64/build.sh --no-model3d   compile model support out
-port/arm64/build.sh --debug        -O0 -g3 -DMUGEN_DEBUG into a separate tree, and
-                                   turns on the batch-rendering profiler (`batch:`
-                                   line in mugen.log, next to `perf:`)
-port/arm64/build.sh --upload        build, then copy the binary to the device
-port/arm64/build.sh --no-keep-old   do not keep the previous binary as .prev
-port/arm64/build.sh --device U@H    device to upload to (default ark@192.168.7.2)
-port/arm64/build.sh --device-dir D  device folder (default mugen, i.e. ~/mugen)
+port\arm64\build.bat                 download anything missing, then build
+port\arm64\build.bat --setup         download the toolchain, then stop
+port\arm64\build.bat --check-tools   report what is present, build nothing
+port\arm64\build.bat --sysroot       re-download the dependency tree, then build
+port\arm64\build.bat --clean         remove this port's build output
+port\arm64\build.bat --no-sysroot    use the existing tree as-is
+port\arm64\build.bat --offline       fail instead of downloading
+port\arm64\build.bat --jobs N        parallel make jobs (default: CPU count)
+port\arm64\build.bat --gles 0 or 1   renderer; 1 = GLES 3.0 (the arm64 default)
+port\arm64\build.bat --model3d       3D stage models ([BGdef] model = *.glb); on by default
+port\arm64\build.bat --no-model3d    compile model support out
+port\arm64\build.bat --debug         -O0 -g3 -DMUGEN_DEBUG into a separate tree, and
+                                     turns on the batch-rendering profiler (`batch:`
+                                     line in mugen.log, next to `perf:`)
+port\arm64\build.bat --upload        build, then copy the binary to the device
+port\arm64\build.bat --no-keep-old   do not keep the previous binary as .prev
+port\arm64\build.bat --device U@H    device to upload to (default ark@192.168.7.2)
+port\arm64\build.bat --device-dir D  device folder (default mugen, i.e. ~/mugen)
 ```
 
 Environment overrides:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `TOOLCHAIN_DIR` | `C:/arm-gnu-toolchain` | where the toolchain is unzipped |
+| `TOOLCHAIN_DIR` | `C:\arm-gnu-toolchain-<version>` | where the toolchain is installed |
+| `ARM64_TOOLCHAIN` | `9.2` | which Arm release: `9.2` (glibc 2.30) or `15.3` (glibc 2.42) |
 | `ARM64_SYSROOT_URL` | the `toolchains-v1.0` release asset | where the dependency tree comes from |
-| `ARM64_SYSROOT_SHA256` | pinned in `build.sh` | its expected hash; needed when the asset is republished |
+| `ARM64_SYSROOT_SHA256` | pinned in the scripts | its expected hash; needed when the asset is republished |
 | `MUGEN_GLES` | `1` | same as `make MUGEN_GLES=`; `--gles` wins |
+| `MUGEN_WIN_KIT` | autodetected | `build.bat` only: which devkit supplies make/sh/sed (`C:\w64devkit`, `C:\x86devkit`, then PATH) |
 | `DEVICE` | `ark@192.168.7.2` | device for `--upload` |
-| `DEVICE_PASS` | *(prompted)* | its password; set it to run `--upload` unattended |
+| `DEVICE_PASS` | *(prompted)* | its password; `build.bat` uses it via `sshpass`, `build.bat` needs a key or an interactive prompt |
 | `DEVICE_DIR` | `mugen` | target folder on the device (relative to `~`) |
 
 `--setup` is the only thing that writes outside the repository, and only into
@@ -110,7 +138,7 @@ Environment overrides:
 ## Uploading to the device
 
 ```sh
-DEVICE_PASS=ark port/arm64/build.sh --upload
+DEVICE_PASS=ark port\arm64\build.bat --upload
 ```
 
 ```
@@ -169,9 +197,9 @@ Two things in the launcher are deliberate:
 
 ## The dependency tree
 
-`build.sh` downloads `arm64-sysroot.zip` from this project's `toolchains-v1.0`
+`build.bat` downloads `arm64-sysroot.zip` from this project's `toolchains-v1.0`
 release into `build/sysroots/arm64-sysroot/`, keeping the archive in
-`build/downloads/` as a cache. The SHA-256 is pinned in `build.sh` and
+`build/downloads/` as a cache. The SHA-256 is pinned in `build.bat` and
 checked on every use, so a truncated or replaced download cannot become the tree
 that gets linked:
 
@@ -253,7 +281,7 @@ game tree.
 
 ```
 port/arm64/
-  build.sh              entry point: toolchain, dependency tree, make
+  build.bat              entry point: toolchain, dependency tree, make
   README.md             this file
 ```
 
@@ -270,6 +298,11 @@ to `.mugen-old`, and restores that tree if the final install rename fails.
 An unmarked, nonempty toolchain directory is left alone: select a new
 `TOOLCHAIN_DIR` instead. Existing `.mugen-new`/`.mugen-old` directories indicate
 an interrupted transaction and are not silently deleted.
+
+A compiler that is present but **will not run** (a native Windows shell cannot
+execute a `/c/.../gcc.exe`) is not treated as missing: the script stops and says
+so rather than downloading a fresh toolchain over a working one. Only `--setup`
+replaces an installed tree.
 
 The build stamp records the resolved compiler path, version and dependency-root
 path. Switching between the versioned 9.2 and 15.3 kits therefore rebuilds the

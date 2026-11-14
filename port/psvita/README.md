@@ -11,13 +11,29 @@ Output: a `mugen-psvita.vpk` you can copy to the console and install with VitaSh
 
 ## Quick start
 
-From the repository root, in MSYS2 / Git Bash, on Windows:
+From the repository root, on Windows:
 
-```sh
-port/psvita/build.sh
+```bat
+port\psvita\build.bat
 ```
 
-That is the whole thing on a clean machine. It downloads VitaSDK (196 MB,
+`build.bat` needs no POSIX shell (VitaSDK's own `cmake`/`ninja`/`vita-pack-vpk`,
+Windows' `curl`, PowerShell's `Get-FileHash` and System32's bsdtar). From
+PowerShell:
+
+```powershell
+.\port\psvita\build.ps1 -CheckTools      # validate, build nothing
+.\port\psvita\build.ps1 -Data install    # build the VPK around install/
+```
+
+`build.ps1` is the PowerShell front end for the same build: `-CheckTools`,
+`-Jobs N`, `-Debug`, `-Clean`, `-Offline`, `-NoData`/`-Data DIR` and friends,
+and anything unrecognised is passed through, so `\build.ps1 --gles 0` works
+too. It forwards to `build.bat` -- one implementation, two front doors -- and
+PowerShell may need `-ExecutionPolicy Bypass` (or `Unblock-File build.ps1`)
+before it will run a local script.
+
+The first run downloads VitaSDK (196 MB,
 cached in `build/downloads/vitasdk.zip`, SHA-256 checked), installs it to
 `C:\vitasdk`, puts it on `PATH` for the build, checks the VitaSDK packages,
 configures CMake and builds. The result:
@@ -61,7 +77,7 @@ export PATH=$VITASDK/bin:$PATH
 export CMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake
 ```
 
-`eval "$(port/psvita/build.sh --env)"` applies them to the current shell, which
+`port\psvita\build.bat --env` applies them to the current shell, which
 is what the manual CMake commands under "Building" below need. `VITASDK_DIR=`
 installs or uses the SDK somewhere else; an exported `VITASDK` is used as-is
 when it already holds a compiler, so an SDK you installed yourself (including
@@ -113,7 +129,7 @@ stale CMake cache state. Explicit compiler overrides remain authoritative.
 
 ## Prerequisites
 
-`port/psvita/build.sh` provides all of this on Windows. The list is what it
+`port\psvita\build.bat` provides all of this on Windows. The list is what it
 provides, and what to arrange yourself on a host it does not cover.
 
 **VitaSDK.** The project publishes the SDK as a release asset
@@ -142,7 +158,7 @@ vdpm install vitaGL      # pulls in vitaShaRK, SceShaccCgExt and libmathneon
 
 The native OpenGL display needs vitaGL, and the CMake
 configure fails with an explicit message if any of the four libraries is
-missing. `build.sh` checks for the artefacts themselves (`libSDL2.a`,
+missing. `build.bat` checks for the artefacts themselves (`libSDL2.a`,
 `libvitaGL.a`, ...) rather than trusting `vdpm`'s bookkeeping, because an SDK
 unpacked from the archive has no package database to ask.
 
@@ -159,7 +175,7 @@ w64devkit's.
 ### With the script
 
 ```sh
-port/psvita/build.sh
+port\psvita\build.bat
 ```
 
 See "Quick start" at the top for what it installs and the flags it takes.
@@ -198,7 +214,7 @@ cmake --build build/psvita -j8
 ```
 
 From `cmd.exe` (no `sh.exe` on `PATH`) `-G "MinGW Makefiles"` is the equivalent,
-and `cmake --build build/psvita` picks the tool itself. `port/psvita/build.sh`
+and `cmake --build build/psvita` picks the tool itself. `port\psvita\build.bat`
 chooses Ninja, then Unix Makefiles, for exactly this reason.
 
 ### Configuration ownership
@@ -314,7 +330,7 @@ cmake -S port/psvita -B build/psvita -G Ninja \
 | `MUGEN_VITA_MEMSIZE` | `0` | `vita-make-fself -m`: `0` for a normal app (recommended), `0x1000`–`0x12800` KiB for system mode |
 | `MUGEN_VITA_HEAP_MIB` | `64` | newlib heap; SDL's Vita video driver needs process memory for GXM too, so an oversized heap starves `sceGxmInitialize` |
 | `MUGEN_VITA_CFG` | `port/psvita/mugen.psvita.cfg` | Platform config packed verbatim as `data/mugen.psvita.cfg`. Required: a missing file, a missing `RenderMode`, or an unsupported resolution fails the configure |
-| `MUGEN_VITA_SHADER_COMPILER` | `build/downloads/libshacccg.suprx` | Module bundled as `module/libshacccg.suprx`; `build.sh` unpacks the release asset there. Its default is passed on every build |
+| `MUGEN_VITA_SHADER_COMPILER` | `build/downloads/libshacccg.suprx` | Module bundled as `module/libshacccg.suprx`; `build.bat` unpacks the release asset there. Its default is passed on every build |
 | `MUGEN_VITA_ICON_ICO` | `res/icons/1.ico` | the artwork every `sce_sys/` image is derived from |
 | `MUGEN_VITA_ICON_SIZE` | `128` | `icon0.png` edge length (the Vita expects 128) |
 | `MUGEN_VITA_BG_W` / `_BG_H` | `840` / `500` | LiveArea background size |
@@ -356,6 +372,13 @@ artwork means replacing `res/icons/`, not editing PNGs. `bash
 tools/test_vita_icon.sh` checks the conversions (and the format) without a
 VitaSDK.
 
+**`port\psvita\build.bat` uses no Python at all**: it passes
+`-DCMAKE_DISABLE_FIND_PACKAGE_Python3=ON`, so the configure always takes the
+committed-asset branch and the VPK packs `port/psvita/sce_sys/` as it stands
+(the configure line says so: *"sce_sys/ artwork is the committed sample"*).
+`build.bat` keeps the derivation for when new artwork has to be produced from
+`res/icons/1.ico`.
+
 ---
 
 ## Installing
@@ -371,7 +394,7 @@ Installs to `ux0:app/MUGEN0001/`. Start it from the LiveArea bubble.
 
 ### Verify the copy before installing
 
-`port/psvita/build.sh` ends by printing the VPK's **exact byte size and
+`port\psvita\build.bat` ends by printing the VPK's **exact byte size and
 SHA-256**. Those describe *that build* (the archive carries file timestamps), so
 the digest changes whenever the VPK is rebuilt — compare against the run that
 produced the file you copied, not against this document:
@@ -410,7 +433,7 @@ was refused", not which check failed:
    which is the normal-app form the promoter expects. A SELF made by a mismatched
    `vita-make-fself` is also refused, so if the package verifies, the console has
    space and the artwork is indexed, reinstall VitaSDK from the pinned archive
-   (`port/psvita/build.sh --setup`) and rebuild.
+   (`port\psvita\build.bat --setup`) and rebuild.
 
 A `--no-data` build is **not** a way to isolate this failure: the artwork, the
 SELF and the SFO are identical to the full VPK, only the game tree is missing, so
@@ -646,7 +669,7 @@ unchanged. The port's own code is `port/psvita/src/`; `src/mugen.h` includes
 
 ```
 port/psvita/
-  build.sh                installs VitaSDK if needed, then builds (see above)
+  build.bat                installs VitaSDK if needed, then builds (see above)
   CMakeLists.txt          the build
   README.md               this file
   src/vita_gl_shim.c      GL capability probe + the entry points vitaGL lacks
@@ -1064,7 +1087,7 @@ To build the OpenGL configuration from MSYS2/Git Bash:
 
 ```sh
 git pull --ff-only
-bash port/psvita/build.sh
+port\psvita\build.bat
 ```
 
 The renderer and precache are not flags: they are `[Video] RenderMode = OpenGL`
@@ -1104,8 +1127,8 @@ for running the Windows-hosted converter on the original failing ELF.
 | Symptom | Cause and fix |
 |---|---|
 | **`Error 0x8010113D`** installing the VPK | `ScePromoterUtil` refused the package (`0x801011xx`; the console may show it as `C2-12691-9`). First suspect is `sce_sys/` artwork that is not 8-bit indexed — see "The bubble artwork"; then the ordered checks in "Verify the copy before installing" (copy size/SHA-256, free space on `ux0:`, a leftover `ux0:app/MUGEN0001/`, installing from `ux0:` rather than `uma0:`) |
-| `VITASDK is not set` | `eval "$(port/psvita/build.sh --env)"`, or pass `-DCMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake` |
-| `arm-vita-eabi/include/SDL/SDL.h not found` | VitaSDK's `sdl` package is missing: `port/psvita/build.sh` reinstalls it with `vdpm`, or by hand `vdpm install sdl` |
+| `VITASDK is not set` | `port\psvita\build.bat --env`, or pass `-DCMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake` |
+| `arm-vita-eabi/include/SDL/SDL.h not found` | VitaSDK's `sdl` package is missing: `port\psvita\build.bat` reinstalls it with `vdpm`, or by hand `vdpm install sdl` |
 | `libvitaGL.a not found` | `vdpm install vitaGL` (not part of a hand-made base SDK) |
 | `libvitashark.a / libSceShaccCgExt.a / libmathneon.a not found` | Same package — `vdpm install vitaGL` pulls them in |
 | `Could NOT find PkgConfig` | No host `pkg-config` on `PATH`; install one or pass `-DPKG_CONFIG_EXECUTABLE=` |
@@ -1343,7 +1366,7 @@ must expose `uPalMul`; an incompatible deployed shader is rejected.
 Enable the optional startup triangle/pixel test and actual game-frame capture:
 
 ```sh
-port/psvita/build.sh --gl-selftest
+port\psvita\build.bat --gl-selftest
 ```
 
 Or configure with `-DMUGEN_VITA_BUILD_VITAGL=ON` and
@@ -1406,13 +1429,13 @@ an unsupported OpenGL output or a missing `RenderMode` fails the build.
 
 The shader compiler for the OpenGL path is a default input, not something you
 have to supply. It is a decrypted Sony module, so it is not tracked here: it is
-this project's `lib-for-vita.zip` release asset, and `build.sh` fetches it into
+this project's `lib-for-vita.zip` release asset, and `build.bat` fetches it into
 `build/downloads/` (cached; SHA-256 pinned in the script), verifies it and
 unpacks `build/downloads/libshacccg.suprx`, which it then packs as
 `module/libshacccg.suprx`. An ordinary build therefore bundles it with no flag:
 
 ```sh
-port/psvita/build.sh            # opengl + bundled compiler, title MUGEN0001
+port\psvita\build.bat            # opengl + bundled compiler, title MUGEN0001
 ```
 
 `--shader-compiler FILE` packs another file instead (given on each invocation —
@@ -1521,7 +1544,7 @@ not a general GPU-allocation health check. No resolution setting changes.
 Rebuild and reinstall:
 
 ```sh
-bash port/psvita/build.sh
+port\psvita\build.bat
 ```
 
 Expect `GL: vitaGL splash handed off to engine` in `mugen.log`.
@@ -1744,8 +1767,8 @@ Draw-state caching defaults ON. Build a baseline and an optimized version with
 identical renderer/data/resolution options (the setting persists in CMake):
 
 ```sh
-port/psvita/build.sh --no-render-cache
-port/psvita/build.sh --render-cache
+port\psvita\build.bat --no-render-cache
+port\psvita\build.bat --render-cache
 ```
 
 Disk shader caching is a separate, **experimental** startup optimization. It
@@ -1755,8 +1778,8 @@ disables the feature. Neither option removes the bundled/runtime compiler
 requirement. Normal builds preserve explicit cache settings.
 
 ```sh
-port/psvita/build.sh --shader-cache
-port/psvita/build.sh --no-shader-cache
+port\psvita\build.bat --shader-cache
+port\psvita\build.bat --no-shader-cache
 ```
 
 Upstream's cache reader trusts cache contents and does not robustly handle

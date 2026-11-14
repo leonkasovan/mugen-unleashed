@@ -202,17 +202,17 @@ make MUGEN_TARGET=linux-arm64                 # MUGEN_GLES=1 (GLES 3.0 backend)
 make MUGEN_TARGET=linux-arm64 MUGEN_GLES=0    # desktop GL, as on x64
 ```
 
-**3D stage models are on by default when built through `port/arm64/build.sh`.**
+**3D stage models are on by default when built through `port\arm64\build.bat`.**
 The Makefile's own default is conservative for a GLES build --
 `MUGEN_MODEL3D ?= $(if $(filter 1,$(MUGEN_GLES)),0,1)` -- so a bare
 `make MUGEN_TARGET=linux-arm64` compiles them out. A stage whose background is
 only `[BGdef] model = *.glb` then has no elements to draw and renders black, with
 `Need at least one [BG] type bg (3D backgrounds unavailable)` in the match log.
-`port/arm64/build.sh` therefore always passes the value explicitly and defaults
-it on, like `port/psvita/build.sh`: `--no-model3d` turns them off. The switch is
+`port\arm64\build.bat` therefore always passes the value explicitly and defaults
+it on, like `port\psvita\build.bat`: `--no-model3d` turns them off. The switch is
 a make command-line variable rather than an environment one because a make
 variable cannot be handed over reliably here -- a native `make.exe` under MSYS2
-may see only a whitelisted environment, so `MUGEN_MODEL3D=1 port/arm64/build.sh`
+may see only a whitelisted environment, so `MUGEN_MODEL3D=1 port\arm64\build.bat`
 silently built the default.
 
 A model stage still has to fit the device: the decoded RGBA of its textures is
@@ -256,9 +256,21 @@ free Arm GNU Toolchain, and an arm64 Ubuntu root filesystem to take the
 dependency libraries from. It lives in **`port/arm64/`**, like the Android and
 Vita ports; its `README.md` has the flag reference.
 
+There are two entry points with the same flags. **`build.bat` runs in cmd.exe**
+and needs no POSIX shell at all: `make`, `sh`, `sed`, `grep` and `strings` come
+from a devkit (`w64devkit`/`x86devkit`), and Windows supplies the rest (curl,
+PowerShell for the checksums, System32's bsdtar for `.zip` and `.tar.xz`). The
+kit's busybox `sh` is passed to make as `SHELL=`, which is what lets the
+Makefile's POSIX recipes run under cmd.exe.
+
+```bat
+port\arm64\build.bat --setup     :: once: download the toolchain (~330 MB)
+port\arm64\build.bat             :: build
+```
+
 ```sh
-port/arm64/build.sh --setup     # once: download the toolchain (~330 MB)
-port/arm64/build.sh             # build
+port\arm64\build.bat --setup     # once: download the toolchain (~330 MB)
+port\arm64\build.bat             # build
 ```
 
 → `build/linux-arm64-aarch64-none-linux-gnu-sdl2/mugen-linux-arm64-aarch64-none-linux-gnu`
@@ -266,7 +278,7 @@ port/arm64/build.sh             # build
 To build and copy it to the device in one step:
 
 ```sh
-DEVICE_PASS=ark port/arm64/build.sh --upload     # -> ark@192.168.7.2:~/mugen/
+DEVICE_PASS=ark port\arm64\build.bat --upload     # -> ark@192.168.7.2:~/mugen/
 ```
 
 That is all. The rest of this section explains what those commands do and what
@@ -278,8 +290,8 @@ can go wrong, for when they do.
 `build/linux-arm64-aarch64-none-linux-gnu-sdl2-debug/`:
 
 ```sh
-port/arm64/build.sh --debug              # unoptimised, with the profiler
-port/arm64/build.sh --debug --upload     # ... and onto the device
+port\arm64\build.bat --debug              # unoptimised, with the profiler
+port\arm64\build.bat --debug --upload     # ... and onto the device
 ```
 
 A separate tree is not tidiness. The Makefile's configuration stamp records the
@@ -499,7 +511,7 @@ unmodified. This toolchain is not `w64devkit` or `x86devkit`: it targets
 Linux/ARM and builds this project's `linux-arm64` target only.
 
 ```sh
-port/arm64/build.sh --check-tools   # is everything in place?
+port\arm64\build.bat --check-tools   # is everything in place?
 ```
 
 #### Uploading to the device
@@ -516,7 +528,7 @@ does not work:
   `/usr/local/crosware/.../dropbear/current/libexec/sftp-server`, a leftover
   from a removed package, so both fail with
   `bash: /usr/local/crosware/...: No such file or directory` while plain `ssh`
-  is fine. `build.sh` therefore streams `tar` over the ssh exec channel.
+  is fine. `build.bat` therefore streams the binary over the ssh exec channel.
 - **Its clock is behind this machine's**, so a tar made here makes GNU tar warn
   `time stamp ... is ... s in the future` for every member. Harmless, and
   silenced with `--warning=no-timestamp`.
@@ -529,11 +541,11 @@ truncated binary where a working one was.
 
 The toolchain is a bare `--target=aarch64-none-linux-gnu` cross toolchain: it
 ships a complete glibc and **no SDL**. The missing libraries arrive as a release
-asset, `arm64-sysroot.zip`, which `build.sh` downloads into
+asset, `arm64-sysroot.zip`, which `build.bat` downloads into
 `build/sysroots/arm64-sysroot/` when the tree is absent; `--sysroot` re-downloads
 it.
 The archive is cached in `build/downloads/` and verified against a
-SHA-256 pinned in `build.sh` on every use, so a truncated or replaced download
+SHA-256 pinned in `build.bat` on every use, so a truncated or replaced download
 cannot become the tree that gets linked:
 
 ```
@@ -566,7 +578,7 @@ Everything the tree holds stays inside the repository, under the git-ignored
 `build/`. The toolchain directory is only ever read — the sysroot it brings
 travels with it.
 
-No absolute path is allowed to survive in it: `build.sh` rewrites every `.pc`
+No absolute path is allowed to survive in it: `build.bat` rewrites every `.pc`
 `prefix=` to `${pcfiledir}/../..` on install, so the tree links correctly from
 wherever it is unpacked. That rewrite is also why the shipped asset does not
 have to be regenerated to move the checkout.
@@ -593,7 +605,7 @@ sed -i 's|^prefix=.*|prefix=${pcfiledir}/../..|' \
 
 # 4. record what is in it — the archives are opaque, this is the only place the
 #    versions and the exclusions are written down (copy the wording from
-#    tools/make_win_sysroot.sh, which writes the same file for the Windows trees)
+#    (the Windows trees get the same .pc rewrite from their published asset)
 $EDITOR build/sysroots/arm64-sysroot/SYSROOT.txt
 
 # 5. package it with the same single top directory. The zip is a release
@@ -603,7 +615,7 @@ sha256sum build/tmp/arm64-sysroot.zip
 ```
 
 Then upload the zip to the release and put its hash in `SYSROOT_SHA256` in
-`port/arm64/build.sh` — the build refuses any other content on purpose. A fork
+`port\arm64\build.bat` — the build refuses any other content on purpose. A fork
 that publishes its own copy does not have to edit the script: it can set
 `ARM64_SYSROOT_URL` and `ARM64_SYSROOT_SHA256` for one run.
 
@@ -638,7 +650,7 @@ immediate and unambiguous:
 ```
 
 Which glibc a build needs is decided by the **toolchain**, not by this project,
-so `port/arm64/build.sh` pins one per target. The rule, measured rather than
+so `port\arm64\build.bat` pins one per target. The rule, measured rather than
 assumed:
 
 | Toolchain | glibc it targets | Binary wants | Runs on |
@@ -650,7 +662,7 @@ So: **ask the device first**, then pick.
 
 ```sh
 ssh ark@<device> 'ldd --version | head -1'      # e.g. "GLIBC 2.30-0ubuntu2.2"
-port/arm64/build.sh                             # 9.2 -> needs 2.29, fine
+port\arm64\build.bat                             # 9.2 -> needs 2.29, fine
 ```
 
 On an RG351MP (ArkOS, Ubuntu 19.10 userspace, kernel 4.4.189, Mali-G31) the 9.2
@@ -740,18 +752,20 @@ appear in a first attempt.
 
 | Symptom | Cause and fix |
 |---|---|
-| `run this from Windows … not from inside WSL` | `port/arm64/build.sh` drives the **Mingw-w64** toolchain, which WSL cannot execute. Inside WSL build natively: `make MUGEN_TARGET=linux-arm64`. |
+| `run this from Windows … not from inside WSL` | `port\arm64\build.bat` drives the **Mingw-w64** toolchain, which WSL cannot execute — and WSL has no `/c/...` mount table or `cygpath` to address it, so Windows interop does not help either. Use `port\arm64\build.bat` from cmd.exe (it needs no POSIX shell), or build natively inside WSL: `make MUGEN_TARGET=linux-arm64 CROSS_COMPILE=aarch64-linux-gnu-`. |
+| `this is a native Windows shell, not an MSYS2/Cygwin one` | `build.sh` was run in `w64devkit`'s or `x86devkit`'s busybox `sh` (or from cmd.exe). That script needs MSYS2/Git Bash for its `/c/...` paths and `cygpath`; the kits' shell is what **`port\arm64\build.bat`** is for — it uses the kit only for `make`/`sh`/`sed` and nothing was downloaded. |
+| `… is installed but cannot run from this shell` | The compiler is there but the shell cannot execute it, so the tree is fine and the shell is wrong. Nothing was downloaded (an earlier version treated this as "missing" and re-fetched 330 MB). Use Git Bash/MSYS2; `--setup` replaces a tree deliberately. |
 | `download failed its vendor SHA-256` | The zip was truncated or altered in transit; nothing was extracted. Re-run `--setup` (the bad file is deleted first). |
 | `the archive did not produce …/gcc` | A half-extracted toolchain. Remove `TOOLCHAIN_DIR` and re-run `--setup`. |
-| `fatal error: math.h: No such file or directory` | `-nostdinc` is on, and the toolchain's own include directories were not detected. The Makefile asks `$(CC) -E -v` for them and re-adds each with `-idirafter`; if you build by hand, do the same. Re-run `make check-toolchain` — it prints the resolved tree and sysroot flags. |
-| `arm64-sysroot.zip failed its SHA-256` | The download was truncated or the asset was replaced; nothing was extracted and the existing tree was kept. Re-run `--sysroot`. If you re-published the asset yourself, pass the new hash: `ARM64_SYSROOT_SHA256=<hex> port/arm64/build.sh --sysroot`. |
+| `fatal error: math.h: No such file or directory` | `-nostdinc` is on, and the toolchain's own include directories were not detected. The Makefile asks `$(CC) -E -v` for them and re-adds each with `-idirafter`; if you build by hand, do the same. **Fixed** for Arm's Windows-host toolchain and for a native make: two things were wrong — the empty file it preprocesses was `/dev/null`, which a native `gcc.exe` cannot open (it is `NUL` there), and the search list comes back as `c:\arm-gnu-toolchain-9.2\bin\..\lib\…`, whose backslashes a shell may or may not eat. The Makefile now picks the null device with `$(wildcard /dev/null)` and normalizes with `$(subst \,/,…)`, so no shell is involved. If it recurs, `make V=1` on one object shows the `-idirafter` values actually passed. |
+| `arm64-sysroot.zip failed its SHA-256` | The download was truncated or the asset was replaced; nothing was extracted and the existing tree was kept. Re-run `--sysroot`. If you re-published the asset yourself, pass the new hash: `ARM64_SYSROOT_SHA256=<hex> port\arm64\build.bat --sysroot`. |
 | `unfinished sysroot transaction at …` | An earlier run died between the renames and left `build/sysroots/arm64-sysroot.mugen-new` or `.mugen-old` behind. The tree in place was kept on purpose; delete the leftover and re-run. |
 | `… did not produce usr/lib/pkgconfig/sdl2.pc` | The archive unpacked but it is not the dependency tree (wrong asset, or a zip of a zip). Nothing was installed and the existing tree was kept. |
 | `cannot find -l:libSDL2-2.0.so.0` | The tree's SONAME-named copies are missing. They are real copies and not symlinks, because a link the Windows-side `ld` cannot follow reads as exactly this error. |
 | Undefined `X*` / `pa_*` / `snd_*` / `wl_*` | `ld` reached a **static** `libSDL2.a` (it prefers `.a` over `.so` when both are in one directory), or `-rpath-link` to `usr/lib/rpath/` is missing. |
 | `libSDL2_ttf-2.0.so.0: undefined reference to \`FT_Done_Face'` (and its siblings) | The `usr/lib/rpath/` copy of `libfreetype.so.6` is missing. `ld` finds a `NEEDED` entry through `-rpath-link` and **not** through `-L`, so being in `usr/lib/` is not enough for a library SDL2_ttf imports. Only a hand-made tree gets this wrong; the published one carries the six roots in `rpath/` for exactly this reason. |
 | `undefined reference to __libc_dlopen_mode@GLIBC_PRIVATE` | The arm64 root's `libc.so.6`/`libpthread.so.0`/`libdl.so.2` got into the link line and shadow the toolchain's own. The published tree ships no glibc at all; a hand-made one must filter it by SONAME. |
-| `CROSS_COMPILE=… needs XSYSROOT=<dir>` | Building by hand without a dependency tree. The Makefile refuses on purpose: without one, pkg-config answers from the **host**, the compile picks up host headers and the link mixes architectures. Run `port/arm64/build.sh`, or point `XSYSROOT` at `build/sysroots/arm64-sysroot`. |
+| `CROSS_COMPILE=… needs XSYSROOT=<dir>` | Building by hand without a dependency tree. The Makefile refuses on purpose: without one, pkg-config answers from the **host**, the compile picks up host headers and the link mixes architectures. Run `port\arm64\build.bat`, or point `XSYSROOT` at `build/sysroots/arm64-sysroot`. |
 | Thousands of errors inside `arm_neon.h` (`expected declaration specifiers before '__extension__'`), mentioning headers under `C:/msys64/mingw64/include/SDL2` | A **host** `.pc` was picked up, so the compile used MSYS2's SDL2 (2.3x) instead of the tree's. MSYS2 exports `PKG_CONFIG_PATH` by default and pkgconf searches it *in addition to* `PKG_CONFIG_LIBDIR`, so clearing only the libdir is not enough; the Makefile now clears both and refuses to build if any `-I` lies outside `XSYSROOT`. Nothing is wrong with the toolchain — read the *first* error, not the avalanche. |
 | `version GLIBC_2.38 not found` on the target | The glibc floor — the toolchain is newer than the device. `ARM64_TOOLCHAIN=9.2` for glibc-2.30 devices; see the table above. |
 

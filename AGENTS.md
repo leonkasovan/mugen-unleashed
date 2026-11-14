@@ -26,7 +26,7 @@ Corollaries learned the hard way:
     tool's state, not ours, and it is not ours to move — see
     [Exploring the code with CBM](#exploring-the-code-with-cbm).
   - VitaSDK lives at `C:/vitasdk` (or `VITASDK_DIR=`), installed there by
-    `port/psvita/build.sh`. A toolchain has to sit at the path the environment
+    `port\psvita\build.bat`. A toolchain has to sit at the path the environment
     variables name and other Vita tools expect; its 600 MB of unpacked SDK does
     not belong in a git-ignored build tree. What the script *downloads* still
     goes to `build/downloads/`, and its staging still happens in `build/tmp/`.
@@ -59,14 +59,18 @@ third_party/    Lua 5.1.4, libpng 1.2.38, glad 2.1, minizip 0.15, sdk,
                 libresample, glew-1.5.4 (reference only, no longer built), vitagl,
                 cgltf-1.14 and stb (upstream desktop 3D model support)
 port/*/cmake/   platform-only CMake helpers; no root MSVC build
-setup.bat       installs the two Windows devkits + dependency trees, then builds
+build.bat       installs the two Windows devkits + dependency trees, then builds
 res/icons/      the window/bubble icon as one .ico per size (see below)
 res/shaders/    project-owned shader dialects: gles/ (staged as data/gles by the
                 Android build) and vita/ (substituted into the VPK); the desktop
                 shaders are the game installation's own data/*.{vert,frag}
 tools/          extract_icon.py, iconpack.py, compare_logs.py,
-                make_win_sysroot.sh, test_*.sh
-port/           android/, psvita/ and arm64/ — the platform ports
+                test_*.sh                     (make_win_sysroot.sh was removed
+                                              with the MSYS2 entry points)
+port/           android/, psvita/ and arm64/ — the platform ports, each with a
+                cmd.exe build.bat as its only entry point (the MSYS2 build.sh
+                scripts were removed; the plan documents below still name them
+                as a record of what was done, not as instructions)
 docs/           ANALYSIS.md, SDL2_ONLY_PLAN.md, BUILD-MINGW.md, BUILD-LINUX.md, LUA.md
 install/        a real M.U.G.E.N 1.1b1 installation (untracked, for testing;
                 tools/fetch_game_data.sh fetches it when absent)
@@ -83,11 +87,11 @@ Each entry point owns its own subtree and never writes into another's.
 
 | `build/mingw64-sdl2/` | plain `make` with the 64-bit kit on `PATH`, or `make MUGEN_TARGET=win64` (Windows, experimental) | the same shape, `mugen-mingw-win64-sdl2.exe` |
 | `build/<linux-target>-sdl2/` | root `Makefile` (Linux) | same shape, `mugen-linux-<arch>` |
-| `build/<linux-target>-<cross-prefix>-<sdl>/` | root `Makefile` with `CROSS_COMPILE=`/`XSYSROOT=` (via `port/arm64/build.sh`) | same shape, `mugen-linux-<arch>-<prefix>`; the dependency tree it links against is `build/sysroots/arm64-sysroot/` |
+| `build/<linux-target>-<cross-prefix>-<sdl>/` | root `Makefile` with `CROSS_COMPILE=`/`XSYSROOT=` (via `port\arm64\build.bat`) | same shape, `mugen-linux-<arch>-<prefix>`; the dependency tree it links against is `build/sysroots/arm64-sysroot/` |
 | `build/mingw-debug/` | `make DEBUG=1 BUILD=build/mingw-debug` | an explicit `BUILD=` override |
-| `build/linux-arm64-<prefix>-sdl2-debug/` | `port/arm64/build.sh --debug` | the same shape, built `-O0 -g3 -DMUGEN_DEBUG`; a separate tree on purpose, since the config stamp does not include `DEBUG=` and the two would otherwise overwrite each other's objects |
-| `build/psvita*/` | `port/psvita/build.sh` (default `build/psvita/`) or `port/psvita/CMakeLists.txt` by hand (`BUILD=<dir>` picks another) | `mugen`, `mugen-psvita.self`, `mugen-psvita.vpk`, `vita-mugen.cfg` |
-| `build/android/` | `port/android/build.sh` | `toolchains/` (JDK/SDK/NDK/CMake, `env.sh`), `sdl2/<abi>/`, `android-deps/<abi>/`, `android-deps-src/`, `sources/`, `build-sdl2/`, `gradle-user-home/`, `asset-list.txt`, `mugen-unleashed-<abi>.apk` |
+| `build/linux-arm64-<prefix>-sdl2-debug/` | `port\arm64\build.bat --debug` | the same shape, built `-O0 -g3 -DMUGEN_DEBUG`; a separate tree on purpose, since the config stamp does not include `DEBUG=` and the two would otherwise overwrite each other's objects |
+| `build/psvita*/` | `port\psvita\build.bat` or `port\psvita\build.bat` (default `build/psvita/`) or `port/psvita/CMakeLists.txt` by hand (`BUILD=<dir>` picks another) | `mugen`, `mugen-psvita.self`, `mugen-psvita.vpk`, `vita-mugen.cfg` |
+| `build/android/` | `port\android\build.bat` or `port\android\build.bat` | `toolchains/` (JDK/SDK/NDK/CMake, `env.sh`/`env.bat`), `sdl2/<abi>/`, `android-deps/<abi>/`, `android-deps-src/`, `sources/`, `build-sdl2/`, `gradle-user-home/`, `asset-list.txt`, `mugen-unleashed-<abi>.apk` |
 | `build/baseline/` | hand-made, kept on purpose | SDL1 reference binary and log used by the log-comparison workflow |
 
 Three of those are not any single entry point's private output, so they are named
@@ -95,8 +99,8 @@ by *kind* rather than by owner and every script uses the same ones:
 
 | Path | Written by | Contents |
 |---|---|---|
-| `build/downloads/` | `port/arm64/build.sh`, `port/psvita/build.sh`, `setup.bat`, `tools/make_win_sysroot.sh` callers | every file fetched from the network: the Arm toolchain archive, `arm64-sysroot.zip`, `vitasdk.zip` (196 MB), `mugen_elecbyte_assets.zip` (the default game tree), the two w64devkit self-extractors, `win32-sysroot.zip`, `win64-sysroot.zip`. Purely a cache — safe to delete, and re-verifying it costs a download |
-| `build/sysroots/` | `port/arm64/build.sh`, `setup.bat` | the installed dependency trees: `arm64-sysroot/`, `win32-sysroot/`, `win64-sysroot/`. Each holds `usr/{include,lib/lib/pkgconfig}` and is consumed through `XSYSROOT=` (Arm) or found automatically by the `Makefile` (Windows) |
+| `build/downloads/` | `port\arm64\build.bat`, `port\psvita\build.bat`, `build.bat` | every file fetched from the network: the Arm toolchain archive, `arm64-sysroot.zip`, `vitasdk.zip` (196 MB), `mugen_elecbyte_assets.zip` (the default game tree), the two w64devkit self-extractors, `win32-sysroot.zip`, `win64-sysroot.zip`. Purely a cache — safe to delete, and re-verifying it costs a download |
+| `build/sysroots/` | `port\arm64\build.bat`, `build.bat` | the installed dependency trees: `arm64-sysroot/`, `win32-sysroot/`, `win64-sysroot/`. Each holds `usr/{include,lib/lib/pkgconfig}` and is consumed through `XSYSROOT=` (Arm) or found automatically by the `Makefile` (Windows) |
 | `build/tmp/` | anything | scratch: staging directories during an install, test output (`build/tmp/<test-name>/`), probe programs and logs. Nothing here is expected to survive; `make` never reads it, and deleting it must never break a build |
 
 Two rules follow from the "keep temporary files inside the project" rule above:
@@ -111,7 +115,7 @@ Two rules follow from the "keep temporary files inside the project" rule above:
   are done instead of letting them accumulate; several debugging scripts and
   stray binaries once piled up in `build/` itself. If you cannot tell whether a
   directory is yours, leave it.
-- `port/android/build.sh` also writes `port/android/app/src/main/assets/`
+- `port\android\build.bat` also writes `port/android/app/src/main/assets/`
   (staging) and `port/android/app/build/`, `port/android/app/.cxx/` (Gradle's
   own output). Those are Gradle-owned, are git-ignored, and are recreated from
   `src/main/assets` and the NDK on every build.
@@ -209,10 +213,19 @@ top-level `tools/`. The Makefile stays generic: it only knows `CROSS_COMPILE=` a
 `XSYSROOT=`, so another target can reuse them.
 
 ```sh
-port/arm64/build.sh --setup   # once: the toolchain, ~330 MB
-port/arm64/build.sh           # dependency tree + build
-DEVICE_PASS=ark port/arm64/build.sh --upload   # ... and copy to the device
+port\arm64\build.bat --setup   # once: the toolchain, ~330 MB
+port\arm64\build.bat           # dependency tree + build
+DEVICE_PASS=ark port\arm64\build.bat --upload   # ... and copy to the device
 ```
+
+**`port\arm64\build.bat` is the same build for cmd.exe**, and it is the one to
+use on Windows if MSYS2/Git Bash is not wanted: it uses a devkit (`w64devkit`,
+else `x86devkit`) only for `make`, `sh`, `sed`, `grep`, `strings`, `md5sum`, and
+passes that busybox `sh` to make as `SHELL=` so the Makefile's POSIX recipes run
+without any MSYS layer. Downloads are `curl.exe`'s, checksums are PowerShell
+`Get-FileHash`'s, and archives are unpacked by System32's bsdtar (`.zip` and
+`.tar.xz` both). It takes the same flags; `--upload` needs `ssh` with a key or an
+interactive password (Windows has no `sshpass`).
 
 `--upload` sends the binary to `ark@192.168.7.2:~/mugen/mugen-linux-arm64`,
 keeping the old one as `.prev`. It uses **tar over ssh, not scp/sftp**: that
@@ -238,16 +251,16 @@ SHA-256 and no version directory. The GitLab URL needs `%2F` in the project
 path — a literal `/` returns 404.
 
 The dependency tree those libraries live in is a **release asset**, not something
-this repository builds: `build.sh` downloads `arm64-sysroot.zip` from the
+this repository builds: `build.bat` downloads `arm64-sysroot.zip` from the
 project's `toolchains-v1.0` release into `build/sysroots/arm64-sysroot/` (cache
-in `build/downloads/`) and verifies it against a SHA-256 pinned in `build.sh`; `ARM64_SYSROOT_URL`/`ARM64_SYSROOT_SHA256` override both for a fork or
+in `build/downloads/`) and verifies it against a SHA-256 pinned in `build.bat`; `ARM64_SYSROOT_URL`/`ARM64_SYSROOT_SHA256` override both for a fork or
 a republished asset. Assembling it needs an aarch64 Ubuntu root filesystem and
 produces the same tree every time, so it is published once and consumed as data;
 the generator that used to do it locally is no longer in the tree. The toolchain
 directory is written to by `--setup` alone, and nowhere else — see
 `docs/BUILD-LINUX.md` ("The dependency tree") for what it holds and why.
 
-**Build switches on `port/arm64/build.sh`.** `--debug` builds `-O0 -g3` with the
+**Build switches on `port\arm64\build.bat`.** `--debug` builds `-O0 -g3` with the
 diagnostics of "Testing" above into a *separate* tree (the config stamp does not
 record `DEBUG=`, so a shared tree would leave both optimisation levels under one
 stamp). Models are **on by default** here, unlike a bare `make`; `--no-model3d`
@@ -256,7 +269,7 @@ compiles them out.
 A trap worth remembering, because it silently produced a wrong binary twice:
 **environment variables do not reliably reach a native `make.exe` under MSYS2** —
 only a whitelisted set (`PATH`, `HOME`, `SYSTEMROOT`, …) gets through. So
-`MUGEN_MODEL3D=1 port/arm64/build.sh` built the Makefile's *default* instead, and
+`MUGEN_MODEL3D=1 port\arm64\build.bat` built the Makefile's *default* instead, and
 `MUGEN_MODEL3D` had to become a command-line variable and a `--model3d` flag. The
 same reason is why `BUILD=` must be handed over repository-relative: gcc writes
 `C:/…/x.o` in the generated `.d` files whatever form it is given, so an absolute
@@ -298,11 +311,26 @@ has a troubleshooting table for the errors a first attempt produces):
 
 ### GNU Make + MinGW (Windows, fully static)
 
+`build.bat` in the repository root is the supported entry point on Windows and
+needs no MSYS2: it uses a devkit's `make`/`sh`/`sed` plus Windows' own curl,
+PowerShell and bsdtar, and hands make the kit's busybox `sh` as `SHELL=`.
+
+```bat
+build.bat /build32                      :: win32 reference build, cmd.exe
+```
+
+Driving `make` by hand still works, from a shell that has the kit first:
+
 ```sh
-export PATH=/c/x86devkit/bin:$PATH      # the 32-bit kit, not w64devkit
+export PATH=/c/x86devkit/bin:$PATH      # MSYS2/Git Bash: the 32-bit kit, not w64devkit
 make check-toolchain
 make -j8
 make install                            # strips and copies into install/
+```
+
+```bat
+set "PATH=C:\x86devkit\bin;%PATH%"      :: or cmd.exe, with the same effect
+make check-toolchain
 ```
 
 → `build/mingw/mugen-mingw-win32-sdl2.exe`, and `install/mugen-mingw-win32-sdl2.exe` after
@@ -340,11 +368,12 @@ on `PATH` a plain `make` produces the experimental win64 build, not win32. For
 the 32-bit reference build, put `x86devkit` first or pass the compiler
 (`CC=/c/x86devkit/bin/gcc make`).
 
-`setup.bat` (repository root) installs both devkits and both dependency trees
-from nothing, verifies them and can build: `setup.bat /build`,
-`/build32`, `/build64`, `/check`, `/force`. The kits go to `C:\w64devkit` and
-`C:\x86devkit`; the trees go to `build/sysroots/win64-sysroot` and
-`build/sysroots/win32-sysroot`.
+`build.bat` (repository root) installs both devkits and both dependency trees
+from nothing, verifies them and builds: with no arguments it does the whole
+job (install what is missing, then build win32 and win64); `/build`,
+`/build32`, `/build64`, `/check` and `/force` narrow it. The kits go to
+`C:\w64devkit` and `C:\x86devkit`; the trees go to `build/sysroots/win64-sysroot`
+and `build/sysroots/win32-sysroot`.
 
 A kit from skeeto's w64devkit ships **no SDL, no libpng and no `.pc` files**, so
 the tree is what supplies the libraries — and because it sits at a fixed path
@@ -359,16 +388,34 @@ Both kits ship their own `pkg-config`, and MSYS `sh` does not convert POSIX
 paths for a native executable, so `PKG_CONFIG_PATH=/c/...` in a make variable
 silently resolves nothing while the same value typed into bash works — use
 `C:/...` spellings. A kit without the SDL add-ons fails `check-pkgconfig`;
-`tools/make_win_sysroot.sh <kit> win32|win64` packages that kit's dependency set
-as a relocatable tree (published as `win32-sysroot.zip`/`win64-sysroot.zip`,
-same shape as `arm64-sysroot.zip`). Both traps: `docs/BUILD-MINGW64.md`.
+the dependency tree is what supplies them, published as
+`win32-sysroot.zip`/`win64-sysroot.zip` (same shape as `arm64-sysroot.zip`)
+and unpacked by `build.bat`. The packer that produced those assets,
+`tools/make_win_sysroot.sh`, went with the MSYS2 entry points. Both traps:
+`docs/BUILD-MINGW64.md`.
 
 ### PS Vita (VitaSDK)
 
 ```sh
-port/psvita/build.sh              # installs VitaSDK if absent, then builds
-port/psvita/build.sh --check-tools
+port\psvita\build.bat              # installs VitaSDK if absent, then builds
+port\psvita\build.bat --check-tools
 ```
+
+```bat
+port\psvita\build.bat            :: the same, from cmd.exe, with no POSIX shell
+```
+
+`port\psvita\build.bat` is the cmd.exe entry point and takes the same flags (and
+`build.ps1` beside it is the PowerShell front end: a thin wrapper that forwards to
+`build.bat`, so the two cannot drift): it
+uses VitaSDK's own `cmake`, `ninja` and `vita-pack-vpk`, Windows' `curl`,
+PowerShell `Get-FileHash` and System32's bsdtar (no `unzip`, no `cygpath`, no
+`uname`), and it exports `VITASDK` with forward slashes because CMake's
+`FindPkgConfig` dies on the `\v` in `C:\vitasdk`. Like the other ports, one
+`build.bat` exists per port: `port\arm64\build.bat`, `port\android\build.bat`,
+`port\psvita\build.bat`, plus the repository root's `build.bat` for the
+Windows/MinGW targets. Each port also has a `build.ps1` — PowerShell-style
+parameters over the same `build.bat` implementation, not a second one.
 
 VitaSDK is a release asset (`vitasdk.zip`, SHA-256 pinned in the script) and is
 unpacked to `C:/vitasdk` — one of the two sanctioned exceptions to the
@@ -395,7 +442,7 @@ neither is packaged yet, so both are inert. Do not reintroduce a wholesale
 `data/mugen.cfg` replacement in a port: it discards whatever the user set.
 
 The vitaGL shader compiler is a decrypted Sony module, so it is **not tracked**
-in this repository. It is the `lib-for-vita.zip` release asset: `build.sh`
+in this repository. It is the `lib-for-vita.zip` release asset: `build.bat`
 fetches it into `build/downloads/`, verifies it against a SHA-256 pinned in the
 script and unpacks `build/downloads/libshacccg.suprx`, which is then bundled as
 `module/libshacccg.suprx` by default (no flag needed); `--shader-compiler FILE`
@@ -505,7 +552,7 @@ All three platforms use it, and nothing else: the artwork is edited in one place
   `$VITASDK/share/gcc-arm-vita-eabi/samples/*/sce_sys`; treat it as the
   reference. The committed fallbacks are regenerated with the same commands, so
   a machine without Python still packs a VPK the console accepts.
-- The Android build runs `tools/make_android_icons.sh` from `port/android/build.sh`
+- The Android build used to run `tools/make_android_icons.sh` from `port\android\build.bat`
   before Gradle, deriving the five density buckets (`ic_launcher.png`,
   48/72/96/144/192) and the adaptive icon's foreground (108dp canvas,
   108/162/216/324/432, artwork confined to the 66% safe zone). It writes into
@@ -634,7 +681,7 @@ Performance instrumentation, all off by default:
 
 | switch | what it does |
 |---|---|
-| `--debug` (`port/arm64/build.sh`) | `-O0 -g3 -DMUGEN_DEBUG`: the `perf:` and `batch:` lines, driver capability dump |
+| `--debug` (`port\arm64\build.bat`) | `-O0 -g3 -DMUGEN_DEBUG`: the `perf:` and `batch:` lines, driver capability dump |
 | `BUILD_DEFS=-DMUGEN_DEBUG` on the make line | the same diagnostics in an `-O2` build — batchprof is otherwise tied to `DEBUG=1`'s `-O0`, which exaggerates engine cost |
 | `MUGEN_SPRITEBATCH=1` | deferred sprite queue (see `docs/BUILD-LINUX.md`, rejected batching) |
 | `MUGEN_GPUTIME=1` | `EXT_disjoint_timer_query` probe; returns sentinels on the reference device |
@@ -703,8 +750,8 @@ the tree is worse than nothing.
 `docs/MODEL3D_IMPLEMENTATION.md` records implemented profiles and OPEN hardware
 qualification. Desktop GL remains the reference and defaults to model support.
 Linux GLES models are opt-in with `MUGEN_GLES=1 MUGEN_MODEL3D=1` (on by default
-through `port/arm64/build.sh`, off for a bare `make`); Android uses
-`port/android/build.sh --model3d` (implies GLES); Vita compiles its restricted
+through `port\arm64\build.bat`, off for a bare `make`); Android uses
+`port\android\build.bat --model3d` (implies GLES); Vita compiles its restricted
 basic profile by default and `--no-model3d` turns it off. Vita rejects skinning
 and omits lighting/outlines/shadow/IBL; GLES omits shadow/IBL.
 

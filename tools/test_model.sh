@@ -9,7 +9,7 @@ sdl_cflags="${SDL_CFLAGS:-$(pkg-config --cflags sdl2 libpng zlib)}"
 sdl_libs="${SDL_LIBS:-$(pkg-config --libs sdl2 libpng zlib)}"
 # -ldl/-lm are POSIX: a MinGW host has neither, and SDL2's own -l line already
 # carries what it needs there. Detected rather than assumed.
-# Windows_NT: a kit first on PATH can shadow MSYS uname (port/psvita/build.sh
+# Windows_NT: a kit first on PATH can shadow MSYS uname (port\psvita\build.bat
 # matches the same set).
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*|Windows_NT) posix_libs="" ;;

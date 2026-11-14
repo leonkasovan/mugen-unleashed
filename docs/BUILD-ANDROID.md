@@ -5,8 +5,10 @@ remains for Windows/Linux; do not invoke it to build this port.
 
 ## Prerequisites (host)
 
-A Bash environment, `curl`, and Python 3.8+ are required. On Windows, use
-MSYS2/Git Bash with those programs on `PATH`.
+On Windows, `port\android\build.bat` needs no Bash and no Python at all: it
+drives the JDK, the SDK's `sdkmanager.bat`/CMake, `gradlew.bat` and cmd
+execution. `port\android\build.bat` is the Bash entry point (MSYS2/Git Bash) and
+does require Bash, `curl` and Python 3.8+ for its tool-installation path.
 
 | Component | Pins / notes |
 |---|---|
@@ -21,7 +23,7 @@ MSYS2/Git Bash with those programs on `PATH`.
 
 | Path | Purpose |
 |---|---|
-| `port/android/build.sh` | Host preflight, tool bootstrap, Gradle invocation, APK staging |
+| `port\android\build.bat` | Host preflight, tool bootstrap, Gradle invocation, APK staging |
 | `port/android/app/build.gradle` | ABI, SDK/NDK/CMake pins, signing |
 | `port/android/app/src/main/jni/src/CMakeLists.txt` | Native `libmain.so` + engine vendor sources |
 | `port/android/tests/test_build.py` | Offline bootstrap/orchestration fixtures |
@@ -30,7 +32,7 @@ MSYS2/Git Bash with those programs on `PATH`.
 
 ```sh
 # From the repository root
-bash port/android/build.sh --setup       # installs missing tools, exits before SDL/lib checks
+port\android\build.bat --setup       # installs missing tools, exits before SDL/lib checks
 source build/android/toolchains/env.sh   # exports SDK/NDK/CMake roots
 
 # Optional: source-build SDL2 (if no prebuilt prefix is available)
@@ -39,9 +41,9 @@ export SDL2_COMPANION_DIR=/path/to/android-mixer-ttf-prefix
 # ... clone SDL, cmake --build --install, then run the companion script ...
 
 # Full build (arm64-v8a is the only ABI supported by Gradle)
-GAME_DATA_DIR=/path/to/game-tree bash port/android/build.sh
+GAME_DATA_DIR=/path/to/game-tree port\android\build.bat
 # or, keep the repository's reference install:
-GAME_DATA_DIR=install bash port/android/build.sh
+GAME_DATA_DIR=install port\android\build.bat
 ```
 
 Output: `build/android/mugen-android-arm64-v8a.apk`.
@@ -67,7 +69,7 @@ export ANDROID_KEYSTORE=/path/to/release.jks
 export ANDROID_KEYSTORE_PASS=...
 export ANDROID_KEY_ALIAS=androidkey
 export ANDROID_KEY_PASS=...
-bash port/android/build.sh
+port\android\build.bat
 ```
 
 The key password defaults to the store password; the alias defaults to

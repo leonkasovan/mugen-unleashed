@@ -18,7 +18,7 @@
 # already there -- including a real M.U.G.E.N installation -- is never touched.
 #
 # POSIX sh on purpose: port/psvita and port/android call it from bash, the
-# Makefile and setup.bat from the w64devkit's sh.exe.
+# Makefile and build.bat from the w64devkit's sh.exe.
 set -eu
 
 URL="${GAME_ASSETS_URL:-https://github.com/leonkasovan/mugen-unleashed/releases/download/toolchains-v1.0/mugen_elecbyte_assets.zip}"

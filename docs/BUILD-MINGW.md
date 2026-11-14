@@ -7,17 +7,18 @@ GCC. This is the supported Windows build; root MSVC/CMake has been removed.
 Everything third-party is either compiled from source in `third_party/` or
 linked statically from `C:\x86devkit`.
 
-## Zero to build: `setup.bat`
+## Zero to build: `build.bat`
 
-The repository root carries `setup.bat`, which installs the whole Windows build
-environment from nothing and can then build both targets:
+The repository root carries `build.bat`, which installs the whole Windows build
+environment from nothing and builds both targets:
 
 ```bat
-setup.bat             :: both devkits + their dependency trees, then verify
-setup.bat /build      :: ... and build win32 and win64
-setup.bat /build32    :: ... only the reference build
-setup.bat /check      :: verify what is installed, install nothing
-setup.bat /force      :: re-download and re-extract
+build.bat             :: install what is missing, then build win32 and win64
+build.bat /build      :: the same thing, spelled out
+build.bat /build32    :: ... only the reference build
+build.bat /build64    :: ... only the 64-bit build
+build.bat /check      :: verify what is installed, install nothing
+build.bat /force      :: re-download and re-extract
 ```
 
 It downloads the two 2.11.0 devkits from `github.com/skeeto/w64devkit` into
@@ -84,8 +85,12 @@ The instructions below are for the environment this project was verified in:
 | Make | GNU Make 4.4.1 |
 | Binutils | `i686-w64-mingw32-{ar,windres,strip}` from the same kit |
 | `pkg-config` | finds `sdl2.pc`, `SDL2_mixer.pc`, `SDL2_ttf.pc`, `zlib.pc`, `libpng16.pc` |
-| Shell | MSYS2 bash (or `sh` from the same kit) |
+| Shell | cmd.exe with the kit's `sh` used only as make's `SHELL` (`build.bat`), or MSYS2 bash if you drive `make` by hand |
 | Python | any working `python3` / `python` / `py -3` — only for the optional icon |
+
+```bat
+build.bat /build32       :: cmd.exe: the whole job, reference build
+```
 
 ```sh
 make check-toolchain     # verifies the 32-bit toolchain and that the static
@@ -93,6 +98,10 @@ make check-toolchain     # verifies the 32-bit toolchain and that the static
 make -j8                 # build/mingw-sdl2/mugen-mingw-win32-sdl2.exe (SDL2 backend)
 make install             # strip it and copy it into install/
 ```
+
+The `make` form needs a shell that has the kit first on `PATH` — MSYS2/Git Bash,
+or `cmd.exe` with `set PATH=C:\x86devkit\bin;%PATH%` (the recipes run in whichever
+`sh` make is given; `build.bat` hands it the kit's own, so no MSYS2 is involved).
 
 Targets and variables:
 
@@ -217,6 +226,7 @@ miss about a dozen archives and fail at link.
 The devkit ships its own `pkg-config`, and under MSYS `sh` a POSIX
 `PKG_CONFIG_PATH`/`PKG_CONFIG_LIBDIR` is not converted for it, so it matches
 nothing — use `C:/...` spellings in make variables. `tools/make_win_sysroot.sh`
+(removed with the MSYS2 entry points; the published trees are the supported ones)
 turns either kit's dependency set into a relocatable tree
 (`win32-sysroot.zip`, `win64-sysroot.zip`, published beside
 `arm64-sysroot.zip`) for a machine whose kit lacks the SDL add-ons; both traps

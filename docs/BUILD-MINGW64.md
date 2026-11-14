@@ -50,17 +50,17 @@ ends up in a make variable or a recipe, or keep MSYS2's `pkg-config` first on
 `PATH`.
 
 **A kit without the SDL add-ons fails `check-pkgconfig`.** `tools/make_win_sysroot.sh`
+(removed with the MSYS2 entry points — the published `win32-sysroot.zip` /
+`win64-sysroot.zip` assets are the supported trees now)
 packages one kit's dependency set as a relocatable tree the same shape as
 `arm64-sysroot.zip` — headers, static archives, and `.pc` files with
 `prefix=${pcfiledir}/../..`:
 
 ```sh
-tools/make_win_sysroot.sh C:/w64devkit win64    # -> build/sysroots/win64-sysroot
-tools/make_win_sysroot.sh C:/x86devkit win32    # -> build/sysroots/win32-sysroot
 ```
 
 The tree lands under `build/sysroots/` (and the zip to publish in `build/tmp/`),
-which is exactly where `setup.bat` puts the downloaded ones, so the `Makefile`
+which is exactly where `build.bat` puts the downloaded ones, so the `Makefile`
 consumes it with no variables at all: it points `PKG_CONFIG_LIBDIR` at
 `<tree>/usr/lib/pkgconfig` in Windows spelling (see above), sets
 `PKG_CONFIG_SYSTEM_INCLUDE_PATH`/`_LIBRARY_PATH` at the tree's

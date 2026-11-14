@@ -25,7 +25,8 @@ for Windows/Linux; do not invoke it to build this Android port.
 
 ```text
 port/android/
-  build.sh                         setup/check tools, stage inputs, invoke Gradle
+  build.bat                         setup/check tools, stage inputs, invoke Gradle
+  build.ps1                         the same, PowerShell parameters
   README.md / REVIEW.md / PLAN.md
   app/build.gradle                 ABI, SDK/NDK/CMake pins and signing
   app/src/main/
@@ -39,9 +40,9 @@ port/android/
       android_dependencies.c       SDL2/ttf/mixer header version checks
       check_sdl2.cmake              reject SDL1 DT_NEEDED entries after linking
   tools/
-    bootstrap_toolchains.sh        missing-tool installation
-    toolchain_metadata.py          vendor metadata, checksums, extraction
-    build_sdl2_companions.sh        SDL2_ttf / SDL2_mixer cross-build
+    build_sdl2_companions.bat       SDL2 + SDL2_ttf + SDL2_mixer cross-build
+    build_sdl2_companions.ps1       the same, PowerShell parameters
+    toolchain_metadata.ps1          Adoptium / Google metadata for the bootstrap
   tests/test_build.py               offline bootstrap/orchestration fixtures
   tests/test_icons.py               launcher icons come from res/icons
   tests/CMakeLists.txt              host build of the actual Android engine paths
@@ -50,29 +51,45 @@ port/android/
 
 ## 1. Toolchain setup
 
-A Bash environment, curl and Python 3.8+ are host prerequisites. Git and the
-existing companion builder's unzip/tar tools are also needed for the optional
-library source-build workflow below. On Windows,
-use MSYS2/Git Bash with those programs on PATH; set `MUGEN_PYTHON` if the Python
-executable is called `python` or is at a custom path. The script does not run
-sudo, install OS packages or modify shell profiles.
-
-Supported bootstrap host selection: Linux x86_64, Windows x64 under
-MSYS/Cygwin, macOS x86_64/arm64. The pinned NDK uses darwin-x86_64 host tools
-on macOS; Apple Silicon may need Rosetta. Native Windows/macOS execution is
-not qualified by the Linux mock tests.
+`port\android\build.bat` needs no Bash, Python or MSYS2: curl, bsdtar and
+PowerShell are Windows' own, and CMake/Ninja come from the SDK. Missing pieces
+are downloaded rather than left as documented prerequisites, and nothing is
+fetched with git. The cmd.exe entry points build on Windows x64 only; the
+pinned NDK ships a windows-x86_64 prebuilt.
 
 From the repository root:
 
-```sh
-bash port/android/build.sh --setup
-source build/android/toolchains/env.sh
+```bat
+port\android\build.bat --check-tools     :: validate the tools, build nothing
+port\android\build.bat                   :: release APK
 ```
 
-`--setup` installs missing tool components and exits before checking SDL
-libraries or packaging assets. Review SDK licenses when sdkmanager asks;
-the script does not accept them automatically. Rerun after a failed download,
-declined license or interrupted SDK package installation.
+`build.bat` checks the JDK 17 / SDK / NDK / CMake and installs whatever is
+missing: Temurin from Adoptium's official metadata, the command-line tools from
+Google's repository XML, and the SDK/NDK/CMake packages through the SDK's own
+`sdkmanager.bat`. Missing SDL2 and its companions are cross-compiled next.
+`--check-tools` validates only and never downloads; `--offline` never
+downloads either.
+
+```powershell
+.\port\android\build.ps1 -CheckTools     # validate the tools, build nothing
+.\port\android\build.ps1 -Debug -NoAssets
+```
+
+`build.ps1` is the PowerShell front end: PowerShell-style switches (`-Debug`,
+`-NoAssets`, `-Gles`, `-Model3d`, `-Clean`, `-Offline`, `-Setup`) over the same
+`build.bat`, with unrecognised arguments passed through. PowerShell may need
+`-ExecutionPolicy Bypass` (or `Unblock-File build.ps1`) before it will run a
+local script.
+
+```bat
+port\android\build.bat --setup
+```
+
+`--setup` installs the missing tool components and then cross-compiles SDL2,
+SDL2_mixer and SDL2_ttf, stopping before Gradle and asset packaging. SDK licence
+prompts are answered with `y` by default; set `MUGEN_ACCEPT_LICENSES=0` to
+answer them yourself. Rerun after a failed download or interrupted installation.
 
 | Component | Selection |
 |---|---|
@@ -103,7 +120,7 @@ Default generated locations:
 | `build/android/toolchains/jdk-17` | Downloaded JDK, if no usable existing one was selected |
 | `build/android/toolchains/downloads` | Vendor metadata and verified bootstrap archives |
 | `build/android/toolchains/tmp` | Bootstrap extraction and temporary files |
-| `build/android/toolchains/env.sh` | Shell exports for subsequent native-library commands |
+| `build/android/toolchains/env.bat` | Environment exports for subsequent native-library commands |
 | `build/android/gradle-user-home` | Default Gradle distribution/dependency cache |
 | `build/android/toolchains/android-user-home` | Default Android/JVM user state |
 
@@ -121,9 +138,10 @@ SDK. A custom incomplete NDK path is rejected instead of being overwritten.
 | `MUGEN_JAVA_HOME` | Explicit JDK 17; an invalid explicit choice fails |
 | `JAVA_HOME` | Reuse when it identifies a runnable JDK 17 |
 | `MUGEN_ANDROID_TOOLS_DIR` | Override bootstrap/cache root; default `build/android/toolchains` |
-| `MUGEN_PYTHON` | Python 3.8+ executable |
+| `MUGEN_ACCEPT_LICENSES` | Default `1`: answer `sdkmanager` licence prompts with `y`; `0` leaves them to you |
 | `GRADLE_USER_HOME` / `ANDROID_USER_HOME` | Optional existing cache/state overrides |
 | `SDL2_DEPS_DIR` | SDL2 prefix; default `build/android/sdl2/arm64-v8a` |
+| `SDL2_VER` | SDL2 release to build when the prefix is absent; default `2.32.10` |
 | `SDL2_COMPANION_DIR` | Mixer/TTF prefix; default `build/android/android-deps/arm64-v8a` |
 | `GAME_DATA_DIR` | Game tree to copy; default repository `install/`, which is fetched from the release assets when a clone has none |
 
@@ -131,12 +149,14 @@ The script normalizes its exported SDK roots so Gradle and sdkmanager use the
 same SDK. An unsuitable inherited Java 8/11/21 is not used as the Gradle JVM;
 select JDK 17 or request setup. A valid existing JDK does not get replaced.
 
-## 2. Supply the native SDL2 libraries
+## 2. SDL2 and the native companions
 
-Toolchain setup does **not** download or build SDL2, SDL2_mixer or SDL2_ttf.
-Supply matching Android arm64-v8a/API-21-compatible libraries and headers.
-The Java integration currently comes from SDL 2.32.10: use that SDL release
-until both sides are deliberately updated together.
+`--setup` (or the first plain build) downloads SDL2 2.32.10's release tarball
+with curl, cross-compiles it, then builds SDL2_ttf and SDL2_mixer against it
+into `build/android/android-deps/arm64-v8a/`. All of it lives under
+`build/android/`; nothing is fetched with git. The Java integration is from SDL
+2.32.10, so that release is used until both sides are deliberately updated
+together.
 
 If existing prefixes are available:
 
@@ -149,31 +169,53 @@ SDL2's prefix must contain `include/SDL2/SDL.h`, `lib/libSDL2.so` and its CMake
 package files when building the companions. The companion prefix needs its
 matching headers plus `lib/libSDL2_mixer.so` and `lib/libSDL2_ttf.so`.
 
-One source-build workflow, after tool setup, is:
+`port\android\tools\build_sdl2_companions.bat` builds SDL2 first when the
+prefix is absent, then installs the two companion libraries into
+`build/android/android-deps/arm64-v8a/`, which `build.bat` uses by default. It
+reads the NDK and CMake pins from `app/build.gradle`, downloads the pinned
+upstream releases into `build/android/android-deps-src/`, and needs no Bash or
+Python:
+
+```bat
+set SDL2_DEPS_DIR=C:\Projects\mugen-unleashed\build\android\sdl2\arm64-v8a
+port\android\tools\build_sdl2_companions.bat
+```
+
+```powershell
+.\port\android\tools\build_sdl2_companions.ps1 -Sdl2DepsDir .\build\android\sdl2\arm64-v8a
+```
+
+The version tags and target are environment overrides in the `.bat`
+(`ANDROID_ABI`, `ANDROID_PLATFORM`, `SDL2_VER`, `SDL2TTF_VER`, `SDL2MIXER_VER`,
+`FREETYPE_VER`) and parameters in the `.ps1` (`-Abi`, `-Platform`,
+`-Sdl2Version`, `-TtfVersion`, `-MixerVersion`, `-FreetypeVersion`). It
+installs nothing outside the repository.
+
+The equivalent manual workflow, without the script, is:
 
 ```sh
 source build/android/toolchains/env.sh
 mkdir -p build/android/sources
-git clone --depth 1 --branch release-2.32.10 \
-  https://github.com/libsdl-org/SDL.git build/android/sources/SDL
+curl -L -o build/android/sources/SDL2-2.32.10.tar.gz \
+  https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.tar.gz
+tar -xf build/android/sources/SDL2-2.32.10.tar.gz -C build/android/sources
 
 export SDL2_DEPS_DIR="$PWD/build/android/sdl2/arm64-v8a"
-cmake -S build/android/sources/SDL -B build/android/build-sdl2 -G Ninja \
+cmake -S build/android/sources/SDL2-2.32.10 -B build/android/build-sdl2 -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
   -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-21 \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$SDL2_DEPS_DIR" \
   -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST=OFF
 cmake --build build/android/build-sdl2
 cmake --install build/android/build-sdl2
-
-bash port/android/tools/build_sdl2_companions.sh
 ```
 
-Do not repeat the clone into an existing directory; reuse the recorded checkout
-or prepare a separate clean source directory.
+Do not re-extract into an existing source directory; reuse the recorded tree or
+prepare a separate clean one.
 
-The existing companion script selects SDL2_ttf 2.20.2 with FreeType 2.12.1 and
-SDL2_mixer 2.6.3 with WAV/OGG/MP3-capable decoders. **That does not establish
+The companion builder (`tools/build_sdl2_companions.bat`) selects SDL2_ttf
+2.20.2 with FreeType 2.12.1 and SDL2_mixer 2.6.3 with WAV/OGG/MP3-capable
+decoders. **That does not establish
 engine BGM support:** the current engine route rejects those formats while
 this mixer profile disables the tracker/MIDI formats it accepts. This remains
 open in REVIEW.md. The companion source downloads/build itself were not rerun
@@ -189,10 +231,10 @@ the known forced-Vita-panel bug; fix the native policy as described in PLAN.md.
 Reference `install/` data is copied, not modified by the build script.
 
 ```sh
-bash port/android/build.sh --check-tools
-GAME_DATA_DIR=/path/to/game-tree bash port/android/build.sh
-bash port/android/build.sh --debug --no-assets
-bash port/android/build.sh --download-tools --debug --no-assets
+port\android\build.bat --check-tools
+GAME_DATA_DIR=/path/to/game-tree port\android\build.bat
+port\android\build.bat --debug --no-assets
+port\android\build.bat --download-tools --debug --no-assets
 ```
 
 `--no-assets` really clears the generated asset staging. It does not provide
@@ -201,8 +243,8 @@ or diagnostic builds. The first-run extraction/update limitations still apply.
 
 ### The launcher icon
 
-The icon is not a hand-drawn resource either. `build.sh` runs
-`tools/make_android_icons.sh` before Gradle, which scales `res/icons/1.ico` —
+The icon is not a hand-drawn resource either. `build.bat` runs
+`tools/make_android_icons.sh` (removed with the MSYS2 entry points) before Gradle, which scaled `res/icons/1.ico` —
 the same artwork the Windows and PS Vita builds use — into
 `app/build/generated/res/mugen-icons/`:
 
@@ -217,6 +259,13 @@ with them; those copies are the same generation and are what a build without
 Python (or a bare `gradlew assembleDebug`) shows. Replacing the artwork means
 replacing `res/icons/`, and `python3 port/android/tests/test_icons.py` keeps the
 two in step.
+
+**`port\android\build.bat` uses no Python**, so it never runs that derivation: it
+removes any `app/build/generated/res/mugen-icons/` left by an earlier run (that
+directory wins over the committed copies) and packages the committed
+`app/src/main/res/mipmap-*` artwork as it stands. After changing `res/icons/`,
+regenerate the PNGs with the two
+`tools/iconpack.py` subcommands before building with it.
 `--clean` removes generated app build/CMake output; it does not uninstall tools.
 
 Output: **`build/android/mugen-android-arm64-v8a.apk`**.
@@ -234,7 +283,7 @@ For offline builds, first populate the selected Gradle distribution/dependency
 cache online, then run:
 
 ```sh
-bash port/android/build.sh --offline --no-assets
+port\android\build.bat --offline --no-assets
 ```
 
 Without a complete cached Gradle 8.1.1 distribution this fails before invoking
@@ -255,7 +304,7 @@ export ANDROID_KEYSTORE=/path/to/release.jks
 export ANDROID_KEYSTORE_PASS=...
 export ANDROID_KEY_ALIAS=androidkey
 export ANDROID_KEY_PASS=...
-bash port/android/build.sh
+port\android\build.bat
 ```
 
 The key password defaults to the store password, and the alias defaults to
@@ -283,7 +332,7 @@ mismatched pixels. Offscreen indexed font surfaces remain supported. Text scalin
 
 ### `data/mugen.cfg` is the Android one
 
-`port/android/mugen.cfg` is the platform's config and `build.sh` installs it over
+`port/android/mugen.cfg` is the platform's config and `build.bat` installs it over
 the staged copy, so the APK ships settings that suit a device rather than a
 desktop's: `RenderMode = System` (the GL/GLES sprite renderer is not runnable on
 Android yet; the software renderer presents through SDL2's `SDL_Renderer`), both
@@ -355,7 +404,6 @@ Renderer-reset events invalidate the texture and retain CPU pixels for upload.
 Bootstrap/orchestration fixtures:
 
 ```sh
-bash -n port/android/build.sh port/android/tools/bootstrap_toolchains.sh port/android/tools/build_sdl2_companions.sh
 python3 port/android/tests/test_build.py
 python3 port/android/tests/test_icons.py     # launcher icons vs res/icons
 ```
@@ -403,7 +451,7 @@ evidence for the M8 GLES backend, not a pass from `tools/test_qualify.sh`, which
 is host-only and keeps `ES01-device` OPEN.
 
 Device: Retroid Pocket Flip2 (kona), arm64-v8a, Android 13 (API 33), Adreno.
-Build: `port/android/build.sh --gles`, `data/mugen.cfg` with
+Build: `port\android\build.bat --gles`, `data/mugen.cfg` with
 `RenderMode = OpenGL`.
 
 | Check | Result |
@@ -426,7 +474,7 @@ Reproduce with:
 
 ```sh
 export ANDROID_NDK_HOME="$PWD/build/android/toolchains/sdk/ndk/27.1.12297006"
-bash port/android/build.sh --gles
+port\android\build.bat --gles
 adb install -r build/android/mugen-android-arm64-v8a.apk
 adb logcat -c; adb shell am force-stop org.mugen_unleashed.mugen
 adb shell am start -n org.mugen_unleashed.mugen/org.libsdl.app.SDLActivity

@@ -46,7 +46,7 @@
 #   make CROSS_COMPILE=aarch64-none-linux-gnu- XSYSROOT=build/sysroots/arm64-sysroot
 #                                         cross-compile the Linux target with a
 #                                         foreign toolchain + dependency tree;
-#                                         port/arm64/build.sh wraps this
+#                                         port\arm64\build.bat wraps this
 #                                         (docs/BUILD-LINUX.md, "Cross-compiling")
 #
 # See docs/BUILD-MINGW.md for what the dependencies are and where they come from.
@@ -79,7 +79,7 @@ PKG_CONFIG ?= pkg-config
 # is port/arm64/ -- it downloads the toolchain and builds the dependency tree,
 # then calls this Makefile with the two variables below.
 #
-#     port/arm64/build.sh              (Windows host, Arm GNU Toolchain)
+#     port\arm64\build.bat             (Windows host, Arm GNU Toolchain)
 #
 # Equivalently, by hand:
 #
@@ -121,7 +121,7 @@ ifneq ($(strip $(CROSS_COMPILE)),)
   ifeq ($(strip $(XSYSROOT)),)
     $(error CROSS_COMPILE=$(CROSS_COMPILE) needs XSYSROOT=<dir>, the tree holding the target's \
             SDL2/zlib/libpng headers, libraries and .pc files; \
-            use the platform port (port/arm64/build.sh) -- see docs/BUILD-LINUX.md)
+            use the platform port (port\arm64\build.bat) -- see docs/BUILD-LINUX.md)
   endif
   ifneq ($(strip $(XSYSROOT)),)
     MUGEN_CROSS_SYSROOT := $(abspath $(XSYSROOT))
@@ -136,14 +136,29 @@ ifneq ($(strip $(CROSS_COMPILE)),)
     ifeq ($(strip $(MUGEN_CROSS_COMPILER_SYSROOT)),)
       MUGEN_CROSS_SYSROOT_FLAGS := --sysroot=$(MUGEN_CROSS_SYSROOT)
     endif
+    # The empty file the search list is asked for. /dev/null is a POSIX path:
+    # the kit's busybox sh can write to it, but a Mingw-w64 gcc.exe is a native
+    # binary that cannot open it and then prints no search list at all -- the
+    # build died on `#include <math.h>` from cmd.exe. NUL is what Windows wants.
+    MUGEN_CROSS_NULL := $(if $(wildcard /dev/null),/dev/null,NUL)
     # -nostdinc below drops *every* implicit include directory, the toolchain's
     # own C library headers among them (math.h, stdio.h, ...), so the compiler
     # is asked which ones it had and they are put back with -idirafter: after
     # $(XSYSROOT)/usr/include, so a dependency's header always wins over any
     # copy of the same name shipped beside the libc headers.
-    MUGEN_CROSS_CC_INCLUDE := $(shell $(CC) $(MUGEN_CROSS_SYSROOT_FLAGS) -E -v -x c /dev/null 2>&1 | \
+    #
+    # Port fix: the extraction keeps the paths as data -- only the *shape* of
+    # the pipe is a shell's business -- and the backslashes are normalized by
+    # make itself. Arm's Windows-host gcc prints `c:\arm-gnu-toolchain-9.2\
+    # bin\..\lib\...`, and whether a shell sees one backslash, two, or none of
+    # them depends on which make and which sh are in play (native make + the
+    # kit's busybox sh mangled them, so gcc got `c:arm-gnu-toolchain-9.2bin..`
+    # and `#include <math.h>` failed). $(subst) has no such variable. Forward
+    # slashes are understood by every gcc.
+    MUGEN_CROSS_CC_LINES := $(shell $(CC) $(MUGEN_CROSS_SYSROOT_FLAGS) -E -v -x c $(MUGEN_CROSS_NULL) 2>&1 | \
         sed -n '/^#include <...> search starts here:/,/^End of search list/p' | \
-        sed -e '1d' -e '$$d' -e 's/^ \{1,\}//' -e 's/^/-idirafter /' | tr '\n' ' ')
+        sed -e '1d' -e '$$d' -e 's/^ \{1,\}//')
+    MUGEN_CROSS_CC_INCLUDE := $(foreach d,$(subst \,/,$(MUGEN_CROSS_CC_LINES)),-idirafter $(d))
     # The host compiler serves pkg-config; only the .pc files must come from
     # the target tree. Both variables are replaced, not extended.
     #
@@ -291,19 +306,39 @@ ifeq ($(MUGEN_TARGET_AUTO),1)
   $(info       kit on PATH, e.g. PATH=/c/x86devkit/bin:$$PATH)
 endif
 
+# --------------------------------------------- Windows path spelling (helpers)
+#
+# A native Windows tool (windres, pkg-config.exe, or gcc.exe reading an -I) cannot
+# open a POSIX /c/... path, and $(abspath) answers /c/... only when make itself
+# runs under MSYS -- where cygpath is the thing that converts it. Asking cygpath
+# unconditionally is wrong in the other direction: Git for Windows puts
+# cygpath.exe on PATH even in a plain cmd.exe session, so a native build would
+# spawn an MSYS binary for nothing and get the same answer back.
+#
+# MAKE_HOST is the make binary's own build triplet, so it names the shell world
+# make is actually in: x86_64-pc-msys under MSYS2/Git Bash, x86_64-w64-mingw32
+# for the kits' own make under cmd.exe (which is what build.bat uses). Off MSYS
+# the conversion is empty and every caller falls back to the plain form.
+ifeq ($(findstring msys,$(MAKE_HOST)),msys)
+  MUGEN_PATH_TO_WIN = $(shell cygpath -m '$1' 2>/dev/null)
+else
+  MUGEN_PATH_TO_WIN =
+endif
+
 # -------------------------------------------------- the Windows dependency tree
 #
-# setup.bat installs win32-sysroot/ or win64-sysroot/ under build/sysroots/, and
+# build.bat installs win32-sysroot/ or win64-sysroot/ under build/sysroots/, and
 # a kit from skeeto's w64devkit ships no SDL, no libpng and no .pc file at all --
 # so that tree is where the libraries come from. Pointing pkg-config at it here
-# is what makes a plain `make` work after setup.bat, with nothing exported.
+# is what makes a plain `make` work after build.bat, with nothing exported.
 #
 # The paths are converted to Windows spelling on purpose: sh (what make runs
 # recipes in) does not convert POSIX paths for a native pkg-config.exe, so a
 # /c/... path silently matches nothing and the build dies with "pkg-config
 # cannot find: SDL2_mixer ..." while the tree sits right there. $(abspath)
-# answers C:/... under cmd but /c/... under MSYS, hence the cygpath pass; off
-# MSYS cygpath does not exist and the plain form stands.
+# answers C:/... under cmd but /c/... under MSYS, hence the conversion above;
+# it is a no-op when make is the kits' own (MAKE_HOST), so a cmd build never
+# looks for cygpath at all.
 #
 #   WINSYSROOT=<dir>   another tree          WINSYSROOT=   do not use one (the
 #                                                        kit's own pkg-config
@@ -319,7 +354,7 @@ ifeq ($(MUGEN_FAMILY),win32)
   endif
   ifneq ($(strip $(MUGEN_WIN_SYSROOT)),)
     MUGEN_WIN_SYSROOT := $(abspath $(MUGEN_WIN_SYSROOT))
-    MUGEN_WIN_SYSROOT_WIN := $(shell cygpath -m '$(MUGEN_WIN_SYSROOT)' 2>/dev/null)
+    MUGEN_WIN_SYSROOT_WIN := $(call MUGEN_PATH_TO_WIN,$(MUGEN_WIN_SYSROOT))
     ifeq ($(strip $(MUGEN_WIN_SYSROOT_WIN)),)
       MUGEN_WIN_SYSROOT_WIN := $(MUGEN_WIN_SYSROOT)
     endif
@@ -669,10 +704,10 @@ endif
 # a shell 'case' pattern ends in one -- it truncates the script silently. The
 # tree is accepted under either spelling it can arrive in: make's $(abspath)
 # answers /c/... from MSYS while pkg-config answers C:/... for the same file, and
-# comparing only one of them reports a correct tree as a leak. cygpath -m is what
-# bridges the two; off MSYS the command is absent and the plain form is used.
+# comparing only one of them reports a correct tree as a leak. MUGEN_PATH_TO_WIN
+# bridges the two; off MSYS it is empty and the plain form is used.
 ifneq ($(strip $(MUGEN_CROSS_SYSROOT)),)
-  MUGEN_CROSS_SYSROOT_WIN := $(shell cygpath -m '$(MUGEN_CROSS_SYSROOT)' 2>/dev/null)
+  MUGEN_CROSS_SYSROOT_WIN := $(call MUGEN_PATH_TO_WIN,$(MUGEN_CROSS_SYSROOT))
   MUGEN_CROSS_INC_OK := $(MUGEN_CROSS_SYSROOT)% \
                         $(if $(MUGEN_CROSS_SYSROOT_WIN),$(MUGEN_CROSS_SYSROOT_WIN)%)
   MUGEN_CROSS_FOREIGN_INC := $(filter-out $(MUGEN_CROSS_INC_OK), \
@@ -681,7 +716,7 @@ ifneq ($(strip $(MUGEN_CROSS_SYSROOT)),)
     $(error pkg-config returned include paths outside the target tree: $(MUGEN_CROSS_FOREIGN_INC) \
             every dependency header must come from $(MUGEN_CROSS_SYSROOT); \
             a host .pc file was picked up (check PKG_CONFIG_PATH / PKG_CONFIG_LIBDIR, \
-            or rebuild the tree with port/arm64/build.sh --sysroot))
+            or rebuild the tree with port\arm64\build.bat --sysroot))
   endif
 endif
 CPPFLAGS += $(CROSS_CPPFLAGS) \
@@ -932,6 +967,16 @@ endif
 
 MANIFEST := $(SRC_DIR)/mugen-static.manifest
 
+# The .rc names the manifest for windres' own preprocessor, and windres is a
+# native Windows binary: it cannot open a POSIX /c/... path (the failure is
+# "can't open file `/c/.../mugen-static.manifest'"). $(CURDIR) answers C:/...
+# under cmd but /c/... under MSYS, so convert it the same way the pkg-config
+# paths above are converted; off MSYS the conversion is empty and abspath stands.
+MUGEN_RC_MANIFEST := $(call MUGEN_PATH_TO_WIN,$(CURDIR)/$(MANIFEST))
+ifeq ($(strip $(MUGEN_RC_MANIFEST)),)
+  MUGEN_RC_MANIFEST := $(abspath $(MANIFEST))
+endif
+
 ifeq ($(ICON_ICO),)
 $(ALL_RC): $(SRC_DIR)/mugen.rc $(MANIFEST)
 else
@@ -941,7 +986,7 @@ endif
 	$(Q)mkdir -p $(dir $@)
 	$(Q)cat $(SRC_DIR)/mugen.rc > $@
 	$(Q)printf '\n/* generated: the assembly manifest, RT_MANIFEST 1 */\n1 24 "%s"\n' \
-	    "$(CURDIR)/$(MANIFEST)" >> $@
+	    "$(MUGEN_RC_MANIFEST)" >> $@
 
 # windres runs its own preprocessor, so it needs the define on its command line
 # too: the .rc includes icon 101 only under MUGEN_HAS_ICON, and passing it to the
@@ -989,7 +1034,7 @@ ifeq ($(MUGEN_GLES),1)
 # The GLES renderer loads GLSL ES sources from data/gles/*, next to the game's
 # own data/ (src/gles_render.c gles_read_shader). They are ours, not game
 # content, so they ship with the binary rather than coming from the
-# installation -- the same reason port/android/build.sh stages them into the APK.
+# installation -- the same reason port\android\build.bat stages them into the APK.
 	@echo "  SHADERS $(INSTALL_DIR)/data/gles"
 	$(Q)mkdir -p $(INSTALL_DIR)/data/gles
 	$(Q)cp -f $(GLES_SHADER_SRCS) $(INSTALL_DIR)/data/gles/

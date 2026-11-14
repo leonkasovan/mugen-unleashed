@@ -58,7 +58,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install dependency kits and build
         shell: cmd
-        run: setup.bat /build${{ matrix.target == 'win32' && '32' || '64' }}
+        run: build.bat /build${{ matrix.target == 'win32' && '32' || '64' }}
       - name: Run profiler regressions
         shell: cmd
         run: |

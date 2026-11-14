@@ -375,7 +375,14 @@ file(GLOB MUGEN_LIBRESAMPLE_SOURCES "${MUGEN_THIRD}/libresample/src/*.c")
 # -mfloat-abi are already set by the VitaSDK toolchain; do not repeat them.
 set(MUGEN_VITA_OPT "-O2")
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-  set(MUGEN_VITA_OPT "-O0 -g3")
+  # Fix: one list element, not a string with a space in it. "-O0 -g3" reached
+  # the compiler as a single quoted argument and cc1 rejected it
+  # ("argument to '-O' should be a non-negative integer, 'g', 's', 'z' or
+  # 'fast'"), so every debug build failed at the first object in both entry
+  # points -- build.bat --debug reached it through both the removed MSYS2 script
+  # and the current cmd.exe one. The
+  # release value is a single flag, which is why only Debug was affected.
+  set(MUGEN_VITA_OPT -O0 -g3)
 endif()
 
 set(MUGEN_ENGINE_FLAGS

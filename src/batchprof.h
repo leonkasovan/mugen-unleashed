@@ -3,7 +3,7 @@
 
 /*
  * Port addition: a batch-rendering profiler, compiled only under MUGEN_DEBUG
- * (`make DEBUG=1`, or `port/arm64/build.sh --debug`).
+ * (`make DEBUG=1`, or `port\arm64\build.bat --debug`).
  *
  * Why it exists. Both GL backends submit one sprite quad per GL draw call and,
  * on GLES, re-stream the whole four-vertex buffer for each of them

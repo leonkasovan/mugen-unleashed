@@ -11,18 +11,25 @@ retired. Android and PS Vita retain their own CMake projects.
 |---|---|---|
 | Windows 32/64-bit | GNU Make + matching MinGW-w64 kit | Static SDL2, SDL2_mixer, SDL2_ttf; System/desktop GL |
 | Linux x86-64 | GNU Make | SDL2 development packages; System/desktop GL or GLES |
-| Linux ARM64 | `port/arm64/build.sh` | SDL2 target sysroot; System/GLES |
-| Android | `port/android/build.sh` | Gradle/NDK CMake, native SDL2; System/GLES |
-| PS Vita | `port/psvita/build.sh` | VitaSDK CMake, native SDL2; System/native vitaGL |
+| Linux ARM64 | `port\arm64\build.bat` (cmd.exe) · `port\arm64\build.ps1` (PowerShell) | SDL2 target sysroot; System/GLES |
+| Android | `port\android\build.bat` (cmd.exe) · `port\android\build.ps1` (PowerShell) | Gradle/NDK CMake, native SDL2; System/GLES |
+| PS Vita | `port\psvita\build.bat` (cmd.exe) · `port\psvita\build.ps1` (PowerShell) | VitaSDK CMake, native SDL2; System/native vitaGL |
 
 ## Windows
 
 ```bat
-setup.bat /build32
-setup.bat /build64
+build.bat             :: install what is missing, then build win32 and win64
+build.bat /build32    :: only the reference build
+build.bat /build64    :: only the 64-bit build
 ```
 
-Or put the desired kit on PATH and run `make check-toolchain` then `make -j8`.
+Or put the desired kit on PATH and run `make check-toolchain` then `make -j8`:
+
+```bat
+set "PATH=C:\x86devkit\bin;%PATH%"     :: win32; C:\w64devkit for win64
+make check-toolchain
+```
+
 The compiler triple selects the architecture. Outputs keep their existing
 names: `build/mingw-sdl2/mugen-mingw-win32-sdl2.exe` and
 `build/mingw64-sdl2/mugen-mingw-win64-sdl2.exe`. `make install` copies a stripped

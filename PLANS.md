@@ -23,7 +23,7 @@ lands; keep the research sections true to the findings they were based on.
 | Linux rendering | primitives **fixed** (constant blend factors dead on Mesa); sprite blending **outstanding** |
 | Modern GL (3.3/4.6) / Vulkan | researched, **not recommended** — reasons below |
 | Linux port | **linux-x64 done and verified** — builds and runs, `mugen.log` identical to the Windows build; `docs/BUILD-LINUX.md`. **linux-arm64 builds and runs on hardware** (RG351MP/ArkOS, GLES 3.0 renderer) through `port/arm64/build.sh`; linux-x86 is still untested |
-| Windows build environment | **one command** — `setup.bat` installs both w64devkit kits and the published dependency trees into `build/sysroots/`; a skeeto kit ships no SDL and no `.pc` files, the tree supplies them |
+| Windows build environment | **one command** — `build.bat` installs both w64devkit kits and the published dependency trees into `build/sysroots/`; a skeeto kit ships no SDL and no `.pc` files, the tree supplies them |
 
 ## Codebase knowledge graph (codebase-memory-mcp)
 
@@ -85,7 +85,7 @@ not auto-update, and the CLI binary is not installed in every session. Re-run
 The Windows Makefile build is verified with GCC 16.2.0 + GNU Make in MSYS2
 bash, using the two **w64devkit 2.11.0** kits: `/c/x86devkit`
 (`i686-w64-mingw32`) for the reference build and `/c/w64devkit`
-(`x86_64-w64-mingw32`) for win64. `setup.bat` in the repository root installs
+(`x86_64-w64-mingw32`) for win64. `build.bat` in the repository root installs
 both from github.com/skeeto/w64devkit 2.11.0 and then unpacks this project's
 dependency trees into `build/sysroots/win{32,64}-sysroot` — a clean kit ships no
 SDL, no libpng and **no `.pc` files at all**, so the tree is where the libraries

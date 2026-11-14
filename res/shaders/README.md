@@ -15,7 +15,7 @@ copied into this repository.
 
 | Directory | Dialect | Read by | Deployed as |
 |---|---|---|---|
-| `gles/` | GLSL ES 1.00, `a_position`/`a_texcoord` + `u_mvp` | `src/gles_render.c` | `data/gles/*` next to the game data, staged by `port/android/build.sh` |
+| `gles/` | GLSL ES 1.00, `a_position`/`a_texcoord` + `u_mvp` | `src/gles_render.c` | `data/gles/*` next to the game data, staged by `port\android\build.bat` |
 | `vita/` | vitaGL dialect, `aPosition`/`aTexCoord`, `gl_ModelViewProjectionMatrix` | `src/glrender.c` | the VPK substitutes them for the game's `data/*.{vert,frag}` at configure time (`port/psvita/CMakeLists.txt`) |
 
 ## Contract

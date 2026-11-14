@@ -2,8 +2,9 @@
 <!--
     Adaptive launcher icon (Android 8+).
 
-    Both layers come from res/icons/*.ico via tools/make_android_icons.sh, the
-    same artwork the Windows and PS Vita builds use:
+    Both layers come from res/icons/*.ico via tools/iconpack.py (the generator
+    script that drove it was removed with the MSYS2 entry points), the same
+    artwork the Windows and PS Vita builds use:
       - @color/ic_launcher_background   a flat colour (values/colors.xml)
       - @mipmap/ic_launcher_foreground  the artwork, drawn on a transparent
         108dp canvas with the picture confined to the 72dp safe zone, so a round

@@ -1,14 +1,19 @@
 @echo off
 rem ===========================================================================
-rem setup.bat - prepare the Windows build environment from nothing
+rem build.bat - build mugen-unleashed on Windows from nothing
 rem
-rem   setup.bat             install both devkits and their dependency trees
-rem   setup.bat /build      ... then build win32 and win64
-rem   setup.bat /build64    ... then build win64 only
-rem   setup.bat /build32    ... then build win32 only
-rem   setup.bat /check      only verify what is installed, install nothing
-rem   setup.bat /force      re-download and re-extract even if installed
-rem   setup.bat /help
+rem   build.bat             install what is missing, then build win32 and win64
+rem   build.bat /build      the same thing, spelled out
+rem   build.bat /build64    ... then build win64 only
+rem   build.bat /build32    ... then build win32 only
+rem   build.bat /check      only verify what is installed, install nothing
+rem   build.bat /force      re-download and re-extract even if installed
+rem   build.bat /help
+rem
+rem The Windows counterpart of port\arm64\build.bat, and named the same way: no
+rem arguments is "do the whole job". Installing and building live in one file
+rem because the build needs the kit first on PATH, so the two cannot disagree
+rem about which compiler or tree is in play.
 rem
 rem What it installs:
 rem
@@ -33,7 +38,7 @@ rem Setup and build live in one file because the build needs the kit first on
 rem PATH *and* pkg-config pointed at that kit's tree, in Windows spelling
 rem (C:/...): sh does not convert POSIX paths for a native pkg-config.exe, and
 rem when that goes wrong pkg-config silently finds nothing and the build stops
-rem with "pkg-config cannot find: SDL2_mixer ...". setup.bat sets exactly the
+rem with "pkg-config cannot find: SDL2_mixer ...". build.bat sets exactly the
 rem variables it verified with, so the two cannot disagree.
 rem
 rem Downloads are cached in %WINKIT_CACHE% (default build\downloads,
@@ -79,6 +84,14 @@ set "DO_FORCE=0"
 set "DO_CHECK=0"
 set "FAILED="
 
+rem No arguments means the whole job: install what is missing and then build
+rem both targets. That is what "/build" spelled out before the rename, and it
+rem is what the arm64 script does with no arguments too.
+if "%~1"=="" (
+    set "DO_BUILD32=1"
+    set "DO_BUILD64=1"
+)
+
 for %%a in (%*) do (
     if /i "%%~a"=="/build" (
         set "DO_BUILD32=1"
@@ -94,7 +107,7 @@ for %%a in (%*) do (
 )
 
 echo.
-echo mugen-unleashed - Windows build setup
+echo mugen-unleashed - Windows build
 echo   x64 kit  %W64DEVKIT_DIR%
 echo   x86 kit  %X86DEVKIT_DIR%
 echo   sysroots %SYSR64%
@@ -156,20 +169,20 @@ echo   export PATH="%BASH86%/bin:$PATH"      # win32, the reference build
 echo   make -j%%NUMBER_OF_PROCESSORS%%
 echo.
 echo The target comes from the compiler's own triple, so there is no variable
-echo to set. Let this script do it instead:  setup.bat /build
+echo to set. Let this script do it instead:  build.bat
 exit /b 0
 
 rem ---------------------------------------------------------------- helpers --
 :usage
 echo.
-echo setup.bat - prepare the Windows build environment (w64devkit 2.11.0)
+echo build.bat - build mugen-unleashed for Windows (w64devkit 2.11.0)
 echo.
-echo   setup.bat             install both devkits and their dependency trees
-echo   setup.bat /build      ... then build win32 and win64
-echo   setup.bat /build32    ... then build win32 only
-echo   setup.bat /build64    ... then build win64 only
-echo   setup.bat /check      only verify what is installed
-echo   setup.bat /force      re-download and re-extract even if installed
+echo   build.bat             install what is missing, then build win32 and win64
+echo   build.bat /build      the same thing, spelled out
+echo   build.bat /build32    ... only the reference build
+echo   build.bat /build64    ... only the 64-bit build
+echo   build.bat /check      only verify what is installed
+echo   build.bat /force      re-download and re-extract even if installed
 echo.
 echo Overrides (environment variables):
 echo   W64DEVKIT_DIR   where the x64 kit goes          (default C:\w64devkit)
@@ -404,12 +417,12 @@ set "V_TRIPLE=%~4"
 echo.
 echo [verify %V_NAME%] %V_KIT%
 if not exist "%V_KIT%\bin\gcc.exe" (
-    echo   ERROR: no bin\gcc.exe - run setup.bat without /check
+    echo   ERROR: no bin\gcc.exe - run build.bat without /check
     exit /b 1
 )
 call :set_env "%V_KIT%"
 if not exist "%V_SYSROOT%\usr\lib\pkgconfig\sdl2.pc" (
-    echo   ERROR: no dependency tree at %V_SYSROOT% - run setup.bat without /check
+    echo   ERROR: no dependency tree at %V_SYSROOT% - run build.bat without /check
     exit /b 1
 )
 call :set_pc "%V_SYSROOT%"
@@ -435,7 +448,7 @@ for %%p in (%PACKAGES%) do (
 )
 if not "!MISSING!"=="" (
     echo   ERROR: pkg-config cannot find:!MISSING!
-    echo          expected in %V_SYSROOT% - run setup.bat without /check
+    echo          expected in %V_SYSROOT% - run build.bat without /check
     exit /b 1
 )
 set "SDLVER="
@@ -459,7 +472,7 @@ if exist "%ROOT%\install\data\mugen.cfg" (
     exit /b 0
 )
 if "%DO_CHECK%"=="1" (
-    echo   MISSING  run setup.bat /build to fetch the default assets
+    echo   MISSING  run build.bat /build to fetch the default assets
     exit /b 0
 )
 if not exist "%ROOT%\tools\fetch_game_data.sh" (

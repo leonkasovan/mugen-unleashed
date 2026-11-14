@@ -1,6 +1,6 @@
 #!/bin/sh
 # ES01 structural gate, part 1 (host, no GPU): GLES shader dialect check.
-# The sources are res/shaders/gles/*; port/android/build.sh stages them into
+# The sources are res/shaders/gles/*; port\android\build.bat stages them into
 # the APK as data/gles/*, which is where src/gles_render.c loads them.
 #
 # Usage: tools/test_gles_shader.sh

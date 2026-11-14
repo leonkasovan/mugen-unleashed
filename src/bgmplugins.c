@@ -815,7 +815,7 @@ const char *Sdlmix_Extensions(void)
 #if defined(ANDROID_PORT)
     /*
      * Android advertises only what its SDL2_mixer was actually built with.
-     * port/android/tools/build_sdl2_companions.sh configures it with
+     * the companion build (port/android/tools/build_sdl2_companions.bat) configures it with
      * SDL2MIXER_MIDI=OFF and SDL2MIXER_MOD=OFF (OGG comes from stb_vorbis and
      * MP3 from dr_mp3), so listing tracker and MIDI extensions would send those
      * files to a decoder that is not linked in. port/android/tests/
