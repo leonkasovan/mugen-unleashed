@@ -10,6 +10,7 @@
  */
 #include "mugen.h"
 #include "memprof.h"
+#include "luascripts.h"
 
 #define LUA_GLOBALSINDEX    (-10002)
 #define LUA_TNIL            0
@@ -514,8 +515,19 @@ int Lua_RunInit(void)
  */
 int Lua_Init(void)
 {
+    int restored;
+
     if (g_luaState != NULL) {
         return 1;
+    }
+    /* Port addition: old game packs may not ship the engine's Lua helpers. */
+    restored = LuaScripts_Ensure();
+    if (restored < 0) {
+        Log_Printf("Cannot restore bundled Lua scripts to data/.\n");
+        return 0;
+    }
+    if (restored > 0) {
+        Log_Printf("Restored missing Lua scripts from embedded lua_script.zip.\n");
     }
     g_luaHook1 = (void *)Lua_LogError;
     g_luaHook2 = (void *)Log_Printf;
