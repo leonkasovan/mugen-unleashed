@@ -1,4 +1,11 @@
-# Heap memory profile — where the engine's bytes go
+# Tracked-heap memory profile — where the engine's bytes go
+
+> **This is a tracked-engine-heap profiler, not process-memory accounting.**
+> It reports what the engine and Lua asked the C runtime for. It cannot see
+> resident code, shared pages, heap metadata, thread stacks, or the graphics
+> and audio drivers. Never subtract its totals from a working-set figure and
+> present the remainder as "other" — that remainder is unmeasured, not
+> attributed. Section 2 lists the gaps explicitly.
 
 This is the record of the heap-accounting work: what the counters measure, how
 to reproduce a profile, and what a real game's ranking looks like. It is filed
@@ -6,10 +13,11 @@ under `port/psvita` because that target is the one with a memory ceiling, but
 **the numbers below were measured on the Windows builds, not on a Vita.** See
 section 6 for what does and does not carry over.
 
-The short version: **half the engine's heap is decoded audio.** SND files are
+The short version: **half the tracked heap is decoded audio.** SND files are
 resampled to the output format in full at load time and kept resident, even
-with `-nosound`. Sprites are the other large block. Nothing leaks per frame —
-every big site is a deliberate cache that lives until unload.
+with `-nosound`. Sprites are the other large block. Across the measured
+45-second run the tracked heap did not grow; that is evidence about this run,
+not a proof that nothing leaks anywhere (section 5).
 
 ## 1. Instrumentation
 
@@ -29,29 +37,43 @@ allocations, frees and failures:
 ```
 mem: heap/lua heap_live=... heap_peak=... heap_allocs=... heap_frees=...
      heap_fails=0 lua_live=... lua_peak=... lua_allocs=... lua_frees=...
+     sites=... sites_dropped=... unattributed=... tracking=...
 ```
+
+`tracking=` is the profiler's own metadata cost, reported so it is not mistaken
+for engine memory. `sites_dropped`/`unattributed` are non-zero only if the
+per-site table could not record a site — they make an incomplete ranking
+visible instead of silent.
 
 That line needs `[Debug] Verbose = 1` (or `ShowFPS = 1`), the same gate as
 `perf:`.
 
 **Call-site attribution** (`MUGEN_MEMPROF=1`, off by default). Each allocation
-records its caller PC; a 256-entry table accumulates live/peak bytes, allocs
-and frees per site; the table is rewritten to `mugen.memprof` on every `mem:`
-line, so a profile survives the process being killed. `Memprof_Stop` writes it
-once more on a clean exit.
+records its caller PC; the site table accumulates live/peak bytes, allocs and
+frees per site and grows as needed. The dump is refreshed by `Memprof_Tick`
+once per second from the frame loop — independent of `Verbose` — and written to
+a temporary file that is renamed over `mugen.memprof`, so a kill mid-write
+cannot destroy the last good snapshot. `Memprof_Stop` writes it once more on a
+clean exit.
 
-The PCs are absolute runtime addresses and Windows relocates the image
-(DYNAMICBASE), so the dump header carries the load base:
+The PCs are runtime addresses, so the header says which address space they are
+in and what base they are relative to:
 
 ```
 # mugen memory-by-site dump
+# abi pe
 # base 0x4d0000
 # format: live_bytes peak_bytes allocs frees 0x<pc>
+# dropped_sites 0
+# unattributed_bytes 0
 ```
 
-`tools/memprof_symbolize.py` subtracts that base, adds the PE ImageBase and asks
-addr2line — the same split as `tools/prof_symbolize.py`: cheap capture on the
-target, symbolization on the workstation.
+`tools/memprof_symbolize.py` reads the ABI and does the right conversion for
+each: for **PE** it adds the file's link-time ImageBase to `pc - base`, because
+Windows relocated the image at load; for **ELF** `pc - base` is already the
+link-time address, since `base` is the load bias (0 for a non-PIE executable,
+the relocation bias for a PIE). The same split as `tools/prof_symbolize.py`:
+cheap capture on the target, symbolization on the workstation.
 
 ```bat
 :: run
@@ -69,13 +91,13 @@ For a 64-bit binary also pass `--image-base 0x140000000`; the MinGW x86 PE
 links at `0x400000`, which is the default.
 
 Without `MUGEN_MEMPROF=1` the attribution is off and only the aggregate is
-collected. The switch costs one extra atomic per allocation and a stack capture
-per site, which is why it is not on by default.
+collected. The switch costs one extra atomic per allocation and one frame of
+unwind per site, which is why it is not on by default.
 
-`[Debug] Verbose = 1` in the game's `mugen.cfg` is what makes the `mem:` line
-appear, and the dump is refreshed from that line — so with `Verbose = 0` the
-dump is written only once, by `Memprof_Stop`, and only if the process exits
-cleanly. Kill it and there is nothing to symbolize.
+`[Debug] Verbose = 1` in the game's `mugen.cfg` controls only the `mem:` **log
+line**. The dump is independent of it: `Memprof_Tick` refreshes the file once a
+second from the frame loop, so a run killed with `Verbose = 0` still leaves a
+current snapshot. `Memprof_Stop` writes one more on a clean exit.
 
 ## 2. What is counted, and what is not
 
@@ -114,9 +136,13 @@ the process-level comparison.
 
 | build | heap live (last) | heap peak | per-site live sum | process peak WS | sites |
 |---|---:|---:|---:|---:|---:|
-| `mugen-mingw-win32-sdl2.exe` | 249.3 MB | 250.5 MB | 248.8 MB | 316.0 MB | 125 |
-| `mugen-mingw-win64-sdl2.exe` | 253.7 MB | 255.0 MB | 253.2 MB | 340.3 MB | 125 |
-| `Hyper DBZ.exe` (original) | — | — | — | 278.7 MB | — |
+| `mugen-mingw-win32-sdl2.exe` | 249.3 MB | 250.5 MB | 248.8 MB | 316 MB | 125 |
+| `mugen-mingw-win64-sdl2.exe` | 253.7 MB | 255.0 MB | 253.2 MB | 340–353 MB | 125 |
+| `Hyper DBZ.exe` (original) | — | — | — | 279 MB | — |
+
+The heap columns are stable to a tenth of a megabyte across runs; the win64
+working set is not, and is given as a range over two runs. Working-set figures
+are the least repeatable number here and should not be read too finely.
 
 Two columns look redundant but are not. `heap_live`/`heap_peak` are the global
 counters from the `mem:` line; the per-site sum comes from the dump, which is
@@ -126,9 +152,12 @@ different sites peak at different moments.
 
 The original cannot appear in the heap columns: it has no counters, and under
 these arguments it writes no log at all, so working set is the only signal it
-can give. The +37 MB (win32) and +62 MB (win64) over the original are therefore
-**unattributed** — they are most likely in the parts this instrument cannot see
-(section 2), but that is an inference, not a measurement.
+can give. **The difference between a working set and this tracked heap is not
+an attribution.** A 316 MB working set against 249 MB of tracked payload leaves
+roughly 67 MB that this instrument simply does not see — resident code, shared
+pages, per-allocation metadata, thread stacks, and the GL/mixer drivers among
+them. That remainder is unmeasured, not "graphics and audio". Getting a real
+number there needs a different tool (section 8).
 
 ## 4. Top 10 sites — 32-bit
 
@@ -140,9 +169,9 @@ Ranked by live bytes, 125 sites, 248.8 MB live in total.
 | 2 | 34.2 MB | 34.2 MB | 2054 | 0 | `Pcx_Decode` | `src/sff.c:172` |
 | 3 | 31.7 MB | 31.7 MB | 2198 | 158 | `Sprite_Init` | `src/sprite.c:73`, allocation at `:90` |
 | 4 | 16.0 MB | 16.0 MB | 1 | 0 | `DecompBuffer_Create` | `src/spritecodec.c:956` |
-| 5 | 12.6 MB | 12.7 MB | 14489 | 44 | `KeyedArray_Create` | `src/keyedarray.c:17` |
+| 5 | 12.6 MB | 12.7 MB | 14489 | 46 | `KeyedArray_Create` | `src/keyedarray.c:17` |
 | 6 | 6.6 MB | 6.6 MB | 6 | 2 | `Sff2_Load` | `src/sff.c:592` |
-| 7 | 3.4 MB | 3.4 MB | 14489 | 23 | `KeyedArray_Create` | second site, same function |
+| 7 | 3.4 MB | 3.4 MB | 14489 | 25 | `KeyedArray_Create` | second site, same function |
 | 8 | 2.2 MB | 2.2 MB | 41811 | 50 | `Trigger_Parse` | `src/trigger.c:500` |
 | 9 | 2.1 MB | 2.3 MB | 59848 | 2295 | `Mem_Calloc` | `src/util.c:10` |
 | 10 | 1.6 MB | 1.6 MB | 4847 | 158 | `Sprite_InitRows` | `src/sprite.c:320` |
@@ -177,12 +206,18 @@ inside a single match. The alloc-heavy sites are retained for the same reason �
 the life of the loaded characters, and they are small per entry, which is why
 2.2 MB covers that many allocations.
 
-The evidence that nothing grows unbounded is the `mem:` line itself. Over the
-45 s run, sampled once a second (41 samples): `heap_live` moved by only **60 KB**
-end to end (249.33 → 249.27 MB), and `heap_fails` was 0 in every sample.
-`heap_peak` (250.5 MB) was already at its final value in the first sample, so it
-was set before the first logged second — during start-up and asset load — and
-never approached again during play.
+What the data supports: over the measured 45 s the tracked heap did not grow.
+`heap_live` moved by **73 KB** end to end across 42 one-second samples
+(249.33 → 249.26 MB), and `heap_fails` was 0 in every sample. `heap_peak`
+(250.5 MB) was already final in the first sample, so it was set during start-up
+and asset load and never approached again during play.
+
+What it does **not** support: a claim that nothing leaks anywhere. This covers
+one scenario, one game, one 45-second window, and only the allocations the
+wrappers can see. A leak in the GL driver, in a library that bypasses the
+`mugen.h` macros (section 2), or in a code path this scenario never exercises
+would not appear here. Longer sessions and repeated stage transitions would be
+needed before saying more.
 
 ## 6. Applicability to the Vita
 
@@ -197,13 +232,17 @@ measurement exists yet**, and the transferable part is narrower than it looks:
   rather than the desktop mixer, its `g_sndFormat` may differ, and it packs a
   different game tree.
 - **Working-set figures are meaningless there**: `GetProcessMemoryInfo` does not
-  exist, and the dump's load base is written only for PE images. A Vita run
-  would need its own process-memory query, which is not implemented.
+  exist on the Vita, and this profiler never measured process memory on any
+  target. A Vita figure would need its own query, which is not implemented.
 
-To measure on hardware, the same two environment variables apply —
-`MUGEN_MEMPROF=1` and `MUGEN_MEMPROF_OUT` — but the PCs are unrelocated ELF
-addresses, so the symbolizer needs the Vita build's own binary and the
-`arm-vita-eabi-addr2line`.
+To measure on hardware the same two environment variables apply —
+`MUGEN_MEMPROF=1` and `MUGEN_MEMPROF_OUT`. The Vita is an ELF target, so its
+dump reports `# abi elf` and the PCs are runtime addresses relative to the
+load bias; `tools/memprof_symbolize.py` handles that path now (it was PE-only
+before the review). Symbolize against the Vita build's own unstripped binary
+with `arm-vita-eabi-addr2line`. That ELF path was validated on Linux x86-64
+with both a non-PIE and a PIE executable, not on Vita hardware — there is still
+no Vita measurement.
 
 ## 7. Bugs found while validating
 
@@ -224,25 +263,70 @@ produced a plausible-looking but false ranking.
    realloc now moves the whole block: the old site loses `old_size`, the new
    site gains `size`.
 
-A symlink-level fourth: the symbolizer was originally passing the RVA to
-addr2line instead of `ImageBase + RVA`, which resolved every address to `??`.
-Both are needed because MinGW links at `0x400000` while Windows loads elsewhere.
+A fourth, in the symbolizer: it passed the RVA to addr2line instead of
+`ImageBase + RVA`, which resolved every address to `??`. Both are needed because
+MinGW links at `0x400000` while Windows loads elsewhere.
 
-## 8. Where this leaves the memory work
+### Fixes from the first review round
+
+That review found two correctness defects and four coverage/robustness gaps.
+All are fixed, and each was reproduced before and after:
+
+| # | Defect | Fix | Evidence |
+|---|---|---|---|
+| 1 | `__builtin_return_address(1)` on ELF: a nonzero level can fault in an optimised PIE build | capture at level 0 from inside `Memprof_*` (safe by GCC's rules); Windows keeps the unwinder-based `RtlCaptureStackBackTrace` | level 0 passes at `-O0`, `-O2` and `-O2 -fPIE -pie`; level 1 returns addresses outside the image on the same builds |
+| 2 | realloc freed the caller's block when metadata insert failed after a successful CRT realloc | the metadata node is detached and **reused**, so a resize never allocates metadata and cannot fail | fault-injected test: old code returns NULL after consuming the pointer; new code injects zero metadata allocations and succeeds |
+| 3 | ELF dumps recorded `base 0` but the symbolizer always added the PE ImageBase | dumps carry `# abi pe` or `# abi elf`; the symbolizer subtracts the bias for ELF and only adds ImageBase for PE | non-PIE and PIE RVAs both resolve to the right function through addr2line |
+| 4 | fixed 256-site table dropped sites silently | table grows on demand; `sites_dropped` and `unattributed_bytes` are reported in the `mem:` line and the dump header | real run reports `sites=125 sites_dropped=0` |
+| 5 | stats read 64-bit counters non-atomically; printed through 32-bit `unsigned long` on win64 | atomic loads; counters and all `%llu` formatting are `uint64_t` throughout | `tracking=` now reports 2.6 MB of metadata overhead that was previously invisible |
+| 6 | dump written in place with `fopen(path,"w")`, so a kill mid-write lost the last good snapshot | written to `path.tmp`, flushed, closed, then renamed over the previous file; refresh is driven by `Memprof_Tick` per frame, not by the `mem:` log line | dump appears with `Verbose = 0`, independent of the log gate |
+| 7 | the report implied process-memory accounting | retitled and rescoped (see the note at the top and section 2) | — |
+
+The site table's growth and the metadata overhead are now visible rather than
+assumed: `tracking=` is the profiler's own cost.
+
+## 8. Complete process memory is a different tool
+
+`GetProcessMemoryInfo` gives private committed bytes and working set for the
+process, which is the honest denominator this profiler deliberately does not
+provide. On Windows, UMDH (`gflags /i <exe> +ust`, then before/after snapshots)
+captures allocations with stacks across process heaps and diffs them; WPR's
+Heap Usage and VirtualAlloc Usage profiles do the same through ETW. Any of
+those is a better cross-check than subtracting this profiler's total from a
+working set.
+
+If this is extended, report the categories separately instead of summing them:
+
+| Category | Measurement |
+|---|---|
+| Engine heap | this profiler, per-site and full-width |
+| Lua | `Memprof_LuaAlloc` totals; call-site needs `lua_getallocf` hooks |
+| Third-party libraries | explicit hooks where the library offers them (libpng does) |
+| Process memory | `GetProcessMemoryInfo` — private bytes and working set |
+| Other heap / virtual | UMDH or ETW/WPR snapshots |
+| GPU resources | engine-created textures, buffers, FBOs; driver under its own heading |
+
+## 9. Where this leaves the memory work
 
 - The instrument is done for the desktop targets and reproducible from the
   commands in section 1.
 - The one large, actionable finding is **audio: 134 MB decoded eagerly and kept
   resident**. Streaming or lazily decoding SND, or skipping decode entirely when
-  sound is disabled, is the change with the most headroom.
-- Everything else is ordinary resident cache; there is no per-frame leak to chase.
+  sound is disabled, is the change with the most headroom. It survives the
+  fixes above unchanged: the ranking was re-derived after them and the top ten
+  is identical.
+- Everything else is ordinary resident cache; there is no per-frame leak to
+  chase **within this scenario** (section 5 covers the limits of that claim).
 - A Vita figure still needs a platform memory query (section 6). Until then,
   treat the ranking as the transferable result and the megabytes as desktop-only.
 
-## 9. Commits
+## 10. Commits
 
 - `1f44181` — heap and Lua counters, `mem:` log line.
 - `06bcd42` — libpng decode allocations counted.
 - `d131cdf` — libpng callback types for the 64-bit kit (`png_alloc_size_t`).
 - `dac7217` — call-site attribution, `MUGEN_MEMPROF`, the dump, and
-  `tools/memprof_symbolize.py`, including the three accounting fixes above.
+  `tools/memprof_symbolize.py`.
+- follow-up — the seven review fixes above: safe call-site capture, realloc
+  contract, ELF symbolization, growing site table, 64-bit stats, crash-safe
+  dumps, and the scope correction in this file.
