@@ -56,6 +56,16 @@ static void overlay(SpriteSet *set,int index);
 #include "../src/gles_render.c"
 #include "../src/gles_draw.c"
 #include "../src/gles_probe.c"
+/*
+ * GPU timer queries are outside this GL error/ownership test. The real
+ * gputime.c uses EXT_disjoint_timer_query and a live GL context; this mock
+ * renderer only verifies its display/texture/shader failure paths. Supply
+ * inert timing boundaries so the GLES variants link independently.
+ */
+int GpuTime_Init(void) { return 0; }
+void GpuTime_Reset(void) {}
+void GpuTime_BeginPresent(void) {}
+void GpuTime_EndPresent(void) {}
 #else
 int Test_LoadGL(void);
 #define gladLoadGL Test_LoadGL
