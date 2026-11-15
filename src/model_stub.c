@@ -22,6 +22,11 @@ void Model_EnableAnim(Model *mdl, int index, int enabled)
 int Model_LoadEnvironment(Model *mdl, const char *path, float intensity)
 { (void)mdl; (void)path; (void)intensity; return 0; }
 void Model_DrawShadows(Model *mdl) { (void)mdl; }
+int Model_HasDestinationBlend(const Model *mdl, int scene, int layer, int default_layer)
+{
+    (void)mdl; (void)scene; (void)layer; (void)default_layer;
+    return 0;
+}
 void Model_Draw(Model *mdl, int scene, int layer, int default_layer,
                 const float *proj, const float *view, const ModelFx *fx,
                 float outline, const float *camera)

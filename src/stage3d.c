@@ -34,6 +34,8 @@ Stage3D g_stage3d;
 
 #ifdef MUGEN_VITA_GL
 static void Stage3D_FreeRenderTarget(void);
+/* Set once a target could not be bound: the stage then draws at full size. */
+static int g_stage3dTargetFailed;
 #endif
 
 /* Reads up to n comma separated floats of key; stops at the first that is no number (as Ikemen GO). */
@@ -309,6 +311,7 @@ void Stage3D_Free(void)
     s3->model = NULL;
 #ifdef MUGEN_VITA_GL
     Stage3D_FreeRenderTarget();
+    g_stage3dTargetFailed = 0;
 #endif
 }
 
@@ -456,7 +459,8 @@ static int Stage3D_EnsureRenderTarget(int target_w, int target_h)
 {
     int w, h;
 
-    if (g_stage3dRenderScale >= 100 || target_w <= 0 || target_h <= 0) {
+    if (g_stage3dRenderScale >= 100 || g_stage3dTargetFailed ||
+        target_w <= 0 || target_h <= 0) {
         return 0;
     }
     w = target_w * g_stage3dRenderScale / 100;
@@ -477,6 +481,18 @@ static int Stage3D_EnsureRenderTarget(int target_w, int target_h)
     Log_Printf("Stage3D: model target %ix%i, upscaled to %ix%i\n", w, h, target_w, target_h);
     return 1;
 }
+
+/*
+ * Drops a target that could not be bound and stops the half-resolution path
+ * for the rest of the stage. A framebuffer that failed once is not retried
+ * every frame; the model then draws straight onto the frame as before.
+ */
+static void Stage3D_AbandonRenderTarget(const char *why)
+{
+    Log_Printf("Stage3D: %s; drawing the model at full size for this stage\n", why);
+    Stage3D_FreeRenderTarget();
+    g_stage3dTargetFailed = 1;
+}
 #endif
 
 /* The model draws of background layer 0 / foreground layer 1, as Ikemen GO. */
@@ -495,6 +511,24 @@ static void Stage3D_DrawLayers(int layer, const Stage3D *s3, const float *proj, 
         Model_Draw(s3->model, 1, 1, 1, proj, view, fx, outline, NULL);
     }
     BatchProf_ModelLayerEnd();
+}
+
+/*
+ * Whether the draws Stage3D_DrawLayers would issue for `layer` blend against
+ * the destination. The (scene, model layer, default layer) triples are the ones
+ * Stage3D_DrawLayers passes to Model_Draw.
+ */
+static int Stage3D_LayerBlendsDestination(const Stage3D *s3, int layer)
+{
+    if (layer == 0) {
+        return Model_HasDestinationBlend(s3->model, 0, -1, 0) ||
+               Model_HasDestinationBlend(s3->model, 0, 0, 0);
+    }
+    if (layer == 1) {
+        return Model_HasDestinationBlend(s3->model, 0, 1, 0) ||
+               Model_HasDestinationBlend(s3->model, 1, 1, 1);
+    }
+    return 0;
 }
 
 /* Draws the model's part of stage background layer `layer` (0 back, 1 front), from Bg_Draw. */
@@ -571,6 +605,16 @@ void Stage3D_Draw(int layer)
     /* mesh outlines are as wide as Ikemen GO's: meshOutline * 0.003 * tan(fov) */
     outline = (float)(0.003 * tan(fov));
 #ifdef MUGEN_VITA_GL
+    /*
+     * A model that blends against the destination (MODEL_TRANS_ADD/SUB/MUL)
+     * cannot be rendered into an offscreen target and composited: those modes
+     * read the colour behind them, and behind them in the target is transparent
+     * black, not the stage. Such a layer keeps the direct full-size path.
+     */
+    if (Stage3D_LayerBlendsDestination(s3, layer)) {
+        Stage3D_DrawLayers(layer, s3, proj, view, &fx, outline);
+        return;
+    }
     if (Stage3D_EnsureRenderTarget(g_targetWidth, g_targetHeight)) {
         SpriteSet *prev_target = g_renderTarget;
         int prev_sprite = g_renderTargetSprite;
@@ -588,7 +632,16 @@ void Stage3D_Draw(int layer)
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             glClearColor(clear_color[0], clear_color[1], clear_color[2], clear_color[3]);
             Stage3D_DrawLayers(layer, s3, proj, view, &fx, outline);
-            Gfx_SetRenderTarget(prev_target, prev_sprite);
+            /*
+             * The composite samples the target as a texture, so the target must
+             * not still be bound: sampling the texture that is being rendered
+             * into is a framebuffer feedback loop with undefined results. If the
+             * restore fails, the frame is left as the model drew it.
+             */
+            if (!Gfx_SetRenderTarget(prev_target, prev_sprite)) {
+                Stage3D_AbandonRenderTarget("could not restore the render target");
+                return;
+            }
             Gfx_SetClipRect(cx1, cy1, cx2, cy2);
             {
                 DrawParams dp;
@@ -607,6 +660,7 @@ void Stage3D_Draw(int layer)
         }
         /* Could not bind the target: restore the clip and draw directly. */
         Gfx_SetClipRect(cx1, cy1, cx2, cy2);
+        Stage3D_AbandonRenderTarget("could not bind the model target");
     }
 #endif
     Stage3D_DrawLayers(layer, s3, proj, view, &fx, outline);

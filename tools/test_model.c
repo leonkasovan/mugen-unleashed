@@ -148,6 +148,57 @@ static void caller_state(GLuint *buffer, GLuint *element, GLuint *texture)
     glActiveTexture(GL_TEXTURE3);
     glGenTextures(1, texture); glBindTexture(GL_TEXTURE_2D, *texture);
 }
+
+/*
+ * The half-resolution stage path (port/psvita) must not run for a model that
+ * blends against the destination. Model_HasDestinationBlend answers that by
+ * walking the same nodes Model_DrawNode would draw, so this checks the answer
+ * against a real loaded model rather than trusting the traversal.
+ */
+static void check_destination_blend(Model *mdl)
+{
+    ModelNode *root = &mdl->nodes[mdl->scenes[0].nodes[0]];
+    int saved_trans = root->trans;
+    int saved_layer = root->layer;
+    int saved_visible = root->visible;
+
+    assert(root->mesh != -1);
+    root->layer = 0;            /* an explicit layer, not MODEL_LAYER_DEFAULT */
+    root->visible = 1;
+
+    /* No trans extra: ordinary alpha blending, safe for an offscreen target. */
+    root->trans = MODEL_TRANS_NONE;
+    assert(Model_HasDestinationBlend(mdl, 0, 0, 0) == 0);
+
+    /* Each destination-dependent mode must be reported for its layer. */
+    root->trans = MODEL_TRANS_ADD;
+    assert(Model_HasDestinationBlend(mdl, 0, 0, 0) == 1);
+    root->trans = MODEL_TRANS_SUB;
+    assert(Model_HasDestinationBlend(mdl, 0, 0, 0) == 1);
+    root->trans = MODEL_TRANS_MUL;
+    assert(Model_HasDestinationBlend(mdl, 0, 0, 0) == 1);
+
+    /* A hidden node is not drawn, so it must not force the full-size path. */
+    root->visible = 0;
+    assert(Model_HasDestinationBlend(mdl, 0, 0, 0) == 0);
+    root->visible = 1;
+
+    /* Nor is a node on a layer this draw does not cover. */
+    assert(Model_HasDestinationBlend(mdl, 0, 1, 1) == 0);
+
+    /* A node with no explicit layer follows the default it is drawn with. */
+    root->layer = MODEL_LAYER_DEFAULT;
+    assert(Model_HasDestinationBlend(mdl, 0, 1, 1) == 1);
+    assert(Model_HasDestinationBlend(mdl, 0, 0, 1) == 0);
+
+    /* An out-of-range scene or a NULL model is not a blend. */
+    assert(Model_HasDestinationBlend(mdl, 1, 0, 0) == 0);
+    assert(Model_HasDestinationBlend(NULL, 0, 0, 0) == 0);
+
+    root->trans = saved_trans;
+    root->layer = saved_layer;
+    root->visible = saved_visible;
+}
 #endif
 
 int main(int argc, char **argv)
@@ -311,6 +362,9 @@ int main(int argc, char **argv)
             }
             if (pass == 0 && getenv("MODEL_TEST_COUNTS") != NULL) {
                 check_primitive_counts(mdl, ident, &fx, camera);
+            }
+            if (pass == 0 && getenv("MODEL_TEST_BLEND") != NULL) {
+                check_destination_blend(mdl);
             }
             if (pass == 1) {
                 /* Reached by the reference build only: the basic profile returns

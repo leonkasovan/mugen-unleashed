@@ -67,10 +67,11 @@ typedef struct BatchProfAverages {
      * here; play draws dozens of them while a stage preview draws a handful. */
     double pass1_calls;
     double pass1_us;
-    /* Port addition: total destination area of the sprite quads (pixels) and
-     * the time inside VitaGl_DrawQuad, so 2D fill and per-quad submission can
-     * be separated from the model's prim cost. */
-    double area_pixels;
+    /* Port addition: the sprite quads' nominal scaled area in pixels -- sprite
+     * size times its scale factors, with no clipping, rotation, perspective or
+     * overdraw accounted for. It tracks how much 2D the engine asked for, and
+     * is a diagnostic, not a count of fragments the GPU executed. */
+    double quad_area_pixels;
     double vita_quad_us;
     /* Port addition: the 3D stage model's two background layers, counted
      * separately ([0] back, [1] front). Which layers a screen draws is the
@@ -134,9 +135,9 @@ void BatchProf_ModelPass(unsigned long long ticks);
  * time spent in the whole block (allocate, render, restore, free). */
 void BatchProf_Pass1(int calls, unsigned long long ticks);
 
-/* Port additions: summed destination quad area (pixels) and time inside
- * VitaGl_DrawQuad (the programmable 2D quad submission). */
-void BatchProf_Area(double pixels);
+/* Port additions: the summed nominal scaled area of the sprite quads (see
+ * quad_area_pixels) and the time inside VitaGl_DrawQuad. */
+void BatchProf_QuadArea(double pixels);
 void BatchProf_VitaQuad(unsigned long long ticks);
 
 /* Port addition: attribute the model draws that follow to background layer
@@ -175,7 +176,7 @@ static inline void BatchProf_ModelSubmit(unsigned int triangles, unsigned long l
 }
 static inline void BatchProf_ModelPass(unsigned long long ticks) { (void)ticks; }
 static inline void BatchProf_Pass1(int calls, unsigned long long ticks) { (void)calls; (void)ticks; }
-static inline void BatchProf_Area(double pixels) { (void)pixels; }
+static inline void BatchProf_QuadArea(double pixels) { (void)pixels; }
 static inline void BatchProf_VitaQuad(unsigned long long ticks) { (void)ticks; }
 static inline void BatchProf_ModelLayerBegin(int layer) { (void)layer; }
 static inline void BatchProf_ModelLayerEnd(void) {}

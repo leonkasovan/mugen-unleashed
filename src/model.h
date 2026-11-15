@@ -385,6 +385,10 @@ void Model_Reset(Model *mdl);
 void Model_EnableAnim(Model *mdl, int index, int enabled);
 int Model_LoadEnvironment(Model *mdl, const char *path, float intensity);
 void Model_DrawShadows(Model *mdl);
+/* Port addition (PS Vita): whether the nodes the given layers draw blend
+ * against the destination (MODEL_TRANS_ADD/SUB/MUL). Such a model must be drawn
+ * straight onto the frame: an offscreen target cannot reproduce it. */
+int Model_HasDestinationBlend(const Model *mdl, int scene, int layer, int default_layer);
 void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float *proj, const float *view,
                 const ModelFx *fx, float outline, const float *camera);
 

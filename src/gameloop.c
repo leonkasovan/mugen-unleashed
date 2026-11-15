@@ -1275,8 +1275,10 @@ static void Game_PerfLog(void)
                            batch.split_us[BATCHPROF_SPLIT_PIXELS],
                            batch.split_us[BATCHPROF_SPLIT_PALETTE],
                            batch.pass1_us, batch.pass1_calls);
-                Log_Printf("batch:   area=%.0fpx vquad=%.0fus\n",
-                           batch.area_pixels, batch.vita_quad_us);
+                /* Nominal scaled area of the 2D quads: how much 2D the frame
+                 * asked for, not the fragments the GPU executed. */
+                Log_Printf("batch:   quad_area=%.0fpx vquad=%.0fus\n",
+                           batch.quad_area_pixels, batch.vita_quad_us);
                 Log_Printf("stage: zoom=%.3f scale=%.3f target=%dx%d\n",
                            (double)g_game->camera_zoom, (double)g_game->stage_scale,
                            g_targetWidth, g_targetHeight);

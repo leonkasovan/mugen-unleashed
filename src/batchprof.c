@@ -253,7 +253,7 @@ void BatchProf_Pass1(int calls, unsigned long long ticks)
     bp_pass1_ticks += (double)ticks;
 }
 
-void BatchProf_Area(double pixels)
+void BatchProf_QuadArea(double pixels)
 {
     if (pixels > 0.0) {
         bp_area_pixels += pixels;
@@ -298,7 +298,7 @@ int BatchProf_TakeAverages(BatchProfAverages *out)
         out->model_pass_us = bp_sum_model_pass_ticks / bp_frames * 1000000.0 / frequency;
         out->pass1_calls = bp_sum_pass1_calls / bp_frames;
         out->pass1_us = bp_sum_pass1_ticks / bp_frames * 1000000.0 / frequency;
-        out->area_pixels = bp_sum_area_pixels / bp_frames;
+        out->quad_area_pixels = bp_sum_area_pixels / bp_frames;
         out->vita_quad_us = bp_sum_vita_quad_ticks / bp_frames * 1000000.0 / frequency;
         out->layer_calls[0] = bp_sum_layer_calls[0] / bp_frames;
         out->layer_calls[1] = bp_sum_layer_calls[1] / bp_frames;

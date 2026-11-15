@@ -1310,10 +1310,11 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
     fx = PalFx_GetApplied();
 #endif
 #ifdef MUGEN_DEBUG
-    /* Destination area of this quad in screen pixels, for the 2D fill report. */
-    BatchProf_Area((double)w * (double)h *
-                   fabs((double)dp->scale_x * dp->scale2_x * spr->scale_x) *
-                   fabs((double)dp->scale_y * dp->scale2_y * spr->scale_y));
+    /* Nominal scaled area of this quad, for the 2D demand report: no clipping,
+     * rotation, perspective or overdraw is taken into account. */
+    BatchProf_QuadArea((double)w * (double)h *
+                       fabs((double)dp->scale_x * dp->scale2_x * spr->scale_x) *
+                       fabs((double)dp->scale_y * dp->scale2_y * spr->scale_y));
 #endif
     if (fx->invertall != 0) {
         /* Inversion through blending: add <-> subtract with negated offsets. */

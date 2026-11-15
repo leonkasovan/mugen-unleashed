@@ -2292,6 +2292,48 @@ static void Model_SetBlend(int trans)
     }
 }
 
+/*
+ * Port addition (PS Vita): whether a node of this scene that the given layers
+ * draw blends against the destination (port/stage3d.c draws the model into an
+ * offscreen target, and ADD/SUB/MUL do not survive being composited as a
+ * texture). Walks the same node/layer rules Model_DrawNode uses, so a false
+ * answer means the model really only contains ordinary alpha blending.
+ */
+static int Model_NodeHasDestinationBlend(const Model *mdl, int index, int layer, int default_layer)
+{
+    const ModelNode *n = &mdl->nodes[index];
+    int node_layer = n->layer != MODEL_LAYER_DEFAULT ? n->layer : default_layer;
+    int i;
+
+    for (i = 0; i < n->child_count; i++) {
+        if (Model_NodeHasDestinationBlend(mdl, n->children[i], layer, default_layer)) {
+            return 1;
+        }
+    }
+    if (n->mesh == -1 || !n->visible || node_layer != layer) {
+        return 0;
+    }
+    return n->trans == MODEL_TRANS_ADD || n->trans == MODEL_TRANS_SUB || n->trans == MODEL_TRANS_MUL;
+}
+
+int Model_HasDestinationBlend(const Model *mdl, int scene, int layer, int default_layer)
+{
+    const ModelScene *sc;
+    int i;
+
+    if (mdl == NULL || scene < 0 || scene >= mdl->scene_count) {
+        return 0;
+    }
+    sc = &mdl->scenes[scene];
+    for (i = 0; i < sc->node_count; i++) {
+        if (Model_NodeHasDestinationBlend(mdl, sc->nodes[i], layer, default_layer)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+
 /* Binds a material texture to its unit; returns whether there is one. */
 static int Model_BindTexture(const Model *mdl, const ModelTexRef *ref, int unit, GLint transform_loc)
 {
