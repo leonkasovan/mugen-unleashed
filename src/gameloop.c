@@ -1061,7 +1061,13 @@ int Screen_Run(ScreenLoop *screen)
                 }
             }
             if (screen->inner == 0) {
+#ifdef MUGEN_VITA_GL
+                Uint64 start = SDL_GetPerformanceCounter();
+#endif
                 Game_Draw(screen);
+#ifdef MUGEN_VITA_GL
+                Perf_VitaSpan(PERF_VITA_GAME_DRAW, start);
+#endif
             }
             if (screen->draw != NULL) {
                 screen->draw(screen, screen->state);
@@ -1232,6 +1238,34 @@ static void Game_PerfLog(void)
                        Game_PerfRendererName(g_renderMode), (double)Timer_GetFps(),
                        frames - last_frames, perf.logic_ms, perf.draw_ms, perf.wait_ms,
                        perf.present_ms, perf.calls, perf.triangles);
+#ifdef MUGEN_VITA_GL
+            /* A few high-resolution counter reads per frame, never per quad.
+             * CPU wall times include time spent waiting in the GL driver;
+             * they are NOT GPU-execution timestamps. */
+            Log_Printf("vphase: game=%.1fms stage bind=%.1f model=%.1f restore=%.1f composite=%.1f direct=%.1f\n",
+                       perf.vita_ms[PERF_VITA_GAME_DRAW],
+                       perf.vita_ms[PERF_VITA_STAGE_BIND],
+                       perf.vita_ms[PERF_VITA_STAGE_MODEL],
+                       perf.vita_ms[PERF_VITA_STAGE_RESTORE],
+                       perf.vita_ms[PERF_VITA_STAGE_COMPOSITE],
+                       perf.vita_ms[PERF_VITA_STAGE_DIRECT]);
+            Log_Printf("vphase: present bind=%.1f blit=%.1f restore=%.1f swap=%.1fms\n",
+                       perf.vita_ms[PERF_VITA_PRESENT_BIND],
+                       perf.vita_ms[PERF_VITA_PRESENT_BLIT],
+                       perf.vita_ms[PERF_VITA_PRESENT_RESTORE],
+                       perf.vita_ms[PERF_VITA_SWAP]);
+            Log_Printf("vphase-max: game=%.1f stage bind=%.1f model=%.1f restore=%.1f composite=%.1f direct=%.1f present bind=%.1f blit=%.1f restore=%.1f swap=%.1fms\n",
+                       perf.vita_max_ms[PERF_VITA_GAME_DRAW],
+                       perf.vita_max_ms[PERF_VITA_STAGE_BIND],
+                       perf.vita_max_ms[PERF_VITA_STAGE_MODEL],
+                       perf.vita_max_ms[PERF_VITA_STAGE_RESTORE],
+                       perf.vita_max_ms[PERF_VITA_STAGE_COMPOSITE],
+                       perf.vita_max_ms[PERF_VITA_STAGE_DIRECT],
+                       perf.vita_max_ms[PERF_VITA_PRESENT_BIND],
+                       perf.vita_max_ms[PERF_VITA_PRESENT_BLIT],
+                       perf.vita_max_ms[PERF_VITA_PRESENT_RESTORE],
+                       perf.vita_max_ms[PERF_VITA_SWAP]);
+#endif
         } else {
             Log_Printf("perf: renderer=%s fps=%.1f frames=%d\n",
                        Game_PerfRendererName(g_renderMode), (double)Timer_GetFps(),
