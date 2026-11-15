@@ -107,15 +107,15 @@ build.
   layer rules as `Model_DrawNode`, and `Stage3D_Draw` falls back to drawing
   that layer directly at full size. Ordinary alpha-blended stages — the
   common case — still use the target.
-- **Failure paths are closed.** A target that cannot be bound drops the
-  half-resolution path for the rest of the stage. A failed restoration is
-  handled differently, because `Gfx_SetRenderTarget` rolls its state back to
-  the target the failed bind came from (`src/gfx.c`): the engine can still
-  point at the offscreen target at that moment, so the frame is retried once,
-  and only then is the target released —
-  `Stage3D_FreeRenderTarget` detaches `g_renderTarget` first, so no freed
-  target stays referenced. The composite never samples a texture that may
-  still be bound for rendering, which would be a framebuffer feedback loop.
+- **Framebuffer failures are handled without freeing live attachments.**
+  If binding the model target fails, the stage disables half-resolution
+  rendering and draws directly. If restoration of the original render target
+  fails, it is retried once; persistent failure is fatal, because substituting
+  the window framebuffer would not restore the engine's screen texture.
+  `Stage3D_FreeRenderTarget` verifies that an active model target can be
+  detached before freeing it; a failed detach is also fatal. On Vita the
+  fatal-error path exits without GL teardown. The composite never samples a
+  texture that remains bound for rendering.
 - **Per-layer model attribution.** `Stage3D_DrawLayers` brackets each
   layer with `BatchProf_ModelLayerBegin/End`, and `Model_Draw`'s
   submissions are attributed through `BatchProf_ModelSubmit`. The log
