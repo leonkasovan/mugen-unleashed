@@ -43,8 +43,9 @@ mem: heap/lua heap_live=... heap_peak=... heap_allocs=... heap_frees=...
 `tracking=` counts live, dynamically allocated pointer records and site-table
 storage (not transient snapshot buffers or the static table of buckets).
 `sites_dropped` counts attribution attempts that could not be recorded;
-`unattributed` counts **currently live** payload bytes without a recorded site.
-Neither counter silently wraps when an untracked allocation is freed.
+`unattributed` counts **currently live** tracked payload bytes without a
+recorded site, including allocations made before `Memprof_Start` and those
+whose site insertion failed. The value falls when those blocks are freed.
 
 That line needs `[Debug] Verbose = 1` (or `ShowFPS = 1`), the same gate as
 `perf:`.
