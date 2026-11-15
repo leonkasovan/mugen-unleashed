@@ -678,6 +678,8 @@ void Stage3D_Draw(int layer)
             glClearDepthf(1.0f);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             glClearColor(clear_color[0], clear_color[1], clear_color[2], clear_color[3]);
+            Perf_VitaSpan(PERF_VITA_STAGE_CLEAR, stage_start);
+            stage_start = SDL_GetPerformanceCounter();
             Stage3D_DrawLayers(layer, s3, proj, view, &fx, outline);
             Perf_VitaSpan(PERF_VITA_STAGE_MODEL, stage_start);
             stage_start = SDL_GetPerformanceCounter();
