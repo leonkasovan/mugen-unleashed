@@ -17,10 +17,11 @@
  * ---------------
  * Three numbers, because they answer different questions:
  *
- *   drawn   frames passed to Screen_Present. The engine drops present when it
- *           is more than a frame late (Frame_UpdateSkip sets skip_draw), so
- *           this can be lower than the tick rate -- that is the engine
- *           reacting to being slow, not the port being wrong.
+ *   drawn   frames that were presented. The caller passes the frame's own
+ *           skip_draw decision, read before Frame_UpdateSkip sets the next
+ *           frame's state; the engine drops present when it is more than a
+ *           frame late, so this can be lower than the tick rate -- that is the
+ *           engine reacting to being slow, not the port being wrong.
  *
  *   tick    calls to Screen_EndFrame. The game loop's own rate, i.e. how many
  *           times per second game logic advanced.
@@ -65,13 +66,13 @@ void Vita_PerfAddFlip(__int64 ticks)
     g_vitaPerfFlip += ticks;
 }
 
-void Vita_FrameLog(void)
+void Vita_FrameLog(int drawn)
 {
     __int64 now;
     __int64 span;
 
     g_vitaFpsTicks++;
-    if (g_game != NULL && g_game->skip_draw == 0) {
+    if (drawn) {
         g_vitaFpsDrawn++;
     }
     if (g_vitaFpsReports >= VITA_FPS_MAX_REPORTS) {

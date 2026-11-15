@@ -303,15 +303,19 @@ void Screen_EndFrame(void)
      * Close the phase after the actual presentation on every platform. */
     Perf_PresentDone();
     Frame_ResetPalFx();
-    Frame_UpdateSkip();
 #if defined(MUGEN_VITA_GL) && !defined(ANDROID_PORT)
-    /*
-     * PS Vita port: per-second tick/draw statistics.
-     *
-     * The Android port has no equivalent yet; its equivalent would live in
-     * port/android and is not written. Nothing is stubbed here, because a
-     * placeholder would imply a measurement that does not exist.
-     */
-    Vita_FrameLog();
+    {
+        /*
+         * Port fix: count this frame's own decision. Frame_UpdateSkip sets the
+         * *next* frame's skip_draw, so reading it afterwards attributed the
+         * current frame with a state that had not been drawn yet.
+         */
+        int drawn = g_game != NULL && g_game->skip_draw == 0;
+
+        Frame_UpdateSkip();
+        Vita_FrameLog(drawn);
+    }
+#else
+    Frame_UpdateSkip();
 #endif
 }
