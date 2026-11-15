@@ -22,6 +22,25 @@
  * 20 calls and with 2000 calls mean very different things.
  */
 
+/* Vita-only low-frequency CPU timing: one sample per major render phase.
+ * These are blocking-call wall times, NOT GPU execution timestamps. */
+enum {
+    PERF_VITA_GAME_DRAW,
+    PERF_VITA_STAGE_BIND,
+    PERF_VITA_STAGE_MODEL,
+    PERF_VITA_STAGE_RESTORE,
+    PERF_VITA_STAGE_COMPOSITE,
+    PERF_VITA_STAGE_DIRECT,
+    PERF_VITA_PRESENT_BIND,
+    PERF_VITA_PRESENT_BLIT,
+    PERF_VITA_PRESENT_RESTORE,
+    PERF_VITA_SWAP,
+    PERF_VITA_PHASE_COUNT
+};
+
+/* The start value comes from SDL_GetPerformanceCounter(). No-op on non-Vita. */
+void Perf_VitaSpan(int phase, unsigned long long start);
+
 typedef struct PerfAverages {
     double logic_ms;    /* mean per frame over the last whole second */
     double draw_ms;
@@ -32,6 +51,8 @@ typedef struct PerfAverages {
                          * layered drawing submit the same geometry more than
                          * once, which is what the GPU is asked to do, and that
                          * is the number that explains a slow draw */
+    double vita_ms[PERF_VITA_PHASE_COUNT]; /* CPU milliseconds per frame */
+    double vita_max_ms[PERF_VITA_PHASE_COUNT]; /* worst single-frame phase */
     int frames;         /* frames the means cover; 0 when there is nothing */
 } PerfAverages;
 
