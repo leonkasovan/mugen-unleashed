@@ -26,6 +26,8 @@
  * These are blocking-call wall times, NOT GPU execution timestamps. */
 enum {
     PERF_VITA_GAME_DRAW,
+    PERF_VITA_STAGE_BACK,
+    PERF_VITA_STAGE_FRONT,
     PERF_VITA_STAGE_BIND,
     PERF_VITA_STAGE_MODEL,
     PERF_VITA_STAGE_RESTORE,
