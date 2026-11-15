@@ -543,38 +543,70 @@ void Memprof_Stop(const char *path)
 
 /* ------------------------------------------------------------ allocator */
 
-void *Memprof_Malloc(size_t size)
+/* These run with memprof_lock held, so entry metadata and site balances
+ * change together. A failed site insertion remains marked on the entry
+ * until its free/realloc; unattributed_bytes is LIVE, not cumulative. */
+static void Memprof_CreditEntryLocked(MemprofEntry *entry, void *pc)
 {
-    void *pc = MEMPROF_SITE_PC();
-    void *p;
-    int tracked;
+    entry->pc = NULL;
+    entry->missing_site = 0;
+    if (!memprof_site_enabled) return;
+    if (Memprof_SiteAddLocked(pc, (int64_t)entry->size, 1)) {
+        entry->pc = pc;
+    } else {
+        entry->missing_site = 1;
+        Memprof_UnattributedAddLocked((int64_t)entry->size);
+    }
+}
 
-    p = malloc(size);
+static void Memprof_DebitEntryLocked(const MemprofEntry *entry)
+{
+    if (entry->pc != NULL) {
+        Memprof_SiteAddLocked(entry->pc, -(int64_t)entry->size, 0);
+    } else if (entry->missing_site) {
+        Memprof_UnattributedAddLocked(-(int64_t)entry->size);
+    }
+}
+
+/* Receive the caller PC explicitly so realloc(NULL,n) retains the engine
+ * realloc call site, not this internal helper's address. */
+static void *Memprof_MallocWithPC(size_t size, void *pc)
+{
+    void *p = malloc(size);
+    MemprofEntry *entry;
+
     if (p == NULL) {
         __sync_fetch_and_add(&memprof_heap_fails, 1);
         return NULL;
     }
     Memprof_Lock();
-    tracked = Memprof_EntryNewLocked(p, size, pc) != NULL;
+    entry = Memprof_EntryNewLocked(p, size, NULL);
+    if (entry != NULL) Memprof_CreditEntryLocked(entry, pc);
     Memprof_Unlock();
-    if (!tracked) {
-        /* Cannot account for it; refuse rather than miscount. */
+    if (entry == NULL) {
         free(p);
         __sync_fetch_and_add(&memprof_heap_fails, 1);
         return NULL;
     }
     __sync_fetch_and_add(&memprof_heap_allocs, 1);
     Memprof_Add(&memprof_heap_live, &memprof_heap_peak, (int64_t)size, 1);
-    Memprof_SiteAdd(pc, (int64_t)size, 1);
     return p;
+}
+
+void *Memprof_Malloc(size_t size)
+{
+    /* Especially on Windows: avoid RtlCaptureStackBackTrace outside opt-in
+     * profiling, rather than paying for a stack walk on every allocation. */
+    void *pc = memprof_site_enabled ? MEMPROF_SITE_PC() : NULL;
+    return Memprof_MallocWithPC(size, pc);
 }
 
 void *Memprof_Calloc(size_t count, size_t size)
 {
-    void *pc = MEMPROF_SITE_PC();
+    void *pc = memprof_site_enabled ? MEMPROF_SITE_PC() : NULL;
     size_t total;
     void *p;
-    int tracked;
+    MemprofEntry *entry;
 
     if (count != 0 && size > SIZE_MAX / count) {
         __sync_fetch_and_add(&memprof_heap_fails, 1);
@@ -587,42 +619,38 @@ void *Memprof_Calloc(size_t count, size_t size)
         return NULL;
     }
     Memprof_Lock();
-    tracked = Memprof_EntryNewLocked(p, total, pc) != NULL;
+    entry = Memprof_EntryNewLocked(p, total, NULL);
+    if (entry != NULL) Memprof_CreditEntryLocked(entry, pc);
     Memprof_Unlock();
-    if (!tracked) {
+    if (entry == NULL) {
         free(p);
         __sync_fetch_and_add(&memprof_heap_fails, 1);
         return NULL;
     }
     __sync_fetch_and_add(&memprof_heap_allocs, 1);
     Memprof_Add(&memprof_heap_live, &memprof_heap_peak, (int64_t)total, 1);
-    Memprof_SiteAdd(pc, (int64_t)total, 1);
     return p;
 }
 
 /*
- * realloc keeps its contract: when it fails the original block is untouched
- * AND still tracked. The existing metadata entry is detached and reused rather
- * than reallocated, so tracking a resize can never fail for want of metadata,
- * and the original block is never freed to work around a metadata shortage.
+ * The CRT block and its original metadata survive a failed realloc.
+ * Successful realloc reuses the SAME metadata node with no allocations.
  */
 void *Memprof_Realloc(void *ptr, size_t size)
 {
-    void *pc = MEMPROF_SITE_PC();
+    void *pc = memprof_site_enabled ? MEMPROF_SITE_PC() : NULL;
     MemprofEntry *entry;
     size_t old_size;
-    void *old_pc;
     void *fresh;
 
     if (ptr == NULL) {
-        return Memprof_Malloc(size);
+        return Memprof_MallocWithPC(size, pc);
     }
-
     Memprof_Lock();
     entry = Memprof_EntryDetachLocked(ptr);
     Memprof_Unlock();
     if (entry == NULL) {
-        /* Not ours: allocated before tracking, or by the CRT itself. */
+        /* CRT allocations not created by the wrappers remain untracked. */
         if (size == 0) {
             free(ptr);
             return NULL;
@@ -630,22 +658,20 @@ void *Memprof_Realloc(void *ptr, size_t size)
         return realloc(ptr, size);
     }
     old_size = entry->size;
-    old_pc = entry->pc;
-
     if (size == 0) {
         free(ptr);
         Memprof_Lock();
+        Memprof_DebitEntryLocked(entry);
         Memprof_EntryFreeLocked(entry);
         Memprof_Unlock();
         __sync_fetch_and_add(&memprof_heap_frees, 1);
         Memprof_Add(&memprof_heap_live, &memprof_heap_peak, -(int64_t)old_size, 0);
-        Memprof_SiteAdd(old_pc, -(int64_t)old_size, 0);
         return NULL;
     }
 
     fresh = realloc(ptr, size);
     if (fresh == NULL) {
-        /* Original block is unchanged; put the same entry back, untouched. */
+        /* The caller still owns ptr, which must remain tracked. */
         Memprof_Lock();
         Memprof_EntryAttachLocked(entry);
         Memprof_Unlock();
@@ -654,22 +680,16 @@ void *Memprof_Realloc(void *ptr, size_t size)
     }
 
     Memprof_Lock();
+    Memprof_DebitEntryLocked(entry);
     entry->ptr = fresh;
     entry->size = size;
-    entry->pc = pc;
+    Memprof_CreditEntryLocked(entry, pc);
     Memprof_EntryAttachLocked(entry);
     Memprof_Unlock();
 
     __sync_fetch_and_add(&memprof_heap_allocs, 1);
     Memprof_Add(&memprof_heap_live, &memprof_heap_peak,
                 (int64_t)size - (int64_t)old_size, size > old_size);
-    /*
-     * Per site a realloc moves the whole block: the old site gives up the old
-     * size, the new site takes the new one. The sum is the global delta, and no
-     * site is left holding bytes that moved away from it.
-     */
-    Memprof_SiteAdd(old_pc, -(int64_t)old_size, 0);
-    Memprof_SiteAdd(pc, (int64_t)size, 1);
     return fresh;
 }
 
@@ -677,16 +697,13 @@ void Memprof_Free(void *ptr)
 {
     MemprofEntry *entry;
     size_t size;
-    void *pc;
 
-    if (ptr == NULL) {
-        return;
-    }
+    if (ptr == NULL) return;
     Memprof_Lock();
     entry = Memprof_EntryDetachLocked(ptr);
     if (entry != NULL) {
         size = entry->size;
-        pc = entry->pc;
+        Memprof_DebitEntryLocked(entry);
         Memprof_EntryFreeLocked(entry);
     }
     Memprof_Unlock();
@@ -697,7 +714,6 @@ void Memprof_Free(void *ptr)
     free(ptr);
     __sync_fetch_and_add(&memprof_heap_frees, 1);
     Memprof_Add(&memprof_heap_live, &memprof_heap_peak, -(int64_t)size, 0);
-    Memprof_SiteAdd(pc, -(int64_t)size, 0);
 }
 
 void *Memprof_LuaAlloc(void *ud, void *ptr, size_t osize, size_t nsize)
