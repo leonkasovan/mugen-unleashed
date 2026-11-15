@@ -548,6 +548,23 @@ void Memprof_Start(void)
     memprof_dump_path = (out != NULL && out[0] != '\0') ? out : "mugen.memprof";
     Memprof_Lock();
     Memprof_SiteResetLocked();
+    /*
+     * The aggregate wrappers run before Memprof_Start (command-line/log
+     * setup). Their live blocks have no recorded caller; expose them in the
+     * live unattributed total instead of silently losing the difference
+     * between site totals and heap_live. The same reset handles a restart.
+     */
+    {
+        size_t bucket;
+        for (bucket = 0; bucket < MEMPROF_BUCKETS; bucket++) {
+            MemprofEntry *entry;
+            for (entry = memprof_buckets[bucket]; entry != NULL; entry = entry->next) {
+                entry->pc = NULL;
+                entry->missing_site = 1;
+                Memprof_UnattributedAddLocked((int64_t)entry->size);
+            }
+        }
+    }
     Memprof_Unlock();
     memprof_last_dump = 0;
     memprof_site_enabled = 1;
