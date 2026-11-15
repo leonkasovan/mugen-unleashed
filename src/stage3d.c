@@ -632,6 +632,9 @@ void Stage3D_Draw(int layer)
     /* mesh outlines are as wide as Ikemen GO's: meshOutline * 0.003 * tan(fov) */
     outline = (float)(0.003 * tan(fov));
 #ifdef MUGEN_VITA_GL
+    /* Time each stage layer independently, including its target switches. */
+    Uint64 stage_total = SDL_GetPerformanceCounter();
+    int stage_phase = layer == 1 ? PERF_VITA_STAGE_FRONT : PERF_VITA_STAGE_BACK;
     /*
      * A model that blends against the destination (MODEL_TRANS_ADD/SUB/MUL)
      * cannot be rendered into an offscreen target and composited: those modes
@@ -642,6 +645,7 @@ void Stage3D_Draw(int layer)
         Uint64 start = SDL_GetPerformanceCounter();
         Stage3D_DrawLayers(layer, s3, proj, view, &fx, outline);
         Perf_VitaSpan(PERF_VITA_STAGE_DIRECT, start);
+        Perf_VitaSpan(stage_phase, stage_total);
         return;
     }
     if (Stage3D_EnsureRenderTarget(g_targetWidth, g_targetHeight)) {
@@ -697,6 +701,7 @@ void Stage3D_Draw(int layer)
                 Gl_SetPalFxSuppressed(0);
             }
             Perf_VitaSpan(PERF_VITA_STAGE_COMPOSITE, stage_start);
+            Perf_VitaSpan(stage_phase, stage_total);
             return;
         }
         Perf_VitaSpan(PERF_VITA_STAGE_BIND, stage_start);
@@ -711,6 +716,7 @@ void Stage3D_Draw(int layer)
         Stage3D_DrawLayers(layer, s3, proj, view, &fx, outline);
         Perf_VitaSpan(PERF_VITA_STAGE_DIRECT, start);
     }
+    Perf_VitaSpan(stage_phase, stage_total);
 #else
     Stage3D_DrawLayers(layer, s3, proj, view, &fx, outline);
 #endif
