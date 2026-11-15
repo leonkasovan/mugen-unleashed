@@ -6,8 +6,26 @@
  * libpng 1.2.38 is linked statically into mugen.exe (third_party/libpng-1.2.38).
  */
 #include "mugen.h"
+#include "memprof.h"
 #include <limits.h>
 #include <stdint.h>
+
+/*
+ * Count libpng's transient decode allocations in the engine heap too, so the
+ * PNG SFF decoders are visible in the counter rather than silently using the
+ * raw CRT.
+ */
+static png_voidp Png_MemAlloc(png_structp png, png_uint_32 size)
+{
+    (void)png;
+    return Memprof_Malloc((size_t)size);
+}
+
+static void Png_MemFree(png_structp png, png_voidp ptr)
+{
+    (void)png;
+    Memprof_Free(ptr);
+}
 
 /* 0x00477140: libpng warning callback. */
 void Png_OnWarning(png_structp png, png_const_charp msg)
@@ -35,7 +53,8 @@ int Png_WriteSurface(SDL_Surface *surface, FILE *fp)
     int color_type;
     int i;
 
-    png = png_create_write_struct(PNG_LIBPNG_VER_STRING, NULL, Png_OnError, Png_OnWarning);
+    png = png_create_write_struct_2(PNG_LIBPNG_VER_STRING, NULL, Png_OnError, Png_OnWarning,
+                                    NULL, Png_MemAlloc, Png_MemFree);
     if (png == NULL) {
         MatchLog_Printf(3, "libpng: png_create_write_struct error\n");
         return -1;
@@ -140,7 +159,8 @@ unsigned char *Png_EncodeToBuffer(const void *pixels, int width, int height, int
     int color_type;
     int i;
 
-    png = png_create_write_struct(PNG_LIBPNG_VER_STRING, NULL, Png_OnError, Png_OnWarning);
+    png = png_create_write_struct_2(PNG_LIBPNG_VER_STRING, NULL, Png_OnError, Png_OnWarning,
+                                    NULL, Png_MemAlloc, Png_MemFree);
     if (png == NULL) {
         MatchLog_Printf(3, "libpng: png_create_write_struct error\n");
         goto fail;
@@ -243,7 +263,8 @@ int Png_ReadStream(Stream *s, void *dest)
         return -1;
     }
     /* The error callback is passed as the error pointer too. */
-    png = png_create_read_struct(PNG_LIBPNG_VER_STRING, (png_voidp)Png_OnError, Png_OnError, Png_OnWarning);
+    png = png_create_read_struct_2(PNG_LIBPNG_VER_STRING, (png_voidp)Png_OnError, Png_OnError, Png_OnWarning,
+                                   NULL, Png_MemAlloc, Png_MemFree);
     if (png == NULL) {
         return -1;
     }
@@ -420,7 +441,8 @@ unsigned char *Png_DecodeRGBA(const void *data, size_t size, int *width_out, int
     if (data == NULL || width_out == NULL || height_out == NULL || size < 8 || png_sig_cmp((png_bytep)data, 0, 8) != 0) {
         return NULL;
     }
-    png = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+    png = png_create_read_struct_2(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL,
+                                   NULL, Png_MemAlloc, Png_MemFree);
     if (png == NULL) {
         return NULL;
     }
