@@ -36,6 +36,7 @@ Stage3D g_stage3d;
 static void Stage3D_FreeRenderTarget(void);
 /* Set once a target could not be bound: the stage then draws at full size. */
 static int g_stage3dTargetFailed;
+static int g_stage3dScaleLogged;
 #endif
 
 /* Reads up to n comma separated floats of key; stops at the first that is no number (as Ikemen GO). */
@@ -312,6 +313,7 @@ void Stage3D_Free(void)
 #ifdef MUGEN_VITA_GL
     Stage3D_FreeRenderTarget();
     g_stage3dTargetFailed = 0;
+    g_stage3dScaleLogged = 0;
 #endif
 }
 
@@ -571,6 +573,15 @@ void Stage3D_Draw(int layer)
     if (s3->model == NULL || g_renderMode != RENDER_OPENGL || g_targetHeight <= 0) {
         return;
     }
+#ifdef MUGEN_VITA_GL
+    if (!g_stage3dScaleLogged) {
+        Log_Printf("Stage3D: scale=%d%% render=%dx%d display=%dx%d path=%s\n",
+                   g_stage3dRenderScale, g_targetWidth, g_targetHeight,
+                   g_videoWidth, g_videoHeight,
+                   g_stage3dRenderScale < 100 ? "half-resolution" : "direct");
+        g_stage3dScaleLogged = 1;
+    }
+#endif
     k = (float)(g_gameCoord[0] / g->stage.unit);
     gh = (float)g->game_coord[1];
     lc_h = (float)s3->localcoord_h;
