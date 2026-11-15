@@ -51,6 +51,12 @@ static double perf_wait_ms;
 static double perf_present_ms;
 static double perf_calls;
 static double perf_triangles;
+#ifdef MUGEN_VITA_GL
+static double perf_vita_frame[PERF_VITA_PHASE_COUNT];
+static double perf_vita_sum[PERF_VITA_PHASE_COUNT];
+static double perf_vita_max[PERF_VITA_PHASE_COUNT];
+#endif
+
 
 /* SDL's counter is the only clock here fine enough to separate the phases;
  * the engine's 1/100 s timer is not. Cached, because it cannot change. */
@@ -73,12 +79,29 @@ static double Perf_Since(Uint64 then, Uint64 now)
     return (double)(now - then) * 1000.0 / Perf_Frequency();
 }
 
+void Perf_VitaSpan(int phase, unsigned long long start)
+{
+#ifdef MUGEN_VITA_GL
+    /* Only time normal frame drawing; startup shaders, menus before the loop
+     * and the end-of-frame log itself are deliberately excluded. */
+    if ((unsigned)phase < PERF_VITA_PHASE_COUNT &&
+        (perf_marks & PERF_MARK_LOGIC) && !(perf_marks & PERF_MARK_PRESENT)) {
+        perf_vita_frame[phase] += Perf_Since((Uint64)start, SDL_GetPerformanceCounter());
+    }
+#else
+    (void)phase; (void)start;
+#endif
+}
+
 void Perf_BeginFrame(void)
 {
     perf_begin = SDL_GetPerformanceCounter();
     perf_marks = 0;
     perf_calls = 0.0;
     perf_triangles = 0.0;
+#ifdef MUGEN_VITA_GL
+    memset(perf_vita_frame, 0, sizeof(perf_vita_frame));
+#endif
 }
 
 void Perf_LogicDone(void)
@@ -127,6 +150,17 @@ void Perf_PresentDone(void)
         perf_sum_present += perf_present_ms;
         perf_sum_calls += perf_calls;
         perf_sum_triangles += perf_triangles;
+#ifdef MUGEN_VITA_GL
+        {
+            int i;
+            for (i = 0; i < PERF_VITA_PHASE_COUNT; ++i) {
+                perf_vita_sum[i] += perf_vita_frame[i];
+                if (perf_vita_frame[i] > perf_vita_max[i]) {
+                    perf_vita_max[i] = perf_vita_frame[i];
+                }
+            }
+        }
+#endif
         perf_frames++;
     }
     perf_marks = 0;
@@ -171,9 +205,22 @@ int Perf_TakeAverages(PerfAverages *out)
         out->present_ms = perf_sum_present / perf_frames;
         out->calls = perf_sum_calls / perf_frames;
         out->triangles = perf_sum_triangles / perf_frames;
+#ifdef MUGEN_VITA_GL
+        {
+            int i;
+            for (i = 0; i < PERF_VITA_PHASE_COUNT; ++i) {
+                out->vita_ms[i] = perf_vita_sum[i] / perf_frames;
+                out->vita_max_ms[i] = perf_vita_max[i];
+            }
+        }
+#endif
     }
     perf_sum_logic = perf_sum_draw = perf_sum_wait = perf_sum_present = 0.0;
     perf_sum_calls = perf_sum_triangles = 0.0;
+#ifdef MUGEN_VITA_GL
+    memset(perf_vita_sum, 0, sizeof(perf_vita_sum));
+    memset(perf_vita_max, 0, sizeof(perf_vita_max));
+#endif
     perf_frames = 0;
     return have;
 }
