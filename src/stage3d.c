@@ -447,6 +447,18 @@ static int g_stage3dTargetW, g_stage3dTargetH;
 static void Stage3D_FreeRenderTarget(void)
 {
     if (g_stage3dTarget != NULL) {
+        /*
+         * Gfx_SetRenderTarget rolls its state back to the target a failed bind
+         * came from (src/gfx.c), so the engine can still point at this one after
+         * a failed restore. Drop that reference before the free -- uncondition-
+         * ally, as Sprite_DrawGL does with its pass-1 buffer -- or the renderer
+         * is left with a dangling target if binding the frame failed too.
+         */
+        if (g_renderTarget == g_stage3dTarget) {
+            Gfx_SetRenderTarget(NULL, 0);
+            g_renderTarget = NULL;
+            g_renderTargetSprite = 0;
+        }
         SpriteSet_Free(g_stage3dTarget);
         g_stage3dTarget = NULL;
     }
@@ -483,15 +495,31 @@ static int Stage3D_EnsureRenderTarget(int target_w, int target_h)
 }
 
 /*
- * Drops a target that could not be bound and stops the half-resolution path
- * for the rest of the stage. A framebuffer that failed once is not retried
- * every frame; the model then draws straight onto the frame as before.
+ * Drops a target and stops the half-resolution path for the rest of the stage,
+ * so a framebuffer that failed is not retried every frame. The model then draws
+ * straight onto the frame as before.
  */
 static void Stage3D_AbandonRenderTarget(const char *why)
 {
     Log_Printf("Stage3D: %s; drawing the model at full size for this stage\n", why);
     Stage3D_FreeRenderTarget();
     g_stage3dTargetFailed = 1;
+}
+
+/*
+ * Makes the frame current again after the model pass, retried once because a
+ * transient bind failure is not worth losing the path for.
+ *
+ * If the frame cannot be bound at all, the engine is left pointing at the
+ * offscreen target: Gfx_SetRenderTarget rolls its state back to the target the
+ * failed bind came from, which is the one that was current.
+ */
+static int Stage3D_RestoreRenderTarget(SpriteSet *target, int sprite)
+{
+    if (Gfx_SetRenderTarget(target, sprite)) {
+        return 1;
+    }
+    return Gfx_SetRenderTarget(target, sprite);
 }
 #endif
 
@@ -635,11 +663,18 @@ void Stage3D_Draw(int layer)
             /*
              * The composite samples the target as a texture, so the target must
              * not still be bound: sampling the texture that is being rendered
-             * into is a framebuffer feedback loop with undefined results. If the
-             * restore fails, the frame is left as the model drew it.
+             * into is a framebuffer feedback loop with undefined results.
+             *
+             * A failed restore leaves the engine pointing at the offscreen
+             * target (Gfx_SetRenderTarget rolls back to the target the failed
+             * bind came from). Get it off there before touching the target, then
+             * abandon the path: nothing is composited this frame and the model
+             * draws directly from the next one.
              */
-            if (!Gfx_SetRenderTarget(prev_target, prev_sprite)) {
-                Stage3D_AbandonRenderTarget("could not restore the render target");
+            if (!Stage3D_RestoreRenderTarget(prev_target, prev_sprite)) {
+                Log_Printf("Stage3D: could not restore the render target; "
+                           "drawing the model at full size from the next frame\n");
+                Stage3D_AbandonRenderTarget("abandoning the model target");
                 return;
             }
             Gfx_SetClipRect(cx1, cy1, cx2, cy2);

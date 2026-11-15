@@ -83,7 +83,7 @@ void Test_DrawGL(SpriteSet *set,int s,const DrawParams *dp);
 
 static GLenum pending;
 static unsigned next_id = 10, binding, color_attachment, depth_attachment;
-static int image_calls, sub_calls, fail_image, fail_read, fail_depth, fail_fbo;
+static int image_calls, sub_calls, fail_image, fail_read, fail_depth, fail_fbo, fail_bind_null;
 static int gen_calls, fail_gen_at;
 static int deleted_textures, deleted_depth, deleted_fbos, deleted_shaders, deleted_programs;
 static int shader_ok = 1, link_ok = 1, fail_compile_at, compile_calls, color_location = 3;
@@ -149,7 +149,13 @@ static void APIENTRY get_int(GLenum p, GLint *v)
     else *v = 0;
 }
 static const GLubyte *APIENTRY get_string(GLenum p) { return (const GLubyte *)version; }
-static void APIENTRY bind_fbo(GLenum t, GLuint id) { binding = id; }
+static void APIENTRY bind_fbo(GLenum t, GLuint id)
+{
+    /* fail_bind_null: a driver refusing the default framebuffer. Distinguishes
+     * "cannot restore the frame" from "cannot bind the offscreen target". */
+    if (fail_bind_null && id == 0) { pending = GL_INVALID_OPERATION; return; }
+    binding = id;
+}
 static void APIENTRY attach_tex(GLenum a, GLenum b, GLenum c, GLuint id, GLint l) { color_attachment = id; }
 static void APIENTRY attach_depth(GLenum a, GLenum b, GLenum c, GLuint id) { depth_attachment = id; }
 static GLenum APIENTRY fbo_status(GLenum t)
@@ -357,6 +363,48 @@ static void test_targets_capture(void)
     g_targetWidth = INT_MAX; assert(Gl_Capture() == NULL); g_targetWidth=4;
     assert(Gfx_SetRenderTarget(NULL,0)); assert(binding == 0);
     puts("ok: failed FBO preserves target/attachments/viewport; readback rejects failure");
+}
+
+/*
+ * Regression for the half-resolution stage target's failure path
+ * (src/stage3d.c). A failed bind rolls Gfx_SetRenderTarget's state back to the
+ * target the bind came from, so after a failed restore the engine still points
+ * at the offscreen target. Freeing it there left g_renderTarget dangling; the
+ * target must be detached before it is released.
+ *
+ * The engine's own helper is static, so this reproduces the sequence the public
+ * API guarantees: bind the offscreen target, fail the restore, then confirm the
+ * state that made the free unsafe is what a detach has to clear.
+ */
+static void test_failed_restore_detaches(void)
+{
+    GlTex off = {0}; Sprite spr = {0};
+    SpriteSet set = {0}; KeyedArray ka = {0};
+
+    off.id = 85; off.w = 4; off.h = 2; off.depth = 95;
+    spr.format = SPRITE_FORMAT_TEXTURE; spr.pixels = &off;
+    spr.w = 4; spr.h = 2; spr.bpp = 32;
+    ka.data = (void *)&spr; ka.elem_size = sizeof(Sprite); ka.capacity = 1;
+    set.sprites = &ka;
+
+    /* Render into the offscreen target. */
+    assert(Gfx_SetRenderTarget(&set, 0));
+    assert(g_renderTarget == &set && color_attachment == 85);
+
+    /* Restoring the frame fails, and it is the *frame* bind the driver refuses,
+     * not the offscreen one. Gfx_SetRenderTarget then rolls its state back onto
+     * the offscreen target -- exactly the condition that made a free unsafe. */
+    fail_bind_null = 1;
+    assert(!Gfx_SetRenderTarget(NULL, 0));
+    assert(g_renderTarget == &set && g_targetWidth == 4 && g_targetHeight == 2);
+    assert(g_glBoundFramebuffer != 0 && color_attachment == 85);
+
+    /* Detaching is the fix: after it nothing points at the target. */
+    fail_bind_null = 0;
+    assert(Gfx_SetRenderTarget(NULL, 0));
+    assert(g_renderTarget == NULL && g_glBoundFramebuffer == 0);
+    assert(g_targetWidth == g_videoWidth && g_targetHeight == g_videoHeight);
+    puts("ok: a failed restore leaves the offscreen target current until detached");
 }
 
 #ifdef TEST_GLES
@@ -702,7 +750,7 @@ int main(void)
     assert(sizeof(void *)*8 == TEST_EXPECT_BITS);
 #endif
     printf("abi: %u-bit build\n",(unsigned)(sizeof(void *)*8));
-    install();test_sizes_uploads();test_targets_capture();test_programs_lifetime();
+    install();test_sizes_uploads();test_targets_capture();test_failed_restore_detaches();test_programs_lifetime();
 #ifdef TEST_VITA
     test_vita_render_cache();
 #if defined(MUGEN_VITA_RENDER_CACHE) && MUGEN_VITA_RENDER_CACHE
