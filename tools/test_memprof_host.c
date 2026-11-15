@@ -57,10 +57,18 @@ int main(void)
     size_t i;
     volatile size_t impossible = SIZE_MAX;
 
+    /* The aggregate heap starts before call-site profiling is enabled. */
+    p = (unsigned char *)Memprof_Malloc(7);
+    check(p != NULL, "pre-start allocation");
     check(setenv("MUGEN_MEMPROF", "1", 1) == 0, "enable profiler");
     check(setenv("MUGEN_MEMPROF_OUT", "memprof-test-output.txt", 1) == 0,
           "set report path");
     Memprof_Start();
+    Memprof_Stats(&stats);
+    check(stats.unattributed_bytes >= 7, "pre-start bytes are visible");
+    Memprof_Free(p);
+    Memprof_Stats(&stats);
+    check(stats.unattributed_bytes == 0, "free clears pre-start bytes");
 
     p = (unsigned char *)Memprof_Malloc(32);
     check(p != NULL, "initial allocation");
