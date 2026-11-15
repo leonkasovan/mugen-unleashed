@@ -885,6 +885,12 @@ CharData *Char_LoadDef(const char *dir, Stream *s)
     if (g_sndActive == 1) {
         status = 0;
         if (Ini_GetString(def, "sound", buf, sizeof(buf)) == 1 && buf[0] != '\0') {
+            /* Port addition: Windows sound paths also work on POSIX hosts
+             * and in ZIP entries. Forward slashes work on Windows too. */
+            char *separator;
+            for (separator = buf; *separator != '\0'; ++separator) {
+                if (*separator == '\\') *separator = '/';
+            }
             Log_Printf("  Loading snd %s...", buf);
             if (is_zip) {
                 Stream_ZipUnload(zs);

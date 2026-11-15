@@ -9,6 +9,25 @@ make -j8
 make install          # strips and copies into install/mugen-linux-x64
 ```
 
+The executable embeds `res/lua_script.zip`. Before Lua initializes, a missing
+`data/vector.lua` triggers restoration of missing bundled scripts to `data/`.
+Existing scripts are preserved; a write failure stops Lua initialization with
+an error in `mugen.log`. This lets older game packs use the engine without
+manually copying its Lua helpers.
+
+To refresh the bundle from the installed default game assets:
+
+```sh
+make install
+python3 tools/embed_lua_scripts.py --pack install/data
+make install
+python3 tools/test_luascripts.py
+```
+
+The ZIP and generated `res/lua_script_zip.h` are checked in together so CMake
+ports can embed the same resource without needing Python at build time.
+GNU Make also regenerates the header when the ZIP changes.
+
 → `build/linux-x64/mugen-linux-x64` (or `build/linux-arm64/…`), installed under
 the same name so an ELF binary never ends up called `.exe`.
 
@@ -127,6 +146,7 @@ replaces a hardcoded byte count with the matching `sizeof`.
 | `char.c` `Player_Create` | `KeyedArray_Create(8, 0x1C)` — `sizeof(TargetEntry)` only while a pointer is 4 bytes. On LP64 the entry is 0x20, so the stride lost `bind_active` and misaligned every entry after the first |
 | `ai.c` `Ai_ResetPlayer`, `player.h` | the clear and the keep buffer used the 32-bit spans 0xDF8 / 0x64C. `AiState`, `AiData`, `AiLearn` and `AiMove` hold pointers, so LP64 grows them to 0xF34 / 0x654; both are `offsetof` spans now and `tools/test_abi_layout.c` prints them per ABI |
 | `system.c` `GameVars_Init` | `calloc(1, 0xC)` is `sizeof(PalGroups)` at 32-bit; the struct is 16 bytes on LP64, so `Match_FreeAssets` wrote past it |
+| `bgmstream.c` `Bgm_StreamOpen` | casting `&s->mode` to `BgmOpenResult *` assumes identical member spacing: `format` is 8 bytes after `mode` in the result, but 12 bytes after it in the LP64 stream. Receive a separate result and copy its members; reject failed resampler setup at open and on format changes. `tools/test_bgmstream.sh` covers decoded/plugin modes and failure cleanup |
 | `select.h`, `syselem.h` | `cutscene`, `key_table`, `text_ptr` are declared `int` but store pointers. Now `intptr_t`: same 4 bytes and offset on 32-bit, 8 on LP64 |
 | `gameloop.c`, `storyboard.c`, `title.c`, `versus.c` | the matching stores cast through `(int)`, which re-truncated the pointer |
 | `trigger.c` | bounded the `g_triggersV11` loop (see above) |
@@ -774,4 +794,40 @@ To see what a cross build actually resolved, rather than guess:
 ```sh
 make check-toolchain CROSS_COMPILE=aarch64-none-linux-gnu- XSYSROOT=build/sysroots/arm64-sysroot MUGEN_TARGET=linux-arm64
 make -n CROSS_COMPILE=… XSYSROOT=build/sysroots/arm64-sysroot MUGEN_TARGET=linux-arm64 | grep -o '\-l:[^ ]*'
+```
+
+## Mixed WAV/Ogg sound banks
+
+`tools/sndcli.c` is the converter from
+<https://raw.githubusercontent.com/leonkasovan/Ikemen-GO/refs/heads/develop-static/tool/sndcli.c>.
+It needs libsndfile headers/library to build (tool only; the engine does not).
+With development packages available:
+
+```sh
+mkdir -p build/tools build/tmp/sndcli
+cc -O2 -g tools/sndcli.c $(pkg-config --cflags --libs sndfile) -o build/tools/sndcli
+cd build/tmp/sndcli
+../../tools/sndcli /absolute/path/to/chars -r
+```
+
+Run one converter process at a time: it uses a fixed temporary filename in its
+working directory. Its default threshold retains Ogg only when it is at most
+30% of the source entry's size. It preserves originals and writes `z.<name>.snd`
+next to each bank. Update each definition's `[Files] sound` to that bank,
+keeping the original directory and filename case. Both slash styles work for
+character sound paths.
+
+The engine detects `OggS` per SND entry, allowing WAV and Ogg in the same bank.
+`Snd_DecodeOggResampled` uses SDL2_mixer's existing Vorbis decoder and conversion
+to the active mixer format. WAV entries keep the configured WAV resampling
+path; Ogg entries use SDL2_mixer's conversion. No new engine decoder dependency
+is required. Both return engine-owned PCM so the memory profiler counts them
+consistently. A compressed bank reduces storage size; eager decoding to PCM
+still retains essentially the same steady-state audio memory.
+
+To test all entries of a converted bank, including truncated-Ogg rejection and
+stream-position restoration:
+
+```sh
+SANITIZE=address,undefined sh tools/test_snd_ogg.sh /absolute/path/to/z.character.snd
 ```
