@@ -13,7 +13,9 @@ CC="${CC:-cc}"
 OUT="${OUT:-$PWD/build/tmp/gl-errors}"
 mkdir -p "$OUT/tmp" "$OUT/data/gles"
 export TMPDIR="$OUT/tmp"
-FLAGS="$TARGET_FLAGS ${CFLAGS:-} -std=gnu11 -O1 -g -UNDEBUG -Wall -Wextra -Wno-unused-parameter -ffunction-sections -fdata-sections"
+# This standalone GL mock does not link src/memprof.c; do not redirect the
+# engine's CRT allocations to the memory-profiler wrappers in this harness.
+FLAGS="$TARGET_FLAGS ${CFLAGS:-} -DMUGEN_MEMPROF_NO_WRAP=1 -std=gnu11 -O1 -g -UNDEBUG -Wall -Wextra -Wno-unused-parameter -ffunction-sections -fdata-sections"
 FLAGS="$FLAGS -fno-asynchronous-unwind-tables -DSDL_MAIN_HANDLED"
 FLAGS="$FLAGS -Iport/psvita/src -Isrc ${SDL_CFLAGS:-$(${PKG_CONFIG:-pkg-config} --cflags sdl2)} -idirafter third_party/sdk/include"
 FLAGS="$FLAGS -Ithird_party/glad-2.1 -Ithird_party/minizip-0.15 -Ithird_party/libpng-1.2.38"
