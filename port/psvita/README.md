@@ -1242,11 +1242,13 @@ A model node with a `trans` extra of `ADD`, `SUB` or `MUL` blends against the
 colour behind it, which in an offscreen target is transparent black rather than
 the stage. `Model_HasDestinationBlend` detects those nodes and that layer is
 drawn directly at full size instead, so such a stage keeps the original
-appearance at the original cost. A target that cannot be bound is dropped for
-the rest of the stage and the model draws directly. A failed restoration is
-retried once and then handled the same way; because a failed target bind rolls
-the renderer's state back to the target it came from, the target is detached
-from `g_renderTarget` before it is freed.
+appearance at the original cost. A model target that cannot be bound is
+dropped for the rest of the stage and the model draws directly. Restoration
+of the original framebuffer is retried once. If both attempts fail, rendering
+stops with a fatal error rather than substituting the default framebuffer for
+the engine's screen texture or freeing an active model target. On stage unload,
+an active model target is freed only after a verified detach; if that detach
+fails, the Vita fatal-error path exits without GL teardown.
 
 In a `--profile` build the log also reports, per second,
 `model: layer0 calls=… tris=… layer1 calls=… tris=…`, which says which of the
