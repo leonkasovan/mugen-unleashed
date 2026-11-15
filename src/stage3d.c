@@ -32,6 +32,10 @@
 
 Stage3D g_stage3d;
 
+#ifdef MUGEN_VITA_GL
+static void Stage3D_FreeRenderTarget(void);
+#endif
+
 /* Reads up to n comma separated floats of key; stops at the first that is no number (as Ikemen GO). */
 static void Stage3D_ReadFloats(Ini *ini, const char *key, float *out, int n)
 {
@@ -303,6 +307,9 @@ void Stage3D_Free(void)
     s3->time = 0;
     Model_Free(s3->model);
     s3->model = NULL;
+#ifdef MUGEN_VITA_GL
+    Stage3D_FreeRenderTarget();
+#endif
 }
 
 /*
@@ -423,6 +430,73 @@ static void Stage3D_Mul(float *out, const float *a, const float *b)
     memcpy(out, r, sizeof(r));
 }
 
+/*
+ * Port addition (PS Vita): the 3D stage model is the fill-rate bottleneck, so
+ * it can be drawn into a smaller render target and upscaled over the frame.
+ * Sprites, effects and the HUD are still drawn at full size, so only the 3D
+ * background loses resolution. The target keeps its depth buffer; the model
+ * itself is unchanged.
+ */
+#ifdef MUGEN_VITA_GL
+static SpriteSet *g_stage3dTarget;
+static int g_stage3dTargetW, g_stage3dTargetH;
+
+static void Stage3D_FreeRenderTarget(void)
+{
+    if (g_stage3dTarget != NULL) {
+        SpriteSet_Free(g_stage3dTarget);
+        g_stage3dTarget = NULL;
+    }
+    g_stage3dTargetW = 0;
+    g_stage3dTargetH = 0;
+}
+
+/* Makes a target scale% of target_w x target_h, or returns 0 to draw directly. */
+static int Stage3D_EnsureRenderTarget(int target_w, int target_h)
+{
+    int w, h;
+
+    if (g_stage3dRenderScale >= 100 || target_w <= 0 || target_h <= 0) {
+        return 0;
+    }
+    w = target_w * g_stage3dRenderScale / 100;
+    h = target_h * g_stage3dRenderScale / 100;
+    if (w < 2 || h < 2) {
+        return 0;
+    }
+    if (g_stage3dTarget != NULL && w == g_stage3dTargetW && h == g_stage3dTargetH) {
+        return 1;
+    }
+    Stage3D_FreeRenderTarget();
+    g_stage3dTarget = Screen_Create(32, w, h);
+    if (g_stage3dTarget == NULL) {
+        return 0;
+    }
+    g_stage3dTargetW = w;
+    g_stage3dTargetH = h;
+    Log_Printf("Stage3D: model target %ix%i, upscaled to %ix%i\n", w, h, target_w, target_h);
+    return 1;
+}
+#endif
+
+/* The model draws of background layer 0 / foreground layer 1, as Ikemen GO. */
+static void Stage3D_DrawLayers(int layer, const Stage3D *s3, const float *proj, const float *view,
+                               const ModelFx *fx, float outline)
+{
+    /* MUGEN_DEBUG: attribute the draws to the layer, so a log can say which
+     * layers a screen actually drew instead of inferring it from the path. */
+    BatchProf_ModelLayerBegin(layer);
+    if (layer == 0) {
+        Model_DrawShadows(s3->model);
+        Model_Draw(s3->model, 0, -1, 0, proj, view, fx, outline, NULL);
+        Model_Draw(s3->model, 0, 0, 0, proj, view, fx, outline, NULL);
+    } else if (layer == 1) {
+        Model_Draw(s3->model, 0, 1, 0, proj, view, fx, outline, NULL);
+        Model_Draw(s3->model, 1, 1, 1, proj, view, fx, outline, NULL);
+    }
+    BatchProf_ModelLayerEnd();
+}
+
 /* Draws the model's part of stage background layer `layer` (0 back, 1 front), from Bg_Draw. */
 void Stage3D_Draw(int layer)
 {
@@ -496,14 +570,46 @@ void Stage3D_Draw(int layer)
 
     /* mesh outlines are as wide as Ikemen GO's: meshOutline * 0.003 * tan(fov) */
     outline = (float)(0.003 * tan(fov));
-    if (layer == 0) {
-        Model_DrawShadows(s3->model);
-        Model_Draw(s3->model, 0, -1, 0, proj, view, &fx, outline, NULL);
-        Model_Draw(s3->model, 0, 0, 0, proj, view, &fx, outline, NULL);
-    } else if (layer == 1) {
-        Model_Draw(s3->model, 0, 1, 0, proj, view, &fx, outline, NULL);
-        Model_Draw(s3->model, 1, 1, 1, proj, view, &fx, outline, NULL);
+#ifdef MUGEN_VITA_GL
+    if (Stage3D_EnsureRenderTarget(g_targetWidth, g_targetHeight)) {
+        SpriteSet *prev_target = g_renderTarget;
+        int prev_sprite = g_renderTargetSprite;
+        int cx1 = g_clipX1, cy1 = g_clipY1, cx2 = g_clipX2, cy2 = g_clipY2;
+        int target_w = g_targetWidth, target_h = g_targetHeight;
+        GLfloat clear_color[4];
+
+        if (Gfx_SetRenderTarget(g_stage3dTarget, 0)) {
+            /* The target is composited over the frame, so its empty area must
+             * be transparent; the frame's own clear colour is restored at once. */
+            glGetFloatv(GL_COLOR_CLEAR_VALUE, clear_color);
+            glDisable(GL_SCISSOR_TEST);
+            glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+            glClearDepthf(1.0f);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            glClearColor(clear_color[0], clear_color[1], clear_color[2], clear_color[3]);
+            Stage3D_DrawLayers(layer, s3, proj, view, &fx, outline);
+            Gfx_SetRenderTarget(prev_target, prev_sprite);
+            Gfx_SetClipRect(cx1, cy1, cx2, cy2);
+            {
+                DrawParams dp;
+
+                DrawParams_Init(&dp);
+                dp.x = 0.0f;
+                dp.y = 0.0f;
+                dp.scale_x = (float)target_w / (float)g_stage3dTargetW;
+                dp.scale_y = (float)target_h / (float)g_stage3dTargetH;
+                /* The model already took the stage PalFX; do not apply it twice. */
+                Gl_SetPalFxSuppressed(1);
+                Sprite_DrawGL(g_stage3dTarget, 0, &dp);
+                Gl_SetPalFxSuppressed(0);
+            }
+            return;
+        }
+        /* Could not bind the target: restore the clip and draw directly. */
+        Gfx_SetClipRect(cx1, cy1, cx2, cy2);
     }
+#endif
+    Stage3D_DrawLayers(layer, s3, proj, view, &fx, outline);
 }
 
 #endif /* MUGEN_MODEL3D */

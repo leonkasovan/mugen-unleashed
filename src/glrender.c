@@ -1135,6 +1135,9 @@ void Gl_DrawQuadRgba(const PalFx *fx, GlTex *tex, float x0, float y0, float x1, 
     GlrFx t;
     const GlProgram *prog;
     unsigned long long bp_start = BATCHPROF_NOW();
+#ifdef MUGEN_VITA_GL
+    unsigned long long vq;
+#endif
 
     Glr_FxTerms(fx, &t);
     prog = &g_glProgramsRgba[Glr_Variant(fx, &t, special)];
@@ -1151,7 +1154,9 @@ void Gl_DrawQuadRgba(const PalFx *fx, GlTex *tex, float x0, float y0, float x1, 
 #ifdef MUGEN_VITA_GL
     if (prog->program != 0) {
         GlrVitaProgram *cached = Glr_VitaProgram(prog->program);
+        vq = BATCHPROF_NOW();
         VitaGl_DrawQuad(&cached->vertex, v, special, c0, c1, dp);
+        BatchProf_VitaQuad(BATCHPROF_NOW() - vq);
     }
 #else
     glBegin(GL_TRIANGLE_STRIP);
@@ -1182,6 +1187,9 @@ void Gl_DrawQuadIndexed(const PalFx *fx, GlTex *tex, GlTex *pal, float x0, float
     GlrFx t;
     const GlProgram *prog;
     unsigned long long bp_start = BATCHPROF_NOW();
+#ifdef MUGEN_VITA_GL
+    unsigned long long vq;
+#endif
 
     Glr_FxTerms(fx, &t);
     prog = &g_glProgramsIndexed[Glr_Variant(fx, &t, special)];
@@ -1201,7 +1209,9 @@ void Gl_DrawQuadIndexed(const PalFx *fx, GlTex *tex, GlTex *pal, float x0, float
 #ifdef MUGEN_VITA_GL
     if (prog->program != 0) {
         GlrVitaProgram *cached = Glr_VitaProgram(prog->program);
+        vq = BATCHPROF_NOW();
         VitaGl_DrawQuad(&cached->vertex, v, special, c0, c1, dp);
+        BatchProf_VitaQuad(BATCHPROF_NOW() - vq);
     }
 #else
     glBegin(GL_TRIANGLE_STRIP);
@@ -1220,6 +1230,21 @@ static int Glr_FlipSign(unsigned int flip, unsigned int bit)
 {
     return (flip & bit) ? -1 : 1;
 }
+
+#ifdef MUGEN_VITA_GL
+/*
+ * Port addition (PS Vita): stage3d.c draws the 3D stage model into a target
+ * with the stage PalFX already applied, then composites it. The composite must
+ * not apply that PalFX a second time, so it asks for this neutral one.
+ */
+static int g_glSuppressPalFx;
+static PalFx g_glNeutralPalFx = { .color = 256, .mul = { 256, 256, 256 } };
+
+void Gl_SetPalFxSuppressed(int on)
+{
+    g_glSuppressPalFx = on;
+}
+#endif
 
 /*
  * 0x0047B830: draws a sprite with the draw parameters: the sprite (uploaded
@@ -1279,7 +1304,17 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
             g_glStatPalStream++;
         }
     }
+#ifdef MUGEN_VITA_GL
+    fx = g_glSuppressPalFx ? &g_glNeutralPalFx : PalFx_GetApplied();
+#else
     fx = PalFx_GetApplied();
+#endif
+#ifdef MUGEN_DEBUG
+    /* Destination area of this quad in screen pixels, for the 2D fill report. */
+    BatchProf_Area((double)w * (double)h *
+                   fabs((double)dp->scale_x * dp->scale2_x * spr->scale_x) *
+                   fabs((double)dp->scale_y * dp->scale2_y * spr->scale_y));
+#endif
     if (fx->invertall != 0) {
         /* Inversion through blending: add <-> subtract with negated offsets. */
         int swap = 0;
@@ -1387,6 +1422,7 @@ void Sprite_DrawGL(SpriteSet *set, int sprite, const DrawParams *dp)
 
     if ((g_glSpriteBufferFlags & 3) == 3 && spr->bpp <= 8) {
         double a;
+        unsigned long long bp_pass1_start;
         scale = (float)fabs((double)dp->scale_x * spr->scale_x * dp->scale2_x);
         if (!(scale != 1.0f)) {
             scale = (float)fabs((double)spr->scale_y * dp->scale_y * dp->scale2_y);
@@ -1416,6 +1452,7 @@ void Sprite_DrawGL(SpriteSet *set, int sprite, const DrawParams *dp)
         first.width_ratio = 1.0f;
         first.masked = 1;
         first.width_anchor = 0.5f;
+        bp_pass1_start = BATCHPROF_NOW();
         buf = Screen_Create(g_videoDepth, spr->w, spr->h);
         if (buf == NULL) {
             MatchLog_Printf(5, "DrawSprite: could not allocate pass 1 buffer\n");
@@ -1446,6 +1483,7 @@ void Sprite_DrawGL(SpriteSet *set, int sprite, const DrawParams *dp)
             g_renderTargetSprite = 0;
         }
         SpriteSet_Free(buf);
+        BatchProf_Pass1(1, BATCHPROF_NOW() - bp_pass1_start);
         return;
     }
     Gl_DrawSprite(sprite, dp, set);

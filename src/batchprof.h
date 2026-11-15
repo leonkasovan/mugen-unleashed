@@ -72,6 +72,12 @@ typedef struct BatchProfAverages {
      * be separated from the model's prim cost. */
     double area_pixels;
     double vita_quad_us;
+    /* Port addition: the 3D stage model's two background layers, counted
+     * separately ([0] back, [1] front). Which layers a screen draws is the
+     * question a demo/play frame-rate comparison has to answer with numbers
+     * rather than by reading the draw path. */
+    double layer_calls[2];
+    double layer_triangles[2];
     int frames;
 } BatchProfAverages;
 
@@ -133,6 +139,12 @@ void BatchProf_Pass1(int calls, unsigned long long ticks);
 void BatchProf_Area(double pixels);
 void BatchProf_VitaQuad(unsigned long long ticks);
 
+/* Port addition: attribute the model draws that follow to background layer
+ * `layer` (0 back, 1 front) until BatchProf_ModelLayerEnd. A layer outside
+ * 0..1 is ignored, so the model passes of other subsystems are unaffected. */
+void BatchProf_ModelLayerBegin(int layer);
+void BatchProf_ModelLayerEnd(void);
+
 /* High-resolution counter for the submission timing. */
 unsigned long long BatchProf_Now(void);
 
@@ -165,6 +177,8 @@ static inline void BatchProf_ModelPass(unsigned long long ticks) { (void)ticks; 
 static inline void BatchProf_Pass1(int calls, unsigned long long ticks) { (void)calls; (void)ticks; }
 static inline void BatchProf_Area(double pixels) { (void)pixels; }
 static inline void BatchProf_VitaQuad(unsigned long long ticks) { (void)ticks; }
+static inline void BatchProf_ModelLayerBegin(int layer) { (void)layer; }
+static inline void BatchProf_ModelLayerEnd(void) {}
 static inline unsigned long long BatchProf_Now(void) { return 0ULL; }
 static inline int BatchProf_TakeAverages(BatchProfAverages *out) { (void)out; return 0; }
 

@@ -415,6 +415,21 @@ int Config_Load(void)
     Ini_GetInt(ini, "fullscreen", &g_game->fullscreen);
     /* mugen-unleashed: shadows of the lights of 3D stages, as Ikemen GO's option (model.c) */
     Ini_GetInt(ini, "enablemodelshadow", &g_modelShadows);
+    /*
+     * Port addition (PS Vita): [Video] Stage3DRenderScale. The 3D stage model
+     * is drawn into a target this percentage of the current render target and
+     * upscaled over the frame (stage3d.c); sprites, effects and the HUD keep
+     * their full size. 100 is the original full-size draw. The Vita defaults
+     * to half size because the model is fill-bound there; the key overrides it
+     * from mugen.cfg when present.
+     */
+#ifdef MUGEN_VITA_GL
+    g_stage3dRenderScale = 50;
+#endif
+    Ini_GetInt(ini, "stage3drenderscale", &g_stage3dRenderScale);
+    if (g_stage3dRenderScale < 25) g_stage3dRenderScale = 25;
+    if (g_stage3dRenderScale > 100) g_stage3dRenderScale = 100;
+
     g = g_game;
     if (g->fullscreen == 0) {
         g->video_flags &= ~VIDEO_FULLSCREEN;

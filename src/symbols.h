@@ -367,6 +367,8 @@ extern int g_rendererFallbackRequested;
 extern int g_logVerbose;
 /* Port addition: [Debug] TimeStamps, a wall-clock prefix on every mugen.log line. */
 extern int g_logTimeStamps;
+/* Port addition (PS Vita): [Video] Stage3DRenderScale, 25..100 (stage3d.c). */
+extern int g_stage3dRenderScale;
 extern int * g_keyMap; /* 0x00504284 */
 extern IntArray g_keyQueue; /* 0x00504288 */
 extern GfxCaptureFn g_gfxCapture; /* 0x00504298 */
@@ -1715,6 +1717,10 @@ int __cdecl GlTex_Revive(GlTex *tex);
 /* 0x0047c100 */ GlTex *__cdecl GlVbuf_Alloc(int depth, int w, int h);
 /* 0x0047c1a0 */ int __cdecl GlVbuf_Bind(GlTex *vbuf);
 /* 0x0047c1f0 */ void __cdecl Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h);
+#ifdef MUGEN_VITA_GL
+/* Port addition (PS Vita): a composite of an already PalFX-drawn target (stage3d.c). */
+void __cdecl Gl_SetPalFxSuppressed(int on);
+#endif
 /* 0x0047c3b0 */ int __cdecl Gl_AttachFramebuffer(unsigned int texture, unsigned int depth);
 /* 0x0047c460 */ char *__cdecl Gl_InsertDefines(const char *src, const char *defines);
 /* 0x0047c580 */ int __cdecl Gl_LoadShader(const char **defines, GlProgram *prog, const char *name);

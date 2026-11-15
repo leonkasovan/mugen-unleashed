@@ -1289,6 +1289,9 @@ static void Game_PerfLog(void)
                     Log_Printf("model: calls=%.0f tris=%.0f draw=%.0fus pass=%.0fus\n",
                                batch.model_calls, batch.model_triangles,
                                batch.model_cpu_us, batch.model_pass_us);
+                    Log_Printf("model: layer0 calls=%.0f tris=%.0f layer1 calls=%.0f tris=%.0f\n",
+                               batch.layer_calls[0], batch.layer_triangles[0],
+                               batch.layer_calls[1], batch.layer_triangles[1]);
                 }
             }
         }

@@ -50,6 +50,10 @@ static double bp_pass1_calls;
 static double bp_pass1_ticks;
 static double bp_area_pixels;
 static double bp_vita_quad_ticks;
+/* Current model layer (-1: none) and the per-layer totals. */
+static int bp_model_layer = -1;
+static double bp_layer_calls[2];
+static double bp_layer_triangles[2];
 static double bp_sum_model_calls;
 static double bp_sum_model_triangles;
 static double bp_sum_model_cpu_ticks;
@@ -58,6 +62,8 @@ static double bp_sum_pass1_calls;
 static double bp_sum_pass1_ticks;
 static double bp_sum_area_pixels;
 static double bp_sum_vita_quad_ticks;
+static double bp_sum_layer_calls[2];
+static double bp_sum_layer_triangles[2];
 static double bp_sum_split[BATCHPROF_SPLIT_COUNT];
 /* Last bound state, for counting only the binds that actually changed. */
 static unsigned int bp_last_program;
@@ -106,6 +112,9 @@ void BatchProf_FrameBegin(void)
     bp_model_cpu_ticks = bp_model_pass_ticks = 0.0;
     bp_pass1_calls = bp_pass1_ticks = 0.0;
     bp_area_pixels = bp_vita_quad_ticks = 0.0;
+    bp_model_layer = -1;
+    bp_layer_calls[0] = bp_layer_calls[1] = 0.0;
+    bp_layer_triangles[0] = bp_layer_triangles[1] = 0.0;
     for (i = 0; i < BATCHPROF_SPLIT_COUNT; i++) {
         bp_split[i] = 0.0;
     }
@@ -136,6 +145,10 @@ void BatchProf_FrameEnd(void)
     bp_sum_pass1_ticks += bp_pass1_ticks;
     bp_sum_area_pixels += bp_area_pixels;
     bp_sum_vita_quad_ticks += bp_vita_quad_ticks;
+    bp_sum_layer_calls[0] += bp_layer_calls[0];
+    bp_sum_layer_calls[1] += bp_layer_calls[1];
+    bp_sum_layer_triangles[0] += bp_layer_triangles[0];
+    bp_sum_layer_triangles[1] += bp_layer_triangles[1];
     for (i = 0; i < BATCHPROF_SPLIT_COUNT; i++) {
         bp_sum_split[i] += bp_split[i];
     }
@@ -209,6 +222,22 @@ void BatchProf_ModelSubmit(unsigned int triangles, unsigned long long ticks)
         bp_model_triangles += (double)triangles;
     }
     bp_model_cpu_ticks += (double)ticks;
+    if (bp_model_layer >= 0 && bp_model_layer < 2) {
+        bp_layer_calls[bp_model_layer] += 1.0;
+        if (triangles > 0) {
+            bp_layer_triangles[bp_model_layer] += (double)triangles;
+        }
+    }
+}
+
+void BatchProf_ModelLayerBegin(int layer)
+{
+    bp_model_layer = (layer >= 0 && layer < 2) ? layer : -1;
+}
+
+void BatchProf_ModelLayerEnd(void)
+{
+    bp_model_layer = -1;
 }
 
 void BatchProf_ModelPass(unsigned long long ticks)
@@ -271,6 +300,10 @@ int BatchProf_TakeAverages(BatchProfAverages *out)
         out->pass1_us = bp_sum_pass1_ticks / bp_frames * 1000000.0 / frequency;
         out->area_pixels = bp_sum_area_pixels / bp_frames;
         out->vita_quad_us = bp_sum_vita_quad_ticks / bp_frames * 1000000.0 / frequency;
+        out->layer_calls[0] = bp_sum_layer_calls[0] / bp_frames;
+        out->layer_calls[1] = bp_sum_layer_calls[1] / bp_frames;
+        out->layer_triangles[0] = bp_sum_layer_triangles[0] / bp_frames;
+        out->layer_triangles[1] = bp_sum_layer_triangles[1] / bp_frames;
     }
     bp_sum_calls = bp_sum_quads = bp_sum_vertices = bp_sum_stream_bytes = 0.0;
     bp_sum_programs = bp_sum_textures = bp_sum_cpu_ticks = 0.0;
@@ -279,6 +312,8 @@ int BatchProf_TakeAverages(BatchProfAverages *out)
     bp_sum_model_cpu_ticks = bp_sum_model_pass_ticks = 0.0;
     bp_sum_pass1_calls = bp_sum_pass1_ticks = 0.0;
     bp_sum_area_pixels = bp_sum_vita_quad_ticks = 0.0;
+    bp_sum_layer_calls[0] = bp_sum_layer_calls[1] = 0.0;
+    bp_sum_layer_triangles[0] = bp_sum_layer_triangles[1] = 0.0;
     for (i = 0; i < BATCHPROF_SPLIT_COUNT; i++) {
         bp_sum_split[i] = 0.0;
     }

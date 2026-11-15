@@ -187,6 +187,44 @@ static void test_model_path(void)
           "model counters reset with the frame");
 }
 
+static void test_model_layers(void)
+{
+    BatchProfAverages avg;
+
+    /* The stage model's two layers are attributed separately, so a log can
+     * answer "which layers did this screen draw" with a number. A draw outside
+     * Begin/End must still count towards the whole-model totals only. */
+    fake_counter = 0;
+    BatchProf_FrameBegin();
+    BatchProf_ModelLayerBegin(0);
+    BatchProf_ModelSubmit(10, 1000ULL);
+    BatchProf_ModelSubmit(20, 1000ULL);
+    BatchProf_ModelLayerEnd();
+    BatchProf_ModelLayerBegin(1);
+    BatchProf_ModelSubmit(30, 1000ULL);
+    BatchProf_ModelLayerEnd();
+    BatchProf_ModelSubmit(40, 1000ULL);         /* no layer: model totals only */
+    BatchProf_FrameEnd();
+    check(BatchProf_TakeAverages(&avg), "layered model frame reported");
+    check(near(avg.layer_calls[0], 2.0), "layer 0 draws counted");
+    check(near(avg.layer_triangles[0], 30.0), "layer 0 triangles summed");
+    check(near(avg.layer_calls[1], 1.0), "layer 1 draws counted");
+    check(near(avg.layer_triangles[1], 30.0), "layer 1 triangles summed");
+    check(near(avg.model_calls, 4.0), "model total spans both layers");
+    check(near(avg.model_triangles, 100.0), "model triangles span both layers");
+
+    /* A layer outside 0..1 disables attribution rather than indexing past it. */
+    BatchProf_FrameBegin();
+    BatchProf_ModelLayerBegin(7);
+    BatchProf_ModelSubmit(5, 1000ULL);
+    BatchProf_ModelLayerEnd();
+    BatchProf_FrameEnd();
+    check(BatchProf_TakeAverages(&avg), "out-of-range layer frame reported");
+    check(near(avg.layer_calls[0], 0.0) && near(avg.layer_calls[1], 0.0),
+          "an out-of-range layer is not attributed");
+    check(near(avg.model_calls, 1.0), "but the model total still counts it");
+}
+
 int main(void)
 {
     test_counts();
@@ -194,6 +232,7 @@ int main(void)
     test_zero_call_ratio();
     test_end_without_begin();
     test_model_path();
+    test_model_layers();
 
     if (failures != 0) {
         printf("test_batchprof: %d failure(s)\n", failures);

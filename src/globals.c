@@ -405,6 +405,15 @@ int g_logTimeStamps = 1;
 #else
 int g_logTimeStamps;
 #endif
+/*
+ * Port addition (PS Vita): [Video] Stage3DRenderScale, the percentage of the
+ * current render target the 3D stage model is drawn at before it is upscaled
+ * (stage3d.c). 100 keeps the original full-size model draw; the Vita defaults
+ * to 50 in Config_Load because the model's fill rate is its bottleneck. Not an
+ * original global.
+ */
+int g_stage3dRenderScale = 100;
+
 int * g_keyMap; /* 0x00504284 */
 IntArray g_keyQueue; /* 0x00504288 */
 GfxCaptureFn g_gfxCapture; /* 0x00504298 */
