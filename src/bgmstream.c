@@ -520,7 +520,7 @@ int Bgm_StreamSetupResampler(const AudioFormat *in, BgmStream *s, int fallback)
  * 0x0049BD30: opens info's file in the current stream with the plugin of
  * its extension (the stream is closed first; the plugin instance is kept
  * when the plugin is the same). Bad loop points are reset in info (-1).
- * Returns 0 when the instance or the file cannot be opened, else 1 (also
+ * Returns 0 when the instance, file or resampler cannot be opened, else 1 (also
  * when no plugin plays the file or the plugin cannot open it, logged).
  */
 int Bgm_StreamOpen(const BgmInfo *info_in)
@@ -599,7 +599,12 @@ int Bgm_StreamOpen(const BgmInfo *info_in)
          * pointer is no less arbitrary there, but on 64-bit (LP64/LLP64)
          * a pointer-to-int cast is implementation-defined, so say what is
          * meant: the low 32 bits. Only read for unknown formats. */
-        Bgm_StreamSetupResampler(&s->format, s, (int)(intptr_t)file);
+        /* Fix: a failed setup must not leave a playable decoded stream. */
+        if (!Bgm_StreamSetupResampler(&s->format, s, (int)(intptr_t)file)) {
+            MatchLog_Printf(3, "Error preparing BGM resampler for %s!\n", info->path);
+            Bgm_StreamClose(s);
+            return 0;
+        }
     }
     return 1;
 }
@@ -767,7 +772,13 @@ unsigned int Bgm_StreamRead(void *dst, int *status)
                 AudioFormat format;
                 s->plugin->get_format(s->instance, &format);
                 /* Same truncated-pointer fallback as above. */
-                Bgm_StreamSetupResampler(&format, s, (int)(intptr_t)&format);
+                /* Fix: format changes can also fail to create a resampler. */
+                if (!Bgm_StreamSetupResampler(&format, s, (int)(intptr_t)&format)) {
+                    MatchLog_Printf(3, "Error preparing BGM resampler after format change!\n");
+                    *status = 0;
+                    Bgm_StreamClose(s);
+                    return 0;
+                }
             } else {
                 ended = 1;
             }

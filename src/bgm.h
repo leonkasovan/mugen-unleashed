@@ -102,7 +102,8 @@ typedef struct BgmPluginIo {
 } BgmPluginIo;
 MUGEN_ASSERT_SIZE(BgmPluginIo, 0x14);
 
-/* What a plugin's open reports (BgmStream.mode onwards). */
+/* What a plugin's open reports. Copy members into BgmStream explicitly:
+ * its mode/format spacing differs from this result on 64-bit platforms. */
 typedef struct BgmOpenResult {
     int mode;                           /* 0x00 BGM_MODE_* */
     int pad_04;                         /* 0x04 never accessed by the game */
