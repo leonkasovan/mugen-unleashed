@@ -14,6 +14,7 @@
 #include <pthread.h>
 
 #include "mugen.h"
+#include "memprof.h"
 #ifdef MUGEN_GLES
 #include "gles_render.h"
 #include "gputime.h"
@@ -1277,6 +1278,7 @@ static void Game_PerfLog(void)
                        Game_PerfRendererName(g_renderMode), (double)Timer_GetFps(),
                        frames - last_frames);
         }
+        Memprof_Log("heap/lua");
 #ifdef MUGEN_DEBUG
         /*
          * Port addition (debug builds only): how fragmented the submission was.

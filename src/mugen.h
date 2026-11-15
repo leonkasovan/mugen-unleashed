@@ -118,6 +118,24 @@
 #include "crt.h"
 #include "ftol.h"
 
+/*
+ * Port addition: heap accounting, see memprof.h. Every engine source file that
+ * includes this header gets the CRT calls redirected to the counters; the file
+ * containing the counters itself opts out by defining MUGEN_MEMPROF_NO_WRAP.
+ * These are macros (not #define forbidden, just text capture) so the counter
+ * file can freely call malloc/free itself.
+ */
+#ifndef MUGEN_MEMPROF_NO_WRAP
+void *Memprof_Malloc(size_t);
+void *Memprof_Calloc(size_t, size_t);
+void *Memprof_Realloc(void *, size_t);
+void Memprof_Free(void *);
+#define malloc(n) Memprof_Malloc(n)
+#define calloc(c, n) Memprof_Calloc((c), (n))
+#define realloc(p, n) Memprof_Realloc((p), (n))
+#define free(p) Memprof_Free(p)
+#endif
+
 /* Version reported by the original build. */
 #define MUGEN_VERSION_MAJOR 1
 #define MUGEN_VERSION_MINOR 1

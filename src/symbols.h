@@ -2063,4 +2063,15 @@ void __cdecl Gl_SetPalFxSuppressed(int on);
 /* 0x004c72a0 */ void __cdecl luaL_openlibs(struct lua_State *L);
 /* 0x004c76c0 */ void __cdecl lua_close(struct lua_State *L);
 
+/* Port addition: Lua 5.1 is linked; lua_newstate is declared directly so Lua_Init can pass a counting allocator. */
+/* No address in the original PE: this is an import from the statically linked lua-5.1 library. */
+struct lua_State *__cdecl lua_newstate(void *(*f)(void *ud, void *ptr, size_t osize, size_t nsize), void *ud);
+
+/* Memprof: port addition, not part of the original binary. */
+void *Memprof_Malloc(size_t size);
+void *Memprof_Calloc(size_t count, size_t size);
+void *Memprof_Realloc(void *ptr, size_t size);
+void Memprof_Free(void *ptr);
+void *Memprof_LuaAlloc(void *ud, void *ptr, size_t osize, size_t nsize);
+
 #endif /* MUGEN_SYMBOLS_H */

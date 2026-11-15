@@ -9,6 +9,7 @@
  * original registers its own copies at the same names).
  */
 #include "mugen.h"
+#include "memprof.h"
 
 #define LUA_GLOBALSINDEX    (-10002)
 #define LUA_TNIL            0
@@ -518,7 +519,9 @@ int Lua_Init(void)
     }
     g_luaHook1 = (void *)Lua_LogError;
     g_luaHook2 = (void *)Log_Printf;
-    g_luaState = luaL_newstate();
+    /* Port change: Lua counts as its own heap, so the engine heap and Lua's
+     * arena can be told apart in the log. */
+    g_luaState = lua_newstate(Memprof_LuaAlloc, NULL);
     if (g_luaState == NULL) {
         return 0;
     }
