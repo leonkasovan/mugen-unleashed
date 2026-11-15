@@ -15,13 +15,13 @@
  * PNG SFF decoders are visible in the counter rather than silently using the
  * raw CRT.
  */
-static png_voidp Png_MemAlloc(png_structp png, png_uint_32 size)
+static PNGCBAPI png_voidp Png_MemAlloc(png_structp png, png_alloc_size_t size)
 {
     (void)png;
     return Memprof_Malloc((size_t)size);
 }
 
-static void Png_MemFree(png_structp png, png_voidp ptr)
+static PNGCBAPI void Png_MemFree(png_structp png, png_voidp ptr)
 {
     (void)png;
     Memprof_Free(ptr);
