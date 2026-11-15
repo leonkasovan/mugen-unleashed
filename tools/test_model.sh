@@ -15,7 +15,7 @@ case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*|Windows_NT) posix_libs="" ;;
     *)                               posix_libs="-ldl -lm" ;;
 esac
-flags="${CFLAGS:-} -std=gnu11 -O1 -g -UNDEBUG -Wall -Wextra -Wno-unused-parameter"
+flags="${CFLAGS:-} -DMUGEN_MEMPROF_NO_WRAP=1 -std=gnu11 -O1 -g -UNDEBUG -Wall -Wextra -Wno-unused-parameter"
 flags="$flags -DSDL_MAIN_HANDLED -ffunction-sections -fdata-sections"
 loader=third_party/glad-2.1
 if [ "${MODEL_TEST_GLES:-0}" = 1 ]; then
