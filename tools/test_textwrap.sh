@@ -17,7 +17,7 @@ export TMPDIR="$OUT/tmp"
 . tools/lib_target.sh
 
 # shellcheck disable=SC2086
-"$CC" $ARCHFLAGS -std=gnu11 -O1 -g -UNDEBUG -Wall -Wextra -Wno-unused-parameter \
+"$CC" $ARCHFLAGS -DMUGEN_MEMPROF_NO_WRAP=1 -std=gnu11 -O1 -g -UNDEBUG -Wall -Wextra -Wno-unused-parameter \
     -Isrc \
     tools/test_textwrap.c src/textwrap.c \
     -o "$OUT/test_textwrap"
