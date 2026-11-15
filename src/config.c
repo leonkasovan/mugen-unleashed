@@ -416,19 +416,31 @@ int Config_Load(void)
     /* mugen-unleashed: shadows of the lights of 3D stages, as Ikemen GO's option (model.c) */
     Ini_GetInt(ini, "enablemodelshadow", &g_modelShadows);
     /*
-     * Port addition (PS Vita): [Video] Stage3DRenderScale. The 3D stage model
-     * is drawn into a target this percentage of the current render target and
-     * upscaled over the frame (stage3d.c); sprites, effects and the HUD keep
-     * their full size. 100 is the original full-size draw. The Vita defaults
-     * to half size because the model is fill-bound there; the key overrides it
-     * from mugen.cfg when present.
+     * [Video] Stage3DRenderScale. The optional smaller model framebuffer is
+     * composited over the full-size frame. On Vita this was measured to
+     * regress Esaka from 24.85 to 3.75 drawn fps (50%): full-size composite
+     * and FBO clears were expensive, with occasional ~1 s driver stalls.
+     * Default to the proven direct rendering path, not the FBO experiment.
      */
 #ifdef MUGEN_VITA_GL
-    g_stage3dRenderScale = 50;
+    g_stage3dRenderScale = 100;
 #endif
     Ini_GetInt(ini, "stage3drenderscale", &g_stage3dRenderScale);
     if (g_stage3dRenderScale < 25) g_stage3dRenderScale = 25;
     if (g_stage3dRenderScale > 100) g_stage3dRenderScale = 100;
+#if defined(MUGEN_VITA_GL) && !defined(MUGEN_VITA_STAGE3D_OFFSCREEN_EXPERIMENTAL)
+    /* The slow path must not reactivate via a user/game configuration file.
+     * Deliberate experiments require a separately opted-in Vita build. */
+    if (g_stage3dRenderScale < 100) {
+        static int warned;
+        if (!warned) {
+            Log_Printf("Stage3D: offscreen scale %d%% disabled on Vita (measured regression); using 100%% direct rendering\\n",
+                       g_stage3dRenderScale);
+            warned = 1;
+        }
+        g_stage3dRenderScale = 100;
+    }
+#endif
 
     g = g_game;
     if (g->fullscreen == 0) {
