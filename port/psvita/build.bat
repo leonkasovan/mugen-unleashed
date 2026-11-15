@@ -29,6 +29,11 @@ rem    port\psvita\build.bat --shader-compiler FILE  bundle this libshacccg.supr
 rem    port\psvita\build.bat --no-shader-compiler    bundle no compiler
 rem    port\psvita\build.bat --render-cache / --no-render-cache  draw-state A/B
 rem    port\psvita\build.bat --shader-cache / --no-shader-cache  disk cache
+rem    port\psvita\build.bat --fast-gamma / --no-fast-gamma  approximate the
+rem                                         model shader's gamma (gamma 2.0
+rem                                         instead of 2.2): on by default,
+rem                                         --no-fast-gamma builds the accurate
+rem                                         reference for an A/B
 rem    port\psvita\build.bat --gl-selftest  startup GL smoke + frame-60 capture
 rem    port\psvita\build.bat --env          print the exports, build nothing
 rem
@@ -113,9 +118,13 @@ set "TITLEID=MUGEN0001"
 set "MODEL3D=ON"
 set "GL_SELFTEST=OFF"
 rem CMake caches option() values, so the gamma choice must be forwarded on every
-rem run, not only when a flag is given: otherwise "--fast-gamma" then a plain
+rem run, not only when a flag is given: otherwise "--no-fast-gamma" then a plain
 rem rebuild keeps the cached ON and the A/B is invalid.
-set "FAST_GAMMA=OFF"
+rem Fast gamma is the Vita default: the two pows per model fragment in the
+rem accurate shader cost roughly 15% of the frame rate on the 3D stages, which
+rem matters far more here than the slight colour shift (see
+rem port\psvita\REPORT_RENDERER.md).
+set "FAST_GAMMA=ON"
 set "RENDER_CACHE="
 set "SHADER_CACHE="
 set "PROFILE=0"
@@ -443,8 +452,8 @@ if defined SHADER_COMPILER set "COMPILER_FWD=%SHADER_COMPILER:\=/%"
 set "CMAKE_ARGS=%CMAKE_ARGS% "-DMUGEN_VITA_SHADER_COMPILER=%COMPILER_FWD%""
 if defined TITLEID set "CMAKE_ARGS=%CMAKE_ARGS% "-DMUGEN_VITA_TITLEID=%TITLEID%""
 if defined RENDER_CACHE set "CMAKE_ARGS=%CMAKE_ARGS% "-DMUGEN_VITA_RENDER_CACHE=%RENDER_CACHE%""
-rem Always forwarded (FAST_GAMMA is initialised to OFF above): a plain rebuild
-rem must actively clear a cached ON from an earlier --fast-gamma run.
+rem Always forwarded (FAST_GAMMA is initialised above): a plain rebuild must
+rem actively apply the default and clear a cached value from an earlier flag.
 set "CMAKE_ARGS=%CMAKE_ARGS% "-DMUGEN_MODEL_FAST_GAMMA=%FAST_GAMMA%""
 if defined SHADER_CACHE set "CMAKE_ARGS=%CMAKE_ARGS% "-DMUGEN_VITA_SHADER_CACHE=%SHADER_CACHE%""
 set "PROFILE_PROP=-DMUGEN_VITA_PROFILE=OFF"
