@@ -83,18 +83,47 @@ and stages never showed such a stall. The instrumentation itself is the
 suspect. Treat `--profile` numbers as advisory; take fps from a release
 build.
 
+### Confirmed: the 50% offscreen approach is slower on Vita
+
+Two **Release** VPK runs on the same Esaka stage, 2026-11-15:
+`scale100-mugen.log` and `scale50-mugen.log`, both with the same
+444/222/222 MHz clocks, model (5,540 triangles/173 primitives), and
+960×720 game render size:
+
+| [Video] Stage3DRenderScale | Average *drawn* FPS | Average game rate |
+| --- | ---: | ---: |
+| 100 (direct) | **24.85** | 59.87 |
+| 50 (480×360 offscreen target, upscale to 960×720) | **3.75** | 4.98 |
+
+At 100, `vphase` attributes ~2.1–2.3 ms CPU wall time to the direct
+stage draws; `vglSwapBuffers` typically waits ~12–13 ms. At 50, FBO
+clearing alone is typically ~5–6 ms, stage compositing ~6–7 ms, and the
+`vphase-max` composite sample reaches **~1,024 ms**. The `perf`
+`present` span is often ~172–207 ms even when individually measured
+`vglSwapBuffers` is ~0.1 ms, so the remaining present-side blocking
+operation is not yet isolated. The causal A/B conclusion is limited to
+**this offscreen FBO/clear/full-size composite implementation**, not
+downscaling in general, and the timings are CPU wait time rather than GPU
+execution timestamps.
+
+The Vita offscreen method is now **disabled by default**, including if
+an older game config still specifies 50%. The engine and the packed
+`port/psvita/mugen.psvita.cfg` both default to 100; experiments below
+100 require the opt-in CMake flag
+`MUGEN_VITA_STAGE3D_OFFSCREEN_EXPERIMENTAL=ON`.
+
 ## 2. What has been done
 
-- **Half-resolution stage target (present, default on, Vita only).**
-  `Stage3D_Draw` (`src/stage3d.c`) now draws the model layer into a target
-  sized by the new `[Video] Stage3DRenderScale` key
-  (`src/config.c`, Vita default 50, clamped 25–100, global in
-  `src/globals.c`) and composites it at full size through `Sprite_DrawGL`.
-  The target is created by `Stage3D_EnsureRenderTarget`, given its own
-  depth buffer by `Screen_Create`, cleared transparent, and freed by
-  `Stage3D_FreeRenderTarget` from `Stage3D_Free`. Characters, effects and
-  the HUD keep their full size; menus and non-3D stages never allocate it.
-  `Stage3DRenderScale = 100` disables the path entirely.
+- **Offscreen stage target (retained but gated off on Vita).**
+  `Stage3D_Draw` (`src/stage3d.c`) contains the smaller render target
+  and full-size composite path, but the release Vita default is now
+  `Stage3DRenderScale = 100` (direct draw). `src/config.c` ignores values
+  below 100 on Vita unless built with the non-default CMake option
+  `MUGEN_VITA_STAGE3D_OFFSCREEN_EXPERIMENTAL`. The packed overlay
+  `port/psvita/mugen.psvita.cfg` explicitly specifies 100 as well.
+  The experimental path uses `Screen_Create` with depth, clear,
+  `Sprite_DrawGL` composite and `Stage3D_FreeRenderTarget` on unload;
+  it must not ship enabled until the blocking behavior is resolved.
 - **No double PalFX.** The stage PalFX is applied when the model is drawn;
   the composite asks for a neutral fx through `Gl_SetPalFxSuppressed`
   (`src/glrender.c`), so the stage's grade is applied once.
@@ -137,28 +166,20 @@ build.
 
 ## 3. Next plan
 
-1. **Release VPK of the current tree, same four stages, demo and play.**
-   This is the first measurement of the half-resolution target that is not
-   contaminated by diagnostic counters. Record fps and `present` per stage
-   at 50% and at 100% and compare them as measured numbers. No particular
-   multiplier is expected: how much fps follows the pixel reduction depends
-   on the share of frame time the resolution affects, plus fixed overhead and
-   synchronisation, so the result is whatever the two runs say.
-2. **Profile build of the same tree for layer attribution only.** Read
-   `model: layer0 … layer1 …` in demo and play on one stage. This replaces
-   the discarded claim with a measurement, and decides whether a
-   layer-specific scale is worth having.
-3. **If half resolution is not enough, establish where `present` blocks.**
-   There is no GPU timer on this target today: `src/gputime.c` is compiled
-   only under `MUGEN_GLES` (`src/gputime.c:10`), and the Vita build defines
-   `MUGEN_VITA_GL`, so `GpuTime_TakeAverages` does not exist in a Vita
-   link. Using it is not an available option until a Vita-specific timer
-   path is written. Until then, bracket individual GL calls with the CPU
-   clock to find which call blocks; that locates the blocking call but
-   cannot by itself measure GPU execution time. Only after that should
-   draw-call batching inside `Model_Draw` be considered, since it is real
-   engine surgery with a fidelity risk.
-4. **Do not re-chase:** shader gamma maths (measured ~10–15%), the sprite
-   pass-1 path (counter now connected; no evidence it dominates), BGM
-   (`demo_fight_playbgm`), AI (`logic` < 1 ms in every slow frame), or
-   thermals (the release run is flat for six minutes).
+1. **Ship Vita Release at `Stage3DRenderScale = 100`.** Re-test Esaka
+   and the other stages on the same hardware. The 100% Esaka A/B result
+   (24.85 drawn fps) is the verified baseline; 50% is a regression, not
+   a candidate default. The packed Vita config forces the safe default.
+2. **If investigating a faster model pass, isolate the driver stall in an
+   experimental build before reenabling offscreen scaling.** The existing
+   `vphase` logs already isolate a ~1-second `Stage3D` texture
+   composite, but the separate `present` stall outside the timed
+   `vglSwapBuffers` call needs its own probes (pre-present callback,
+   end-of-present GL clear, frame-boundary adapter). Avoid expensive
+   per-primitive timing; a Release build is essential.
+3. **Use a design that avoids repeatedly clearing and compositing the
+   offscreen stage texture**, or validate a different whole-frame scaling
+   strategy first. Do not infer performance from pixel count alone.
+4. **Use `--profile` only for attribution** and do not interpret its
+   timings as release frame rate. The existing model-layer counters can
+   clarify whether front-layer model work is present.
