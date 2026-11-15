@@ -35,8 +35,10 @@ python3 tools/model_fixtures.py "$out"
 $cc $flags -w -c third_party/cgltf-1.14/cgltf.c -o "$out/cgltf.o"
 $cc $flags -w -c third_party/stb/stb_image.c -o "$out/stb.o"
 $cc $flags -c "$loader/glad.c" -o "$out/glad.o"
+# pngio.c passes Memprof_Malloc/Free explicitly to libpng, even when the
+# standalone harness disables mugen.h's malloc macros. Link the real tracker.
 $cc $flags -DMUGEN_MODEL3D tools/test_model.c src/model.c src/model_asset.c src/model_gpu.c src/model_pass.c src/pngio.c src/file.c \
-    src/util.c src/compat_linux.c src/perf.c "$out/cgltf.o" "$out/stb.o" "$out/glad.o" \
+    src/util.c src/compat_linux.c src/perf.c src/memprof.c "$out/cgltf.o" "$out/stb.o" "$out/glad.o" \
     -Wl,--gc-sections ${LDFLAGS:-} $sdl_libs $posix_libs -o "$out/desktop"
 $cc $flags tools/test_model.c src/model_stub.c -Wl,--gc-sections \
     ${LDFLAGS:-} $sdl_libs $posix_libs -o "$out/unsupported"
