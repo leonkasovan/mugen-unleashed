@@ -1222,23 +1222,26 @@ live GXM context.
 | Calibration | Desktop legacy-shader calibration is bypassed; pixel offsets are zero and index sampling is Standard |
 | Shader errors | Explicit shader/program classification and info logs in `mugen.log`; interface validated after linking |
 
-### 3D stage render scale (port addition)
+### 3D stage render scale (port addition, PS Vita only)
 
-A stage's glTF model is the fill-bound part of the OpenGL frame: the model
-geometry is cheap, but its fragments at 960x544 dominate `present`. The port
-therefore draws the stage model into a target at
+The stage's glTF model is the resolution-sensitive part of the OpenGL frame:
+the geometry is cheap, but its fragments at 960x544 dominate the present path.
+The port therefore draws the stage model into a target at
 `[Video] Stage3DRenderScale` percent of the current frame (default **50** on the
-Vita, i.e. 480x272) and upscales it over the frame. Characters, effects and the
-HUD are still drawn at full 960x544 size, so only the 3D background loses
-resolution; menus and non-3D stages are unchanged.
+Vita) and upscales it over the frame. Characters, effects and the HUD are still
+drawn at full size, so only the 3D background loses resolution; menus and non-3D
+stages never allocate the target.
 
-`Stage3DRenderScale = 100` restores the original full-size model draw (and the
-original 25-30 fps behaviour on the tested 3D stage). Values below 25 are
-clamped. The target has its own depth buffer, is composited with the engine's
-premultiplied alpha path, and is upscaled bilinearly. The stage PalFX is applied
-when the model is drawn and suppressed on the composite so it is not applied
-twice. This is a port addition, not an original option; a model layer with
-additive blending is approximated by the alpha composite.
+`Stage3DRenderScale = 100` restores the original full-size model draw. Values
+outside 25..100 are clamped. The target has its own depth buffer, is cleared
+transparent and composited through `Sprite_DrawGL`, and is freed when the stage
+unloads. The stage PalFX is applied when the model is drawn and suppressed on the
+composite (`Gl_SetPalFxSuppressed`) so it is not applied twice. A model layer
+that uses additive blending is approximated by the alpha composite.
+
+In a `--profile` build the log also reports, per second,
+`model: layer0 calls=… tris=… layer1 calls=… tris=…`, which says which of the
+model's two background layers a screen actually drew.
 
 The programmable draw path matters: vitaGL's `glBegin`/`glEnd` uses its FFP
 programs and ignores the engine's palette shader. Calling `vglInit` alone
