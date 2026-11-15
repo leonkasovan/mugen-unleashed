@@ -639,7 +639,9 @@ void Stage3D_Draw(int layer)
      * black, not the stage. Such a layer keeps the direct full-size path.
      */
     if (Stage3D_LayerBlendsDestination(s3, layer)) {
+        Uint64 start = SDL_GetPerformanceCounter();
         Stage3D_DrawLayers(layer, s3, proj, view, &fx, outline);
+        Perf_VitaSpan(PERF_VITA_STAGE_DIRECT, start);
         return;
     }
     if (Stage3D_EnsureRenderTarget(g_targetWidth, g_targetHeight)) {
@@ -648,8 +650,11 @@ void Stage3D_Draw(int layer)
         int cx1 = g_clipX1, cy1 = g_clipY1, cx2 = g_clipX2, cy2 = g_clipY2;
         int target_w = g_targetWidth, target_h = g_targetHeight;
         GLfloat clear_color[4];
+        Uint64 stage_start = SDL_GetPerformanceCounter();
 
         if (Gfx_SetRenderTarget(g_stage3dTarget, 0)) {
+            Perf_VitaSpan(PERF_VITA_STAGE_BIND, stage_start);
+            stage_start = SDL_GetPerformanceCounter();
             /* The target is composited over the frame, so its empty area must
              * be transparent; the frame's own clear colour is restored at once. */
             glGetFloatv(GL_COLOR_CLEAR_VALUE, clear_color);
@@ -659,6 +664,8 @@ void Stage3D_Draw(int layer)
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             glClearColor(clear_color[0], clear_color[1], clear_color[2], clear_color[3]);
             Stage3D_DrawLayers(layer, s3, proj, view, &fx, outline);
+            Perf_VitaSpan(PERF_VITA_STAGE_MODEL, stage_start);
+            stage_start = SDL_GetPerformanceCounter();
             /*
              * The composite samples the target as a texture, so the target must
              * not still be bound: sampling the texture that is being rendered
@@ -673,7 +680,9 @@ void Stage3D_Draw(int layer)
             if (!Stage3D_RestoreRenderTarget(prev_target, prev_sprite)) {
                 Error_Fatal("Stage3D: cannot restore screen framebuffer after two attempts; stopping rendering");
             }
+            Perf_VitaSpan(PERF_VITA_STAGE_RESTORE, stage_start);
             Gfx_SetClipRect(cx1, cy1, cx2, cy2);
+            stage_start = SDL_GetPerformanceCounter();
             {
                 DrawParams dp;
 
@@ -687,14 +696,24 @@ void Stage3D_Draw(int layer)
                 Sprite_DrawGL(g_stage3dTarget, 0, &dp);
                 Gl_SetPalFxSuppressed(0);
             }
+            Perf_VitaSpan(PERF_VITA_STAGE_COMPOSITE, stage_start);
             return;
         }
+        Perf_VitaSpan(PERF_VITA_STAGE_BIND, stage_start);
         /* Could not bind the target: restore the clip and draw directly. */
         Gfx_SetClipRect(cx1, cy1, cx2, cy2);
         Stage3D_AbandonRenderTarget("could not bind the model target");
     }
 #endif
+#ifdef MUGEN_VITA_GL
+    {
+        Uint64 start = SDL_GetPerformanceCounter();
+        Stage3D_DrawLayers(layer, s3, proj, view, &fx, outline);
+        Perf_VitaSpan(PERF_VITA_STAGE_DIRECT, start);
+    }
+#else
     Stage3D_DrawLayers(layer, s3, proj, view, &fx, outline);
+#endif
 }
 
 #endif /* MUGEN_MODEL3D */
