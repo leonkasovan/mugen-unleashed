@@ -55,4 +55,20 @@ void Memprof_Stats(MemprofStats *out);
 /* Writes one "mem:" line to the log for each heap plus a combined line. */
 void Memprof_Log(const char *tag);
 
+/*
+ * Per-callsite counters (engine heap only), collected when MUGEN_MEMPROF=1.
+ * Every Memprof_* call captures its caller PC; the top MEMPROF_SITE_SLOTS
+ * distinct PCs are ranked by live bytes when Memprof_Stop writes the dump.
+ * Off by default: the added work is one extra atomic on the critical path.
+ */
+void Memprof_Start(void);
+
+/*
+ * Symbolizeable dump: one line per site, "<live_bytes> <peak_bytes> <allocs>
+ * <frees> 0x<pc> 0x<caller>". `path` is argv for the dump (default
+ * "mugen.memprof"). Pass MUGEN_MEMPROF=1 and symbolize with
+ * tools/memprof_symbolize.py.
+ */
+void Memprof_Stop(const char *path);
+
 #endif /* MUGEN_MEMPROF_H */

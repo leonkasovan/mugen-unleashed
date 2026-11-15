@@ -5,6 +5,7 @@
  * RNG.
  */
 #include "mugen.h"
+#include "memprof.h"
 #include "profiler.h"
 
 #ifdef MUGEN_VITA_GL
@@ -99,6 +100,8 @@ int main(int argc, char *argv[])
     Log_Printf("Parsing command line...\n");
     CmdLine_Parse(argc, argv);
     Log_Printf("Parse command line OK\n");
+    /* Port addition: allocate in the counter's lifetime, not before it. */
+    Memprof_Start();
     Log_Printf("Initializing...\n");
     System_Init();
     /* Port addition: arm the sampling profiler when MUGEN_PROF=1. */
@@ -165,6 +168,7 @@ int main(int argc, char *argv[])
     free(g_cmdline);
     /* Port addition: write the sampling profile before the process goes away. */
     Prof_Stop(getenv("MUGEN_PROF_OUT"));
+    Memprof_Stop(getenv("MUGEN_MEMPROF_OUT"));
     Log_Printf("Successful program termination.\n");
     if (g_log != NULL) {
         Log_Printf("\nLog file successfully closed.\n");
