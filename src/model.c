@@ -2012,8 +2012,8 @@ static int Model_BuildProgram(void)
     static const char vert_head[] = "#define MODEL_ATTRIBUTE attribute\n#define MODEL_VARYING varying\n";
     /*
      * Port addition: MUGEN_MODEL_FAST_GAMMA picks the approximate gamma branch
-     * of model_basic.frag at build time, so the accurate and the fast fragment
-     * shader can be measured on hardware without touching the renderer.
+     * of model_basic.frag at build time. The Vita build enables it by default
+     * (build.bat); --no-fast-gamma selects the accurate shader instead.
      */
     static const char frag_head[] = "#define MODEL_VARYING varying\n#define MODEL_TEXTURE2D texture2D\n#define MODEL_OUTPUT gl_FragColor\n"
 #ifdef MUGEN_MODEL_FAST_GAMMA

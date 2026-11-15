@@ -8,10 +8,11 @@ artefact, that is stated rather than quietly dropped.
 
 The short version: **the 3D stage frame is dominated by `present`, not by model
 drawing.** Two optimisations that targeted fragment/shader work gave little or
-nothing; one (fast gamma) gives ~15% and is kept opt-in. A half-resolution
-offscreen model target was measured to be far *worse* than drawing directly and
-is disabled. The remaining gap to 60 fps is not yet explained, and the port's
-own frame counters disagree in a way that has to be resolved before further
+nothing; one (fast gamma) gives ~15% and is now the Vita default, with
+`--no-fast-gamma` kept as the accurate reference. A half-resolution offscreen
+model target was measured to be far *worse* than drawing directly and is
+disabled. The remaining gap to 60 fps is not yet explained, and the port's own
+frame counters disagree in a way that has to be resolved before further
 optimisation.
 
 ## 1. Method
@@ -186,7 +187,7 @@ re-run of the reverted build measured Wheel `game`/`direct` at 3.9/3.3 ms
 (median `draw` 2.6 ms), confirming the baseline mean was the artefact. **This is
 why section 1 says medians.**
 
-## 5. Experiment 3 — approximate gamma in the model shader (kept, opt-in)
+## 5. Experiment 3 — approximate gamma in the model shader (now the default)
 
 **Goal.** The basic model fragment shader (`src/shaders/model_basic.frag`) does
 two `pow(vec3, 2.2)` round trips per fragment (texture → linear, then linear →
@@ -195,9 +196,10 @@ sRGB). Measure what they cost.
 **Implemented.** `MUGEN_MODEL_FAST_GAMMA` (CMake option,
 `port\psvita\build.bat --fast-gamma` / `--no-fast-gamma`) injects
 `MODEL_FAST_GAMMA` into the shader head (`src/model.c`), which selects
-`x*x` / `sqrt` (gamma 2.0) instead of the two pows. Off by default; the accurate
-path is unchanged. It is a measurement switch that changes colour slightly, not
-a quality setting.
+`x*x` / `sqrt` (gamma 2.0) instead of the two pows. The accurate path is
+unchanged and remains selectable. `build.bat` now defaults it **on**; the CMake
+option itself still defaults to OFF, so a direct `cmake` configure gets the
+accurate shader unless it passes `-DMUGEN_MODEL_FAST_GAMMA=ON`.
 
 **Measured** against the accurate build, same stages, same order:
 
@@ -218,8 +220,10 @@ option).
 Wheel shows no improvement and is spike-prone; its raw `draw` samples are
 irregular in both builds, so its medians are not a reliable comparison.
 
-Kept as an opt-in profile. It is not a default because it trades colour accuracy
-for a modest gain.
+This is now the Vita default in `build.bat`: on this hardware the frame rate
+matters more than the slight colour shift, and 12–15% is the largest gain any
+experiment in this report produced. `--no-fast-gamma` builds the accurate
+gamma-2.2 reference for an A/B or for anyone who prefers exact colour.
 
 ## 6. What the numbers say about reaching 60 fps
 
@@ -283,11 +287,11 @@ the skip/present path, not in the fragment shader.
 ## 8. Reproducing any run here
 
 ```bat
-:: accurate gamma, stage scale 100 (the current default)
+:: approximate gamma, stage scale 100 (the current default)
 port\psvita\build.bat
 
-:: approximate gamma, stage scale 100
-port\psvita\build.bat --fast-gamma
+:: accurate gamma, stage scale 100 (the reference for an A/B)
+port\psvita\build.bat --no-fast-gamma
 
 :: the rejected half-resolution target, for re-measurement
 ::   the build must opt in, or config.c forces the scale back to 100:
@@ -311,7 +315,8 @@ until section 7 is resolved.
 - blend fallback for `ADD`/`SUB`/`MUL`, checked render-target restore and
   abandoned-target handling.
 - default scale back to 100, with the A/B recorded in `src/config.c`.
-- `MUGEN_MODEL_FAST_GAMMA` / `--fast-gamma`.
+- `MUGEN_MODEL_FAST_GAMMA` / `--fast-gamma`, with `--no-fast-gamma` as the
+  accurate reference; `build.bat` now defaults fast gamma on.
 
 The opaque-blend experiment is not in the tree; it was reverted after
 measurement (section 4).

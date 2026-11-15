@@ -1,9 +1,10 @@
 /* Port addition: intentionally unlit Vita profile; same base/alpha/PalFX math. */
 /*
  * Port addition: the gamma conversions have an accurate and an approximate
- * form. MODEL_FAST_GAMMA is set only by a build that opts in
- * (MUGEN_MODEL_FAST_GAMMA, model.c), for measuring fragment cost on hardware;
- * it approximates gamma 2.2 with gamma 2.0 and changes colour slightly.
+ * form. MODEL_FAST_GAMMA is set by MUGEN_MODEL_FAST_GAMMA (model.c), which the
+ * Vita build enables by default because the two pows cost roughly 15% of the
+ * frame rate on the 3D stages; --no-fast-gamma builds the accurate form. The
+ * fast form approximates gamma 2.2 with gamma 2.0 and changes colour slightly.
  */
 #ifdef MODEL_FAST_GAMMA
 #define MODEL_TO_LINEAR(x) ((x) * (x))
