@@ -457,6 +457,15 @@ target_compile_options(mugen PRIVATE
   ${MUGEN_VITA_FORCE_INCLUDE}
   -DMUGEN_VITA_GL)
 
+# The half-resolution glTF stage FBO was slower on device (Esaka:
+# 24.85 fps direct vs 3.75 fps at 50%). Keep it behind an explicit,
+# non-default build switch for driver experiments only.
+option(MUGEN_VITA_STAGE3D_OFFSCREEN_EXPERIMENTAL
+  "Enable known-slow Vita Stage3D offscreen scaling for GPU research" OFF)
+if(MUGEN_VITA_STAGE3D_OFFSCREEN_EXPERIMENTAL)
+  target_compile_definitions(mugen PRIVATE MUGEN_VITA_STAGE3D_OFFSCREEN_EXPERIMENTAL=1)
+endif()
+
 # LIBRESAMPLE_STATIC drops __declspec(dllimport) from libresample.h, which is
 # meaningless (and rejected) off Windows.
 # Port addition: enable the R4 smoke/pixel test and real frame-60 capture only
