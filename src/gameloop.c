@@ -1242,8 +1242,10 @@ static void Game_PerfLog(void)
             /* A few high-resolution counter reads per frame, never per quad.
              * CPU wall times include time spent waiting in the GL driver;
              * they are NOT GPU-execution timestamps. */
-            Log_Printf("vphase: game=%.1fms stage bind=%.1f model=%.1f restore=%.1f composite=%.1f direct=%.1f\n",
+            Log_Printf("vphase: game=%.1fms stage back=%.1f front=%.1f bind=%.1f model=%.1f restore=%.1f composite=%.1f direct=%.1f\n",
                        perf.vita_ms[PERF_VITA_GAME_DRAW],
+                       perf.vita_ms[PERF_VITA_STAGE_BACK],
+                       perf.vita_ms[PERF_VITA_STAGE_FRONT],
                        perf.vita_ms[PERF_VITA_STAGE_BIND],
                        perf.vita_ms[PERF_VITA_STAGE_MODEL],
                        perf.vita_ms[PERF_VITA_STAGE_RESTORE],
@@ -1254,8 +1256,10 @@ static void Game_PerfLog(void)
                        perf.vita_ms[PERF_VITA_PRESENT_BLIT],
                        perf.vita_ms[PERF_VITA_PRESENT_RESTORE],
                        perf.vita_ms[PERF_VITA_SWAP]);
-            Log_Printf("vphase-max: game=%.1f stage bind=%.1f model=%.1f restore=%.1f composite=%.1f direct=%.1f present bind=%.1f blit=%.1f restore=%.1f swap=%.1fms\n",
+            Log_Printf("vphase-max: game=%.1f back=%.1f front=%.1f bind=%.1f model=%.1f restore=%.1f composite=%.1f direct=%.1f present bind=%.1f blit=%.1f restore=%.1f swap=%.1fms\n",
                        perf.vita_max_ms[PERF_VITA_GAME_DRAW],
+                       perf.vita_max_ms[PERF_VITA_STAGE_BACK],
+                       perf.vita_max_ms[PERF_VITA_STAGE_FRONT],
                        perf.vita_max_ms[PERF_VITA_STAGE_BIND],
                        perf.vita_max_ms[PERF_VITA_STAGE_MODEL],
                        perf.vita_max_ms[PERF_VITA_STAGE_RESTORE],
