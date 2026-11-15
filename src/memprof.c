@@ -381,13 +381,30 @@ static uintptr_t Memprof_ModuleBase(void)
 {
 #if defined(_WIN32)
     return (uintptr_t)GetModuleHandleA(NULL);
-#elif defined(__PIE__) || defined(__PIC__)
-    /* GNU ld defines this; for a PIE its runtime value is the load bias. */
-    extern char __executable_start;
+#elif defined(__linux__)
+    /*
+     * PIC source flags do not determine whether the executable is PIE.
+     * Read e_type from its in-memory ELF header, valid on both ELF32 and
+     * ELF64 (offset 16). ET_DYN=3 needs a load bias; ET_EXEC=2 does not.
+     * This also handles an -fPIC -no-pie executable correctly.
+     */
+    extern const unsigned char __executable_start;
+    const unsigned char *image = &__executable_start;
+    uint16_t elf_type;
 
+    if (image[0] != 0x7f || image[1] != 'E' ||
+        image[2] != 'L' || image[3] != 'F') {
+        return 0;
+    }
+    memcpy(&elf_type, image + 16, sizeof(elf_type));
+    return elf_type == 3 ? (uintptr_t)image : 0;
+#elif defined(__PIE__)
+    /* Non-Linux ELF (e.g. Vita): retain the linker-defined PIE base.
+     * Actual Vita relocation still needs an on-device verification. */
+    extern char __executable_start;
     return (uintptr_t)(void *)&__executable_start;
 #else
-    return 0; /* non-PIE ELF: runtime addresses are link-time addresses */
+    return 0;
 #endif
 }
 
@@ -432,7 +449,7 @@ static void Memprof_SiteDumpTo(const char *path)
         }
     }
     Memprof_Unlock();
-    if (snapshot == NULL) {
+    if (capacity != 0 && snapshot == NULL) {
         return;
     }
     if (strlen(path) + 5 >= sizeof(tmp_path)) {
@@ -477,10 +494,20 @@ static void Memprof_SiteDumpTo(const char *path)
         remove(tmp_path);
         return;
     }
-    remove(path);
+#if defined(_WIN32)
+    /* CRT rename cannot replace an existing file on Windows. MoveFileExA
+     * replaces the old snapshot without exposing a gap where neither
+     * snapshot exists. On failure, preserve the previous valid file. */
+    if (!MoveFileExA(tmp_path, path,
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        remove(tmp_path);
+    }
+#else
+    /* Both files are in the same directory: POSIX rename is atomic. */
     if (rename(tmp_path, path) != 0) {
         remove(tmp_path);
     }
+#endif
 }
 
 void Memprof_Dump(void)
