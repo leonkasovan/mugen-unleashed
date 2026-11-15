@@ -107,12 +107,15 @@ build.
   layer rules as `Model_DrawNode`, and `Stage3D_Draw` falls back to drawing
   that layer directly at full size. Ordinary alpha-blended stages — the
   common case — still use the target.
-- **Failure paths are closed.** A target that cannot be bound, or whose
-  restoration after the model pass fails, is dropped and the half-resolution
-  path is disabled for the rest of the stage
-  (`Stage3D_AbandonRenderTarget`). The composite never samples a texture
-  that may still be bound for rendering, which would be a framebuffer
-  feedback loop.
+- **Failure paths are closed.** A target that cannot be bound drops the
+  half-resolution path for the rest of the stage. A failed restoration is
+  handled differently, because `Gfx_SetRenderTarget` rolls its state back to
+  the target the failed bind came from (`src/gfx.c`): the engine can still
+  point at the offscreen target at that moment, so the frame is retried once,
+  and only then is the target released —
+  `Stage3D_FreeRenderTarget` detaches `g_renderTarget` first, so no freed
+  target stays referenced. The composite never samples a texture that may
+  still be bound for rendering, which would be a framebuffer feedback loop.
 - **Per-layer model attribution.** `Stage3D_DrawLayers` brackets each
   layer with `BatchProf_ModelLayerBegin/End`, and `Model_Draw`'s
   submissions are attributed through `BatchProf_ModelSubmit`. The log
@@ -136,10 +139,11 @@ build.
 
 1. **Release VPK of the current tree, same four stages, demo and play.**
    This is the first measurement of the half-resolution target that is not
-   contaminated by diagnostic counters. Record fps and `present` per stage.
-   If Esaka's ~25 fps becomes ~60 and Wheel's 3–6 improves by roughly the
-   4× its pixel reduction implies, resolution scaling is confirmed and the
-   default stays 50.
+   contaminated by diagnostic counters. Record fps and `present` per stage
+   at 50% and at 100% and compare them as measured numbers. No particular
+   multiplier is expected: how much fps follows the pixel reduction depends
+   on the share of frame time the resolution affects, plus fixed overhead and
+   synchronisation, so the result is whatever the two runs say.
 2. **Profile build of the same tree for layer attribution only.** Read
    `model: layer0 … layer1 …` in demo and play on one stage. This replaces
    the discarded claim with a measurement, and decides whether a
