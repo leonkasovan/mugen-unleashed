@@ -88,6 +88,12 @@ case ":$PATH:" in
 esac
 
 
+# Standalone test binaries do not link the full engine's memprof.c. Disable
+# the mugen.h malloc-family redirects for these harness builds only; the main
+# Makefile and Vita/Android applications keep heap accounting enabled.
+CFLAGS="${CFLAGS:-} -DMUGEN_MEMPROF_NO_WRAP=1"
+export CFLAGS
+
 # Runs a built harness and enforces the target's pointer width.
 #
 # Prints the harness output, fails when it reports a different width than the
