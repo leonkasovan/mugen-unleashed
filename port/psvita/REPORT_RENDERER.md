@@ -37,13 +37,16 @@ per frame:
 | `logic` | engine logic |
 | `draw` | everything submitted before `Perf_DrawDone` |
 | `wait` | frame limiting (`Timer_WaitFrame`) |
-| `present` | `Screen_Present`, which blocks in the GL swap |
+| `present` | the presentation phase (`Screen_Present`) |
 | `calls`/`tris` | GL draw calls and triangles |
 
 `present` is **not a GPU timestamp**. It is CPU elapsed time around
-`Screen_Present` (`src/frame.c`), which blocks in `vglSwapBuffers`. A slow GPU
-therefore shows up as a block in `present` even when the work was submitted
-earlier. This distinction matters for everything below.
+`Screen_Present` (`src/frame.c`). The blocking operation inside that phase is
+not fully isolated: the `vphase` present line times the swap separately, and
+logs exist where `present` was large while the swap span itself was short. A
+slow GPU still surfaces here as a block, but the phase can also contain waiting
+that the swap call did not cause. Do not read `present` as "time spent in
+`vglSwapBuffers`".
 
 The `vphase:` lines (added upstream, `src/perf.c` + `port/psvita/src/`) split
 the 3D path further: `back`/`front` (the two `Stage3D_Draw` calls), `bind`,
@@ -55,8 +58,9 @@ reports three different rates:
 
 - `fps` — `Timer_GetFps()`, the engine's own counter.
 - `tick` — calls to `Screen_EndFrame` per second (the loop rate).
-- `drawn` — those calls where `g_game->skip_draw == 0` (frames actually
-  presented).
+- `drawn` — those calls where the frame's own `skip_draw` decision was 0, i.e.
+  frames presented. The caller now reads that decision before
+  `Frame_UpdateSkip` updates it for the next frame (section 7).
 
 **Always use medians for `draw`/`present`, not means.** Early in this work a
 single 1,115 ms frame in one sample dragged Wheel's mean `draw` from a 2.9 ms
@@ -140,10 +144,11 @@ so it can be re-measured if it is redesigned.
 
 **Failure-path note.** A failed restore leaves `Gfx_SetRenderTarget`'s state
 rolled back onto the offscreen target (`src/gfx.c`), so freeing it there would
-leave `g_renderTarget` dangling. That was fixed, then hardened upstream to call
-`Error_Fatal` instead of freeing live GL attachments
-(`Stage3D_FreeRenderTarget`, which is `noreturn` and skips GL teardown). A
-regression test covers the rollback precondition
+leave `g_renderTarget` dangling. That was fixed, then hardened upstream:
+`Stage3D_FreeRenderTarget` detaches the framebuffer before releasing it, and if
+it cannot detach it calls `Error_Fatal`, which is `noreturn` and skips GL
+teardown. The normal cleanup path returns as usual; only that exceptional path
+terminates the process. A regression test covers the rollback precondition
 (`tools/test_gl_errors.c`, `test_failed_restore_detaches`).
 
 ## 4. Experiment 2 — skip blending for opaque primitives (rejected)
@@ -250,15 +255,30 @@ perf: … draw=2.5ms wait=0.0ms present=13.5ms calls=37 tris=2654
 ```
 
 `draw` + `present` ≈ 16 ms, which is a 60 fps frame. Yet only 14–35 frames a
-second reach `Screen_Present`, and `Timer_GetFps()` reports 8–18. The engine
-calls `Screen_EndFrame` ~47 times a second but presents far fewer, so
-`Frame_UpdateSkip` (`src/frame.c`) is dropping a large share of frames — and the
-time those skipped iterations spend is not attributed to `draw` or `present`.
+second are presented, and `Timer_GetFps()` reports 8–18. Either the measured
+phases do not cover everything an iteration spends, or the three rates are not
+measuring the same thing.
 
-Until that is instrumented, the visible frame rate cannot be reconciled with the
-measured per-frame cost, and no further optimisation should be justified by fps
-alone. The next instrumented experiment belongs in the skip/present path, not
-in the fragment shader.
+Two caveats apply:
+
+- **The phase means mix drawn and skipped iterations.** `Perf_DrawDone` and
+  `Perf_PresentDone` still execute on an iteration that frame-skip dropped, so
+  `draw`/`present` are averages over a mixed population, not a clean
+  per-presented-frame cost. Work outside the measured phases — event polling,
+  input, the timer wait accounting and the skip decision itself — is not
+  attributed anywhere.
+- **`drawn` was sampled one frame late.** `Vita_FrameLog` used to read
+  `skip_draw` *after* `Frame_UpdateSkip`, which sets the **next** frame's state,
+  so it counted a decision that had not been drawn yet. `Screen_EndFrame` now
+  captures the frame's own decision before updating skip state and passes it to
+  `Vita_FrameLog`. Logs taken before that fix have `drawn` off by up to one
+  frame per window, which does not explain the size of the disagreement but
+  makes the counter an estimate rather than an exact presentation count.
+
+Until the phases are reconciled with the delivered rate, the visible frame rate
+cannot be fully explained by `draw` + `present`, and no further optimisation
+should be justified by fps alone. The next instrumented experiment belongs in
+the skip/present path, not in the fragment shader.
 
 ## 8. Reproducing any run here
 
