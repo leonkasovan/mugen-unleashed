@@ -30,6 +30,7 @@ jobs:
           sh tools/test_sdl2input.sh
           sh tools/test_sdl2audio.sh
           sh tools/test_perf.sh
+          sh tools/test_memprof_host.sh
           sh tools/test_batchprof.sh
           sh tools/test_textwrap.sh
           sh tools/test_ttfcache.sh
