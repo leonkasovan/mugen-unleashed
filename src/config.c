@@ -434,7 +434,7 @@ int Config_Load(void)
     if (g_stage3dRenderScale < 100) {
         static int warned;
         if (!warned) {
-            Log_Printf("Stage3D: offscreen scale %d%% disabled on Vita (measured regression); using 100%% direct rendering\\n",
+            Log_Printf("Stage3D: offscreen scale %d%% disabled on Vita (measured regression); using 100%% direct rendering\n",
                        g_stage3dRenderScale);
             warned = 1;
         }
