@@ -27,6 +27,7 @@ typedef struct MemprofEntry {
     void *ptr;
     size_t size;
     void *pc;
+    unsigned char missing_site; /* attribution failed while profiling */
     struct MemprofEntry *next;
 } MemprofEntry;
 
@@ -128,6 +129,7 @@ static MemprofEntry *Memprof_EntryNewLocked(void *ptr, size_t size, void *pc)
     entry->ptr = ptr;
     entry->size = size;
     entry->pc = pc;
+    entry->missing_site = 0;
     Memprof_EntryAttachLocked(entry);
     Memprof_TrackingAdd((int64_t)sizeof(*entry));
     return entry;
@@ -204,6 +206,7 @@ typedef struct MemprofSite {
 
 static MemprofSite *memprof_sites;
 static size_t memprof_site_capacity;
+static size_t memprof_site_count;
 static uint64_t memprof_sites_dropped;
 static uint64_t memprof_dropped_bytes;
 static int memprof_site_enabled;
@@ -214,10 +217,13 @@ static time_t memprof_last_dump;
 static void Memprof_SiteResetLocked(void)
 {
     if (memprof_sites != NULL) {
+        size_t bytes = memprof_site_capacity * sizeof(*memprof_sites);
         free(memprof_sites);
+        Memprof_TrackingAdd(-(int64_t)bytes);
         memprof_sites = NULL;
     }
     memprof_site_capacity = 0;
+    memprof_site_count = 0;
     memprof_sites_dropped = 0;
     memprof_dropped_bytes = 0;
 }
@@ -227,29 +233,43 @@ static int Memprof_SiteGrowLocked(void)
 {
     size_t old_capacity = memprof_site_capacity;
     MemprofSite *old_sites = memprof_sites;
-    size_t new_capacity = old_capacity == 0 ? 256 : old_capacity * 2;
-    MemprofSite *fresh = (MemprofSite *)calloc(new_capacity, sizeof(MemprofSite));
+    size_t new_capacity, new_bytes;
+    size_t old_bytes = old_capacity * sizeof(*old_sites);
+    MemprofSite *fresh;
     size_t i;
 
+    if (old_capacity > SIZE_MAX / 2) {
+        return 0;
+    }
+    new_capacity = old_capacity == 0 ? 256 : old_capacity * 2;
+    if (new_capacity > SIZE_MAX / sizeof(MemprofSite)) {
+        return 0;
+    }
+    new_bytes = new_capacity * sizeof(MemprofSite);
+    fresh = (MemprofSite *)calloc(new_capacity, sizeof(MemprofSite));
     if (fresh == NULL) {
         return 0;
     }
+    /* Account for both tables during resize, including their peak. */
+    Memprof_TrackingAdd((int64_t)new_bytes);
     memprof_sites = fresh;
     memprof_site_capacity = new_capacity;
     for (i = 0; i < old_capacity; i++) {
-        MemprofSite *s = &old_sites[i];
+        MemprofSite *old = &old_sites[i];
         size_t slot;
-
-        if (!s->inuse) {
+        if (!old->inuse) {
             continue;
         }
-        slot = ((uintptr_t)s->pc >> 2) & (new_capacity - 1);
+        slot = ((uintptr_t)old->pc >> 2) & (new_capacity - 1);
         while (memprof_sites[slot].inuse) {
             slot = (slot + 1) & (new_capacity - 1);
         }
-        memprof_sites[slot] = *s;
+        memprof_sites[slot] = *old;
     }
     free(old_sites);
+    if (old_bytes != 0) {
+        Memprof_TrackingAdd(-(int64_t)old_bytes);
+    }
     return 1;
 }
 
@@ -259,90 +279,91 @@ static int Memprof_SiteGrowLocked(void)
  */
 static MemprofSite *Memprof_FindSiteLocked(void *pc, int create)
 {
-    size_t probes = 0;
-    size_t slot;
+    size_t slot, probes;
+    MemprofSite *empty = NULL;
 
     if (memprof_site_capacity == 0) {
         if (!create || !Memprof_SiteGrowLocked()) {
             return NULL;
         }
-    } else if (create) {
-        size_t used = 0;
-        size_t i;
-
-        /* Stay under a 70% load factor. */
-        for (i = 0; i < memprof_site_capacity; i++) {
-            if (memprof_sites[i].inuse) {
-                used++;
-            }
-        }
-        if (used * 10 >= memprof_site_capacity * 7 && !Memprof_SiteGrowLocked()) {
-            return NULL;
-        }
     }
-
+    /* Existing sites are never contingent on successful table growth. */
     slot = ((uintptr_t)pc >> 2) & (memprof_site_capacity - 1);
-    while (probes < memprof_site_capacity) {
-        MemprofSite *s = &memprof_sites[slot];
-
-        if (!s->inuse) {
-            if (!create) {
-                return NULL;
-            }
-            memset(s, 0, sizeof(*s));
-            s->pc = pc;
-            s->inuse = 1;
-            return s;
+    for (probes = 0; probes < memprof_site_capacity; probes++) {
+        MemprofSite *site = &memprof_sites[slot];
+        if (!site->inuse) {
+            empty = site;
+            break;
         }
-        if (s->pc == pc) {
-            return s;
+        if (site->pc == pc) {
+            return site;
         }
         slot = (slot + 1) & (memprof_site_capacity - 1);
-        probes++;
     }
-    return NULL; /* full even after growth */
+    if (!create) {
+        return NULL;
+    }
+    /* Grow only on a NEW insertion, without O(capacity) counting each time.
+     * If growth fails, use the remaining free slot if one exists. */
+    if (memprof_site_count >= memprof_site_capacity * 7 / 10) {
+        if (Memprof_SiteGrowLocked()) {
+            slot = ((uintptr_t)pc >> 2) & (memprof_site_capacity - 1);
+            while (memprof_sites[slot].inuse) {
+                slot = (slot + 1) & (memprof_site_capacity - 1);
+            }
+            empty = &memprof_sites[slot];
+        }
+    }
+    if (empty == NULL) {
+        return NULL;
+    }
+    memset(empty, 0, sizeof(*empty));
+    empty->pc = pc;
+    empty->inuse = 1;
+    memprof_site_count++;
+    return empty;
 }
 
-static void Memprof_SiteAdd(void *pc, int64_t delta_size, int allocating)
+/* Called while holding memprof_lock. Returns whether the site was credited;
+ * the owning MemprofEntry records that result for correct free/realloc. */
+static int Memprof_SiteAddLocked(void *pc, int64_t delta_size, int allocating)
 {
-    MemprofSite *s;
-
-    if (!memprof_site_enabled) {
-        return;
-    }
-    Memprof_Lock();
+    MemprofSite *site;
     if (pc == NULL) {
-        if (allocating && delta_size > 0) {
-            __sync_fetch_and_add(&memprof_dropped_bytes, (uint64_t)delta_size);
-        }
-        Memprof_Unlock();
-        return;
+        return 0;
     }
-    s = Memprof_FindSiteLocked(pc, allocating);
-    if (s == NULL) {
+    site = Memprof_FindSiteLocked(pc, allocating);
+    if (site == NULL) {
         if (allocating) {
             __sync_fetch_and_add(&memprof_sites_dropped, 1);
-            if (delta_size > 0) {
-                __sync_fetch_and_add(&memprof_dropped_bytes, (uint64_t)delta_size);
-            }
         }
-        Memprof_Unlock();
-        return;
+        return 0;
     }
     if (delta_size >= 0) {
-        s->live += (uint64_t)delta_size;
+        site->live += (uint64_t)delta_size;
     } else {
-        s->live -= (uint64_t)-delta_size;
+        uint64_t bytes = (uint64_t)-delta_size;
+        /* A corrupt entry must not wrap the exported unsigned counter. */
+        if (site->live < bytes) {
+            site->live = 0;
+            __sync_fetch_and_add(&memprof_sites_dropped, 1);
+        } else {
+            site->live -= bytes;
+        }
     }
     if (allocating) {
-        s->allocs++;
-        if (delta_size > 0 && s->live > s->peak) {
-            s->peak = s->live;
-        }
+        site->allocs++;
+        if (site->live > site->peak) site->peak = site->live;
     } else {
-        s->frees++;
+        site->frees++;
     }
-    Memprof_Unlock();
+    return 1;
+}
+
+/* Current LIVE payload without site attribution; not a cumulative total. */
+static void Memprof_UnattributedAddLocked(int64_t delta)
+{
+    __sync_fetch_and_add(&memprof_dropped_bytes, (uint64_t)delta);
 }
 
 /* -------------------------------------------------------------- reporting */
@@ -747,15 +768,7 @@ void Memprof_Stats(MemprofStats *out)
     out->tracking_overhead_bytes = Memprof_AtomicRead(&memprof_tracking_live);
 
     Memprof_Lock();
-    if (memprof_sites != NULL) {
-        size_t i;
-
-        for (i = 0; i < memprof_site_capacity; i++) {
-            if (memprof_sites[i].inuse) {
-                tracked++;
-            }
-        }
-    }
+    tracked = memprof_site_count;
     Memprof_Unlock();
     out->sites_tracked = tracked;
 }
