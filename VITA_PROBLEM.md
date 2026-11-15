@@ -30,12 +30,16 @@ diagnostic counters), over a six-minute run that loaded six stages:
 
 What those numbers do and do not say:
 
-- **The CPU is not the limit.** Engine logic is 0.2–0.9 ms per frame and
-  the model's own pass is 1.4–3.6 ms in every slow frame. The time is
-  spent after the draw, in the present path.
+- **Engine logic is cheap.** Engine logic is 0.2–0.9 ms per frame and the
+  model's measured submission is 1.4–3.6 ms in every slow frame. That does
+  not rule out driver CPU overhead, synchronisation or CPU/GPU waiting —
+  only that the engine's own logic and the measured model submission are
+  not where the time goes.
 - **The cost scales with resolution.** A 480×272 run of the same scene
   with the same model work moved `present` from ~31 ms to ~8.5 ms. That
-  A/B is the strongest single datapoint here.
+  A/B is the strongest single datapoint here. It is a 4× pixel reduction
+  and must not be read as a 4× frame-rate promise: the result is bounded by
+  whatever part of the frame is not model fragments.
 - **The bottleneck is not isolated.** `present` is measured on the CPU
   around `Screen_Present` (`src/frame.c:257-304`) via
   `Perf_PresentDone` (`src/perf.c:117-133`). It is not a GPU timestamp:
@@ -93,8 +97,22 @@ build.
   `Stage3DRenderScale = 100` disables the path entirely.
 - **No double PalFX.** The stage PalFX is applied when the model is drawn;
   the composite asks for a neutral fx through `Gl_SetPalFxSuppressed`
-  (`src/glrender.c`), so the stage's grade is applied once. A layer using
-  additive blending is approximated by the alpha composite.
+  (`src/glrender.c`), so the stage's grade is applied once.
+- **Destination-blended models keep the full-size path.** A node whose
+  `trans` extra is `ADD`, `SUB` or `MUL` blends against whatever is behind
+  it (`Model_SetBlend`, `src/model.c`). Behind it in an offscreen target is
+  transparent black rather than the stage, so those modes cannot be
+  reproduced by compositing a texture. `Model_HasDestinationBlend`
+  (`src/model.c`) walks the nodes the layer would draw, using the same
+  layer rules as `Model_DrawNode`, and `Stage3D_Draw` falls back to drawing
+  that layer directly at full size. Ordinary alpha-blended stages — the
+  common case — still use the target.
+- **Failure paths are closed.** A target that cannot be bound, or whose
+  restoration after the model pass fails, is dropped and the half-resolution
+  path is disabled for the rest of the stage
+  (`Stage3D_AbandonRenderTarget`). The composite never samples a texture
+  that may still be bound for rendering, which would be a framebuffer
+  feedback loop.
 - **Per-layer model attribution.** `Stage3D_DrawLayers` brackets each
   layer with `BatchProf_ModelLayerBegin/End`, and `Model_Draw`'s
   submissions are attributed through `BatchProf_ModelSubmit`. The log
@@ -104,10 +122,13 @@ build.
 - **Counters connected and tested.** `BatchProf_Pass1` wraps the
   `Sprite_DrawGL` pass-1 offscreen block (`Screen_Create` → draw →
   `SpriteSet_Free`); `BatchProf_VitaQuad` brackets both
-  `VitaGl_DrawQuad` call sites; `BatchProf_Area` sums destination quad
-  area in `Gl_DrawSprite`. All three were previously defined with no call
-  sites, which made earlier zero readings meaningless. `tools/test_batchprof.c`
-  covers the layer arithmetic, including an out-of-range layer, and passes.
+  `VitaGl_DrawQuad` call sites; `BatchProf_QuadArea` sums the quads'
+  **nominal scaled area** — sprite size times scale factors, with no
+  clipping, rotation, perspective or overdraw — so it measures 2D demand,
+  not executed fragments. All of these were previously defined with no call
+  sites, which made earlier zero readings meaningless.
+  `tools/test_batchprof.c` covers the layer arithmetic, including an
+  out-of-range layer, and passes.
 - **`--profile` build mode.** Release optimisation plus `MUGEN_DEBUG`
   diagnostics (`port/psvita/build.bat --profile`).
 
@@ -124,11 +145,15 @@ build.
    the discarded claim with a measurement, and decides whether a
    layer-specific scale is worth having.
 3. **If half resolution is not enough, establish where `present` blocks.**
-   `GpuTime_TakeAverages` (`src/gputime.c`) exists for exactly this; if the
-   device cannot supply timer queries, fall back to bracketing individual
-   GL calls. Only after that should draw-call batching inside
-   `Model_Draw` be considered, since it is real engine surgery with a
-   fidelity risk.
+   There is no GPU timer on this target today: `src/gputime.c` is compiled
+   only under `MUGEN_GLES` (`src/gputime.c:10`), and the Vita build defines
+   `MUGEN_VITA_GL`, so `GpuTime_TakeAverages` does not exist in a Vita
+   link. Using it is not an available option until a Vita-specific timer
+   path is written. Until then, bracket individual GL calls with the CPU
+   clock to find which call blocks; that locates the blocking call but
+   cannot by itself measure GPU execution time. Only after that should
+   draw-call batching inside `Model_Draw` be considered, since it is real
+   engine surgery with a fidelity risk.
 4. **Do not re-chase:** shader gamma maths (measured ~10–15%), the sprite
    pass-1 path (counter now connected; no evidence it dominates), BGM
    (`demo_fight_playbgm`), AI (`logic` < 1 ms in every slow frame), or

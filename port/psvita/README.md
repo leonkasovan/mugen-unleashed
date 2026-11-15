@@ -1236,8 +1236,15 @@ stages never allocate the target.
 outside 25..100 are clamped. The target has its own depth buffer, is cleared
 transparent and composited through `Sprite_DrawGL`, and is freed when the stage
 unloads. The stage PalFX is applied when the model is drawn and suppressed on the
-composite (`Gl_SetPalFxSuppressed`) so it is not applied twice. A model layer
-that uses additive blending is approximated by the alpha composite.
+composite (`Gl_SetPalFxSuppressed`) so it is not applied twice.
+
+A model node with a `trans` extra of `ADD`, `SUB` or `MUL` blends against the
+colour behind it, which in an offscreen target is transparent black rather than
+the stage. `Model_HasDestinationBlend` detects those nodes and that layer is
+drawn directly at full size instead, so such a stage keeps the original
+appearance at the original cost. A target that cannot be bound, or whose
+restoration fails, is dropped for the rest of the stage and the model draws
+directly.
 
 In a `--profile` build the log also reports, per second,
 `model: layer0 calls=… tris=… layer1 calls=… tris=…`, which says which of the
