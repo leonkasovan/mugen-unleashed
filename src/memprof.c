@@ -388,8 +388,8 @@ static uintptr_t Memprof_ModuleBase(void)
      * ELF64 (offset 16). ET_DYN=3 needs a load bias; ET_EXEC=2 does not.
      * This also handles an -fPIC -no-pie executable correctly.
      */
-    extern const unsigned char __executable_start;
-    const unsigned char *image = &__executable_start;
+    extern const unsigned char __executable_start[];
+    const unsigned char *image = __executable_start;
     uint16_t elf_type;
 
     if (image[0] != 0x7f || image[1] != 'E' ||
