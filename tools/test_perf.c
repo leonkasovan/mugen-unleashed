@@ -19,7 +19,25 @@ static Uint64 Test_Counter(void) { return clock_ticks; }
 static Uint64 Test_Frequency(void) { return 1000; }
 #define SDL_GetPerformanceCounter Test_Counter
 #define SDL_GetPerformanceFrequency Test_Frequency
+/*
+ * The host harness included mugen.h before selecting its simulated Android
+ * path, so desktop glad already supplies GL_TRIANGLES and the other enums.
+ * For TEST_ANDROID=1, perf.c's normal Android-only GLES2/gl2.h include would
+ * redeclare glad's function pointers as GL functions and fail on Linux.
+ *
+ * Temporarily suppress that header for the perf.c inclusion only; keep
+ * MUGEN_GLES unset when compiling frame.c so the Android software present
+ * path is still tested. Production Android compilation remains unchanged.
+ */
+#if TEST_ANDROID == 1
+#define MUGEN_GLES 1
+#define TEST_PERF_HOST_GL_ENUMS 1
+#endif
 #include "../src/perf.c"
+#ifdef TEST_PERF_HOST_GL_ENUMS
+#undef MUGEN_GLES
+#undef TEST_PERF_HOST_GL_ENUMS
+#endif
 #include "../src/frame.c"
 /* Standalone frame test does not link the optional memory-profiler module. */
 void Memprof_Tick(void) {}
