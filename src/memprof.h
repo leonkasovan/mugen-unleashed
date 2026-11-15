@@ -46,7 +46,10 @@ typedef struct MemprofStats {
     uint64_t heap_allocs, heap_frees, heap_fails;
     uint64_t lua_live, lua_peak;
     uint64_t lua_allocs, lua_frees, lua_fails;
-    /* Attribution health, so an incomplete ranking is never silent. */
+    /* sites_dropped: failed attribution attempts since Memprof_Start.
+     * unattributed_bytes: CURRENT live payload without a recorded site.
+     * tracking_overhead_bytes: live pointer-record and site-table heap,
+     * excluding static buckets and transient report snapshots. */
     uint64_t sites_tracked, sites_dropped, unattributed_bytes;
     uint64_t tracking_overhead_bytes;
 } MemprofStats;
