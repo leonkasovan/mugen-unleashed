@@ -478,6 +478,16 @@ if(MUGEN_VITA_GL_SELFTEST)
   endif()
 endif()
 
+# Port addition: measure the model fragment shader's gamma cost on hardware.
+# OFF keeps Ikemen GO's accurate pow(2.2) round trip; ON approximates it with
+# square/sqrt (gamma 2.0), which changes colour slightly. This is a measurement
+# switch, not a quality setting.
+option(MUGEN_MODEL_FAST_GAMMA "Approximate the model shader's gamma (colour changes)" OFF)
+if(MUGEN_MODEL_FAST_GAMMA)
+  target_compile_definitions(mugen PRIVATE MUGEN_MODEL_FAST_GAMMA=1)
+  message(STATUS "Model fast gamma enabled (approximate colour)")
+endif()
+
 target_compile_definitions(mugen PRIVATE
   LIBRESAMPLE_STATIC
   SDL_MAIN_HANDLED

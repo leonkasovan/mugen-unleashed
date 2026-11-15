@@ -1,4 +1,18 @@
 /* Port addition: intentionally unlit Vita profile; same base/alpha/PalFX math. */
+/*
+ * Port addition: the gamma conversions have an accurate and an approximate
+ * form. MODEL_FAST_GAMMA is set only by a build that opts in
+ * (MUGEN_MODEL_FAST_GAMMA, model.c), for measuring fragment cost on hardware;
+ * it approximates gamma 2.2 with gamma 2.0 and changes colour slightly.
+ */
+#ifdef MODEL_FAST_GAMMA
+#define MODEL_TO_LINEAR(x) ((x) * (x))
+#define MODEL_TO_SRGB(x) sqrt(x)
+#else
+#define MODEL_TO_LINEAR(x) pow((x), vec3(2.2))
+#define MODEL_TO_SRGB(x) pow((x), vec3(1.0 / 2.2))
+#endif
+
 uniform sampler2D tex;
 uniform mat3 texTransform;
 uniform bool useTexture, enableAlpha, invertall;
@@ -12,7 +26,7 @@ void main()
     vec4 color = vec4(1.0);
     if (useTexture) {
         color = MODEL_TEXTURE2D(tex, vec2(texTransform * vec3(texcoord, 1.0)));
-        color.rgb = pow(color.rgb, vec3(2.2));
+        color.rgb = MODEL_TO_LINEAR(color.rgb);
     }
     color *= baseColorFactor * vColor;
     color.rgb *= color.a;
@@ -20,7 +34,7 @@ void main()
         if (color.a < alphaThreshold) discard;
         color.a = 1.0;
     } else if (color.a <= 0.0) discard;
-    vec3 c = pow(color.rgb, vec3(1.0 / 2.2));
+    vec3 c = MODEL_TO_SRGB(color.rgb);
     float a = color.a;
     if (a > 0.0) c = clamp(c / a, 0.0, 1.0);
     if (colorbal != 1.0) {

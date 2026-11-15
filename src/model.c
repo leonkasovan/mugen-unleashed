@@ -2010,7 +2010,16 @@ static int Model_BuildProgram(void)
     static const char frag_head[] = "#version 300 es\nprecision highp float;\nprecision highp int;\n#define MODEL_VARYING in\n#define MODEL_TEXTURE2D texture\n#define MODEL_TEXTURECUBE texture\nout vec4 modelColor;\n#define MODEL_OUTPUT modelColor\n#define MODEL_NO_SHADOW\n";
 #elif defined(MUGEN_VITA_GL)
     static const char vert_head[] = "#define MODEL_ATTRIBUTE attribute\n#define MODEL_VARYING varying\n";
-    static const char frag_head[] = "#define MODEL_VARYING varying\n#define MODEL_TEXTURE2D texture2D\n#define MODEL_OUTPUT gl_FragColor\n";
+    /*
+     * Port addition: MUGEN_MODEL_FAST_GAMMA picks the approximate gamma branch
+     * of model_basic.frag at build time, so the accurate and the fast fragment
+     * shader can be measured on hardware without touching the renderer.
+     */
+    static const char frag_head[] = "#define MODEL_VARYING varying\n#define MODEL_TEXTURE2D texture2D\n#define MODEL_OUTPUT gl_FragColor\n"
+#ifdef MUGEN_MODEL_FAST_GAMMA
+        "#define MODEL_FAST_GAMMA\n"
+#endif
+        ;
 #else
     static const char vert_head[] = "#version 120\n#define MODEL_ATTRIBUTE attribute\n#define MODEL_VARYING varying\n";
     static const char frag_head[] = "#version 120\n#define MODEL_VARYING varying\n#define MODEL_TEXTURE2D texture2D\n#define MODEL_TEXTURECUBE textureCube\n#define MODEL_OUTPUT gl_FragColor\n";

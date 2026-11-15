@@ -146,6 +146,8 @@ if /I "!ARG!"=="--model3d"           ( set "MODEL3D=ON" & shift & goto parse )
 if /I "!ARG!"=="--no-model3d"        ( set "MODEL3D=OFF" & shift & goto parse )
 if /I "!ARG!"=="--render-cache"      ( set "RENDER_CACHE=ON" & shift & goto parse )
 if /I "!ARG!"=="--no-render-cache"   ( set "RENDER_CACHE=OFF" & shift & goto parse )
+if /I "!ARG!"=="--fast-gamma"        ( set "FAST_GAMMA=ON" & shift & goto parse )
+if /I "!ARG!"=="--no-fast-gamma"     ( set "FAST_GAMMA=OFF" & shift & goto parse )
 if /I "!ARG!"=="--shader-cache"      ( set "SHADER_CACHE=ON" & shift & goto parse )
 if /I "!ARG!"=="--no-shader-cache"   ( set "SHADER_CACHE=OFF" & shift & goto parse )
 if /I "!ARG!"=="--no-shader-compiler" ( set "SHADER_COMPILER_SET=1" & set "SHADER_COMPILER=" & shift & goto parse )
@@ -437,6 +439,7 @@ if defined SHADER_COMPILER set "COMPILER_FWD=%SHADER_COMPILER:\=/%"
 set "CMAKE_ARGS=%CMAKE_ARGS% "-DMUGEN_VITA_SHADER_COMPILER=%COMPILER_FWD%""
 if defined TITLEID set "CMAKE_ARGS=%CMAKE_ARGS% "-DMUGEN_VITA_TITLEID=%TITLEID%""
 if defined RENDER_CACHE set "CMAKE_ARGS=%CMAKE_ARGS% "-DMUGEN_VITA_RENDER_CACHE=%RENDER_CACHE%""
+if defined FAST_GAMMA set "CMAKE_ARGS=%CMAKE_ARGS% "-DMUGEN_MODEL_FAST_GAMMA=%FAST_GAMMA%""
 if defined SHADER_CACHE set "CMAKE_ARGS=%CMAKE_ARGS% "-DMUGEN_VITA_SHADER_CACHE=%SHADER_CACHE%""
 set "PROFILE_PROP=-DMUGEN_VITA_PROFILE=OFF"
 if "%PROFILE%"=="1" set "PROFILE_PROP=-DMUGEN_VITA_PROFILE=ON"
