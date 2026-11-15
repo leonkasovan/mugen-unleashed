@@ -107,7 +107,9 @@ void VitaGl_ReleaseDisplay(void)
 void VitaGl_SwapBuffers(void)
 {
     if (ready && display != NULL) {
+        Uint64 start = SDL_GetPerformanceCounter();
         vglSwapBuffers(GL_FALSE);
+        Perf_VitaSpan(PERF_VITA_SWAP, start);
         VitaDiag_GamePresent(display_width,display_height);
     }
 }
