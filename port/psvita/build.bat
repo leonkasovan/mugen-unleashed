@@ -112,6 +112,10 @@ set "DATA_DIR="
 set "TITLEID=MUGEN0001"
 set "MODEL3D=ON"
 set "GL_SELFTEST=OFF"
+rem CMake caches option() values, so the gamma choice must be forwarded on every
+rem run, not only when a flag is given: otherwise "--fast-gamma" then a plain
+rem rebuild keeps the cached ON and the A/B is invalid.
+set "FAST_GAMMA=OFF"
 set "RENDER_CACHE="
 set "SHADER_CACHE="
 set "PROFILE=0"
@@ -439,7 +443,9 @@ if defined SHADER_COMPILER set "COMPILER_FWD=%SHADER_COMPILER:\=/%"
 set "CMAKE_ARGS=%CMAKE_ARGS% "-DMUGEN_VITA_SHADER_COMPILER=%COMPILER_FWD%""
 if defined TITLEID set "CMAKE_ARGS=%CMAKE_ARGS% "-DMUGEN_VITA_TITLEID=%TITLEID%""
 if defined RENDER_CACHE set "CMAKE_ARGS=%CMAKE_ARGS% "-DMUGEN_VITA_RENDER_CACHE=%RENDER_CACHE%""
-if defined FAST_GAMMA set "CMAKE_ARGS=%CMAKE_ARGS% "-DMUGEN_MODEL_FAST_GAMMA=%FAST_GAMMA%""
+rem Always forwarded (FAST_GAMMA is initialised to OFF above): a plain rebuild
+rem must actively clear a cached ON from an earlier --fast-gamma run.
+set "CMAKE_ARGS=%CMAKE_ARGS% "-DMUGEN_MODEL_FAST_GAMMA=%FAST_GAMMA%""
 if defined SHADER_CACHE set "CMAKE_ARGS=%CMAKE_ARGS% "-DMUGEN_VITA_SHADER_CACHE=%SHADER_CACHE%""
 set "PROFILE_PROP=-DMUGEN_VITA_PROFILE=OFF"
 if "%PROFILE%"=="1" set "PROFILE_PROP=-DMUGEN_VITA_PROFILE=ON"
