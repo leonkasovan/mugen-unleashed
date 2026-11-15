@@ -9,6 +9,7 @@
  * g_spriteEncoders); the decoders run when sprites are loaded or drawn.
  */
 #include "mugen.h"
+#include <limits.h>
 
 /* ------------------------------------------------------------------ GrowBuf */
 
@@ -1178,4 +1179,85 @@ void *DecompBuffer_Get(const DecompRequest *req, int *hit)
     }
     buf->misses++;
     return DecompBuffer_Alloc(req);
+}
+
+/* Port fix: validate the legacy codecs before they write into a decoded buffer.
+ * Keep their byte-for-byte output for valid data; reject truncated runs, invalid
+ * backreferences and output extents that disagree with the sprite dimensions. */
+int Sprite_ValidateCompressed(const void *data, size_t size, int format, size_t expected)
+{
+    const unsigned char *p = data;
+    size_t i = 4, pos = 0;
+    unsigned int declared;
+    unsigned char rec = 0;
+    int rec_bits = 0;
+
+    if (p == NULL || size < 4 || expected == 0 || expected > INT_MAX) return 0;
+    declared = (unsigned int)p[0] | ((unsigned int)p[1] << 8) |
+               ((unsigned int)p[2] << 16) | ((unsigned int)p[3] << 24);
+    if (declared != expected) return 0;
+    if (format >= 10 && format <= 12) {
+        size_t w, h, channels;
+        if (size < 33 || memcmp(p + 4, "\x89PNG\r\n\x1a\n", 8) ||
+            memcmp(p + 12, "\0\0\0\x0dIHDR", 8)) return 0;
+        w = ((size_t)p[20] << 24) | ((size_t)p[21] << 16) | ((size_t)p[22] << 8) | p[23];
+        h = ((size_t)p[24] << 24) | ((size_t)p[25] << 16) | ((size_t)p[26] << 8) | p[27];
+        channels = p[29] == 3 ? 1 : p[29] == 2 ? 3 : p[29] == 6 ? 4 : 0;
+        return w && h && channels && p[28] <= 8 &&
+               w <= (size_t)INT_MAX / h / channels && w * h * channels == expected;
+    }
+    if (format != 2 && format != 3 && format != 4) return 0;
+    while (i < size) {
+        size_t n, offset = 0;
+        unsigned int c = p[i++];
+        if (format == 2) {
+            n = 1;
+            if ((c & 0xc0) == 0x40) {
+                if (i == size) return 0;
+                ++i; n = c & 63;
+            }
+            if (n > expected - pos) return 0;
+            pos += n;
+        } else if (format == 3) {
+            unsigned int ctrl, count;
+            if (i == size) return 0;
+            ctrl = p[i++]; count = ctrl & 127;
+            if (ctrl & 128) { if (i == size) return 0; ++i; }
+            n = c + 1;
+            if (n > expected - pos || count > size - i) return 0;
+            pos += n;
+            while (count--) {
+                n = (p[i++] >> 5) + 1;
+                if (n > expected - pos) return 0;
+                pos += n;
+            }
+        } else {
+            unsigned int flags = c;
+            int bit;
+            if (i == size) return 0;
+            for (bit = 0; bit < 8 && i < size; ++bit, flags >>= 1) {
+                c = p[i++];
+                if (flags & 1) {
+                    n = c & 63;
+                    if (n) {
+                        rec = (unsigned char)((c >> 6) | (rec << 2));
+                        rec_bits += 2; ++n;
+                        if (rec_bits == 8) { offset = rec; rec_bits = 0; }
+                        else { if (i == size) return 0; offset = p[i++]; }
+                    } else {
+                        if (size - i < 2) return 0;
+                        offset = p[i++] | ((c & 192) << 2);
+                        n = p[i++] + 3;
+                    }
+                    if (offset >= pos) return 0;
+                } else {
+                    n = c >> 5;
+                    if (!n) { if (i == size) return 0; n = p[i++] + 8; }
+                }
+                if (n > expected - pos) return 0;
+                pos += n;
+            }
+        }
+    }
+    return pos == expected;
 }

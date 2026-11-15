@@ -388,12 +388,15 @@ unsigned char *Png_Encode32(const void *pixels, int width, int height, int *size
 
 /*
  * 0x00477A60: sprite formats 10-12 decoder: data is the sprite data (the
- * decoded size, then the PNG), size the PNG size. Returns the Stream_Close
+ * decoded size, then the PNG), size includes that prefix. Returns the Stream_Close
  * result (the decoding result is dropped), 0 if out of memory.
  */
 int Png_Decode(const void *data, int size, void *dest)
 {
-    Stream *s = Stream_OpenMemory((unsigned char *)data + PNG_SPRITE_PREFIX, size);
+    /* Fix: the prefix is not part of the PNG byte stream. */
+    Stream *s;
+    if (size < PNG_SPRITE_PREFIX) return 0;
+    s = Stream_OpenMemory((unsigned char *)data + PNG_SPRITE_PREFIX, size - PNG_SPRITE_PREFIX);
 
     if (s == NULL) {
         return 0;

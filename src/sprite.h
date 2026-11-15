@@ -65,4 +65,7 @@ MUGEN_ASSERT_SIZE(SpriteSet, 0x18);
 /* Decoder of a compressed sprite format (g_spriteDecoders[format]). */
 typedef int (__cdecl *SpriteDecodeFn)(const void *data, size_t size, void *out);
 
+/* Port fix: check compressed input and output bounds before legacy decoding. */
+int Sprite_ValidateCompressed(const void *data, size_t size, int format, size_t expected);
+
 #endif /* MUGEN_SPRITE_H */

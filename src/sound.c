@@ -751,8 +751,14 @@ struct Mix_Chunk *Snd_DecodeWavResampled(Stream *s, int *status)
         wav_reader_close(reader);
         return NULL;
     }
-    /* Not checked for NULL in the original either. */
+    /* Fix: resampler allocation/format failure must unwind the reader and PCM. */
     session = g_sndResampler->begin(g_sndResampler, &info);
+    if (session == NULL) {
+        wav_reader_close(reader);
+        free(out_buf);
+        if (status != NULL) *status = WAV_ERR_UNKNOWN;
+        return NULL;
+    }
     in_buf = calloc(session->vtbl->in_block(session), in_frame);
     if (in_buf == NULL) {
         g_outOfMemory = 1;
@@ -791,11 +797,17 @@ struct Mix_Chunk *Snd_DecodeWavResampled(Stream *s, int *status)
     free(in_buf);
     Stream_Seek(s, start, SEEK_SET);
     size = out_frame * written;
-    data = realloc(out_buf, size);
+    /* Fix: neither realloc failure nor chunk failure transfers PCM ownership. */
+    data = realloc(out_buf, size != 0 ? size : 1);
     if (data == NULL) {
+        free(out_buf);
         return NULL;
     }
-    return Mix_QuickLoad_RAW(data, size);
+    {
+        struct Mix_Chunk *chunk = Mix_QuickLoad_RAW(data, size);
+        if (chunk == NULL) free(data);
+        return chunk;
+    }
 }
 
 /*

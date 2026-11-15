@@ -12,6 +12,7 @@
  * decoded there too.
  */
 #include "mugen.h"
+#include <limits.h>
 
 #define SFF_LOG_INFO    7
 #define SFF_LOG_ERROR   3
@@ -165,9 +166,9 @@ static int Pcx_StreamEnded(Stream *s)
  * keeps the palette out of textures. The stream position is restored on
  * success and for unsupported depths; NULL on errors.
  *
- * Quirks kept: header fields keep their previous (uninitialised) value when
- * a read fails, images with an empty size become 1x1 and are not decoded,
- * and the bits == 4 palette case is unreachable.
+ * Fix: reject unreadable dimensions, invalid scanlines and overflowing image
+ * extents before allocating. Release pixels if palette initialization fails.
+ * The bits == 4 palette case remains unreachable.
  */
 void *Pcx_Decode(Palette *pal, int *w_out, Stream *s, int *h_out, int *bpp_out, size_t *size_out, int flags)
 {
@@ -197,13 +198,13 @@ void *Pcx_Decode(Palette *pal, int *w_out, Stream *s, int *h_out, int *bpp_out, 
     if (Stream_GetByte(s) != 8) {
         return NULL;
     }
-    Stream_ReadU16(s, &value);
+    if (Stream_ReadU16(s, &value) != 0) return NULL;
     xmin = (short)value;
-    Stream_ReadU16(s, &value);
+    if (Stream_ReadU16(s, &value) != 0) return NULL;
     ymin = (short)value;
-    Stream_ReadU16(s, &value);
+    if (Stream_ReadU16(s, &value) != 0) return NULL;
     w = (short)value - xmin + 1;
-    Stream_ReadU16(s, &value);
+    if (Stream_ReadU16(s, &value) != 0) return NULL;
     h = (short)value - ymin + 1;
     Stream_ReadU32(s, &dpi);
     for (i = 0; i < 16; i++) {
@@ -219,7 +220,13 @@ void *Pcx_Decode(Palette *pal, int *w_out, Stream *s, int *h_out, int *bpp_out, 
         return NULL;
     }
     bytes_pp = (bits - 1) / 8 + 1;
-    Stream_ReadU16(s, &value);  /* bytes per line of one plane */
+    /* Fix: reject invalid scanlines/dimensions before signed arithmetic or decoding. */
+    if (Stream_ReadU16(s, &value) != 0 || w <= 0 || h <= 0 ||
+        value < w || value > 32767 ||
+        (size_t)w > (size_t)INT_MAX / bytes_pp / h) {
+        Stream_Seek(s, start, SEEK_SET);
+        return NULL;
+    }
     size = bytes_pp * h * w;
     *size_out = size;
     if (size <= 0) {
@@ -305,6 +312,8 @@ void *Pcx_Decode(Palette *pal, int *w_out, Stream *s, int *h_out, int *bpp_out, 
             colors[3] = 0;
         init_palette:
             if (!Pal_Init(pal, 256, colors, pal_flags)) {
+                /* Fix: palette failure does not transfer pixel ownership. */
+                free(pixels);
                 return NULL;
             }
         }

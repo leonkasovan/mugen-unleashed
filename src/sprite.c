@@ -66,8 +66,8 @@ static int Sprite_TextureStep(int size, int max_size)
  *   it (COPY), and gets a row offset table.
  * With OWN the data is freed when it is not kept (also on most errors).
  *
- * Quirks kept: formats 5 to 9 have no decoder (the call crashes), a failed
- * COPY allocation leaks owned data, and sprites with no rows (h == 0) fail
+ * Fix: reject unsupported codecs and malformed compressed input before decoding.
+ * Quirks kept: a failed COPY allocation leaks owned data, and sprites with no rows (h == 0) fail
  * in Sprite_InitRows after it allocated the row table.
  */
 int Sprite_Init(unsigned int flags, Sprite *spr, int format, void *data, size_t size, int w, int h, int bpp,
@@ -86,8 +86,19 @@ int Sprite_Init(unsigned int flags, Sprite *spr, int format, void *data, size_t 
     spr->pal_index = -1;
     spr->format = format;
     if ((flags & SPRITE_INIT_DECODE) && format >= SPRITE_FORMAT_DECODE_MIN && format <= SPRITE_FORMAT_DECODE_MAX) {
-        size_t out_size = *(const unsigned int *)data;
-        void *out = malloc(out_size);
+        size_t out_size;
+        void *out;
+
+        /* Fix: validate both compressed input and decoded extent before dispatch. */
+        if (w <= 0 || h <= 0 || bpp <= 0 || bpp > 32 ||
+            (size_t)w > SIZE_MAX / (size_t)h / (size_t)((bpp + 7) / 8) ||
+            !Sprite_ValidateCompressed(data, size, format,
+                (size_t)w * (size_t)h * (size_t)((bpp + 7) / 8))) {
+            if (owns) free(data);
+            return 0;
+        }
+        out_size = (size_t)w * (size_t)h * (size_t)((bpp + 7) / 8);
+        out = malloc(out_size);
 
         if (out == NULL) {
             if (owns) {
