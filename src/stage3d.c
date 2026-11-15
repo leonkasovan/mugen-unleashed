@@ -448,16 +448,15 @@ static void Stage3D_FreeRenderTarget(void)
 {
     if (g_stage3dTarget != NULL) {
         /*
-         * Gfx_SetRenderTarget rolls its state back to the target a failed bind
-         * came from (src/gfx.c), so the engine can still point at this one after
-         * a failed restore. Drop that reference before the free -- uncondition-
-         * ally, as Sprite_DrawGL does with its pass-1 buffer -- or the renderer
-         * is left with a dangling target if binding the frame failed too.
+         * A render target must never be freed while bound. In particular,
+         * clearing g_renderTarget by hand does not unbind the GL framebuffer.
+         * If the default framebuffer is unavailable, terminate through the
+         * Vita fatal-error path (which skips GL teardown) instead of freeing
+         * live attachments or continuing with inconsistent renderer state.
          */
-        if (g_renderTarget == g_stage3dTarget) {
-            Gfx_SetRenderTarget(NULL, 0);
-            g_renderTarget = NULL;
-            g_renderTargetSprite = 0;
+        if (g_renderTarget == g_stage3dTarget &&
+            !Gfx_SetRenderTarget(NULL, 0)) {
+            Error_Fatal("Stage3D: cannot detach active model framebuffer; stopping rendering");
         }
         SpriteSet_Free(g_stage3dTarget);
         g_stage3dTarget = NULL;
@@ -665,17 +664,14 @@ void Stage3D_Draw(int layer)
              * not still be bound: sampling the texture that is being rendered
              * into is a framebuffer feedback loop with undefined results.
              *
-             * A failed restore leaves the engine pointing at the offscreen
-             * target (Gfx_SetRenderTarget rolls back to the target the failed
-             * bind came from). Get it off there before touching the target, then
-             * abandon the path: nothing is composited this frame and the model
-             * draws directly from the next one.
+             * A failed restore leaves the offscreen target current. Do not
+             * substitute the default framebuffer for prev_target: the engine
+             * may be drawing into its screen texture. Without that target we
+             * cannot safely continue the frame, so stop via Error_Fatal and
+             * leave the live framebuffer for process teardown.
              */
             if (!Stage3D_RestoreRenderTarget(prev_target, prev_sprite)) {
-                Log_Printf("Stage3D: could not restore the render target; "
-                           "drawing the model at full size from the next frame\n");
-                Stage3D_AbandonRenderTarget("abandoning the model target");
-                return;
+                Error_Fatal("Stage3D: cannot restore screen framebuffer after two attempts; stopping rendering");
             }
             Gfx_SetClipRect(cx1, cy1, cx2, cy2);
             {
