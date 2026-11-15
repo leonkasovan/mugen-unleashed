@@ -1,37 +1,33 @@
 /*
- * Port addition: allocation counters for the engine heap and the Lua heap.
+ * Port addition: a tracked-engine-heap profiler.
  *
- * The original binary has no memory accounting at all; nothing in the tree
- * reports bytes allocated, resident or peak. The one existing signal is
- * g_outOfMemory, set by Mem_Calloc on failure. On this engine, the big
- * allocators are the C runtime (the 681 malloc/calloc/realloc/free sites in
- * src/) and Lua's internal arena (newstate with the default allocator).
- * Everything else (GL, mixer) is outside the CRT heap and is not counted.
+ * This is NOT process-memory accounting. It reports what the engine and Lua
+ * asked the C runtime for, and nothing else. Resident working set also
+ * includes resident code, shared pages, heap metadata, thread stacks and the
+ * graphics/audio drivers, none of which are visible here. Do not subtract
+ * these figures from a working-set measurement and call the remainder "other".
  *
  * Two independent counters are kept:
  *
- *   heap   every allocation routed through the macros in mugen.h (which
- *          redirect malloc/calloc/realloc/free in every engine source file,
- *          including third_party files that include mugen.h) plus anything
- *          that calls the Memprof_* functions directly;
- *   lua    Lua's allocator, replaced in Lua_Init by Lua_MemCounterAlloc.
+ *   heap   allocations routed through the macros in mugen.h (every source
+ *          file in src/ includes that header) plus direct Memprof_* calls;
+ *   lua    Lua's arena, via lua_newstate(Memprof_LuaAlloc, ...) in Lua_Init.
  *
- * The CRT call sizeof(MemprofHeader) is paid per allocation: the free path
- * must know the payload size, and neither MinGW's nor newlib's private
- * header is stable to read. The size stored is the payload, matching what
- * Lua reports in OSize, so the two counters are comparable.
+ * Known coverage gaps, deliberate and documented rather than hidden:
+ *   - vendored libraries that do not include mugen.h (libresample, minizip)
+ *     allocate through the bare CRT and are not counted;
+ *   - libpng IS counted, through its explicit allocator hooks;
+ *   - allocations the CRT makes internally (strdup and friends) never pass
+ *     through the wrappers.
  *
- * Thread safety: the counters use the GCC atomic builtins, which exist on
- * every compiler this tree builds with (MinGW gcc, Linux gcc, Vita newlib
- * gcc, Android clang). The peak update is a CAS loop so it never under-reports.
- *
- * Not counted: allocations made by the CRT itself (e.g. the block behind
- * strdup) are later freed by Memprof_Free with no header, and fall through
- * to the system free() without touching the counters, so nothing breaks
- * and nothing is miscounted.
+ * Thread safety: the live/peak/allocation counters are updated with GCC
+ * atomic builtins and read back with an atomic load, so a 32-bit build cannot
+ * observe a torn 64-bit value. The per-site table has its own spin lock.
  */
 #ifndef MUGEN_MEMPROF_H
 #define MUGEN_MEMPROF_H
+
+#include <stdint.h>
 
 void *Memprof_Malloc(size_t size);
 void *Memprof_Calloc(size_t count, size_t size);
@@ -41,34 +37,48 @@ void Memprof_Free(void *ptr);
 /* lua_Alloc compatible: nsize == 0 frees, osize is the previous payload. */
 void *Memprof_LuaAlloc(void *ud, void *ptr, size_t osize, size_t nsize);
 
+/*
+ * Full-width on every target: `unsigned long` is 32 bits on 64-bit Windows,
+ * which silently truncated large allocation counts.
+ */
 typedef struct MemprofStats {
-    size_t heap_live, heap_peak;
-    unsigned long heap_allocs, heap_frees, heap_fails;
-    size_t lua_live, lua_peak;
-    unsigned long lua_allocs, lua_frees, lua_fails;
+    uint64_t heap_live, heap_peak;
+    uint64_t heap_allocs, heap_frees, heap_fails;
+    uint64_t lua_live, lua_peak;
+    uint64_t lua_allocs, lua_frees, lua_fails;
+    /* Attribution health, so an incomplete ranking is never silent. */
+    uint64_t sites_tracked, sites_dropped, unattributed_bytes;
+    uint64_t tracking_overhead_bytes;
 } MemprofStats;
 
-/* Snapshots the two counters into `out` (atomically per counter, not as a
- * single consistent instant -- the engine keeps no global heap lock). */
+/* Snapshots the counters with atomic loads (each counter individually
+ * consistent; not a single instant, since the engine keeps no global lock). */
 void Memprof_Stats(MemprofStats *out);
 
-/* Writes one "mem:" line to the log for each heap plus a combined line. */
+/* Writes one "mem:" line to the log. */
 void Memprof_Log(const char *tag);
 
 /*
- * Per-callsite counters (engine heap only), collected when MUGEN_MEMPROF=1.
- * Every Memprof_* call captures its caller PC; the top MEMPROF_SITE_SLOTS
- * distinct PCs are ranked by live bytes when Memprof_Stop writes the dump.
- * Off by default: the added work is one extra atomic on the critical path.
+ * Writes the site dump if the reporting interval has elapsed, independent of
+ * whether the mem: line is enabled. Call once per frame; it does nothing
+ * between intervals and nothing at all when MUGEN_MEMPROF is unset.
+ */
+void Memprof_Tick(void);
+
+/*
+ * Per-call-site counters, collected when MUGEN_MEMPROF=1. Each engine
+ * allocation records its caller PC; the table grows as needed and reports
+ * how many sites it had to drop if it ever runs out. Off by default.
  */
 void Memprof_Start(void);
 
 /*
- * Symbolizeable dump: one line per site, "<live_bytes> <peak_bytes> <allocs>
- * <frees> 0x<pc> 0x<caller>". `path` is argv for the dump (default
- * "mugen.memprof"). Pass MUGEN_MEMPROF=1 and symbolize with
- * tools/memprof_symbolize.py.
+ * Writes the dump now (default path "mugen.memprof"). Also called by
+ * Memprof_Stop at exit; a clean exit is not required, because the dump is
+ * rewritten periodically during the run.
  */
+void Memprof_Dump(void);
+
 void Memprof_Stop(const char *path);
 
 #endif /* MUGEN_MEMPROF_H */

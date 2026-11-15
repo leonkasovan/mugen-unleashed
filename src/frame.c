@@ -8,6 +8,7 @@
 #include <stdio.h>
 
 #include "mugen.h"
+#include "memprof.h"
 
 /* ------------------------------------------------------------------ coordinates */
 
@@ -318,4 +319,8 @@ void Screen_EndFrame(void)
 #else
     Frame_UpdateSkip();
 #endif
+    /* Port addition: refresh the call-site memory dump at most once a second.
+     * Here rather than in Game_PrePresent so it does not depend on the draw
+     * path, debug mode or Verbose; it is a no-op unless MUGEN_MEMPROF=1. */
+    Memprof_Tick();
 }

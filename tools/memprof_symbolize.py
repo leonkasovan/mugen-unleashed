@@ -24,7 +24,8 @@ import sys
 
 
 def parse_dump(path):
-    """-> (base, [(live, peak, allocs, frees, pc), ...]) with pc as int."""
+    """-> (abi, base, [(live, peak, allocs, frees, pc), ...]) with pc as int."""
+    abi = "pe"
     base = 0
     rows = []
     with open(path, "r", encoding="utf-8", errors="replace") as fp:
@@ -39,6 +40,8 @@ def parse_dump(path):
                         base = int(parts[1], 16)
                     except ValueError:
                         pass
+                elif len(parts) >= 2 and parts[0] == "abi":
+                    abi = parts[1]
                 continue
             parts = line.split()
             if len(parts) < 5:
@@ -52,7 +55,7 @@ def parse_dump(path):
             except ValueError:
                 continue
             rows.append((live, peak, allocs, frees, pc))
-    return base, rows
+    return abi, base, rows
 
 
 def symbolize(pcs, binary, addr2line):
@@ -105,21 +108,26 @@ def main():
     if not os.path.exists(args.dump):
         sys.exit("no such dump: %s (was MUGEN_MEMPROF=1 set?)" % args.dump)
 
-    base, rows = parse_dump(args.dump)
+    abi, base, rows = parse_dump(args.dump)
     if not rows:
         sys.exit("no allocation sites in %s" % args.dump)
 
-    # The dump's PCs are absolute runtime addresses. A symbolizer needs the
-    # address as it appears in the image file, i.e. the PE link-time ImageBase
-    # plus the offset inside the image. Both are needed: MinGW links at
-    # 0x400000, but Windows relocates the image to `base` at run time.
-    image_base = args.image_base
-    pcs = [image_base + (pc - base) for _, _, _, _, pc in rows]
-    sym = symbolize(pcs, args.binary, args.addr2line)
+    # Runtime address -> the address addr2line wants.
+    #
+    # PE: the image is relocated per run, so the file address is
+    #     ImageBase + (pc - runtime_base).
+    # ELF: the dump's base is the load bias (0 for a non-PIE executable, the
+    #     bias for a PIE), so pc - base is already the link-time address and
+    #     adding a PE ImageBase would be wrong.
+    if abi == "elf":
+        to_file_addr = [pc - base for _, _, _, _, pc in rows]
+    else:
+        to_file_addr = [args.image_base + (pc - base) for _, _, _, _, pc in rows]
+    sym = symbolize(to_file_addr, args.binary, args.addr2line)
 
     total_live = sum(live for live, _, _, _, _ in rows)
     total_peak = sum(peak for _, peak, _, _, _ in rows)
-    print("sites: %d  base: 0x%x" % (len(rows), base))
+    print("sites: %d  abi: %s  base: 0x%x" % (len(rows), abi, base))
     print("live total: %.2f MB   peak total: %.2f MB\n"
           % (total_live / (1024.0 * 1024.0), total_peak / (1024.0 * 1024.0)))
 
@@ -127,7 +135,7 @@ def main():
     print("%-4s %10s %10s %8s %8s  %s" % ("#", "live KB", "peak KB", "allocs", "frees", "function"))
     print("-" * 96)
     for i, (live, peak, allocs, frees, pc) in enumerate(ranked[: args.top], 1):
-        file_addr = image_base + (pc - base)
+        file_addr = (pc - base) if abi == "elf" else (args.image_base + (pc - base))
         func, where = sym.get(file_addr, ("??", "??:0"))
         name = func.split("(")[0]
         if not name or name == "??":

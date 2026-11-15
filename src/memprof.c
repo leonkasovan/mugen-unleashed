@@ -1,19 +1,27 @@
 /*
  * Port addition: see memprof.h for what this counts and why.
+ *
  * MUGEN_MEMPROF_NO_WRAP makes this translation unit exempt from the malloc
- * macros in mugen.h, so the raw CRT calls below stay CRT calls.
+ * macros in mugen.h, so the raw CRT calls below stay CRT calls and growing
+ * the profiler's own tables cannot re-enter the profiler.
  */
 #define MUGEN_MEMPROF_NO_WRAP 1
 #include "mugen.h"
 #include "memprof.h"
 
+#include <time.h>
+
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
 /*
- * Side table of allocation sizes. Storing a header next to the payload cannot
- * distinguish engine allocations from pointers the CRT gave us before the
- * counters were installed (or pointers passed by accident). Raw malloc plus a
- * hash insert is slightly more expensive, but it is always safe.
+ * Side table of allocation sizes, keyed by pointer. A header next to the
+ * payload cannot distinguish engine allocations from pointers the CRT gave us
+ * before tracking was installed (or pointers passed by accident), so the
+ * metadata lives here instead.
  *
- * All counters are 64-bit so the arithmetic does not depend on size_t width.
+ * All counters are 64-bit: the arithmetic must not depend on size_t width.
  */
 typedef struct MemprofEntry {
     void *ptr;
@@ -30,12 +38,12 @@ static uint64_t memprof_heap_live, memprof_heap_peak;
 static uint64_t memprof_heap_allocs, memprof_heap_frees, memprof_heap_fails;
 static uint64_t memprof_lua_live, memprof_lua_peak;
 static uint64_t memprof_lua_allocs, memprof_lua_frees, memprof_lua_fails;
+static uint64_t memprof_tracking_live, memprof_tracking_peak;
 
 static void Memprof_Lock(void)
 {
     while (__sync_lock_test_and_set(&memprof_lock, 1)) {
-        /* Spin. The table is only held while inserting/removing and the
-         * critical section is a few instructions. */
+        /* Spin. The critical section is a few instructions. */
     }
 }
 
@@ -55,8 +63,7 @@ static size_t Memprof_Hash(const void *ptr)
 
 static MemprofEntry **Memprof_FindEntryLocked(void *ptr)
 {
-    size_t bucket = Memprof_Hash(ptr);
-    MemprofEntry **link = &memprof_buckets[bucket];
+    MemprofEntry **link = &memprof_buckets[Memprof_Hash(ptr)];
 
     while (*link != NULL) {
         if ((*link)->ptr == ptr) {
@@ -67,62 +74,69 @@ static MemprofEntry **Memprof_FindEntryLocked(void *ptr)
     return NULL;
 }
 
-static int Memprof_EntryAddLocked(void *ptr, size_t size, void *pc)
+/*
+ * Detach the entry for `ptr` but keep the node itself. realloc reuses it, so
+ * tracking a resized block never needs a metadata allocation and therefore
+ * cannot fail -- which is what keeps realloc's "original block stays valid
+ * and unchanged on failure" contract intact.
+ */
+static MemprofEntry *Memprof_EntryDetachLocked(void *ptr)
 {
-    size_t bucket = Memprof_Hash(ptr);
+    MemprofEntry **link = Memprof_FindEntryLocked(ptr);
+    MemprofEntry *entry;
+
+    if (link == NULL) {
+        return NULL;
+    }
+    entry = *link;
+    *link = entry->next;
+    entry->next = NULL;
+    return entry;
+}
+
+static void Memprof_EntryAttachLocked(MemprofEntry *entry)
+{
+    size_t bucket = Memprof_Hash(entry->ptr);
+
+    entry->next = memprof_buckets[bucket];
+    memprof_buckets[bucket] = entry;
+}
+
+static void Memprof_TrackingAdd(int64_t delta)
+{
+    uint64_t live = __sync_add_and_fetch(&memprof_tracking_live, (uint64_t)delta);
+
+    if (delta > 0) {
+        for (;;) {
+            uint64_t peak = __sync_add_and_fetch(&memprof_tracking_peak, 0);
+
+            if (live <= peak || __sync_bool_compare_and_swap(&memprof_tracking_peak, peak, live)) {
+                break;
+            }
+        }
+    }
+}
+
+/* Caller holds the lock. */
+static MemprofEntry *Memprof_EntryNewLocked(void *ptr, size_t size, void *pc)
+{
     MemprofEntry *entry = (MemprofEntry *)malloc(sizeof(MemprofEntry));
 
     if (entry == NULL) {
-        return 0;
+        return NULL;
     }
     entry->ptr = ptr;
     entry->size = size;
     entry->pc = pc;
-    entry->next = memprof_buckets[bucket];
-    memprof_buckets[bucket] = entry;
-    return 1;
+    Memprof_EntryAttachLocked(entry);
+    Memprof_TrackingAdd((int64_t)sizeof(*entry));
+    return entry;
 }
 
-static int Memprof_EntryRemoveLocked(void *ptr, size_t *size_out, void **pc_out)
+static void Memprof_EntryFreeLocked(MemprofEntry *entry)
 {
-    MemprofEntry **link = Memprof_FindEntryLocked(ptr);
-
-    if (link == NULL) {
-        return 0;
-    }
-    {
-        MemprofEntry *entry = *link;
-
-        *link = entry->next;
-        if (size_out != NULL) {
-            *size_out = entry->size;
-        }
-        if (pc_out != NULL) {
-            *pc_out = entry->pc;
-        }
-        free(entry);
-        return 1;
-    }
-}
-
-static int Memprof_EntryRemove(void *ptr, size_t *size_out, void **pc_out)
-{
-    int found = 0;
-
-    Memprof_Lock();
-    found = Memprof_EntryRemoveLocked(ptr, size_out, pc_out);
-    Memprof_Unlock();
-    return found;
-}
-
-static int Memprof_EntryAdd(void *ptr, size_t size, void *pc)
-{
-    int added;
-
-    Memprof_Lock();
-    added = Memprof_EntryAddLocked(ptr, size, pc);
-    Memprof_Unlock();
-    return added;
+    free(entry);
+    Memprof_TrackingAdd(-(int64_t)sizeof(*entry));
 }
 
 /* `delta` is signed; the cast wraps in two's complement, so a negative delta
@@ -145,42 +159,132 @@ static void Memprof_Add(uint64_t *live, uint64_t *peak, int64_t delta, int alloc
     }
 }
 
+/* ------------------------------------------------------------ call sites */
+
 /*
- * Call-site counters. Enabled with MUGEN_MEMPROF=1 (same shape as
- * MUGEN_PROF). Each engine allocation stores the caller PC in its entry; a
- * fixed-size table ranks live bytes by site. A symbolizable dump is rewritten
- * on every Memprof_Log call (about once a second), so the dump survives a kill.
+ * The engine's allocation site, captured from inside the Memprof_* entry
+ * points.
  *
- * The static table is read under the heap lock here, so no separate lock is
- * needed; Memprof_Lock is taken by every FindSiteLocked caller.
+ * On ELF this is GCC's level-0 return address, which the compiler documents as
+ * always safe. A NONZERO level asks for a frame the compiler may not have kept
+ * and can fault in an optimised PIE build; that is why the capture has to be
+ * expanded inline here rather than walked one frame up out of a helper.
+ *
+ * On Windows RtlCaptureStackBackTrace unwinds through the image's unwind data,
+ * so it is safe at any optimisation level. Its frame 0 is the function that
+ * called it, so from Memprof_* the frames are
+ *   0 memprof_win_site_pc, 1 Memprof_*, 2 the engine site.
  */
-#define MEMPROF_SITE_BUCKETS 256
+#if defined(_WIN32)
+#  define MEMPROF_SITE_PC() memprof_win_site_pc()
+__attribute__((noinline)) static void *memprof_win_site_pc(void)
+{
+    void *trace[2] = { 0, 0 };
+    USHORT n = RtlCaptureStackBackTrace(2, 2, trace, NULL);
+
+    return (n >= 1) ? trace[0] : NULL;
+}
+#else
+#  define MEMPROF_SITE_PC() __builtin_return_address(0)
+#endif
+
+/* ------------------------------------------------------- per-site table */
+
+/*
+ * Grows on demand and reports what it had to drop, so an incomplete ranking is
+ * never silent. Open addressing with linear probing; capacity is a power of
+ * two and starts small because most runs see well under a hundred sites.
+ */
 typedef struct MemprofSite {
     void *pc;
     uint64_t live, peak;
-    unsigned long allocs, frees;
+    uint64_t allocs, frees;
     int inuse;
 } MemprofSite;
-static MemprofSite memprof_sites[MEMPROF_SITE_BUCKETS];
+
+static MemprofSite *memprof_sites;
+static size_t memprof_site_capacity;
+static uint64_t memprof_sites_dropped;
+static uint64_t memprof_dropped_bytes;
 static int memprof_site_enabled;
 static const char *memprof_dump_path;
+static time_t memprof_last_dump;
+
+/* Caller holds the lock. */
+static void Memprof_SiteResetLocked(void)
+{
+    if (memprof_sites != NULL) {
+        free(memprof_sites);
+        memprof_sites = NULL;
+    }
+    memprof_site_capacity = 0;
+    memprof_sites_dropped = 0;
+    memprof_dropped_bytes = 0;
+}
+
+/* Caller holds the lock. Returns 0 when the table cannot grow. */
+static int Memprof_SiteGrowLocked(void)
+{
+    size_t old_capacity = memprof_site_capacity;
+    MemprofSite *old_sites = memprof_sites;
+    size_t new_capacity = old_capacity == 0 ? 256 : old_capacity * 2;
+    MemprofSite *fresh = (MemprofSite *)calloc(new_capacity, sizeof(MemprofSite));
+    size_t i;
+
+    if (fresh == NULL) {
+        return 0;
+    }
+    memprof_sites = fresh;
+    memprof_site_capacity = new_capacity;
+    for (i = 0; i < old_capacity; i++) {
+        MemprofSite *s = &old_sites[i];
+        size_t slot;
+
+        if (!s->inuse) {
+            continue;
+        }
+        slot = ((uintptr_t)s->pc >> 2) & (new_capacity - 1);
+        while (memprof_sites[slot].inuse) {
+            slot = (slot + 1) & (new_capacity - 1);
+        }
+        memprof_sites[slot] = *s;
+    }
+    free(old_sites);
+    return 1;
+}
 
 /*
- * `create` is 0 for a lookup from the free path: a site that was never
- * recorded when its block was allocated (for example because the table was
- * full) must not be invented on the way out, or its live count goes negative.
+ * `create` is 0 on the free path: a site that was never recorded on the way in
+ * must not be invented on the way out, or its live count would go negative.
  */
 static MemprofSite *Memprof_FindSiteLocked(void *pc, int create)
 {
-    size_t slot = ((uintptr_t)pc >> 2) % MEMPROF_SITE_BUCKETS;
-    int i;
+    size_t probes = 0;
+    size_t slot;
 
-    for (i = 0; i < MEMPROF_SITE_BUCKETS; i++) {
-        MemprofSite *s = &memprof_sites[(slot + i) % MEMPROF_SITE_BUCKETS];
-
-        if (s->inuse && s->pc == pc) {
-            return s;
+    if (memprof_site_capacity == 0) {
+        if (!create || !Memprof_SiteGrowLocked()) {
+            return NULL;
         }
+    } else if (create) {
+        size_t used = 0;
+        size_t i;
+
+        /* Stay under a 70% load factor. */
+        for (i = 0; i < memprof_site_capacity; i++) {
+            if (memprof_sites[i].inuse) {
+                used++;
+            }
+        }
+        if (used * 10 >= memprof_site_capacity * 7 && !Memprof_SiteGrowLocked()) {
+            return NULL;
+        }
+    }
+
+    slot = ((uintptr_t)pc >> 2) & (memprof_site_capacity - 1);
+    while (probes < memprof_site_capacity) {
+        MemprofSite *s = &memprof_sites[slot];
+
         if (!s->inuse) {
             if (!create) {
                 return NULL;
@@ -190,134 +294,39 @@ static MemprofSite *Memprof_FindSiteLocked(void *pc, int create)
             s->inuse = 1;
             return s;
         }
-    }
-    return NULL; /* table full: site not tracked */
-}
-
-/*
- * Load base the captured PCs are measured from, so a symbolizer can turn them
- * back into file addresses. Windows relocates a DYNAMICBASE image per run, so
- * the dump records this value; on ELF the addresses are already link-time.
- */
-static uintptr_t Memprof_ModuleBase(void)
-{
-#if defined(_WIN32)
-    HMODULE module = GetModuleHandleA(NULL);
-
-    return (uintptr_t)module;
-#else
-    return 0;
-#endif
-}
-
-/*
- * Writes the site table to a `path` file. Called by Memprof_Stop and (from
- * Memprof_Log) once a second when MUGEN_MEMPROF=1 is set, so the dump reflects
- * the steady-state mix rather than whatever the caller kills the process at.
- */
-static void Memprof_SiteDump(void)
-{
-    FILE *fp;
-    int i, n = 0;
-    MemprofSite snapshot[MEMPROF_SITE_BUCKETS];
-
-    if (!memprof_site_enabled || memprof_dump_path == NULL) {
-        return;
-    }
-    Memprof_Lock();
-    memcpy(snapshot, memprof_sites, sizeof(snapshot));
-    Memprof_Unlock();
-
-    fp = fopen(memprof_dump_path, "w");
-    if (fp == NULL) {
-        return;
-    }
-    fprintf(fp, "# mugen memory-by-site dump\n");
-    /*
-     * The captured PCs are absolute runtime addresses. Windows loads this
-     * image at a relocated base (DYNAMICBASE), so a symbolizer must subtract
-     * the base of *this* run; writing it here keeps the dump self-contained.
-     */
-    fprintf(fp, "# base 0x%llx\n", (unsigned long long)Memprof_ModuleBase());
-    fprintf(fp, "# format: live_bytes peak_bytes allocs frees 0x<pc>\n");
-    for (i = 0; i < MEMPROF_SITE_BUCKETS; i++) {
-        MemprofSite *s = &snapshot[i];
-
-        if (!s->inuse) {
-            continue;
+        if (s->pc == pc) {
+            return s;
         }
-        fprintf(fp, "%llu %llu %lu %lu 0x%llx\n",
-                (unsigned long long)s->live, (unsigned long long)s->peak,
-                s->allocs, s->frees,
-                (unsigned long long)(uintptr_t)s->pc);
-        n++;
+        slot = (slot + 1) & (memprof_site_capacity - 1);
+        probes++;
     }
-    fclose(fp);
-    (void)n;
+    return NULL; /* full even after growth */
 }
 
-/*
- * noinline: the frame index below is only correct while this stays a real
- * frame. -O2 would otherwise fold it into Memprof_Malloc and every site would
- * be attributed one level too deep.
- */
-#if defined(_WIN32)
-#include <windows.h>
-__attribute__((noinline)) static void *Memprof_CallerPC(void)
-{
-    /*
-     * RtlCaptureStackBackTrace counts its own caller as frame 0:
-     *   0 Memprof_CallerPC, 1 Memprof_Malloc, 2 the allocation site.
-     */
-    void *trace[3] = { 0, 0, 0 };
-    USHORT n = RtlCaptureStackBackTrace(2, 3, trace, NULL);
-
-    return (n >= 1) ? trace[0] : (void *)0;
-}
-#else
-__attribute__((noinline)) static void *Memprof_CallerPC(void)
-{
-    /* Level 0 is this function's return into Memprof_*; level 1 is the site. */
-    return __builtin_return_address(1);
-}
-#endif
-
-void Memprof_Start(void)
-{
-    const char *enable = getenv("MUGEN_MEMPROF");
-    const char *out = getenv("MUGEN_MEMPROF_OUT");
-
-    if (enable == NULL || enable[0] != '1' || memprof_site_enabled) {
-        return;
-    }
-    memprof_dump_path = out != NULL ? out : "mugen.memprof";
-    memprof_site_enabled = 1;
-    Log_Printf("memprof: call-site accounting on, dump -> %s\n", memprof_dump_path);
-}
-
-void Memprof_Stop(const char *path)
-{
-    if (!memprof_site_enabled) {
-        return;
-    }
-    if (path != NULL && path[0] != '\0') {
-        memprof_dump_path = path;
-    }
-    Memprof_SiteDump();
-    memprof_site_enabled = 0;
-    Log_Printf("memprof: dump written to %s\n", memprof_dump_path);
-}
-
-/* Add site accounting for pc. Acquires the memprof lock. */
-static void Memprof_SiteAddLocked(void *pc, int64_t delta_size, int allocating)
+static void Memprof_SiteAdd(void *pc, int64_t delta_size, int allocating)
 {
     MemprofSite *s;
 
-    if (!memprof_site_enabled || pc == NULL) {
+    if (!memprof_site_enabled) {
+        return;
+    }
+    Memprof_Lock();
+    if (pc == NULL) {
+        if (allocating && delta_size > 0) {
+            __sync_fetch_and_add(&memprof_dropped_bytes, (uint64_t)delta_size);
+        }
+        Memprof_Unlock();
         return;
     }
     s = Memprof_FindSiteLocked(pc, allocating);
     if (s == NULL) {
+        if (allocating) {
+            __sync_fetch_and_add(&memprof_sites_dropped, 1);
+            if (delta_size > 0) {
+                __sync_fetch_and_add(&memprof_dropped_bytes, (uint64_t)delta_size);
+            }
+        }
+        Memprof_Unlock();
         return;
     }
     if (delta_size >= 0) {
@@ -333,29 +342,202 @@ static void Memprof_SiteAddLocked(void *pc, int64_t delta_size, int allocating)
     } else {
         s->frees++;
     }
-}
-
-static void Memprof_SiteAdd(void *pc, int64_t delta_size, int allocating)
-{
-    if (!memprof_site_enabled || pc == NULL) {
-        return;
-    }
-    Memprof_Lock();
-    Memprof_SiteAddLocked(pc, delta_size, allocating);
     Memprof_Unlock();
 }
 
+/* -------------------------------------------------------------- reporting */
+
+/*
+ * Load base the captured PCs must be measured from.
+ *
+ * PE: the image is relocated per run (DYNAMICBASE), so the symbolizer needs the
+ * base of *this* run and adds the file's link-time ImageBase back.
+ * ELF: the bias is the difference between runtime and link-time addresses,
+ * which is 0 for a non-PIE executable and the load bias for a PIE. Subtracting
+ * it is therefore the correct conversion in both cases.
+ */
+static uintptr_t Memprof_ModuleBase(void)
+{
+#if defined(_WIN32)
+    return (uintptr_t)GetModuleHandleA(NULL);
+#elif defined(__PIE__) || defined(__PIC__)
+    /* GNU ld defines this; for a PIE its runtime value is the load bias. */
+    extern char __executable_start;
+
+    return (uintptr_t)(void *)&__executable_start;
+#else
+    return 0; /* non-PIE ELF: runtime addresses are link-time addresses */
+#endif
+}
+
+static const char *Memprof_AbiName(void)
+{
+#if defined(_WIN32)
+    return "pe";
+#else
+    return "elf";
+#endif
+}
+
+/* A full-width load: a plain read of a uint64_t can tear on a 32-bit build. */
+static uint64_t Memprof_AtomicRead(const uint64_t *value)
+{
+    return __sync_add_and_fetch((uint64_t *)value, 0);
+}
+
+/*
+ * Writes the site table through a temporary file and renames it into place, so
+ * a process that dies mid-write cannot destroy the last good snapshot.
+ */
+static void Memprof_SiteDumpTo(const char *path)
+{
+    char tmp_path[1024];
+    FILE *fp;
+    size_t i;
+    size_t capacity;
+    MemprofSite *snapshot;
+    uintptr_t base;
+
+    if (!memprof_site_enabled || path == NULL) {
+        return;
+    }
+    Memprof_Lock();
+    capacity = memprof_site_capacity;
+    snapshot = NULL;
+    if (capacity > 0) {
+        snapshot = (MemprofSite *)malloc(capacity * sizeof(*snapshot));
+        if (snapshot != NULL) {
+            memcpy(snapshot, memprof_sites, capacity * sizeof(*snapshot));
+        }
+    }
+    Memprof_Unlock();
+    if (snapshot == NULL) {
+        return;
+    }
+    if (strlen(path) + 5 >= sizeof(tmp_path)) {
+        free(snapshot);
+        return;
+    }
+
+    sprintf(tmp_path, "%s.tmp", path);
+    fp = fopen(tmp_path, "w");
+    if (fp == NULL) {
+        free(snapshot);
+        return;
+    }
+    base = Memprof_ModuleBase();
+    fprintf(fp, "# mugen memory-by-site dump\n");
+    fprintf(fp, "# abi %s\n", Memprof_AbiName());
+    fprintf(fp, "# base 0x%llx\n", (unsigned long long)base);
+    fprintf(fp, "# format: live_bytes peak_bytes allocs frees 0x<pc>\n");
+    for (i = 0; i < capacity; i++) {
+        MemprofSite *s = &snapshot[i];
+
+        if (!s->inuse) {
+            continue;
+        }
+        fprintf(fp, "%llu %llu %llu %llu 0x%llx\n",
+                (unsigned long long)s->live, (unsigned long long)s->peak,
+                (unsigned long long)s->allocs, (unsigned long long)s->frees,
+                (unsigned long long)(uintptr_t)s->pc);
+    }
+    fprintf(fp, "# dropped_sites %llu\n",
+            (unsigned long long)Memprof_AtomicRead(&memprof_sites_dropped));
+    fprintf(fp, "# unattributed_bytes %llu\n",
+            (unsigned long long)Memprof_AtomicRead(&memprof_dropped_bytes));
+    free(snapshot);
+
+    if (fflush(fp) != 0) {
+        fclose(fp);
+        remove(tmp_path);
+        return;
+    }
+    if (fclose(fp) != 0) {
+        remove(tmp_path);
+        return;
+    }
+    remove(path);
+    if (rename(tmp_path, path) != 0) {
+        remove(tmp_path);
+    }
+}
+
+void Memprof_Dump(void)
+{
+    if (memprof_dump_path != NULL) {
+        Memprof_SiteDumpTo(memprof_dump_path);
+    }
+}
+
+/*
+ * Called once per frame. Writes the dump at most once a second, independent of
+ * whether the mem: log line is enabled, so a run is never left without a
+ * snapshot merely because Verbose is off.
+ */
+void Memprof_Tick(void)
+{
+    time_t now;
+
+    if (!memprof_site_enabled) {
+        return;
+    }
+    now = time(NULL);
+    if (memprof_last_dump != 0 && now - memprof_last_dump < 1) {
+        return;
+    }
+    memprof_last_dump = now;
+    Memprof_Dump();
+}
+
+void Memprof_Start(void)
+{
+    const char *enable = getenv("MUGEN_MEMPROF");
+    const char *out = getenv("MUGEN_MEMPROF_OUT");
+
+    if (enable == NULL || enable[0] != '1' || memprof_site_enabled) {
+        return;
+    }
+    memprof_dump_path = (out != NULL && out[0] != '\0') ? out : "mugen.memprof";
+    Memprof_Lock();
+    Memprof_SiteResetLocked();
+    Memprof_Unlock();
+    memprof_last_dump = 0;
+    memprof_site_enabled = 1;
+    Log_Printf("memprof: call-site accounting on, dump -> %s (%s)\n",
+               memprof_dump_path, Memprof_AbiName());
+}
+
+void Memprof_Stop(const char *path)
+{
+    if (!memprof_site_enabled) {
+        return;
+    }
+    if (path != NULL && path[0] != '\0') {
+        memprof_dump_path = path;
+    }
+    Memprof_Dump();
+    memprof_site_enabled = 0;
+    Log_Printf("memprof: dump written to %s\n", memprof_dump_path);
+}
+
+/* ------------------------------------------------------------ allocator */
+
 void *Memprof_Malloc(size_t size)
 {
-    void *p = malloc(size);
-    void *pc = memprof_site_enabled ? Memprof_CallerPC() : NULL;
+    void *pc = MEMPROF_SITE_PC();
+    void *p;
+    int tracked;
 
+    p = malloc(size);
     if (p == NULL) {
         __sync_fetch_and_add(&memprof_heap_fails, 1);
         return NULL;
     }
-    if (!Memprof_EntryAdd(p, size, pc)) {
-        /* Cannot track it; refuse the allocation rather than miscount. */
+    Memprof_Lock();
+    tracked = Memprof_EntryNewLocked(p, size, pc) != NULL;
+    Memprof_Unlock();
+    if (!tracked) {
+        /* Cannot account for it; refuse rather than miscount. */
         free(p);
         __sync_fetch_and_add(&memprof_heap_fails, 1);
         return NULL;
@@ -368,9 +550,10 @@ void *Memprof_Malloc(size_t size)
 
 void *Memprof_Calloc(size_t count, size_t size)
 {
+    void *pc = MEMPROF_SITE_PC();
     size_t total;
     void *p;
-    void *pc;
+    int tracked;
 
     if (count != 0 && size > SIZE_MAX / count) {
         __sync_fetch_and_add(&memprof_heap_fails, 1);
@@ -382,8 +565,10 @@ void *Memprof_Calloc(size_t count, size_t size)
         __sync_fetch_and_add(&memprof_heap_fails, 1);
         return NULL;
     }
-    pc = memprof_site_enabled ? Memprof_CallerPC() : NULL;
-    if (!Memprof_EntryAdd(p, total, pc)) {
+    Memprof_Lock();
+    tracked = Memprof_EntryNewLocked(p, total, pc) != NULL;
+    Memprof_Unlock();
+    if (!tracked) {
         free(p);
         __sync_fetch_and_add(&memprof_heap_fails, 1);
         return NULL;
@@ -394,55 +579,73 @@ void *Memprof_Calloc(size_t count, size_t size)
     return p;
 }
 
+/*
+ * realloc keeps its contract: when it fails the original block is untouched
+ * AND still tracked. The existing metadata entry is detached and reused rather
+ * than reallocated, so tracking a resize can never fail for want of metadata,
+ * and the original block is never freed to work around a metadata shortage.
+ */
 void *Memprof_Realloc(void *ptr, size_t size)
 {
+    void *pc = MEMPROF_SITE_PC();
+    MemprofEntry *entry;
     size_t old_size;
+    void *old_pc;
     void *fresh;
-    void *pc;
-    void *old_pc = NULL;
 
     if (ptr == NULL) {
         return Memprof_Malloc(size);
     }
-    if (!Memprof_EntryRemove(ptr, &old_size, &old_pc)) {
-        /* Not ours: pass through without disturbing the counters. */
+
+    Memprof_Lock();
+    entry = Memprof_EntryDetachLocked(ptr);
+    Memprof_Unlock();
+    if (entry == NULL) {
+        /* Not ours: allocated before tracking, or by the CRT itself. */
         if (size == 0) {
             free(ptr);
             return NULL;
         }
         return realloc(ptr, size);
     }
-    /*
-     * The old entry is gone but the counters have not moved yet: every path
-     * below applies exactly one delta, so live never double-counts old_size.
-     */
+    old_size = entry->size;
+    old_pc = entry->pc;
+
     if (size == 0) {
         free(ptr);
+        Memprof_Lock();
+        Memprof_EntryFreeLocked(entry);
+        Memprof_Unlock();
         __sync_fetch_and_add(&memprof_heap_frees, 1);
         Memprof_Add(&memprof_heap_live, &memprof_heap_peak, -(int64_t)old_size, 0);
         Memprof_SiteAdd(old_pc, -(int64_t)old_size, 0);
         return NULL;
     }
-    pc = memprof_site_enabled ? Memprof_CallerPC() : NULL;
+
     fresh = realloc(ptr, size);
     if (fresh == NULL) {
-        /* The CRT block is unchanged and still ours; re-track it, unchanged. */
-        Memprof_EntryAdd(ptr, old_size, old_pc);
+        /* Original block is unchanged; put the same entry back, untouched. */
+        Memprof_Lock();
+        Memprof_EntryAttachLocked(entry);
+        Memprof_Unlock();
         __sync_fetch_and_add(&memprof_heap_fails, 1);
         return NULL;
     }
-    if (!Memprof_EntryAdd(fresh, size, pc)) {
-        free(fresh);
-        __sync_fetch_and_add(&memprof_heap_fails, 1);
-        return NULL;
-    }
+
+    Memprof_Lock();
+    entry->ptr = fresh;
+    entry->size = size;
+    entry->pc = pc;
+    Memprof_EntryAttachLocked(entry);
+    Memprof_Unlock();
+
     __sync_fetch_and_add(&memprof_heap_allocs, 1);
     Memprof_Add(&memprof_heap_live, &memprof_heap_peak,
                 (int64_t)size - (int64_t)old_size, size > old_size);
     /*
-     * Per site the move is two steps: the old site loses the whole old block,
-     * the new site gains the whole new one. The sum is the same delta the
-     * global counter applies, and no site keeps bytes that moved away from it.
+     * Per site a realloc moves the whole block: the old site gives up the old
+     * size, the new site takes the new one. The sum is the global delta, and no
+     * site is left holding bytes that moved away from it.
      */
     Memprof_SiteAdd(old_pc, -(int64_t)old_size, 0);
     Memprof_SiteAdd(pc, (int64_t)size, 1);
@@ -451,13 +654,22 @@ void *Memprof_Realloc(void *ptr, size_t size)
 
 void Memprof_Free(void *ptr)
 {
+    MemprofEntry *entry;
     size_t size;
-    void *pc = NULL;
+    void *pc;
 
     if (ptr == NULL) {
         return;
     }
-    if (!Memprof_EntryRemove(ptr, &size, &pc)) {
+    Memprof_Lock();
+    entry = Memprof_EntryDetachLocked(ptr);
+    if (entry != NULL) {
+        size = entry->size;
+        pc = entry->pc;
+        Memprof_EntryFreeLocked(entry);
+    }
+    Memprof_Unlock();
+    if (entry == NULL) {
         free(ptr);
         return;
     }
@@ -472,7 +684,6 @@ void *Memprof_LuaAlloc(void *ud, void *ptr, size_t osize, size_t nsize)
     void *result;
 
     (void)ud;
-    (void)osize;
 
     if (nsize == 0) {
         if (ptr != NULL) {
@@ -515,20 +726,38 @@ void *Memprof_LuaAlloc(void *ud, void *ptr, size_t osize, size_t nsize)
 
 void Memprof_Stats(MemprofStats *out)
 {
+    size_t tracked = 0;
+
     if (out == NULL) {
         return;
     }
     memset(out, 0, sizeof(*out));
-    out->heap_live = (size_t)memprof_heap_live;
-    out->heap_peak = (size_t)memprof_heap_peak;
-    out->heap_allocs = (unsigned long)memprof_heap_allocs;
-    out->heap_frees = (unsigned long)memprof_heap_frees;
-    out->heap_fails = (unsigned long)memprof_heap_fails;
-    out->lua_live = (size_t)memprof_lua_live;
-    out->lua_peak = (size_t)memprof_lua_peak;
-    out->lua_allocs = (unsigned long)memprof_lua_allocs;
-    out->lua_frees = (unsigned long)memprof_lua_frees;
-    out->lua_fails = (unsigned long)memprof_lua_fails;
+    out->heap_live = Memprof_AtomicRead(&memprof_heap_live);
+    out->heap_peak = Memprof_AtomicRead(&memprof_heap_peak);
+    out->heap_allocs = Memprof_AtomicRead(&memprof_heap_allocs);
+    out->heap_frees = Memprof_AtomicRead(&memprof_heap_frees);
+    out->heap_fails = Memprof_AtomicRead(&memprof_heap_fails);
+    out->lua_live = Memprof_AtomicRead(&memprof_lua_live);
+    out->lua_peak = Memprof_AtomicRead(&memprof_lua_peak);
+    out->lua_allocs = Memprof_AtomicRead(&memprof_lua_allocs);
+    out->lua_frees = Memprof_AtomicRead(&memprof_lua_frees);
+    out->lua_fails = Memprof_AtomicRead(&memprof_lua_fails);
+    out->sites_dropped = Memprof_AtomicRead(&memprof_sites_dropped);
+    out->unattributed_bytes = Memprof_AtomicRead(&memprof_dropped_bytes);
+    out->tracking_overhead_bytes = Memprof_AtomicRead(&memprof_tracking_live);
+
+    Memprof_Lock();
+    if (memprof_sites != NULL) {
+        size_t i;
+
+        for (i = 0; i < memprof_site_capacity; i++) {
+            if (memprof_sites[i].inuse) {
+                tracked++;
+            }
+        }
+    }
+    Memprof_Unlock();
+    out->sites_tracked = tracked;
 }
 
 void Memprof_Log(const char *tag)
@@ -536,12 +765,21 @@ void Memprof_Log(const char *tag)
     MemprofStats s;
 
     Memprof_Stats(&s);
-    Log_Printf("mem: %s heap_live=%lu heap_peak=%lu heap_allocs=%lu heap_frees=%lu heap_fails=%lu lua_live=%lu lua_peak=%lu lua_allocs=%lu lua_frees=%lu lua_fails=%lu\n",
+    /*
+     * %llu on uint64_t: `unsigned long` is 32 bits on 64-bit Windows, which
+     * truncated large totals in the previous version of this line.
+     */
+    Log_Printf("mem: %s heap_live=%llu heap_peak=%llu heap_allocs=%llu heap_frees=%llu heap_fails=%llu "
+               "lua_live=%llu lua_peak=%llu lua_allocs=%llu lua_frees=%llu lua_fails=%llu "
+               "sites=%llu sites_dropped=%llu unattributed=%llu tracking=%llu\n",
                tag != NULL ? tag : "",
-               (unsigned long)s.heap_live, (unsigned long)s.heap_peak,
-               s.heap_allocs, s.heap_frees, s.heap_fails,
-               (unsigned long)s.lua_live, (unsigned long)s.lua_peak,
-               s.lua_allocs, s.lua_frees, s.lua_fails);
-    /* Refresh the site dump about once a second. */
-    Memprof_SiteDump();
+               (unsigned long long)s.heap_live, (unsigned long long)s.heap_peak,
+               (unsigned long long)s.heap_allocs, (unsigned long long)s.heap_frees,
+               (unsigned long long)s.heap_fails,
+               (unsigned long long)s.lua_live, (unsigned long long)s.lua_peak,
+               (unsigned long long)s.lua_allocs, (unsigned long long)s.lua_frees,
+               (unsigned long long)s.lua_fails,
+               (unsigned long long)s.sites_tracked, (unsigned long long)s.sites_dropped,
+               (unsigned long long)s.unattributed_bytes,
+               (unsigned long long)s.tracking_overhead_bytes);
 }
