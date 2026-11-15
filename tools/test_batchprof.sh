@@ -39,7 +39,7 @@ esac
 # linked, so no engine object and no SDL library is needed -- the two SDL
 # functions it calls are supplied by the test itself.
 # shellcheck disable=SC2086
-"$CC" $ARCHFLAGS -DSDL_MAIN_HANDLED -std=gnu11 -O1 -g -UNDEBUG -Wall -Wextra \
+"$CC" $ARCHFLAGS -DMUGEN_MEMPROF_NO_WRAP=1 -DSDL_MAIN_HANDLED -std=gnu11 -O1 -g -UNDEBUG -Wall -Wextra \
     -Wno-unused-parameter -DMUGEN_DEBUG \
     -Isrc -Ithird_party/glad-2.1 -Ithird_party/minizip-0.15 \
     -Ithird_party/lua-5.1.4/src -Ithird_party/libpng-1.2.38 \
