@@ -871,6 +871,12 @@ $(CONFIG_STAMP): FORCE
 	$(Q)printf '%s\n' '$(CONFIG_ID)' > $@.tmp
 	$(Q)cmp -s $@.tmp $@ 2>/dev/null && rm -f $@.tmp || mv -f $@.tmp $@
 
+# Keep a checked-in header for the CMake ports as well as the Make build.
+res/lua_script_zip.h: res/lua_script.zip tools/embed_lua_scripts.py
+	$(Q)$(PYTHON3) tools/embed_lua_scripts.py
+
+$(OBJ_DIR)/src/luascripts.o: res/lua_script_zip.h
+
 $(OBJ_DIR)/src/%.o: $(SRC_DIR)/%.c $(CONFIG_STAMP)
 	@echo "  CC      $<"
 	$(Q)mkdir -p $(dir $@)

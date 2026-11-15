@@ -681,9 +681,19 @@ Snd *Snd_Load(const char *path)
     }
 }
 
-/* 0x0046F120: decodes the WAV data of s with the configured resample method (NULL for unknown methods). */
+/* 0x0046F120: configured WAV decoding (NULL for unknown resampling methods).
+ * Port addition: Ogg entries dispatch to the mixer-backed Ogg decoder first. */
 struct Mix_Chunk *Snd_DecodeWav(Stream *s, int *status)
 {
+    unsigned char signature[4];
+    long start = Stream_Tell(s);
+    size_t got = Stream_Read(signature, 1, sizeof(signature), s);
+
+    /* Port addition: sndcli banks can mix original WAV and Ogg entries. */
+    Stream_Seek(s, start, SEEK_SET);
+    if (got == sizeof(signature) && memcmp(signature, "OggS", 4) == 0) {
+        return Snd_DecodeOggResampled(s, status);
+    }
     if (g_sndResampleMethod == SND_RESAMPLE_SDL) {
         return Snd_DecodeWavSDL(s, status);
     }
@@ -691,6 +701,58 @@ struct Mix_Chunk *Snd_DecodeWav(Stream *s, int *status)
         return Snd_DecodeWavResampled(s, status);
     }
     return NULL;
+}
+
+/*
+ * Port addition: decode an Ogg/Vorbis SND entry to the active mixer format.
+ * SDL2_mixer supplies the existing Vorbis decoder and rate/channel conversion;
+ * no additional engine dependency is needed. Like Snd_DecodeWavResampled,
+ * return a QuickLoad chunk backed by engine-owned PCM, released by Snd_Free.
+ * Copying the decoder's output keeps PCM visible to the engine memory profiler
+ * rather than appearing to save memory by moving it into an untracked library.
+ * The input stream remains owned by the caller and its position is restored.
+ */
+struct Mix_Chunk *Snd_DecodeOggResampled(Stream *s, int *status)
+{
+    long start = Stream_Tell(s);
+    SDL_RWops *rw;
+    Mix_Chunk *decoded, *chunk;
+    unsigned char *pcm;
+    Uint32 size;
+
+    if (status != NULL) *status = WAV_ERR_UNKNOWN;
+    rw = Stream_ToSDLRWops(s);
+    if (rw == NULL) {
+        Stream_Seek(s, start, SEEK_SET);
+        return NULL;
+    }
+    /* Use native RWops for Vorbis seeking, borrowing the file/memory buffer. */
+    /* Own the wrapper explicitly: some SDL2_mixer versions do not close it
+     * on early format-detection errors, even with freesrc requested. */
+    decoded = Mix_LoadWAV_RW(rw, 0);
+    SDL_RWclose(rw);
+    Stream_Seek(s, start, SEEK_SET);
+    if (decoded == NULL) {
+        MatchLog_Printf(3, "Error decoding Ogg sound: %s\n", Mix_GetError());
+        return NULL;
+    }
+    size = decoded->alen;
+    pcm = malloc(size != 0 ? size : 1);
+    if (pcm == NULL) {
+        g_outOfMemory = 1;
+        Mix_FreeChunk(decoded);
+        if (status != NULL) *status = WAV_ERR_NOMEM;
+        return NULL;
+    }
+    if (size != 0) memcpy(pcm, decoded->abuf, size);
+    Mix_FreeChunk(decoded);
+    chunk = Mix_QuickLoad_RAW(pcm, size);
+    if (chunk == NULL) {
+        free(pcm);
+        return NULL;
+    }
+    if (status != NULL) *status = WAV_OK;
+    return chunk;
 }
 
 /*
@@ -751,8 +813,14 @@ struct Mix_Chunk *Snd_DecodeWavResampled(Stream *s, int *status)
         wav_reader_close(reader);
         return NULL;
     }
-    /* Not checked for NULL in the original either. */
+    /* Fix: resampler allocation/format failure must unwind the reader and PCM. */
     session = g_sndResampler->begin(g_sndResampler, &info);
+    if (session == NULL) {
+        wav_reader_close(reader);
+        free(out_buf);
+        if (status != NULL) *status = WAV_ERR_UNKNOWN;
+        return NULL;
+    }
     in_buf = calloc(session->vtbl->in_block(session), in_frame);
     if (in_buf == NULL) {
         g_outOfMemory = 1;
@@ -791,11 +859,17 @@ struct Mix_Chunk *Snd_DecodeWavResampled(Stream *s, int *status)
     free(in_buf);
     Stream_Seek(s, start, SEEK_SET);
     size = out_frame * written;
-    data = realloc(out_buf, size);
+    /* Fix: neither realloc failure nor chunk failure transfers PCM ownership. */
+    data = realloc(out_buf, size != 0 ? size : 1);
     if (data == NULL) {
+        free(out_buf);
         return NULL;
     }
-    return Mix_QuickLoad_RAW(data, size);
+    {
+        struct Mix_Chunk *chunk = Mix_QuickLoad_RAW(data, size);
+        if (chunk == NULL) free(data);
+        return chunk;
+    }
 }
 
 /*

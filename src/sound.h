@@ -2,6 +2,8 @@
 #define MUGEN_SOUND_H
 
 int Sound_QueryMixerSpec(int *frequency, Uint16 *format, int *channels, int *chunksize);
+/* Port addition: Ogg/Vorbis entries in mixed-format sound banks. */
+struct Mix_Chunk *Snd_DecodeOggResampled(Stream *s, int *status);
 
 /*
  * Types of the sound effects module (sound.c) and of the code it uses from

@@ -520,7 +520,7 @@ int Bgm_StreamSetupResampler(const AudioFormat *in, BgmStream *s, int fallback)
  * 0x0049BD30: opens info's file in the current stream with the plugin of
  * its extension (the stream is closed first; the plugin instance is kept
  * when the plugin is the same). Bad loop points are reset in info (-1).
- * Returns 0 when the instance or the file cannot be opened, else 1 (also
+ * Returns 0 when the instance, file or resampler cannot be opened, else 1 (also
  * when no plugin plays the file or the plugin cannot open it, logged).
  */
 int Bgm_StreamOpen(const BgmInfo *info_in)
@@ -530,6 +530,7 @@ int Bgm_StreamOpen(const BgmInfo *info_in)
     const BgmSubsystem *plugin;
     BgmPluginIo io;
     BgmInfo copy;
+    BgmOpenResult result;
     Stream *file;
     int err;
 
@@ -573,7 +574,15 @@ int Bgm_StreamOpen(const BgmInfo *info_in)
     io.read = (BgmIoReadFn)Stream_Read;
     io.seek = (BgmIoSeekFn)Stream_Seek;
     io.tell = (BgmIoTellFn)Stream_Tell;
-    err = plugin->open(s->instance, &io, &copy, (BgmOpenResult *)&s->mode);
+    /* Port fix: on 64-bit, alignment puts format 12 bytes after mode in
+     * BgmStream, versus 8 in BgmOpenResult. Receive the plugin result in
+     * its own object instead of assuming the original 32-bit layout. */
+    memset(&result, 0, sizeof(result));
+    result.mode = s->mode;
+    result.format = s->format;
+    err = plugin->open(s->instance, &io, &copy, &result);
+    s->mode = result.mode;
+    s->format = result.format;
     if (err != 0) {
         MatchLog_Printf(3, "Error loading file %s: %s\n", info->path, s->plugin->strerror(s->instance, err));
         Stream_Close(file);
@@ -590,7 +599,12 @@ int Bgm_StreamOpen(const BgmInfo *info_in)
          * pointer is no less arbitrary there, but on 64-bit (LP64/LLP64)
          * a pointer-to-int cast is implementation-defined, so say what is
          * meant: the low 32 bits. Only read for unknown formats. */
-        Bgm_StreamSetupResampler(&s->format, s, (int)(intptr_t)file);
+        /* Fix: a failed setup must not leave a playable decoded stream. */
+        if (!Bgm_StreamSetupResampler(&s->format, s, (int)(intptr_t)file)) {
+            MatchLog_Printf(3, "Error preparing BGM resampler for %s!\n", info->path);
+            Bgm_StreamClose(s);
+            return 0;
+        }
     }
     return 1;
 }
@@ -758,7 +772,13 @@ unsigned int Bgm_StreamRead(void *dst, int *status)
                 AudioFormat format;
                 s->plugin->get_format(s->instance, &format);
                 /* Same truncated-pointer fallback as above. */
-                Bgm_StreamSetupResampler(&format, s, (int)(intptr_t)&format);
+                /* Fix: format changes can also fail to create a resampler. */
+                if (!Bgm_StreamSetupResampler(&format, s, (int)(intptr_t)&format)) {
+                    MatchLog_Printf(3, "Error preparing BGM resampler after format change!\n");
+                    *status = 0;
+                    Bgm_StreamClose(s);
+                    return 0;
+                }
             } else {
                 ended = 1;
             }
