@@ -1222,33 +1222,36 @@ live GXM context.
 | Calibration | Desktop legacy-shader calibration is bypassed; pixel offsets are zero and index sampling is Standard |
 | Shader errors | Explicit shader/program classification and info logs in `mugen.log`; interface validated after linking |
 
-### 3D stage render scale (port addition, PS Vita only)
+### 3D stage render scale (PS Vita performance regression)
 
-The stage's glTF model is the resolution-sensitive part of the OpenGL frame:
-the geometry is cheap, but its fragments at 960x544 dominate the present path.
-The port therefore draws the stage model into a target at
-`[Video] Stage3DRenderScale` percent of the current frame (default **50** on the
-Vita) and upscales it over the frame. Characters, effects and the HUD are still
-drawn at full size, so only the 3D background loses resolution; menus and non-3D
-stages never allocate the target.
+**Vita default: direct rendering, `[Video] Stage3DRenderScale = 100`.**
+The packed default in `port/psvita/mugen.psvita.cfg` and the fallback
+in `src/config.c` both use 100. The normal Vita build forces 100 even
+when another config asks for a smaller value; it logs the override once.
+Characters, effects, HUD and the 3D model all render to the normal game
+target, preserving the measured pre-experiment behavior.
 
-`Stage3DRenderScale = 100` restores the original full-size model draw. Values
-outside 25..100 are clamped. The target has its own depth buffer, is cleared
-transparent and composited through `Sprite_DrawGL`, and is freed when the stage
-unloads. The stage PalFX is applied when the model is drawn and suppressed on the
-composite (`Gl_SetPalFxSuppressed`) so it is not applied twice.
+A release-build A/B on the same Esaka stage and Vita (2026-11-15,
+`scale100-mugen.log` vs `scale50-mugen.log`) showed **24.85 drawn fps
+at 100% versus 3.75 at 50%**. At 50%, the added FBO clear took roughly
+5–6 ms of CPU wall time and the full-size stage-texture composite roughly
+6–7 ms per frame, with intermittent **~1,024 ms** stalls measured inside
+the composite. The `perf` present span also reached ~206 ms per frame,
+although the separately timed `vglSwapBuffers` call remained ~0.1 ms;
+the remaining present-time blocking call has not been localized. These
+measurements establish that this *offscreen/composite implementation*
+regresses on Vita, not that rendering fewer 3D fragments can never help.
 
-A model node with a `trans` extra of `ADD`, `SUB` or `MUL` blends against the
-colour behind it, which in an offscreen target is transparent black rather than
-the stage. `Model_HasDestinationBlend` detects those nodes and that layer is
-drawn directly at full size instead, so such a stage keeps the original
-appearance at the original cost. A model target that cannot be bound is
-dropped for the rest of the stage and the model draws directly. Restoration
-of the original framebuffer is retried once. If both attempts fail, rendering
-stops with a fatal error rather than substituting the default framebuffer for
-the engine's screen texture or freeing an active model target. On stage unload,
-an active model target is freed only after a verified detach; if that detach
-fails, the Vita fatal-error path exits without GL teardown.
+The 25–99% offscreen path is kept **for explicit investigation only**:
+configure CMake with
+`-DMUGEN_VITA_STAGE3D_OFFSCREEN_EXPERIMENTAL=ON` and set
+`Stage3DRenderScale = 50` in the Vita configuration. This is not a
+supported performance setting. Without that compile-time opt-in, smaller
+values are ignored and direct rendering is used. Offscreen targets retain
+their depth buffer, transparent clear, PalFX-neutral composite, and
+destination-blend fallback (ADD/SUB/MUL nodes draw directly). Failures
+to restore the original render target twice are fatal rather than
+continuing with inconsistent framebuffer state.
 
 In a `--profile` build the log also reports, per second,
 `model: layer0 calls=… tris=… layer1 calls=… tris=…`, which says which of the
