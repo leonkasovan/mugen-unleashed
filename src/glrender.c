@@ -1611,6 +1611,9 @@ void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
         SpriteSet *target;
         int target_sprite;
         DrawParams dp;
+#ifdef MUGEN_VITA_GL
+        Uint64 vita_start;
+#endif
         if (spr == NULL || spr->format != SPRITE_FORMAT_TEXTURE) {
             return;
         }
@@ -1620,7 +1623,14 @@ void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
         }
         target = g_renderTarget;
         target_sprite = g_renderTargetSprite;
+#ifdef MUGEN_VITA_GL
+        vita_start = SDL_GetPerformanceCounter();
+#endif
         Gfx_SetRenderTarget(NULL, 0);
+#ifdef MUGEN_VITA_GL
+        Perf_VitaSpan(PERF_VITA_PRESENT_BIND, vita_start);
+        vita_start = SDL_GetPerformanceCounter();
+#endif
         glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
         glClearDepth(1.0);
         glDisable(GL_SCISSOR_TEST);
@@ -1633,7 +1643,14 @@ void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
         dp.scale_x = (float)((double)w / spr->w);
         dp.scale_y = (float)((double)h / spr->h);
         Sprite_DrawGL(set, sprite, &dp);
+#ifdef MUGEN_VITA_GL
+        Perf_VitaSpan(PERF_VITA_PRESENT_BLIT, vita_start);
+        vita_start = SDL_GetPerformanceCounter();
+#endif
         Gfx_SetRenderTarget(target, target_sprite);
+#ifdef MUGEN_VITA_GL
+        Perf_VitaSpan(PERF_VITA_PRESENT_RESTORE, vita_start);
+#endif
     }
     if (g_gfxPrePresent != NULL) {
         SpriteSet *target = g_renderTarget;
