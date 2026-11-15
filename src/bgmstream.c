@@ -530,6 +530,7 @@ int Bgm_StreamOpen(const BgmInfo *info_in)
     const BgmSubsystem *plugin;
     BgmPluginIo io;
     BgmInfo copy;
+    BgmOpenResult result;
     Stream *file;
     int err;
 
@@ -573,7 +574,15 @@ int Bgm_StreamOpen(const BgmInfo *info_in)
     io.read = (BgmIoReadFn)Stream_Read;
     io.seek = (BgmIoSeekFn)Stream_Seek;
     io.tell = (BgmIoTellFn)Stream_Tell;
-    err = plugin->open(s->instance, &io, &copy, (BgmOpenResult *)&s->mode);
+    /* Port fix: on 64-bit, alignment puts format 12 bytes after mode in
+     * BgmStream, versus 8 in BgmOpenResult. Receive the plugin result in
+     * its own object instead of assuming the original 32-bit layout. */
+    memset(&result, 0, sizeof(result));
+    result.mode = s->mode;
+    result.format = s->format;
+    err = plugin->open(s->instance, &io, &copy, &result);
+    s->mode = result.mode;
+    s->format = result.format;
     if (err != 0) {
         MatchLog_Printf(3, "Error loading file %s: %s\n", info->path, s->plugin->strerror(s->instance, err));
         Stream_Close(file);

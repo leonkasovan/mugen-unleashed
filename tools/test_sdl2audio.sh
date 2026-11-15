@@ -1,6 +1,6 @@
 #!/bin/sh
 # Builds and runs tools/test_sdl2audio.c against the engine's real bgmthread.c
-# and sdl2audio.c.
+# and sdl2audio.c, with memprof.c providing their tracked heap allocations.
 #
 # These paths cannot be reached by the -nosound runs used elsewhere: the custom
 # music hook is never installed and the mixer is never opened. The test drives
@@ -40,7 +40,7 @@ $CC $ARCHFLAGS ${CFLAGS:-} -std=gnu11 -O1 -g -Wall \
     -Isrc -Ithird_party/glad-2.1 -Ithird_party/minizip-0.15 \
     -Ithird_party/lua-5.1.4/src -Ithird_party/libpng-1.2.38 \
     -Ithird_party/libresample/include $PLAT_INC $SDL_CFLAGS \
-    tools/test_sdl2audio.c src/bgmthread.c src/sdl2audio.c src/stream.c third_party/minizip-0.15/unzip.c $PLATFORM_SOURCE \
+    tools/test_sdl2audio.c src/bgmthread.c src/sdl2audio.c src/stream.c src/memprof.c third_party/minizip-0.15/unzip.c $PLATFORM_SOURCE \
     -o "$OUT/test_sdl2audio" ${LDFLAGS:-} $SDL_LIBS $SYSTEM_LIBS -lm
 
 echo "built $OUT/test_sdl2audio"
