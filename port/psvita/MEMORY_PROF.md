@@ -40,10 +40,11 @@ mem: heap/lua heap_live=... heap_peak=... heap_allocs=... heap_frees=...
      sites=... sites_dropped=... unattributed=... tracking=...
 ```
 
-`tracking=` is the profiler's own metadata cost, reported so it is not mistaken
-for engine memory. `sites_dropped`/`unattributed` are non-zero only if the
-per-site table could not record a site — they make an incomplete ranking
-visible instead of silent.
+`tracking=` counts live, dynamically allocated pointer records and site-table
+storage (not transient snapshot buffers or the static table of buckets).
+`sites_dropped` counts attribution attempts that could not be recorded;
+`unattributed` counts **currently live** payload bytes without a recorded site.
+Neither counter silently wraps when an untracked allocation is freed.
 
 That line needs `[Debug] Verbose = 1` (or `ShowFPS = 1`), the same gate as
 `perf:`.
@@ -52,8 +53,9 @@ That line needs `[Debug] Verbose = 1` (or `ShowFPS = 1`), the same gate as
 records its caller PC; the site table accumulates live/peak bytes, allocs and
 frees per site and grows as needed. The dump is refreshed by `Memprof_Tick`
 once per second from the frame loop — independent of `Verbose` — and written to
-a temporary file that is renamed over `mugen.memprof`, so a kill mid-write
-cannot destroy the last good snapshot. `Memprof_Stop` writes it once more on a
+a temporary file. POSIX `rename` and Windows `MoveFileExA` replace the previous
+snapshot without an explicit deletion, so a failure leaves the last good
+snapshot intact. `Memprof_Stop` writes it once more on a
 clean exit.
 
 The PCs are runtime addresses, so the header says which address space they are
@@ -91,8 +93,9 @@ For a 64-bit binary also pass `--image-base 0x140000000`; the MinGW x86 PE
 links at `0x400000`, which is the default.
 
 Without `MUGEN_MEMPROF=1` the attribution is off and only the aggregate is
-collected. The switch costs one extra atomic per allocation and one frame of
-unwind per site, which is why it is not on by default.
+collected. **No stack unwind occurs when it is off**. When on, a call-site PC
+is captured for each engine allocation; the Windows stack walk has real cost,
+which is why this remains a profiling mode rather than a default.
 
 `[Debug] Verbose = 1` in the game's `mugen.cfg` controls only the `mem:` **log
 line**. The dump is independent of it: `Memprof_Tick` refreshes the file once a
@@ -114,9 +117,11 @@ current snapshot. `Memprof_Stop` writes one more on a clean exit.
 | libresample, minizip | call the CRT directly and do not include `mugen.h` |
 | CRT-internal allocations (`strdup` and friends) | never pass through the wrappers |
 
-So the reported total is a **lower bound** on process memory. On the measured
-run the heap accounted for 248.8 MB of a 316.3 MB working set; the remaining
-~67 MB is the graphics and audio stacks above.
+These tracked payload figures are not directly comparable to a working-set
+total, which measures resident physical pages and includes shared mappings,
+code, thread stacks and more. The historical Windows run measured 248.8 MB of
+tracked payload against a 316.3 MB peak working set, but **the difference is
+not an allocation category or measured graphics/audio usage**.
 
 ## 3. Measurement
 
@@ -250,10 +255,10 @@ The attribution was wrong three times before the numbers above were trustworthy;
 all three are fixed in the committed code and are recorded here because each one
 produced a plausible-looking but false ranking.
 
-1. **Inlining shifted every attribution by one frame.** `Memprof_CallerPC` was
-   folded into `Memprof_Malloc` at `-O2`, so the captured PC belonged to the
-   wrapper rather than the call site. It is `noinline` now, and the frame index
-   depends on that.
+1. **Inlining shifted every attribution by one frame.** The original helper
+   was folded into `Memprof_Malloc` at `-O2`, moving the captured frame. On ELF
+   the current code now captures level 0 **inside** each public allocator; on
+   Windows the `noinline` unwinder helper keeps the intended frame index.
 2. **`Memprof_Realloc` subtracted `old_size` twice** — once directly and again
    inside `size - old_size` — so live counts drifted and sites went negative.
    Each path now applies exactly one delta.
@@ -283,7 +288,19 @@ All are fixed, and each was reproduced before and after:
 | 7 | the report implied process-memory accounting | retitled and rescoped (see the note at the top and section 2) | — |
 
 The site table's growth and the metadata overhead are now visible rather than
-assumed: `tracking=` is the profiler's own cost.
+assumed. The 2026-11-15 follow-up additionally fixed six edge cases:
+Windows stack unwinding is opt-in; failed site growth cannot invalidate an
+existing entry; each block records whether attribution succeeded; missed
+live bytes are decremented on free/realloc; site lookups no longer scan the
+whole capacity on each allocation; both site-table storage and pointer records
+contribute to `tracking=`. Windows snapshots use `MoveFileExA` rather than
+deleting the previous file before rename, and Linux detects ELF executable
+type instead of guessing PIE from `-fPIC`/`-fPIE` compiler flags.
+
+Host regression source: `tools/test_memprof_host.c`, executable by
+`sh tools/test_memprof_host.sh` on Linux with GCC and binutils (no SDL needed).
+This isolates the real profiler implementation with an engine-header stub;
+full-game Windows and Vita runtime qualification are separate checks.
 
 ## 8. Complete process memory is a different tool
 
@@ -327,6 +344,8 @@ If this is extended, report the categories separately instead of summing them:
 - `d131cdf` — libpng callback types for the 64-bit kit (`png_alloc_size_t`).
 - `dac7217` — call-site attribution, `MUGEN_MEMPROF`, the dump, and
   `tools/memprof_symbolize.py`.
-- follow-up — the seven review fixes above: safe call-site capture, realloc
-  contract, ELF symbolization, growing site table, 64-bit stats, crash-safe
-  dumps, and the scope correction in this file.
+- `219fa99`, `1316e3d` — original review fixes and tracked-heap scope.
+- follow-up on `sdl2` — correct per-entry attribution under allocation failure,
+  opt-in Windows stack capture, atomic Windows snapshot replacement, efficient
+  site lookups, site-table metadata tracking, ELF executable-type detection,
+  and a standalone Linux regression harness.
