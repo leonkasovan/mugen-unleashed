@@ -373,8 +373,10 @@ static void test_targets_capture(void)
  * target must be detached before it is released.
  *
  * The engine's own helper is static, so this reproduces the sequence the public
- * API guarantees: bind the offscreen target, fail the restore, then confirm the
- * state that made the free unsafe is what a detach has to clear.
+ * API guarantees: bind the offscreen target, fail both restore attempts and
+ * the fallback bind, then confirm that GL still owns the live attachment.
+ * This mock test verifies the failure precondition; the stage helper's
+ * Error_Fatal policy must also be checked by integration testing.
  */
 static void test_failed_restore_detaches(void)
 {
@@ -399,12 +401,24 @@ static void test_failed_restore_detaches(void)
     assert(g_renderTarget == &set && g_targetWidth == 4 && g_targetHeight == 2);
     assert(g_glBoundFramebuffer != 0 && color_attachment == 85);
 
-    /* Detaching is the fix: after it nothing points at the target. */
+    /* A second restore attempt also fails. Clearing only the CPU pointer
+     * here would be unsafe: the GL attachment is still the offscreen target.
+     * Stage3D_Draw must take its fatal-error path without freeing this target. */
+    assert(!Gfx_SetRenderTarget(NULL, 0));
+    assert(g_renderTarget == &set && g_glBoundFramebuffer != 0);
+    assert(color_attachment == 85);
+
+    /* Even a cleanup attempt cannot detach while the driver refuses the
+     * default framebuffer. The stage cleanup must not free the live target. */
+    assert(!Gfx_SetRenderTarget(NULL, 0));
+    assert(g_renderTarget == &set && g_glBoundFramebuffer != 0);
+
+    /* Once the driver recovers, a verified bind is sufficient to detach. */
     fail_bind_null = 0;
     assert(Gfx_SetRenderTarget(NULL, 0));
     assert(g_renderTarget == NULL && g_glBoundFramebuffer == 0);
     assert(g_targetWidth == g_videoWidth && g_targetHeight == g_videoHeight);
-    puts("ok: a failed restore leaves the offscreen target current until detached");
+    puts("ok: persistent restore failures retain the live target until a verified detach");
 }
 
 #ifdef TEST_GLES
