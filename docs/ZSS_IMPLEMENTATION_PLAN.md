@@ -1,6 +1,8 @@
 # ZSS compiler and runtime implementation plan
 
-Status: RESEARCH / PROPOSED. No ZSS compiler or runtime has been implemented by this document.
+Status: IMPLEMENTATION IN PROGRESS (experimental subset).
+Sections 1-16 retain the original research/design baseline; section 17 records
+implemented increments, verification and remaining qualification gaps.
 Research date: 2026-11-16 (Asia/Jakarta).
 
 ## 1. Decision
