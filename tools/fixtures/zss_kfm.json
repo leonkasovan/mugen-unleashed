@@ -1,0 +1,176 @@
+{
+  "character": "kfm_zss",
+  "cache": "build/downloads/zss-kfm-91e9ff0cd21d",
+  "files": [
+    {
+      "repository": "ikemen-engine/Ikemen-GO-Screenpack",
+      "ref": "91e9ff0cd21def4cf1fe2780e7709e2243b82bc9",
+      "path": "chars/kfm_zss/AI.zss",
+      "cache": "character/AI.zss",
+      "target": "chars/kfm_zss/AI.zss",
+      "size": 27476,
+      "git_blob": "6990cb342dc2c6b7142b95cf4257779889478d31",
+      "sha256": "dfb060bf737720c3dc8c71452f7b4dc7a2ac3586cdba5ec26e952ac6b9e57d26"
+    },
+    {
+      "repository": "ikemen-engine/Ikemen-GO-Screenpack",
+      "ref": "91e9ff0cd21def4cf1fe2780e7709e2243b82bc9",
+      "path": "chars/kfm_zss/command.zss",
+      "cache": "character/command.zss",
+      "target": "chars/kfm_zss/command.zss",
+      "size": 11606,
+      "git_blob": "b8e827d2dd29bfeb835e5b5d00ca67058b9f18d1",
+      "sha256": "dc3ffad8b4b73057e3c5246301669581020bd59c1e8bc215b9eda564f33ea958"
+    },
+    {
+      "repository": "ikemen-engine/Ikemen-GO-Screenpack",
+      "ref": "91e9ff0cd21def4cf1fe2780e7709e2243b82bc9",
+      "path": "chars/kfm_zss/ending.def",
+      "cache": "character/ending.def",
+      "target": "chars/kfm_zss/ending.def",
+      "size": 1955,
+      "git_blob": "c0186be869aff6f5c4e581d5f93a7db5b29cbec5",
+      "sha256": "a20eef6761aa419c989d06a19af790c48d96e56d28f115674353fd11c6b4f479"
+    },
+    {
+      "repository": "ikemen-engine/Ikemen-GO-Screenpack",
+      "ref": "91e9ff0cd21def4cf1fe2780e7709e2243b82bc9",
+      "path": "chars/kfm_zss/ending.sff",
+      "cache": "character/ending.sff",
+      "target": "chars/kfm_zss/ending.sff",
+      "size": 48958,
+      "git_blob": "c00229bb526447075c125810b484cd9a36121637",
+      "sha256": "abd3b10e42d3518a86c214ee38a394c8e2f08984e165387c47fa7a1153a37484"
+    },
+    {
+      "repository": "ikemen-engine/Ikemen-GO-Screenpack",
+      "ref": "91e9ff0cd21def4cf1fe2780e7709e2243b82bc9",
+      "path": "chars/kfm_zss/hits.zss",
+      "cache": "character/hits.zss",
+      "target": "chars/kfm_zss/hits.zss",
+      "size": 4878,
+      "git_blob": "6dc351b6f39be835d5d1b0e25c1f098b6640afad",
+      "sha256": "cb153b82f9d945e386410b4aacb69e7dcb5615de9fd141179c35f5f5b32a2cad"
+    },
+    {
+      "repository": "ikemen-engine/Ikemen-GO-Screenpack",
+      "ref": "91e9ff0cd21def4cf1fe2780e7709e2243b82bc9",
+      "path": "chars/kfm_zss/intro.def",
+      "cache": "character/intro.def",
+      "target": "chars/kfm_zss/intro.def",
+      "size": 2841,
+      "git_blob": "4f879f812cfd2291c9a85e182667b9bca6d2047d",
+      "sha256": "44172e5aa8612ffd485b8d04236339fd70b2eab480075d5937eac448bc91713e"
+    },
+    {
+      "repository": "ikemen-engine/Ikemen-GO-Screenpack",
+      "ref": "91e9ff0cd21def4cf1fe2780e7709e2243b82bc9",
+      "path": "chars/kfm_zss/intro.sff",
+      "cache": "character/intro.sff",
+      "target": "chars/kfm_zss/intro.sff",
+      "size": 90427,
+      "git_blob": "89fb411134843e59bf86de6a42c9e73080c7ff7f",
+      "sha256": "ea90366a6f85fd60e4940de3c37636c7b4c80a96c61e72edd02fd07e0d18229d"
+    },
+    {
+      "repository": "ikemen-engine/Ikemen-GO-Screenpack",
+      "ref": "91e9ff0cd21def4cf1fe2780e7709e2243b82bc9",
+      "path": "chars/kfm_zss/kfm.air",
+      "cache": "character/kfm.air",
+      "target": "chars/kfm_zss/kfm.air",
+      "size": 49450,
+      "git_blob": "3ec37f2c06efeae295f0828124db4b7b18625c7a",
+      "sha256": "09ec6a79b887321f5ffe141dbf9842ec915414de52f047c39221b7a39aed62e4"
+    },
+    {
+      "repository": "ikemen-engine/Ikemen-GO-Screenpack",
+      "ref": "91e9ff0cd21def4cf1fe2780e7709e2243b82bc9",
+      "path": "chars/kfm_zss/kfm.cmd",
+      "cache": "character/kfm.cmd",
+      "target": "chars/kfm_zss/kfm.cmd",
+      "size": 8918,
+      "git_blob": "467b730c78208b1ed6e6b7ac21394dc581491eba",
+      "sha256": "f49bc50c2431370d8f5b5cb927bca4330d25e719603371eab4d01d2187862920"
+    },
+    {
+      "repository": "ikemen-engine/Ikemen-GO-Screenpack",
+      "ref": "91e9ff0cd21def4cf1fe2780e7709e2243b82bc9",
+      "path": "chars/kfm_zss/kfm.const",
+      "cache": "character/kfm.const",
+      "target": "chars/kfm_zss/kfm.const",
+      "size": 6904,
+      "git_blob": "d5a6dc1f9c95b38d41c0e4afa60ef51897d0cb0d",
+      "sha256": "dd1b01133c7000e4e460615711d3acd5d88dd9cd9b7c70d83047d82289ca4036"
+    },
+    {
+      "repository": "ikemen-engine/Ikemen-GO-Screenpack",
+      "ref": "91e9ff0cd21def4cf1fe2780e7709e2243b82bc9",
+      "path": "chars/kfm_zss/kfm.sff",
+      "cache": "character/kfm.sff",
+      "target": "chars/kfm_zss/kfm.sff",
+      "size": 209010,
+      "git_blob": "75aa3c8085924455052cb31fb0fc7f79bb535aa2",
+      "sha256": "4124a7836529f67a97ce7a869c789e2238336eb84e88f1a74566bb751321f875"
+    },
+    {
+      "repository": "ikemen-engine/Ikemen-GO-Screenpack",
+      "ref": "91e9ff0cd21def4cf1fe2780e7709e2243b82bc9",
+      "path": "chars/kfm_zss/kfm.snd",
+      "cache": "character/kfm.snd",
+      "target": "chars/kfm_zss/kfm.snd",
+      "size": 76631,
+      "git_blob": "d84829cedba4de074725aa61928d16ac0edcdb3b",
+      "sha256": "daae16a39cc22b5eaf7b40c09a20076ee2278c1fb34ab40af4caa3f3b4db669a"
+    },
+    {
+      "repository": "ikemen-engine/Ikemen-GO-Screenpack",
+      "ref": "91e9ff0cd21def4cf1fe2780e7709e2243b82bc9",
+      "path": "chars/kfm_zss/kfm.zss",
+      "cache": "character/kfm.zss",
+      "target": "chars/kfm_zss/kfm.zss",
+      "size": 65540,
+      "git_blob": "f3a0e2da45e6a50be06a0ef0a45edd77ebe691a7",
+      "sha256": "806ff9d7677adce78ae5b15baa6701fe7d07f18a7b3fbd745618bb86f1ae8230"
+    },
+    {
+      "repository": "ikemen-engine/Ikemen-GO-Screenpack",
+      "ref": "91e9ff0cd21def4cf1fe2780e7709e2243b82bc9",
+      "path": "chars/kfm_zss/kfm_zss.def",
+      "cache": "character/kfm_zss.def",
+      "target": "chars/kfm_zss/kfm_zss.def",
+      "size": 1434,
+      "git_blob": "72524c0ce56dbed27dea05e60dcd1fb8e4f3b0ed",
+      "sha256": "79cf72a836db6ab371dc87357622ea8ad5b4b969bf7618229202a30efe3d7157"
+    },
+    {
+      "repository": "ikemen-engine/Ikemen-GO-Screenpack",
+      "ref": "91e9ff0cd21def4cf1fe2780e7709e2243b82bc9",
+      "path": "chars/kfm_zss/movelist.dat",
+      "cache": "character/movelist.dat",
+      "target": "chars/kfm_zss/movelist.dat",
+      "size": 520,
+      "git_blob": "5d7561664c6383bd3cda7284b75eb41fef6093eb",
+      "sha256": "2f7d3dc2fd50bde1826158333a2a357cf880dff5986cad3280ad1b83e986aefc"
+    },
+    {
+      "repository": "ikemen-engine/Ikemen-GO-Screenpack",
+      "ref": "91e9ff0cd21def4cf1fe2780e7709e2243b82bc9",
+      "path": "chars/kfm_zss/readme.txt",
+      "cache": "character/readme.txt",
+      "target": "chars/kfm_zss/readme.txt",
+      "size": 4062,
+      "git_blob": "667addc9d3a90f3d0a0fa332319ac28ede19911c",
+      "sha256": "f084aa6ec127804568fb0f409fbfd1bc5ab71aaa448283dbaf732f42e86301ac"
+    },
+    {
+      "repository": "ikemen-engine/Ikemen-GO",
+      "ref": "b55af1a13c128c16b4d4331f8f1fe67dcd4f06df",
+      "path": "data/common1.cns.zss",
+      "cache": "common/common1.cns.zss",
+      "target": "data/common1.cns.zss",
+      "git_blob": "886d4dc74f5d404d21fbf137a8a571f988b90cc5",
+      "size": 27348,
+      "sha256": "d801465c831877ce8c8833a30ab500307501599a88b9abbf662b95d25f6341d0"
+    }
+  ]
+}

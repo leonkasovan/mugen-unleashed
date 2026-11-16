@@ -14,7 +14,7 @@
 #define MAX_DEPTH 32u
 #define MAX_LOOP 2500u
 #define MAX_STEPS 100000u
-enum {NODE_CONTROLLER, NODE_IF, NODE_WHILE, NODE_EXPRESSION, NODE_BREAK, NODE_CONTINUE, NODE_FOR, NODE_LET};
+enum {NODE_CONTROLLER, NODE_IF, NODE_WHILE, NODE_EXPRESSION, NODE_BREAK, NODE_CONTINUE, NODE_FOR, NODE_LET, NODE_CASE};
 
 typedef struct ZssNode {
     int kind, local;
@@ -42,6 +42,7 @@ typedef struct ZssParser {
     ExprCompileCtx context;
     ZssToken locals[256];
     unsigned local_count;
+    size_t switch_bytes;
 } ZssParser;
 static int error(ZssParser *p, const char *message)
 {
@@ -131,7 +132,7 @@ static int enclosed(ZssParser *p, int header)
     }
     return error(p,"Unclosed ZSS header or controller");
 }
-static int body(ZssParser *p, unsigned depth, unsigned loops, uint32_t *first);
+static int body(ZssParser *p, unsigned depth, unsigned loops, int labels, uint32_t *first);
 static int branch(ZssParser *p, unsigned depth, unsigned loops, int loop, uint32_t *index, uint32_t *end_line)
 {
     uint32_t id=node(p), child=NO_NODE, other=NO_NODE;
@@ -158,7 +159,7 @@ static int branch(ZssParser *p, unsigned depth, unsigned loops, int loop, uint32
     }
     free(expression);
     next(p);
-    if (!body(p,depth+1,loops+(loop ? 1u : 0u),&child)) return 0;
+    if (!body(p,depth+1,loops+(loop ? 1u : 0u),0,&child)) return 0;
     if (p->lex.token.kind!='}') return error(p,"Expected '}' after if body");
     *end_line=p->lex.token.line;next(p);
     if (!loop && ZssLex_Is(&p->lex,"else")) {
@@ -168,7 +169,7 @@ static int branch(ZssParser *p, unsigned depth, unsigned loops, int loop, uint32
         } else {
             if (p->lex.token.kind!='{') return error(p,"Expected if or '{' after else");
             next(p);
-            if (!body(p,depth+1,loops,&other)) return 0;
+            if (!body(p,depth+1,loops,0,&other)) return 0;
             if (p->lex.token.kind!='}') return error(p,"Expected '}' after else body");
             *end_line=p->lex.token.line;next(p);
         }
@@ -254,12 +255,125 @@ static int range_loop(ZssParser *p, unsigned depth, unsigned loops, uint32_t *id
     }
     /* The third expression leaves '{' current; the two-expression form does too. */
     next(p);
-    if (!body(p,depth+1,loops+1,&child)) return 0;
+    if (!body(p,depth+1,loops+1,0,&child)) return 0;
     if (p->lex.token.kind!='}') return error(p,"Expected '}' after for body");
     p->program->nodes[index].child=child;
     *id=index;*end_line=p->lex.token.line;next(p);return 1;
 }
-static int body(ZssParser *p, unsigned depth, unsigned loops, uint32_t *first)
+/* Port addition: retain the reference's textual header = value || ... guard
+ * construction. In particular, do not hoist a side-effecting header or add
+ * parentheses that change its precedence. Buffers own only compiler scratch. */
+static int switch_expression(ZssParser *p, int close1, int close2, char **out, unsigned *tokens)
+{
+    ZssLexer scan=p->lex;
+    size_t bytes=0;
+    unsigned count=0, depth=0, i;
+    int kind;
+    char *text,*write;
+    for (;;) {
+        kind=scan.token.kind;
+        if (!depth && (kind==close1 || kind==close2)) break;
+        if (kind<=0 || kind=='{' || kind=='}' || kind==';' || kind==':') {
+            p->lex=scan;return error(p,"Incomplete switch expression or delimiter");
+        }
+        if (kind=='(' || kind=='[') depth++;
+        if (kind==')' || kind==']') {
+            if (!depth) {p->lex=scan;return error(p,"Unmatched switch expression delimiter");}
+            depth--;
+        }
+        if (++count>=EXPR_OP_STACK_SIZE || depth>MAX_DEPTH) {
+            p->lex=scan;return error(p,"Switch expression token/nesting limit");
+        }
+        bytes+=scan.token.length;
+        ZssLex_Next(&scan);
+    }
+    if (!count) return error(p,"Empty switch header or case value");
+    text=calloc(1,bytes+count+1);
+    if (text==NULL) return error(p,"Out of memory reading switch expression");
+    write=text;
+    for (i=0;i<count;i++) {
+        kind=p->lex.token.kind;
+        if (i && !(write[-1]=='-' && (kind==ZSS_INT || kind==ZSS_FLOAT))) *write++=' ';
+        memcpy(write,p->lex.source+p->lex.token.offset,p->lex.token.length);write+=p->lex.token.length;
+        next(p);
+    }
+    *out=text;*tokens=count;return 1;
+}
+static int switch_guard_append(ZssParser *p, char **guard, size_t *length,
+                                const char *header, const char *value, int more)
+{
+    size_t h=strlen(header),v=strlen(value),extra=h+v+3+(more?4:0);
+    size_t limit=2u*ZSS_MAX_SOURCE-p->switch_bytes;
+    char *text;
+    if (*length>limit || extra>limit-*length) return error(p,"Switch guard expansion budget (2 MiB)");
+    text=calloc(1,*length+extra+1);
+    if (text==NULL) return error(p,"Out of memory constructing switch guard");
+    if (*length) memcpy(text,*guard,*length);
+    if (more) memcpy(text+*length," || ",4);
+    memcpy(text+*length+(more?4:0),header,h);
+    memcpy(text+*length+(more?4:0)+h," = ",3);
+    memcpy(text+*length+(more?4:0)+h+3,value,v);
+    free(*guard);*guard=text;*length+=extra;return 1;
+}
+static int switch_block(ZssParser *p, unsigned depth, unsigned loops, uint32_t *id, uint32_t *end_line)
+{
+    uint32_t root=node(p),first=NO_NODE,last=NO_NODE,fallback=NO_NODE,entry,child;
+    unsigned header_tokens,value_tokens,guard_tokens;
+    char *header=NULL,*value=NULL,*guard=NULL;
+    const char *end;
+    size_t length;
+    int seen_default=0,labels=0,more,kind;
+    if (root==NO_NODE) return 0;
+    if (depth>=MAX_DEPTH) return error(p,"ZSS block nesting limit");
+    p->program->nodes[root].kind=NODE_IF;Expr_SetInt(&p->program->nodes[root].condition,1);
+    next(p);
+    if (!switch_expression(p,'{','{',&header,&header_tokens)) goto fail;
+    next(p);
+    while (p->lex.token.kind!='}') {
+        labels++;
+        if (ZssLex_Is(&p->lex,"default")) {
+            if (seen_default) {error(p,"Duplicate switch default");goto fail;}
+            seen_default=1;
+            if (next(p)!=':') {error(p,"Expected ':' after default");goto fail;}
+            next(p);
+            if (!body(p,depth+1,loops,1,&fallback)) goto fail;
+            continue;
+        }
+        if (!ZssLex_Is(&p->lex,"case")) {error(p,"Expected case/default or closing switch brace");goto fail;}
+        entry=node(p);if (entry==NO_NODE) goto fail;
+        p->program->nodes[entry].kind=NODE_CASE;
+        next(p);length=0;guard_tokens=0;more=0;
+        for (;;) {
+            if (!switch_expression(p,';',':',&value,&value_tokens)) goto fail;
+            guard_tokens+=header_tokens+1+value_tokens+(more?1:0);
+            if (guard_tokens>=EXPR_MAX_TOKENS) {error(p,"Combined switch guard token limit");goto fail;}
+            if (!switch_guard_append(p,&guard,&length,header,value,more)) goto fail;
+            free(value);value=NULL;
+            kind=p->lex.token.kind;
+            if (kind==':') break;
+            more=1;next(p);
+        }
+        end=guard;
+        if (!Expr_CompileCtx(guard,&p->program->nodes[entry].condition,p->owner,&end,EXPR_WANT_ANY,&p->context) || *end) {
+            error(p,"Switch guard rejected by MUGEN expression compiler");goto fail;
+        }
+        p->switch_bytes+=length;free(guard);guard=NULL;
+        next(p);
+        if (!body(p,depth+1,loops,1,&child)) goto fail;
+        p->program->nodes[entry].child=child;
+        if (last==NO_NODE) first=entry;
+        else p->program->nodes[last].otherwise=entry;
+        last=entry;
+    }
+    if (!labels) {error(p,"Switch needs a case or default");goto fail;}
+    if (last!=NO_NODE) p->program->nodes[last].otherwise=fallback;
+    p->program->nodes[root].child=first!=NO_NODE ? first : fallback;
+    *id=root;*end_line=p->lex.token.line;next(p);free(header);return 1;
+fail:
+    free(header);free(value);free(guard);return 0;
+}
+
+static int body(ZssParser *p, unsigned depth, unsigned loops, int labels, uint32_t *first)
 {
     uint32_t last=NO_NODE, id, end_line;
     ZssToken start;
@@ -268,7 +382,19 @@ static int body(ZssParser *p, unsigned depth, unsigned loops, uint32_t *first)
     for (;;) {
         kind=p->lex.token.kind;
         if (kind==ZSS_EOF || kind=='}' || kind=='[') return 1;
-        if (ZssLex_Is(&p->lex,"if") || ZssLex_Is(&p->lex,"while")) {
+        if (labels && (ZssLex_Is(&p->lex,"case") || ZssLex_Is(&p->lex,"default"))) return 1;
+        if (kind=='{') {
+            uint32_t child;
+            if (depth>=MAX_DEPTH) return error(p,"ZSS block nesting limit");
+            id=node(p);if (id==NO_NODE) return 0;
+            p->program->nodes[id].kind=NODE_IF;Expr_SetInt(&p->program->nodes[id].condition,1);
+            next(p);
+            if (!body(p,depth+1,loops,0,&child)) return 0;
+            if (p->lex.token.kind!='}') return error(p,"Expected closing block brace");
+            p->program->nodes[id].child=child;end_line=p->lex.token.line;next(p);
+        } else if (ZssLex_Is(&p->lex,"switch")) {
+            if (!switch_block(p,depth,loops,&id,&end_line)) return 0;
+        } else if (ZssLex_Is(&p->lex,"if") || ZssLex_Is(&p->lex,"while")) {
             if (!branch(p,depth,loops,ZssLex_Is(&p->lex,"while"),&id,&end_line)) return 0;
         } else if (ZssLex_Is(&p->lex,"let")) {
             int local;
@@ -287,7 +413,7 @@ static int body(ZssParser *p, unsigned depth, unsigned loops, uint32_t *first)
         } else {
             ZssLexer peek=p->lex;
             if (ZssLex_Is(&p->lex,"call") ||
-                ZssLex_Is(&p->lex,"switch") || ZssLex_Is(&p->lex,"persistent") || ZssLex_Is(&p->lex,"ignorehitpause"))
+                ZssLex_Is(&p->lex,"persistent") || ZssLex_Is(&p->lex,"ignorehitpause"))
                 return error(p,"This ZSS statement is not implemented yet");
             if (kind!=ZSS_IDENT || ZssLex_Next(&peek)!='{') {
                 if (!assignment(p,-1,&id,&end_line)) return 0;
@@ -352,7 +478,7 @@ int Zss_CompileProgram(const char *source, size_t size, CharData *owner,
             error(&p,"StateDef header must end on its own line");goto fail;
         }
         p.local_count=0;
-        if (!body(&p,0,0,&first)) goto fail;
+        if (!body(&p,0,0,0,&first)) goto fail;
         p.program->states[i].first=first;p.program->states[i].locals=p.local_count;
     }
     if (!p.program->state_count) {error(&p,"Program needs a StateDef");goto fail;}
@@ -462,6 +588,14 @@ int Zss_RunBody(ZssProgram *p, size_t state, Player *player,
         }
         frame->current=n->next;
         switch (n->kind) {
+        case NODE_CASE:
+            type=Expr_EvalCtx(player,&n->condition,&i,&f,&evalctx);
+            if (!type) return 0;
+            selected=type==1 ? i!=0 : type==2 ? (!_isnan(f) && f!=0) : 0;
+            /* A case chain tail-dispatches without stacking one empty frame
+             * per failed label. A match (even empty) never falls through. */
+            frame->current=selected ? n->child : n->otherwise;
+            break;
         case NODE_IF:
             type=Expr_EvalCtx(player,&n->condition,&i,&f,&evalctx);
             if (type==0) return 0;

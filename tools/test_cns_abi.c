@@ -785,6 +785,85 @@ static void test_zss_locals(void)
     zss_fail_call=0;
     puts("ok: numeric locals, named for counters, lexical slots, fresh frames and allocation rollback");
 }
+static void test_zss_switch(void)
+{
+    const struct {const char *body;int value;} cases[]={
+        {"switch 2 {case 1:var(0):=1; case 2;3:var(0):=2; default:var(0):=9;}",2},
+        {"switch 2 {default:var(0):=9; case 2:var(0):=2;}",2},
+        {"switch 4 {case 1:var(0):=1; default:var(0):=9; case 2:var(0):=2;}",9},
+        {"switch 1 {case 1: case 1:var(0):=9; default:var(0):=8;}",0},
+        {"switch 4 {case 1:var(0):=1;}",0},
+        {"switch $unknown {default:var(0):=5;}",5},
+        {"switch 1 {default:}",0},
+        {"switch -2147483648 {case -2147483648:var(0):=6; default:var(0):=9;}",6},
+        {"switch 1.5 {case 1.5:var(0):=5; default:var(0):=9;}",5},
+        {"switch 1 {case 1:{var(0):=3;} case 2:var(0):=9;}",3},
+        {"switch 1 {case [0,2):var(0):=4; default:var(0):=9;}",4},
+        {"switch 1||0 {case 0:var(0):=1; default:var(0):=2;}",1},
+        {"switch 2 {case 0||1:var(0):=1; default:var(0):=2;}",1},
+        {"{switch 2 {case 2:switch 3 {case 3:var(0):=7; default:var(0):=8;} default:var(0):=9;}}",7}
+    };
+    const char *effects="[StateDef 0]\nvar(0):=0;\nvar(1):=0;\nswitch (var(0):=var(0)+1) {case 9:var(1):=1; case 8;3;4:var(1):=3; default:var(1):=4;}\n";
+    const char *loops="[StateDef 0]\nvar(0):=0;\nfor i=0;9 {switch $i {case 0:continue; case 3:break; default:var(0):=var(0)+1;} var(0):=var(0)+10;}\nvar(1):=$i;\n";
+    const char *stop="[StateDef 0]\nswitch 1 {case 1:CtrlSet{value:1} CtrlSet{value:2} default:CtrlSet{value:3}}\nCtrlSet{value:4}\n";
+    const char *bad[]={"switch 1 {}","switch {default:}","switch 1 {case:}","switch 1 {case 1;:}","switch 1 {case 1,2:}","switch 1 {case 1 Null{}}","switch 1 {default}","switch 1 {default:default:}","switch 1 {case 1:break;}","switch 1 {case 1:continue;}","switch 1 {case 1:if 1 {case 2:}}","switch 1 {case 1:","switch 1 {case (1:}","switch 1 {case $unknown:}","switch $unknown {case 1:}","switch 1 {case 1:} Null{}"};
+    ZssProgram *program=NULL,*failed=NULL;
+    ZssDiagnostic d;
+    char text[16384],*large;
+    size_t j,used;
+    int result,calls;
+    for(j=0;j<sizeof(cases)/sizeof(*cases);j++) {
+        snprintf(text,sizeof(text),"[StateDef 0]\nvar(0):=0;\n%s\nvar(2):=7;\n",cases[j].body);
+        assert(Zss_CompileProgram(text,strlen(text),&owner,&program,&d));
+        assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+        assert(!result && player.var[0]==cases[j].value && player.var[2]==7);Zss_FreeProgram(program);zss_no_allocs();
+    }
+    assert(Zss_CompileProgram(effects,strlen(effects),&owner,&program,&d));
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert(!result && player.var[0]==3 && player.var[1]==3);Zss_FreeProgram(program);zss_no_allocs();
+    strcpy(text,"[StateDef 0]\nvar(0):=0;\nvar(1):=0;\nswitch (var(0):=var(0)+1) {case (var(1):=var(0)):var(2):=1; default:var(2):=2;}\n");
+    assert(Zss_CompileProgram(text,strlen(text),&owner,&program,&d));
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert(player.var[0]==1 && player.var[1]==1 && player.var[2]==1);Zss_FreeProgram(program);zss_no_allocs();
+    strcpy(text,"[StateDef 0]\nswitch random {case 9;123;123:var(0):=7; default:var(0):=9;}\n");
+    assert(Zss_CompileProgram(text,strlen(text),&owner,&program,&d));random_reads=0;
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert(random_reads==2 && player.var[0]==7);Zss_FreeProgram(program);zss_no_allocs();
+    assert(Zss_CompileProgram(loops,strlen(loops),&owner,&program,&d));
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert(player.var[0]==22 && player.var[1]==3);Zss_FreeProgram(program);zss_no_allocs();
+    assert(Zss_CompileProgram(stop,strlen(stop),&owner,&program,&d));visits=0;stop_visit=1;
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert(visits==1 && (result&STATECTRL_STOP) && (result&STATECTRL_CHANGED));Zss_FreeProgram(program);zss_no_allocs();stop_visit=0;
+    /* Failed labels do not consume the block-frame budget. */
+    used=(size_t)snprintf(text,sizeof(text),"[StateDef 0]\nswitch 199 {\n");
+    for(j=0;j<199;j++) used+=(size_t)snprintf(text+used,sizeof(text)-used,"case %zu:\n",j);
+    used+=(size_t)snprintf(text+used,sizeof(text)-used,"case 199:var(0):=199;\n");
+    strcpy(text+used,"default:var(0):=999;\n}\n");
+    assert(Zss_CompileProgram(text,strlen(text),&owner,&program,&d));
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));assert(player.var[0]==199);Zss_FreeProgram(program);zss_no_allocs();
+    for(j=0;j<sizeof(bad)/sizeof(*bad);j++) {
+        snprintf(text,sizeof(text),"[StateDef 0]\n%s",bad[j]);
+        assert(!Zss_CompileProgram(text,strlen(text),&owner,&failed,&d));assert(!failed && d.message);zss_no_allocs();
+    }
+    used=(size_t)snprintf(text,sizeof(text),"[StateDef 0]\nswitch 1 {case 0");
+    for(j=0;j<40;j++) used+=(size_t)snprintf(text+used,sizeof(text)-used,";0");strcpy(text+used,":}\n");
+    assert(!Zss_CompileProgram(text,strlen(text),&owner,&failed,&d));assert(!failed);zss_no_allocs();
+    /* A small source can repeat a long valid numeric header across many guards;
+     * enforce the total expansion bound before retaining excessive output. */
+    large=malloc(66000);assert(large);strcpy(large,"[StateDef 0]\nswitch ");used=strlen(large);
+    memset(large+used,'0',60000);used+=60000;large[used-1]='1';used+=(size_t)sprintf(large+used," {\n");
+    for(j=0;j<40;j++) used+=(size_t)sprintf(large+used,"case 0:\n");strcpy(large+used,"}\n");
+    assert(!Zss_CompileProgram(large,strlen(large),&owner,&failed,&d));assert(d.message && !strcmp(d.message,"Switch guard expansion budget (2 MiB)"));free(large);zss_no_allocs();
+    zss_calloc_calls=0;assert(Zss_CompileProgram(effects,strlen(effects),&owner,&program,&d));calls=zss_calloc_calls;Zss_FreeProgram(program);
+    for(j=1;j<=(size_t)calls;j++) {
+        zss_calloc_calls=0;zss_fail_call=(int)j;
+        if(Zss_CompileProgram(effects,strlen(effects),&owner,&failed,&d)){Zss_FreeProgram(failed);failed=NULL;}
+        assert(!failed);zss_no_allocs();
+    }
+    zss_fail_call=0;
+    puts("ok: ordered switch cases, repeated header effects, default fallback, loop signals and expansion limits");
+}
 static void test_zss_program(void)
 {
     const char *source="[StateDef 200;type:S;]\nif var(0)=0 { CtrlSet{value:1} CtrlSet{value:2} } else if var(0)=9 { CtrlSet{value:9} } else { CtrlSet{value:8} }\nif .5 { CtrlSet{value:3} }\n[StateDef 201]\n";
@@ -968,6 +1047,7 @@ int main(void)
     test_zss_lazy();
     test_zss_locals();
     test_zss_controller_contexts();
+    test_zss_switch();
     test_zss_installation();
 #else
     test_controller_parse(); test_variables(); test_clipboard();

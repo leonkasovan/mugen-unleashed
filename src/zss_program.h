@@ -4,11 +4,12 @@
 typedef struct ZssProgram ZssProgram;
 /* Prototype profile: states, enabled controllers, nested if/else, assignments,
  * while, anonymous/named for ranges, single-name numeric let declarations,
- * locals in the audited controller parameters, and short-circuit &&/||.
+ * locals in the audited controller parameters, short-circuit &&/|| and switch.
  * Explicit stN stream installation is experimental; locals in StateDef header
  * properties, functions and attributes are not enabled. Compilation
  * owns all output; source can be released immediately. *out is unchanged on
  * failure. Program limits: 64 states, 1024 nodes, 32 nested blocks, 256 locals per state, 1 MiB.
+ * Switch guards: <128 combined lexical tokens and 2 MiB expansion per program.
  * Runtime guards: 2500 iterations per loop and 100000 control steps per body. */
 int Zss_CompileProgram(const char *source, size_t size, CharData *owner,
                        ZssProgram **out, ZssDiagnostic *diagnostic);

@@ -1130,3 +1130,85 @@ Validation completed on Linux x86-64:
 Windows/32-bit, Android NDK and Vita/device builds remain unqualified here.
 Functions/call, multi-name bindings, local :=, switch, persistence/hitpause
 attributes, broader controller payloads and StateDef-local contexts remain open.
+
+### Switch and grouped blocks
+
+Switch now compiles to an ordered conditional chain, using the pinned
+[reference construction](https://github.com/ikemen-engine/Ikemen-GO/blob/b55af1a13c128c16b4d4331f8f1fe67dcd4f06df/src/compiler.go#L7925):
+
+```text
+switch $mode {
+    default: CtrlSet{value:0}
+    case 1; 2: CtrlSet{value:1}
+    case 3: { Turn{} }
+}
+```
+
+Case values are separated by semicolons, labels end with a colon, and case bodies
+end at the next label or switch closing brace. Empty bodies are valid and a
+matching empty case stops the chain. Duplicate case values are allowed (first
+match wins); duplicate defaults and empty switches fail. Default may appear
+anywhere in the source but runs only after every ordinary case fails. A switch
+containing only default never evaluates or compiles its unused header, matching
+the reference. Standalone brace groups are now supported too; they inherit loop
+nesting and keep the state's existing local-variable scope.
+
+Guards retain the reference's `header = value || header = value ...` text
+construction and precedence. No extra parentheses or cached header value are
+inserted. Parenthesize side-effecting or compound operands when grouping is
+intended. A header can run once per attempted case value; OR short circuit skips
+later values after a match. Case guards use the shared MUGEN numeric/expression
+profile and explicit local context. MUGEN interval comparisons work as case values.
+This does not introduce a separate switch equality/value model.
+
+Break and continue are still loop-only signals: a switch does not create a loop
+or a C-style break target. Inside a loop they unwind to that loop; outside one
+they are compile errors. Controller stop/state-change bits unwind the entire
+old body. Internal conditional-case nodes tail-dispatch their next guard/body,
+so long flat case chains do not consume a frame per failed label. Existing
+statement execution and the total-work guard otherwise remain unchanged.
+
+Bounds: 63 tokens per header/value, fewer than 128 generated lexical tokens per
+combined case guard, plus the shared postfix/code verifier limits. Across one
+program, generated guard text is capped at 2 MiB to bound repeated-header
+expansion. This is an engine-specific prototype budget, not an upstream limit.
+It is independent of the existing source/node/state/block bounds. Scratch buffers
+use checked sizes and owned allocate/copy/publish operations; every failure path
+releases the header, current value/guard and all partially compiled nodes.
+
+Validation: Linux x86-64 ZSS tests pass under ASan/UBSan (leak detection disabled),
+including default-first/middle/only, empty matches, no fallthrough, duplicate
+labels/defaults, repeated-header and operand-order effects, raw precedence,
+interval/float/int32-minimum values, nested switches/groups, loop signals,
+state-change unwinding, 200-case dispatch, malformed syntax, guard token/expansion
+limits and injected calloc failures. The RNG probe counts the explicit host
+trigger dispatch boundary: two attempted values make two calls, and a skipped
+third value makes none. It does not qualify a real RNG distribution or an Ikemen
+runtime. Existing CNS and lexer tests pass. The changed production unit passes
+-Wall -Wextra -Werror syntax checks, including ANDROID_PORT on the host.
+
+The full native Linux engine links with MUGEN_MODEL3D=0. A copied offscreen CNS
+KFM fixture checks default-first and repeated headers, no fallthrough from an
+empty match, nested switch dispatch, loop break/continue and state-change stop.
+Only var(0)=3, var(1)=3, var(2)=22, var(3)=2 and local i=3 reach state 65001. The
+native log records 65000 result 5 and 65001 result 0; failure state 65002 is never
+visited. Cleanup is orderly after the 12-second timeout. Native parent/candidate
+plain-CNS quick-VS logs have 195 fragments each and match after numeric
+normalization. These are bounded smoke tests, not complete matches/determinism
+proofs. Original game data and display dimensions were not changed.
+
+### Upstream KFM ZSS corpus added
+
+The user-selected upstream KFM ZSS character is now available through a pinned,
+hash-verifying fetcher and manifest. See [ZSS_KFM_FIXTURE.md](ZSS_KFM_FIXTURE.md)
+for source revisions, commands, asset provenance and the current blocked result.
+All 17 character/common dependency files (637958 bytes) were downloaded and
+installed without rewriting the upstream scripts or DEF. The installed fixture
+passes its hash check, but the unmodified character exits 1 during loading:
+primary `st = kfm.zss` still enters the CNS route. This is recorded as a failed
+compatibility probe, not a pass for the new switch implementation.
+
+This corpus makes the next integration priorities concrete: primary/common ZSS
+routing, functions/call, block attributes, more controller payloads, and explicit
+Ikemen AI/map extensions. Windows/32-bit, Android NDK and Vita/device qualification
+remain open. Multi-name bindings and local := are also still outside the profile.
