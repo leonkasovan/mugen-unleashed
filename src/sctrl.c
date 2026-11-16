@@ -179,21 +179,55 @@ int StateCtrl_VersionOk(int type, unsigned int version)
 
 /* ------------------------------------------------------------ parsing */
 
+/* Port addition: explicitly audited inline-expression controllers. The same
+ * capability table guards compilation and context-aware runtime dispatch. */
+static const struct {const char *name;int type;} script_controllers[]={
+    {"velset",SCTRL_VELSET},{"veladd",SCTRL_VELADD},
+    {"posset",SCTRL_POSSET},{"posadd",SCTRL_POSADD},
+    {"ctrlset",SCTRL_CTRLSET},{"changestate",SCTRL_CHANGESTATE},
+    {"changeanim",SCTRL_CHANGEANIM},{"turn",SCTRL_TURN},{"null",SCTRL_NULL},
+    {"displaytoclipboard",SCTRL_DISPLAYTOCLIPBOARD},
+    {"appendtoclipboard",SCTRL_APPENDTOCLIPBOARD},{"clearclipboard",SCTRL_CLEARCLIPBOARD}
+};
+int StateCtrl_ScriptType(const char *name)
+{
+    size_t i;
+    if (name==NULL) return -1;
+    for (i=0;i<sizeof(script_controllers)/sizeof(*script_controllers);i++)
+        if (!_stricmp(name,script_controllers[i].name)) return script_controllers[i].type;
+    return -1;
+}
+static int script_frame_supported(int type)
+{
+    size_t i;
+    for (i=0;i<sizeof(script_controllers)/sizeof(*script_controllers);i++)
+        if (type==script_controllers[i].type) return 1;
+    return 0;
+}
+static int compile_expr_ctx(const char *s, Expr *e, CharData *owner, int want, ExprCompileCtx *ctx)
+{
+    const char *end=NULL;
+    if (!Expr_CompileCtx(s,e,owner,ctx!=NULL ? &end : NULL,want,ctx)) return 0;
+    return ctx==NULL || s==NULL || (end!=NULL && *end=='\0');
+}
 /* Compiles the value of key (if any) into e. */
+static int compile_key_ctx(Ini *ini, const char *key, Expr *e, CharData *owner, int want, ExprCompileCtx *ctx)
+{
+    return compile_expr_ctx(Ini_GetValue(ini,key),e,owner,want,ctx);
+}
 static int compile_key(Ini *ini, const char *key, Expr *e, CharData *owner, int want)
 {
-    return Expr_Compile(Ini_GetValue(ini, key), e, owner, NULL, want);
+    return compile_key_ctx(ini,key,e,owner,want,NULL);
 }
-
 /* Compiles the value of key into e; 0 when it is missing. */
+static int compile_required_ctx(Ini *ini, const char *key, Expr *e, CharData *owner, int want, ExprCompileCtx *ctx)
+{
+    const char *s=Ini_GetValue(ini,key);
+    return s!=NULL && compile_expr_ctx(s,e,owner,want,ctx);
+}
 static int compile_required(Ini *ini, const char *key, Expr *e, CharData *owner, int want)
 {
-    const char *s = Ini_GetValue(ini, key);
-
-    if (s == NULL) {
-        return 0;
-    }
-    return Expr_Compile(s, e, owner, NULL, want);
+    return compile_required_ctx(ini,key,e,owner,want,NULL);
 }
 
 /*
@@ -331,7 +365,7 @@ static int parse_pair_end_first(Ini *ini, const char *key, const char *fmt, Expr
 }
 
 /* x, y and z of PosSet/PosAdd/VelSet/VelAdd/VelMul/Offset: arg[0..2] flag the given ones, arg[3..5] the values. */
-static int parse_xyz(Ini *ini, StateCtrl *sc, CharData *owner, int has_z)
+static int parse_xyz_ctx(Ini *ini, StateCtrl *sc, CharData *owner, int has_z, ExprCompileCtx *ctx)
 {
     static const char *const keys[3] = { "x", "y", "z" };
     const char *s;
@@ -341,12 +375,17 @@ static int parse_xyz(Ini *ini, StateCtrl *sc, CharData *owner, int has_z)
         s = Ini_GetValue(ini, keys[i]);
         if (s != NULL) {
             Expr_SetInt(&sc->arg[i], 1);
-            if (!Expr_Compile(s, &sc->arg[3 + i], owner, NULL, EXPR_WANT_FLOAT)) {
+            if (!compile_expr_ctx(s, &sc->arg[3 + i], owner, EXPR_WANT_FLOAT, ctx)) {
                 return 0;
             }
         }
     }
     return 1;
+}
+
+static int parse_xyz(Ini *ini, StateCtrl *sc, CharData *owner, int has_z)
+{
+    return parse_xyz_ctx(ini,sc,owner,has_z,NULL);
 }
 
 /* The S/C/L/A first letter of a state type, or 0. */
@@ -372,6 +411,10 @@ static int statetype_of(int c)
  */
 int StateCtrl_ParseParams(Ini *ini, StateCtrl *sc, CharData *owner)
 {
+    return StateCtrl_ParseParamsCtx(ini,sc,owner,NULL);
+}
+int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompileCtx *ctx)
+{
     char name[0x100];
     const char *s;
     const char *end;
@@ -386,6 +429,7 @@ int StateCtrl_ParseParams(Ini *ini, StateCtrl *sc, CharData *owner)
         Error_Printf("State controller type is too long\n");
         return 0;
     }
+    if (ctx!=NULL && StateCtrl_ScriptType(s)<0) return 0;
     strcpy(name, s);
     _strlwr(name);
     for (i = 0; i < 6; i++) {
@@ -394,35 +438,35 @@ int StateCtrl_ParseParams(Ini *ini, StateCtrl *sc, CharData *owner)
 
     if (strcmp(name, "changestate") == 0 || strcmp(name, "selfstate") == 0) {
         sc->type = name[0] == 'c' ? SCTRL_CHANGESTATE : SCTRL_SELFSTATE;
-        if (!compile_required(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT)) {
+        if (!compile_required_ctx(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT, ctx)) {
             return 0;
         }
         Expr_SetInt(&sc->arg[1], -1);
         Expr_SetInt(&sc->arg[2], -1);
-        if (!compile_key(ini, "ctrl", &sc->arg[1], owner, EXPR_WANT_INT)) {
+        if (!compile_key_ctx(ini, "ctrl", &sc->arg[1], owner, EXPR_WANT_INT, ctx)) {
             return 0;
         }
-        ok = compile_key(ini, "anim", &sc->arg[2], owner, EXPR_WANT_INT);
+        ok = compile_key_ctx(ini, "anim", &sc->arg[2], owner, EXPR_WANT_INT, ctx);
     } else if (strcmp(name, "tag") == 0) {
         sc->type = SCTRL_TAG;
         Expr_SetInt(&sc->arg[0], -1);
         Expr_SetInt(&sc->arg[1], -1);
-        if (!compile_key(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT)) {
+        if (!compile_key_ctx(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT, ctx)) {
             return 0;
         }
-        ok = compile_key(ini, "partnerstateno", &sc->arg[1], owner, EXPR_WANT_INT);
+        ok = compile_key_ctx(ini, "partnerstateno", &sc->arg[1], owner, EXPR_WANT_INT, ctx);
     } else if (strcmp(name, "ctrlset") == 0) {
         sc->type = SCTRL_CTRLSET;
-        ok = compile_required(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT);
+        ok = compile_required_ctx(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT, ctx);
     } else if (strcmp(name, "turn") == 0) {
         sc->type = SCTRL_TURN;
         ok = 1;
     } else if (strcmp(name, "changeanim") == 0 || strcmp(name, "changeanim2") == 0) {
         sc->type = name[10] == '\0' ? SCTRL_CHANGEANIM : SCTRL_CHANGEANIM2;
-        if (!compile_required(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT)) {
+        if (!compile_required_ctx(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT, ctx)) {
             return 0;
         }
-        ok = compile_key(ini, "elem", &sc->arg[1], owner, EXPR_WANT_INT);
+        ok = compile_key_ctx(ini, "elem", &sc->arg[1], owner, EXPR_WANT_INT, ctx);
     } else if (strcmp(name, "playsnd") == 0) {
         PlaySndParams *ps = Mem_Calloc(1, sizeof(PlaySndParams));
         if (ps == NULL) {
@@ -452,37 +496,37 @@ int StateCtrl_ParseParams(Ini *ini, StateCtrl *sc, CharData *owner)
                     return 0;
                 }
             }
-            ok = compile_key(ini, "pan", &sc->arg[1], owner, EXPR_WANT_INT);
+            ok = compile_key_ctx(ini, "pan", &sc->arg[1], owner, EXPR_WANT_INT, ctx);
         }
     } else if (strcmp(name, "lifeset") == 0) {
         sc->type = SCTRL_LIFESET;
-        ok = compile_required(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT);
+        ok = compile_required_ctx(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT, ctx);
     } else if (strcmp(name, "lifeadd") == 0) {
         sc->type = SCTRL_LIFEADD;
-        if (!compile_required(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT)) {
+        if (!compile_required_ctx(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT, ctx)) {
             return 0;
         }
         Expr_SetInt(&sc->arg[1], 1);
-        if (!compile_key(ini, "kill", &sc->arg[1], owner, EXPR_WANT_INT)) {
+        if (!compile_key_ctx(ini, "kill", &sc->arg[1], owner, EXPR_WANT_INT, ctx)) {
             return 0;
         }
-        ok = compile_key(ini, "absolute", &sc->arg[2], owner, EXPR_WANT_INT);
+        ok = compile_key_ctx(ini, "absolute", &sc->arg[2], owner, EXPR_WANT_INT, ctx);
     } else if (strcmp(name, "powerset") == 0) {
         sc->type = SCTRL_POWERSET;
-        ok = compile_required(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT);
+        ok = compile_required_ctx(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT, ctx);
     } else if (strcmp(name, "poweradd") == 0) {
         sc->type = SCTRL_POWERADD;
-        ok = compile_required(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT);
+        ok = compile_required_ctx(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT, ctx);
     } else if (strcmp(name, "posset") == 0 || strcmp(name, "posadd") == 0) {
         sc->type = name[3] == 's' ? SCTRL_POSSET : SCTRL_POSADD;
-        ok = parse_xyz(ini, sc, owner, 1);
+        ok = parse_xyz_ctx(ini, sc, owner, 1, ctx);
     } else if (strcmp(name, "posfreeze") == 0) {
         sc->type = SCTRL_POSFREEZE;
         Expr_SetInt(&sc->arg[0], 1);
-        ok = compile_key(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT);
+        ok = compile_key_ctx(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT, ctx);
     } else if (strcmp(name, "velset") == 0 || strcmp(name, "veladd") == 0 || strcmp(name, "velmul") == 0) {
         sc->type = name[3] == 's' ? SCTRL_VELSET : name[3] == 'a' ? SCTRL_VELADD : SCTRL_VELMUL;
-        ok = parse_xyz(ini, sc, owner, 1);
+        ok = parse_xyz_ctx(ini, sc, owner, 1, ctx);
     } else if (strcmp(name, "gravity") == 0) {
         sc->type = SCTRL_GRAVITY;
         ok = 1;
@@ -1184,7 +1228,7 @@ int StateCtrl_ParseParams(Ini *ini, StateCtrl *sc, CharData *owner)
         sc->params = text;
         s = Ini_GetValue(ini, "params");
         if (s != NULL) {
-            n = Cns_ParseValues(s, "nnnnnn", owner, &end, &sc->arg[0], &sc->arg[1], &sc->arg[2], &sc->arg[3],
+            n = Cns_ParseValuesCtx(s, "nnnnnn", owner, &end, ctx, &sc->arg[0], &sc->arg[1], &sc->arg[2], &sc->arg[3],
                                 &sc->arg[4], &sc->arg[5]);
             if (n == 0) {
                 return 0;
@@ -1352,6 +1396,10 @@ static int target_matches(const TargetEntry *e, int id)
  */
 int StateCtrl_Run(Player *p, StateCtrl *sc, StateRunCtx *ctx)
 {
+    return StateCtrl_RunCtx(p,sc,ctx,NULL);
+}
+int StateCtrl_RunCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *frame)
+{
     int own = p->custom_states == NULL;
     int r;
     int n;
@@ -1363,7 +1411,7 @@ int StateCtrl_Run(Player *p, StateCtrl *sc, StateRunCtx *ctx)
     p->ctrl_statetype = p->statetype;
     p->ctrl_movetype = p->movetype;
     p->ctrl_ctrl = p->ctrl;
-    r = StateCtrl_Apply(p, sc, ctx);
+    r = StateCtrl_ApplyCtx(p, sc, ctx, frame);
     if (p->active && (r & STATECTRL_CHANGED) && own && p->custom_states == NULL) {
         for (n = 0; p->ai_cmds[n] != -1; n++) {
         }
@@ -1471,14 +1519,14 @@ static int run_parent_var(Player *p, StateCtrl *sc, Player *parent, int add)
 }
 
 /* ChangeState / SelfState after the state change: ctrl (arg[1]) and anim (arg[2]) unless -1. */
-static void run_ctrl_anim(Player *p, StateCtrl *sc)
+static void run_ctrl_anim(Player *p, StateCtrl *sc, ExprEvalCtx *frame)
 {
-    int v = Expr_EvalInt(p, &sc->arg[1], 1);
+    int v = Expr_EvalIntCtx(p, &sc->arg[1], 1, frame);
 
     if (v != -1) {
         p->ctrl = v != 0;
     }
-    v = Expr_EvalInt(p, &sc->arg[2], 1);
+    v = Expr_EvalIntCtx(p, &sc->arg[2], 1, frame);
     if (v != -1) {
         if (v < 0) {
             Player_WarnAt(p, sc, "%s", "attempted change to negative anim");
@@ -1489,10 +1537,10 @@ static void run_ctrl_anim(Player *p, StateCtrl *sc)
 }
 
 /* ChangeAnim / ChangeAnim2: action arg[0] from element arg[1]. */
-static void run_change_anim(Player *p, StateCtrl *sc, int anim2)
+static void run_change_anim(Player *p, StateCtrl *sc, int anim2, ExprEvalCtx *frame)
 {
-    int elem = Expr_EvalInt(p, &sc->arg[1], 1);
-    int anim = Expr_EvalInt(p, &sc->arg[0], 1);
+    int elem = Expr_EvalIntCtx(p, &sc->arg[1], 1, frame);
+    int anim = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
 
     if (elem < 0) {
         Player_WarnAt(p, sc, "%s", "changed to negative animelem");
@@ -1541,7 +1589,7 @@ static void make_dust(int x, int y)
 
 /* Portability fix: literal segments (including decoded "%%") and the final
  * clipboard string are data. Only validated parameter specifiers are formats. */
-static void run_clipboard(Player *p, StateCtrl *sc)
+static void run_clipboard(Player *p, StateCtrl *sc, ExprEvalCtx *frame)
 {
     CnsText *t = sc->params;
     char buf[0x1000];
@@ -1573,7 +1621,7 @@ static void run_clipboard(Player *p, StateCtrl *sc)
             break;
         }
         start = t->pos[i];
-        type = Expr_Eval(p, &sc->arg[i], &ival, &fval);
+        type = Expr_EvalCtx(p, &sc->arg[i], &ival, &fval, frame);
         mark = &t->text[start + t->len[i]];
         saved = *mark;
         *mark = '\0';
@@ -2046,6 +2094,10 @@ static int run_tagin(Player *p, StateCtrl *sc, Player *partner)
  */
 int StateCtrl_Apply(Player *p, StateCtrl *sc, StateRunCtx *ctx)
 {
+    return StateCtrl_ApplyCtx(p,sc,ctx,NULL);
+}
+int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *frame)
+{
     GameVars *g = g_game;
     Player *enemy = ctx->enemy;
     Player *partner = ctx->partner;
@@ -2054,11 +2106,15 @@ int StateCtrl_Apply(Player *p, StateCtrl *sc, StateRunCtx *ctx)
     HitDef *hd = &p->hitdef;
     int v;
 
+    if (frame!=NULL && !script_frame_supported(sc->type)) {
+        Player_Warn(p,"Controller does not support a script local frame");return STATECTRL_STOP;
+    }
+
     switch (sc->type) {
     case SCTRL_NULL:
         return 0;
     case SCTRL_CHANGESTATE:
-        v = Expr_EvalInt(p, &sc->arg[0], 1);
+        v = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
         if (v < 0) {
             Player_WarnAt(p, sc, "%s", "attempted change to negative state");
             v = 0;
@@ -2069,7 +2125,7 @@ int StateCtrl_Apply(Player *p, StateCtrl *sc, StateRunCtx *ctx)
             g->stage.autoturn != 0 && !Screen_IsSpecial() && Player_IsActive(enemy)) {
             Player_FaceTowards(p, enemy);
         }
-        run_ctrl_anim(p, sc);
+        run_ctrl_anim(p, sc, frame);
         return 5;
     case SCTRL_SELFSTATE:
         Player_ClearCustomState(p);
@@ -2079,7 +2135,7 @@ int StateCtrl_Apply(Player *p, StateCtrl *sc, StateRunCtx *ctx)
             v = 0;
         }
         Player_ChangeState(v, p);
-        run_ctrl_anim(p, sc);
+        run_ctrl_anim(p, sc, frame);
         return 5;
     case SCTRL_TURN:
         Player_Turn(p);
@@ -2163,24 +2219,24 @@ int StateCtrl_Apply(Player *p, StateCtrl *sc, StateRunCtx *ctx)
         return 0;
     }
     case SCTRL_CTRLSET:
-        p->ctrl = Expr_EvalInt(p, &sc->arg[0], 1) != 0;
+        p->ctrl = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame) != 0;
         return 0;
     case SCTRL_POSSET:
-        if (Expr_EvalInt(p, &sc->arg[0], 0)) {
-            p->pos.x = Player_FromLocalCoord(p, Expr_EvalFloat(p, &sc->arg[3])) + g->camera_offset_x;
+        if (Expr_EvalIntCtx(p, &sc->arg[0], 0, frame)) {
+            p->pos.x = Player_FromLocalCoord(p, Expr_EvalFloatCtx(p, &sc->arg[3], frame)) + g->camera_offset_x;
         }
-        if (Expr_EvalInt(p, &sc->arg[1], 0)) {
-            p->pos.y = Player_FromLocalCoord(p, Expr_EvalFloat(p, &sc->arg[4]));
+        if (Expr_EvalIntCtx(p, &sc->arg[1], 0, frame)) {
+            p->pos.y = Player_FromLocalCoord(p, Expr_EvalFloatCtx(p, &sc->arg[4], frame));
         }
         return 0;
     case SCTRL_POSADD:
-        if (Expr_EvalInt(p, &sc->arg[0], 0)) {
-            float x = (float)((double)Expr_EvalFloat(p, &sc->arg[3]) * p->facing);
+        if (Expr_EvalIntCtx(p, &sc->arg[0], 0, frame)) {
+            float x = (float)((double)Expr_EvalFloatCtx(p, &sc->arg[3], frame) * p->facing);
 
             p->pos.x = Player_FromLocalCoord(p, x) + p->pos.x;
         }
-        if (Expr_EvalInt(p, &sc->arg[1], 0)) {
-            float y = Expr_EvalFloat(p, &sc->arg[4]);
+        if (Expr_EvalIntCtx(p, &sc->arg[1], 0, frame)) {
+            float y = Expr_EvalFloatCtx(p, &sc->arg[4], frame);
 
             p->pos.y = Player_FromLocalCoord(p, y) + p->pos.y;
         }
@@ -2189,21 +2245,21 @@ int StateCtrl_Apply(Player *p, StateCtrl *sc, StateRunCtx *ctx)
         p->pos_freeze = Expr_EvalInt(p, &sc->arg[0], 1) != 0;
         return 0;
     case SCTRL_VELSET:
-        if (Expr_EvalInt(p, &sc->arg[0], 0)) {
-            p->vel.x = Player_FromLocalCoord(p, (double)Expr_EvalFloat(p, &sc->arg[3]) * p->facing);
+        if (Expr_EvalIntCtx(p, &sc->arg[0], 0, frame)) {
+            p->vel.x = Player_FromLocalCoord(p, (double)Expr_EvalFloatCtx(p, &sc->arg[3], frame) * p->facing);
         }
-        if (Expr_EvalInt(p, &sc->arg[1], 0)) {
-            p->vel.y = Player_FromLocalCoord(p, Expr_EvalFloat(p, &sc->arg[4]));
+        if (Expr_EvalIntCtx(p, &sc->arg[1], 0, frame)) {
+            p->vel.y = Player_FromLocalCoord(p, Expr_EvalFloatCtx(p, &sc->arg[4], frame));
         }
         return 0;
     case SCTRL_VELADD:
-        if (Expr_EvalInt(p, &sc->arg[0], 0)) {
-            float x = (float)((double)Expr_EvalFloat(p, &sc->arg[3]) * p->facing);
+        if (Expr_EvalIntCtx(p, &sc->arg[0], 0, frame)) {
+            float x = (float)((double)Expr_EvalFloatCtx(p, &sc->arg[3], frame) * p->facing);
 
             p->vel.x = Player_FromLocalCoord(p, x) + p->vel.x;
         }
-        if (Expr_EvalInt(p, &sc->arg[1], 0)) {
-            float y = Expr_EvalFloat(p, &sc->arg[4]);
+        if (Expr_EvalIntCtx(p, &sc->arg[1], 0, frame)) {
+            float y = Expr_EvalFloatCtx(p, &sc->arg[4], frame);
 
             p->vel.y = Player_FromLocalCoord(p, y) + p->vel.y;
         }
@@ -2237,10 +2293,10 @@ int StateCtrl_Apply(Player *p, StateCtrl *sc, StateRunCtx *ctx)
         }
         return 0;
     case SCTRL_CHANGEANIM:
-        run_change_anim(p, sc, 0);
+        run_change_anim(p, sc, 0, frame);
         return 0;
     case SCTRL_CHANGEANIM2:
-        run_change_anim(p, sc, 1);
+        run_change_anim(p, sc, 1, frame);
         return 0;
     case SCTRL_PLAYSND:
         PlaySnd_Run(sc->params, p, sc);
@@ -2594,7 +2650,7 @@ int StateCtrl_Apply(Player *p, StateCtrl *sc, StateRunCtx *ctx)
         return run_parent_var(p, sc, parent, 1);
     case SCTRL_DISPLAYTOCLIPBOARD:
     case SCTRL_APPENDTOCLIPBOARD:
-        run_clipboard(p, sc);
+        run_clipboard(p, sc, frame);
         return 0;
     case SCTRL_CLEARCLIPBOARD: {
         TextRing *ring = p->warnings;

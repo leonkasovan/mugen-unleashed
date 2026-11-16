@@ -2085,4 +2085,11 @@ void Trigger_EvalCtx(Player *p, const Trigger *t, ExprEvalCtx *ctx);
 int Cns_ParseExprListCtx(const char *s, CharData *owner, const char **end, Expr **out, ExprCompileCtx *ctx);
 int Cns_ParseArgsCtx(const char *s, const char *fmt, CharData *owner, const char **end, ExprValue *tokens, char *types, int *count, int max, ExprCompileCtx *ctx);
 
+float Expr_EvalFloatCtx(Player *p, const Expr *e, ExprEvalCtx *ctx);
+int Cns_ParseValuesCtx(const char *s, const char *fmt, CharData *owner, const char **end, ExprCompileCtx *ctx, ...);
+int StateCtrl_ScriptType(const char *name);
+int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompileCtx *ctx);
+int StateCtrl_RunCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *frame);
+int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *frame);
+
 #endif /* MUGEN_SYMBOLS_H */

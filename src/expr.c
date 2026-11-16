@@ -994,9 +994,13 @@ int Expr_EvalIntCtx(Player *p, const Expr *e, int warn, ExprEvalCtx *ctx)
 /* 0x004029A0: evaluates e as a float (bottom gives 0). */
 float Expr_EvalFloat(Player *p, const Expr *e)
 {
+    return Expr_EvalFloatCtx(p,e,NULL);
+}
+float Expr_EvalFloatCtx(Player *p, const Expr *e, ExprEvalCtx *ctx)
+{
     float fval;
     int ival;
-    int ret = Expr_Eval(p, e, &ival, &fval);
+    int ret = Expr_EvalCtx(p, e, &ival, &fval, ctx);
 
     if (ret == 0) {
         sprintf(g_libraryErrorText, EXPR_FATAL_MALFORMED, g_game->frames, p->name, p->id, p->state_no);

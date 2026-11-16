@@ -176,18 +176,18 @@ static void test_clipboard(void)
     StateCtrl sc = {0};
     sc.type = SCTRL_DISPLAYTOCLIPBOARD;
     sc.params = CnsText_Parse("\"100%% %%n\""); assert(sc.params);
-    run_clipboard(&player, &sc); assert(!strcmp(clipboard, "100% %n")); free(sc.params);
+    run_clipboard(&player, &sc, NULL); assert(!strcmp(clipboard, "100% %n")); free(sc.params);
     sc.params = CnsText_Parse("\"value=%d / %.2f%%\""); assert(sc.params);
     Expr_SetInt(&sc.arg[0], 7); Expr_SetFloat(&sc.arg[1], 1.5f);
-    run_clipboard(&player, &sc); assert(!strcmp(clipboard, "value=7 / 1.50%"));
+    run_clipboard(&player, &sc, NULL); assert(!strcmp(clipboard, "value=7 / 1.50%"));
     sc.type = SCTRL_APPENDTOCLIPBOARD;
-    run_clipboard(&player, &sc); assert(!strcmp(clipboard, "value=7 / 1.50%value=7 / 1.50%"));
+    run_clipboard(&player, &sc, NULL); assert(!strcmp(clipboard, "value=7 / 1.50%value=7 / 1.50%"));
     free(sc.params);
     sc.type = SCTRL_DISPLAYTOCLIPBOARD;
     sc.params = CnsText_Parse("\"left\\q%d\""); assert(sc.params);
-    run_clipboard(&player, &sc); assert(!strcmp(clipboard, "left7")); free(sc.params);
+    run_clipboard(&player, &sc, NULL); assert(!strcmp(clipboard, "left7")); free(sc.params);
     sc.params = CnsText_Parse("\"%99999d\""); assert(sc.params);
-    run_clipboard(&player, &sc); assert(strlen(clipboard) == 4095); free(sc.params);
+    run_clipboard(&player, &sc, NULL); assert(strlen(clipboard) == 4095); free(sc.params);
     assert(!CnsText_Parse("\"bad\\"));
     puts("ok: clipboard percent literals, numeric parameters, truncation, malformed escape");
 }
@@ -373,10 +373,10 @@ static void test_zss_installation(void)
     puts("ok: atomic ZSS state installation, retained ownership and Stream loading");
 }
 static int visited[16], visits, stop_visit;
-static int record_zss_controller(Player *p, StateCtrl *sc, void *context)
+static int record_zss_controller(Player *p, StateCtrl *sc, ExprEvalCtx *frame, void *context)
 {
     assert(context==&owner && sc->type==SCTRL_CTRLSET && visits<16);
-    visited[visits++]=Expr_EvalInt(p,&sc->arg[0],0);
+    visited[visits++]=Expr_EvalIntCtx(p,&sc->arg[0],0,frame);
     p->var[0]=visited[visits-1];
     return visits==stop_visit ? STATECTRL_STOP|STATECTRL_CHANGED : 0;
 }
@@ -540,13 +540,73 @@ static void test_expression_contexts(void)
     memset(&expression,0,sizeof(expression));
     puts("ok: explicit expression contexts, nested cond/arguments, clone ownership and invalid-frame guards");
 }
-static int reenter_zss(Player *p, StateCtrl *sc, void *context)
+static int reenter_zss(Player *p, StateCtrl *sc, ExprEvalCtx *frame, void *context)
 {
     ZssProgram *program=context;
-    int result;
+    int result, before;
     assert(sc->type==SCTRL_CTRLSET);
+    before=Expr_EvalIntCtx(p,&sc->arg[0],0,frame);
     assert(Zss_RunBody(program,1,p,reenter_zss,context,&result) && !result);
+    assert(Expr_EvalIntCtx(p,&sc->arg[0],0,frame)==before);
     return 0;
+}
+static void test_zss_controller_contexts(void)
+{
+    const struct {const char *source;int type,arg;} cases[]={
+        {"VelSet{x:$x;y:$y}",SCTRL_VELSET,3},
+        {"VelAdd{x:cond($y,$x,0)}",SCTRL_VELADD,3},
+        {"PosSet{x:$x;y:$y}",SCTRL_POSSET,3},
+        {"PosAdd{x:$x}",SCTRL_POSADD,3},
+        {"CtrlSet{value:$x}",SCTRL_CTRLSET,0},
+        {"ChangeState{value:$x;ctrl:$y;anim:$x}",SCTRL_CHANGESTATE,0},
+        {"ChangeAnim{value:$x;elem:$y}",SCTRL_CHANGEANIM,0},
+        {"Turn{}",SCTRL_TURN,-1}, {"Null{}",SCTRL_NULL,-1},
+        {"ClearClipboard{}",SCTRL_CLEARCLIPBOARD,-1}
+    };
+    const char *text="DisplayToClipboard{text:\"$x=%i y=%g k=%i\";params:$x,$y,cond($x=4,8,9)}";
+    const char *bad[]={"CtrlSet{value:$unknown}","CtrlSet{value:cond($x,1,$unknown)}","CtrlSet{value:$x,1}","CtrlSet{value:$x && 1}","CtrlSet{}","CtrlSet{value:$x;value:1}","Helper{id:$x}","ChangeState{ctrl:$x}","DisplayToClipboard{text:\"%i %i\";params:$x}","VelSet{x:$x,1}"};
+    const char *body="[StateDef 0]\nlet value=1;\nCtrlSet{value:$value}\nlet value=$value+1;\nCtrlSet{value:$value}\nfor i=1;3 {CtrlSet{value:$value+$i}}\n";
+    StateCtrl sc={0}, failed={0};
+    ZssProgram *program=NULL;
+    ZssDiagnostic d;
+    ExprCompileCtx compile={&owner,context_slot,0};
+    ExprValue values[2]={{0},{0}};
+    char types[2]={EXPR_INT,EXPR_FLOAT};
+    ExprEvalCtx frame={values,types,2};
+    size_t j;
+    int result, calls;
+    values[0].i=3;values[1].f=1.5f;
+    for(j=0;j<sizeof(cases)/sizeof(*cases);j++) {
+        assert(Zss_CompileControllerCtx(cases[j].source,strlen(cases[j].source),&owner,&sc,&d,&compile));
+        assert(sc.type==cases[j].type);
+        if(cases[j].arg>=0) assert(Expr_EvalFloatCtx(&player,&sc.arg[cases[j].arg],&frame)==3.0f);
+        StateCtrl_Free(&sc);zss_no_allocs();
+    }
+    assert(Zss_CompileControllerCtx(text,strlen(text),&owner,&sc,&d,&compile));
+    run_clipboard(&player,&sc,&frame);assert(!strcmp(clipboard,"$x=3 y=1.5 k=9"));
+    values[0].i=4;values[1].f=2.5f;
+    run_clipboard(&player,&sc,&frame);assert(!strcmp(clipboard,"$x=4 y=2.5 k=8"));
+    sc.type=SCTRL_APPENDTOCLIPBOARD;run_clipboard(&player,&sc,&frame);
+    assert(!strcmp(clipboard,"$x=4 y=2.5 k=8$x=4 y=2.5 k=8"));StateCtrl_Free(&sc);zss_no_allocs();
+    assert(!Zss_CompileController("CtrlSet{value:$x}",strlen("CtrlSet{value:$x}"),&owner,&failed,&d));zss_no_allocs();
+    for(j=0;j<sizeof(bad)/sizeof(*bad);j++) {
+        assert(!Zss_CompileControllerCtx(bad[j],strlen(bad[j]),&owner,&failed,&d,&compile));
+        assert(!failed.params && !failed.arg[0].count && d.message && !compile.depth);zss_no_allocs();
+    }
+    assert(Zss_CompileProgram(body,strlen(body),&owner,&program,&d));visits=stop_visit=0;
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert(!result && visits==5 && visited[0]==1 && visited[1]==2 && visited[2]==3 && visited[3]==4 && visited[4]==5);
+    Zss_FreeProgram(program);zss_no_allocs();
+    /* Inject failure into every owned allocation while compiling local/nested
+     * clipboard parameters, including its text payload and temporary INI. */
+    zss_calloc_calls=0;assert(Zss_CompileControllerCtx(text,strlen(text),&owner,&sc,&d,&compile));calls=zss_calloc_calls;StateCtrl_Free(&sc);
+    for(j=1;j<=(size_t)calls;j++) {
+        zss_calloc_calls=0;zss_fail_call=(int)j;
+        if(Zss_CompileControllerCtx(text,strlen(text),&owner,&failed,&d,&compile)) StateCtrl_Free(&failed);
+        assert(!failed.params && !failed.arg[0].count && !compile.depth);zss_no_allocs();
+    }
+    zss_fail_call=0;
+    puts("ok: local controller parameters, runtime frame binding, clipboard formatting and partial cleanup");
 }
 static void test_zss_locals(void)
 {
@@ -554,7 +614,7 @@ static void test_zss_locals(void)
     const char *mutate="[StateDef 0]\nvar(0):=0;\nfor i=0;4 {var(0):=var(0)+1;let i=$i+1;}\nvar(1):=$i;\n";
     const char *lifetime="[StateDef 0]\nvar(0):=0;\nif var(2)=0 {let x=9;}\nif $x {var(0):=9;}\n";
     const char *nested="[StateDef 0]\nvar(0):=0;\nfor i=1;3 {for j=1;3 {if $j=2 {continue;} if $i=3 {break;} var(0):=var(0)+$i*$j;}}\n";
-    const char *bad[]={"let a=;", "let a=1", "let a,b=1,2;", "let $a=1;", "let a=1;\n$a:=2;", "var(0):=$unknown;", "let a=$unknown;", "let a=1;\nCtrlSet{value:$a}", "let a=1;\n[StateDef 1]\nvar(0):=$a;", "for i=0;3; {}"};
+    const char *bad[]={"let a=;", "let a=1", "let a,b=1,2;", "let $a=1;", "let a=1;\n$a:=2;", "var(0):=$unknown;", "let a=$unknown;", "let a=1;\nCtrlSet{value:$unknown}", "let a=1;\n[StateDef 1]\nvar(0):=$a;", "for i=0;3; {}"};
     ZssProgram *program=NULL, *failed=NULL;
     ZssDiagnostic d;
     char text[16384];
@@ -594,7 +654,7 @@ static void test_zss_locals(void)
         snprintf(text,sizeof(text),"[StateDef 0]\n%s",bad[j]);
         assert(!Zss_CompileProgram(text,strlen(text),&owner,&failed,&d));assert(!failed && d.message);zss_no_allocs();
     }
-    strcpy(text,"[StateDef 0]\nlet x=3;\nCtrlSet{value:1}\nvar(0):=$x;\n[StateDef 1]\nlet x=9;\nvar(1):=$x;\n");
+    strcpy(text,"[StateDef 0]\nlet x=3;\nCtrlSet{value:$x}\nvar(0):=$x;\n[StateDef 1]\nlet x=9;\nvar(1):=$x;\n");
     assert(Zss_CompileProgram(text,strlen(text),&owner,&program,&d));
     assert(Zss_RunBody(program,0,&player,reenter_zss,program,&result));
     assert(!result && player.var[0]==3 && player.var[1]==9);Zss_FreeProgram(program);zss_no_allocs();
@@ -796,6 +856,7 @@ int main(void)
     test_zss_ranges();
     test_expression_contexts();
     test_zss_locals();
+    test_zss_controller_contexts();
     test_zss_installation();
 #else
     test_controller_parse(); test_variables(); test_clipboard();

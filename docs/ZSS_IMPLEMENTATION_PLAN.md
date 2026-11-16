@@ -956,3 +956,77 @@ Validation on Linux x86-64:
 
 Original installations and display dimensions were not changed. Native 32-bit,
 Windows, Android NDK and Vita builds/devices remain open qualification work.
+
+### Local controller-parameter integration
+
+The audited controller subset now compiles local parameter expressions through
+Zss_CompileControllerCtx and StateCtrl_ParseParamsCtx. The token reader permits
+local tokens only when a lexical compile context is present. StateDef properties
+and the legacy standalone-controller wrapper retain their rejection of locals.
+Unknown names, duplicate/unknown keys, malformed or partially consumed numeric
+parameters, and unsupported controllers fail before a program is installed.
+Lazy &&/|| parameters remain rejected in the context-aware profile.
+
+The enabled set is unchanged: VelSet, VelAdd, PosSet, PosAdd, CtrlSet, ChangeState,
+ChangeAnim, Turn, Null, DisplayToClipboard, AppendToClipboard and ClearClipboard.
+An engine-owned capability table now supplies the bridge's name check and the
+runtime's type check. StateCtrl_ParseParamsCtx refuses unsupported types when a
+compile context is supplied; StateCtrl_ApplyCtx stops a context-bearing invocation
+of an unsupported type. Adding an entry alone is not enough to expand this set:
+its nested compile helpers, runtime reads and failure ownership must be audited.
+
+The shared numeric key/XYZ helpers and formatted expression-list reader take an
+explicit compile context. Cns_ParseValues and Cns_ParseValuesCtx share one va_list
+implementation. Legacy signatures remain wrappers passing NULL; no global mode,
+current-frame pointer, local-to-character-var remapping or token substitution was
+introduced. String literals such as "$x=%i" remain literal text. Compiled local
+parameters retain slot operands, not values captured while compiling a file.
+
+ZssControllerRun now receives the borrowed current ExprEvalCtx in addition to its
+adapter context. The engine adapter calls StateCtrl_RunCtx, preserving snapshots,
+stop/state-change bits and the existing AI bookkeeping. StateCtrl_ApplyCtx and the
+supported animation/clipboard helpers evaluate parameters with that same frame
+at their original read sites. A float context wrapper shares the existing numeric
+conversion/bottom semantics. None of the original engine struct layouts changed.
+
+In particular, ChangeState still evaluates its state number before changing state,
+then reads ctrl and anim afterward. The outgoing local frame remains live during
+those post-change reads. Parameters are not eagerly replaced with constants before
+dispatch. Subsequent controllers in the old body stop executing on STATECTRL_STOP.
+A callback must not retain its borrowed frame; reentrant state executions receive
+separate frames, so inner slot values cannot overwrite the outer caller's values.
+
+Validation completed on Linux x86-64:
+
+- The ZSS/controller host suite passes under ASan/UBSan (leak detection disabled
+  in this environment). New tests cover each supported numeric parameter schema,
+  nested cond/local expressions, changing local values across controller visits,
+  loop-index parameters, multi-value clipboard formatting, append behavior,
+  literal dollar strings, nested/reentrant frame preservation, unknown locals,
+  trailing comma values, duplicate/missing keys, unsupported complex controllers,
+  and failure injection through temporary INI/text/expression ownership.
+- Existing CNS and lexer tests pass. The review-regression suite passes under
+  ASan/UBSan with MUGEN_MEMPROF_NO_WRAP=1 for its standalone boundary harness.
+  Host syntax checks with -Wall -Wextra -Werror pass for the six changed production
+  C units, including an ANDROID_PORT check; that is not an Android NDK build.
+- The full native engine links with MUGEN_MODEL3D=0. A copied offscreen KFM fixture
+  executes every enabled controller type. It uses local values for CtrlSet,
+  PosSet/PosAdd, VelSet/VelAdd, ChangeAnim, ChangeState and clipboard parameters;
+  checks animation/control/position/velocity in the same body; and checks the
+  new state's control/animation before entering a success state. The native log
+  records 65000 -> 65001 -> 65002, with body results 5, 5 and 0 respectively, and
+  no visit to the fixture's failure states 65010..65013. The ChangeState ctrl
+  expression is cond(stateno=$target,$one,0), so this specifically exercises its
+  post-change evaluation with the outgoing local frame. A trailing CtrlSet(0)
+  in the old body must be skipped for the success state to be reached.
+- Native parent/candidate plain-CNS quick-VS runs each yield 195 log fragments,
+  identical with tools/compare_logs.py numeric normalization. This is regression
+  evidence, not a gameplay-state/determinism equivalence claim. All native runs
+  are bounded smoke runs; the ZSS run exits on its 12-second timeout with orderly
+  cleanup, rather than completing a match.
+
+Original game trees and display dimensions were not changed. Windows/32-bit,
+Android NDK and Vita/device qualification remain open. Functions/call, multi-name
+bindings, local := syntax, switch, persistence/hitpause attributes, lazy logical
+compilation, broader controller payloads and StateDef-local expressions remain
+outside the supported profile.

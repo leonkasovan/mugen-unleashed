@@ -26,6 +26,11 @@ static int allowed_key(const char *type, const char *key)
 int Zss_CompileController(const char *source, size_t size, CharData *owner,
                           StateCtrl *out, ZssDiagnostic *diagnostic)
 {
+    return Zss_CompileControllerCtx(source,size,owner,out,diagnostic,NULL);
+}
+int Zss_CompileControllerCtx(const char *source, size_t size, CharData *owner,
+                             StateCtrl *out, ZssDiagnostic *diagnostic, ExprCompileCtx *ctx)
+{
     ZssLexer lex;
     ZssParamBlock block = {0};
     ScriptParam *pairs = block.pairs;
@@ -41,22 +46,16 @@ int Zss_CompileController(const char *source, size_t size, CharData *owner,
     }
     if (!ZssLex_Init(&lex, source, size, 65536)) { message = lex.error; goto done; }
     if (ZssLex_Next(&lex) != ZSS_IDENT) goto lexical;
-    /* Enable only payloads with audited partial-failure ownership in this
-     * first bridge. Complex controllers are deferred to the shared-context
-     * migration rather than exposing legacy partial-parse cleanup hazards. */
-    if (!(ZssLex_Is(&lex, "velset") || ZssLex_Is(&lex, "veladd") ||
-          ZssLex_Is(&lex, "posset") || ZssLex_Is(&lex, "posadd") ||
-          ZssLex_Is(&lex, "ctrlset") || ZssLex_Is(&lex, "changestate") ||
-          ZssLex_Is(&lex, "changeanim") || ZssLex_Is(&lex, "turn") ||
-          ZssLex_Is(&lex, "null") || ZssLex_Is(&lex, "displaytoclipboard") ||
-          ZssLex_Is(&lex, "appendtoclipboard") || ZssLex_Is(&lex, "clearclipboard"))) {
-        message = "Controller not yet enabled in the ZSS bridge"; goto done;
-    }
+    /* The engine's capability table is shared with the runtime context guard. */
+    if (lex.token.length >= sizeof(name)) {message="Controller name too long";goto done;}
     memcpy(name, source + lex.token.offset, lex.token.length);
     name[lex.token.length] = 0;
+    if (StateCtrl_ScriptType(name)<0) {
+        message = "Controller not yet enabled in the ZSS bridge"; goto done;
+    }
     message = "Expected '{' after controller name";
     if (ZssLex_Next(&lex) != '{') goto lexical;
-    if (!Zss_ReadParams(&lex, '}', name, &block, diagnostic)) goto cleanup;
+    if (!Zss_ReadParamsCtx(&lex, '}', name, &block, diagnostic, ctx)) goto cleanup;
     message = "Unexpected text after controller (no trailing ';')";
     if (ZssLex_Next(&lex) != ZSS_EOF) goto lexical;
     for (i = 1; i < block.count; i++) {
@@ -66,9 +65,8 @@ int Zss_CompileController(const char *source, size_t size, CharData *owner,
     }
     ini = ScriptParams_ToIni(pairs, block.count, &message);
     if (ini == NULL) goto done;
-    /* Parameter expressions use the existing MUGEN dialect in this increment.
-     * Strict ZSS expression contexts remain pending. */
-    if (!StateCtrl_ParseParams(ini, &controller, owner)) {
+    /* Locals remain symbolic operands; never snapshot parameter values here. */
+    if (!StateCtrl_ParseParamsCtx(ini, &controller, owner, ctx)) {
         message = "Controller parameters rejected by MUGEN compiler"; goto done;
     }
     *out = controller;

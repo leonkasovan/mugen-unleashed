@@ -302,8 +302,8 @@ static int body(ZssParser *p, unsigned depth, unsigned loops, uint32_t *first)
             next(p);
             if (!enclosed(p,0)) return 0;
             id=node(p);if (id==NO_NODE) return 0;
-            if (!Zss_CompileController(p->lex.source+start.offset,p->lex.pos-start.offset,
-                                      p->owner,&p->program->nodes[id].controller,p->diagnostic)) {
+            if (!Zss_CompileControllerCtx(p->lex.source+start.offset,p->lex.pos-start.offset,
+                                      p->owner,&p->program->nodes[id].controller,p->diagnostic,&p->context)) {
                 relocate(p->diagnostic,&start);return 0;
             }
             end_line=p->lex.token.line;next(p);
@@ -500,7 +500,7 @@ int Zss_RunBody(ZssProgram *p, size_t state, Player *player,
             if (!count) return 0;
             top=n->kind==NODE_BREAK ? count-1 : count;break;
         default:
-            bits|=run(player,&n->controller,context);
+            bits|=run(player,&n->controller,&evalctx,context);
             if (bits&STATECTRL_STOP) {*result=bits;return 1;}
             break;
         }
@@ -521,11 +521,11 @@ void Zss_FreeBoundBody(void *binding)
     if (b==NULL) return;
     Zss_FreeProgram(b->program);free(b);
 }
-static int run_bound_leaf(Player *p, StateCtrl *controller, void *context)
+static int run_bound_leaf(Player *p, StateCtrl *controller, ExprEvalCtx *frame, void *context)
 {
     /* Keep command hints collected by this body's guards for the existing AI
      * bookkeeping in StateCtrl_Run. The outer state loop reset them already. */
-    return StateCtrl_Run(p,controller,context);
+    return StateCtrl_RunCtx(p,controller,context,frame);
 }
 int Zss_RunBoundBody(Player *p, void *binding, StateRunCtx *context)
 {

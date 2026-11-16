@@ -119,20 +119,13 @@ int Cns_CompileFloat(Ini *ini, const char *key, Expr *e, CharData *owner, float 
     return 1;
 }
 
-/*
- * 0x00458CE0: compiles the comma-separated values of s into the Expr *
- * arguments (NULL skips a value, which is then leaked), one per 'n'/'i'/'f'
- * of fmt. Returns the number of values read; *end is set after the trailing
- * blanks. A value ending in something else than ',' or the end of the text is
- * accepted only for the last one.
- */
-int Cns_ParseValues(const char *s, const char *fmt, CharData *owner, const char **end, ...)
+/* Shared implementation for the legacy and explicit-context value readers. */
+static int Cns_ParseValuesV(const char *s, const char *fmt, CharData *owner, const char **end, ExprCompileCtx *ctx, va_list ap)
 {
     const char *cur = s;
     const char *e;
     Expr tmp;
     Expr *out;
-    va_list ap;
     int count, i, want;
 
     memset(&tmp, 0, sizeof(tmp));
@@ -143,11 +136,10 @@ int Cns_ParseValues(const char *s, const char *fmt, CharData *owner, const char 
     if (fmt[count] != ':' && fmt[count] != '\0') {
         return 0;
     }
-    va_start(ap, end);
     for (i = 0; i < count; i++) {
         want = want_of(fmt[i]);
         out = va_arg(ap, Expr *);
-        if (!Expr_Compile(cur, &tmp, owner, &e, want)) {
+        if (!Expr_CompileCtx(cur, &tmp, owner, &e, want, ctx)) {
             break;
         }
         if (*e == ',') {
@@ -169,7 +161,6 @@ int Cns_ParseValues(const char *s, const char *fmt, CharData *owner, const char 
         }
         memset(&tmp, 0, sizeof(tmp));
     }
-    va_end(ap);
     while (is_blank(*cur)) {
         cur++;
     }
@@ -177,6 +168,27 @@ int Cns_ParseValues(const char *s, const char *fmt, CharData *owner, const char 
         *end = cur;
     }
     return i;
+}
+
+/*
+ * 0x00458CE0: compiles the comma-separated values of s into the Expr *
+ * arguments (NULL skips a value, which is then leaked), one per 'n'/'i'/'f'
+ * of fmt. Returns the number of values read; *end is set after the trailing
+ * blanks. A value ending in something else than ',' or the end of the text is
+ * accepted only for the last one.
+ */
+int Cns_ParseValues(const char *s, const char *fmt, CharData *owner, const char **end, ...)
+{
+    va_list ap;
+    int n;
+    va_start(ap,end);n=Cns_ParseValuesV(s,fmt,owner,end,NULL,ap);va_end(ap);return n;
+}
+/* Port addition: explicit context also reaches every formatted parameter. */
+int Cns_ParseValuesCtx(const char *s, const char *fmt, CharData *owner, const char **end, ExprCompileCtx *ctx, ...)
+{
+    va_list ap;
+    int n;
+    va_start(ap,ctx);n=Cns_ParseValuesV(s,fmt,owner,end,ctx,ap);va_end(ap);return n;
 }
 
 /*
