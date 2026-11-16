@@ -1620,7 +1620,7 @@ int GameVars_Init(void)
     g_gfxClear(0);
     g = g_game;
     g->render_target = g->screen;
-    g_spriteDecompBuffer = DecompBuffer_Create(g->sprite_decompression_buffer_size << 10);
+    g_spriteDecompBuffer = DecompBuffer_Create(DecompBuffer_ConfigBytes(g->sprite_decompression_buffer_size));
     if (g_spriteDecompBuffer == NULL) {
         GameVars_Free();
         Error_Printf("Can't allocate sprite decompression buffer.\n");

@@ -926,17 +926,51 @@ static DecompBlock *DecompBlock_Next(const DecompBlock *blk)
 
 static unsigned int DecompBlock_Need(unsigned int size)
 {
+    /* Port fix: reject empty and unrepresentable aligned payload extents. */
+    if (size == 0 || size > UINT_MAX - sizeof(DecompBlock) - (DECOMP_ALIGN - 1)) return 0;
     return ((size + (DECOMP_ALIGN - 1)) & ~(DECOMP_ALIGN - 1)) + (unsigned int)sizeof(DecompBlock);
+}
+
+/* Port fix: checked conversion shared by config validation and startup. */
+unsigned int DecompBuffer_ConfigBytes(int kib)
+{
+    if (kib < 128 || (unsigned int)kib > DECOMP_MAX_KIB) return 0;
+    return (unsigned int)kib * 1024u;
+}
+
+static int DecompBuffer_Valid(const DecompBuffer *buf)
+{
+    return buf != NULL && buf->data != NULL && buf->size <= DECOMP_MAX_BYTES &&
+        buf->size >= 2 * sizeof(DecompBlock) + DECOMP_ALIGN && buf->size % DECOMP_ALIGN == 0;
+}
+
+static unsigned int DecompRequest_Need(const DecompRequest *req)
+{
+    if (req == NULL || !DecompBuffer_Valid(req->pool) || req->key == NULL || req->cost < 0 ||
+        req->size > req->pool->size - 2 * sizeof(DecompBlock)) return 0;
+    return DecompBlock_Need(req->size);
+}
+
+/* Port fix: priorities saturate at INT_MAX instead of overflowing. Wide window
+ * sums preserve candidate ordering; saturation changes aging only at the old
+ * overflow boundary, without discarding cached pixels or changing struct layouts.
+ * Lifetime hit/miss/eviction counters also saturate instead of wrapping. */
+static int DecompBlock_Expire(int clock, int cost)
+{
+    int64_t expire = (int64_t)clock + cost;
+    return expire > INT_MAX ? INT_MAX : expire < 0 ? 0 : (int)expire;
 }
 
 /*
  * 0x0048C830: empties buf: one free block covering it, then the end marker
- * in its last 16 bytes. Returns 1.
+ * in its last sizeof(DecompBlock) bytes. Returns 1, or 0 for an invalid pool.
  */
 int DecompBuffer_Reset(DecompBuffer *buf)
 {
-    DecompBlock *first = buf->data;
-    DecompBlock *end = (DecompBlock *)((unsigned char *)buf->data + buf->size - sizeof(DecompBlock));
+    DecompBlock *first, *end;
+    if (!DecompBuffer_Valid(buf)) return 0;
+    first = buf->data;
+    end = (DecompBlock *)((unsigned char *)buf->data + buf->size - sizeof(DecompBlock));
 
     first->size = buf->size - sizeof(DecompBlock);
     first->expire = 0;
@@ -956,8 +990,13 @@ int DecompBuffer_Reset(DecompBuffer *buf)
 /* 0x0048C7B0: a decompression buffer of size bytes rounded up to 1 KB, or NULL. */
 DecompBuffer *DecompBuffer_Create(unsigned int size)
 {
-    DecompBuffer *buf = calloc(1, sizeof(DecompBuffer));
+    DecompBuffer *buf;
     unsigned int bytes;
+
+    /* Port fix: validate before 1-KiB rounding, allocation, or header writes. */
+    if (size == 0 || size > DECOMP_MAX_BYTES) return NULL;
+    bytes = (size + 1023u) & ~1023u;
+    buf = calloc(1, sizeof(DecompBuffer));
 
     if (buf == NULL) {
         g_outOfMemory = 1;
@@ -971,11 +1010,11 @@ DecompBuffer *DecompBuffer_Create(unsigned int size)
     buf->block_count = 0;
     buf->used_count = 0;
     buf->free_count = 0;
-    bytes = (((size - 1) >> 10) + 1) << 10;
     buf->evictions = 0;
     buf->used_bytes = 0;
     buf->data = malloc(bytes);
     if (buf->data == NULL) {
+        g_outOfMemory = 1;
         free(buf);
         return NULL;
     }
@@ -1028,20 +1067,19 @@ DecompBlock *DecompBuffer_FreeBlock(DecompBlock *blk, DecompBuffer *buf, DecompB
  */
 void *DecompBuffer_Alloc(const DecompRequest *req)
 {
-    DecompBuffer *buf = req->pool;
-    unsigned int need = DecompBlock_Need(req->size);
+    unsigned int need = DecompRequest_Need(req);
+    DecompBuffer *buf;
     DecompBlock *start, *end, *cur;
     DecompBlock *before = NULL;
     DecompBlock *best_start = NULL;
     DecompBlock *best_before = NULL;
     DecompBlock *best_end = NULL;
     unsigned int step, span, rest;
-    int best_sum = 0x7FFFFFFF;
-    int sum;
+    int64_t best_sum = INT64_MAX;
+    int64_t sum;
 
-    if (need > buf->size) {
-        return NULL;
-    }
+    if (need == 0) return NULL;
+    buf = req->pool;
     cur = buf->data;
     sum = cur->expire;
     step = cur->size;
@@ -1101,13 +1139,13 @@ void *DecompBuffer_Alloc(const DecompRequest *req)
         while (blk <= best_end) {
             if (blk->key != NULL) {
                 blk = DecompBuffer_FreeBlock(blk, buf, prev);
-                buf->evictions++;
+                if (buf->evictions < INT_MAX) ++buf->evictions;
             }
             prev = blk;
             blk = DecompBlock_Next(blk);
         }
     }
-    buf->clock = best_sum;
+    buf->clock = best_sum > INT_MAX ? INT_MAX : (int)best_sum;
     rest = best_start->size - need;
     /*
      * Split when the remainder can hold a header plus at least one aligned
@@ -1127,7 +1165,7 @@ void *DecompBuffer_Alloc(const DecompRequest *req)
     }
     best_start->cost = req->cost;
     best_start->key = req->key;
-    best_start->expire = buf->clock + req->cost;
+    best_start->expire = DecompBlock_Expire(buf->clock, req->cost);
     buf->free_count--;
     buf->used_count++;
     buf->used_bytes += best_start->size;
@@ -1149,35 +1187,35 @@ void *DecompBuffer_Alloc(const DecompRequest *req)
  */
 void *DecompBuffer_Get(const DecompRequest *req, int *hit)
 {
-    DecompBuffer *buf = req->pool;
-    unsigned int need = DecompBlock_Need(req->size);
+    unsigned int need = DecompRequest_Need(req);
+    DecompBuffer *buf;
     DecompBlock *prev = NULL;
     DecompBlock *blk;
 
+    if (hit == NULL) return NULL;
     *hit = 0;
-    if (need > buf->size) {
-        return NULL;
-    }
+    if (need == 0) return NULL;
+    buf = req->pool;
     blk = buf->data;
     if (blk->size != 0) {
         while (blk->key != req->key) {
             prev = blk;
             blk = DecompBlock_Next(blk);
             if (blk->size == 0) {
-                buf->misses++;
+                if (buf->misses < INT_MAX) ++buf->misses;
                 return DecompBuffer_Alloc(req);
             }
         }
         if (blk->size >= need) {
             blk->cost = req->cost;
-            blk->expire = buf->clock + req->cost;
-            buf->hits++;
+            blk->expire = DecompBlock_Expire(buf->clock, req->cost);
+            if (buf->hits < INT_MAX) ++buf->hits;
             *hit = 1;
             return blk + 1;
         }
         DecompBuffer_FreeBlock(blk, buf, prev);
     }
-    buf->misses++;
+    if (buf->misses < INT_MAX) ++buf->misses;
     return DecompBuffer_Alloc(req);
 }
 

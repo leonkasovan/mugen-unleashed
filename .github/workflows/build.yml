@@ -26,6 +26,7 @@ jobs:
         run: |
           sh tools/test_memprof_host.sh
           SANITIZE=1 sh tools/test_pcx.sh
+          SANITIZE=1 sh tools/test_decompbuffer.sh
           sh tools/test_zoomdiff.sh
           sh tools/test_render_baseline.sh
           sh tools/test_sdl2helpers.sh
@@ -90,6 +91,7 @@ jobs:
           sh tools/test_batchplan.sh
           sh tools/test_ini_groups.sh
           sh tools/test_selectupdate.sh
+          sh tools/test_decompbuffer.sh
       - name: Check supported source/dependency contract
         shell: cmd
         run: |

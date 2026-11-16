@@ -832,6 +832,25 @@ stream-position restoration:
 SANITIZE=address,undefined sh tools/test_snd_ogg.sh /absolute/path/to/z.character.snd
 ```
 
+## Sprite decompression pool
+
+`[Config] SpriteDecompressionBufferSize` is a fixed pool capacity in KiB, separate
+from the sound cache. For example, `16384` reserves 16 MiB. Values below 128
+retain the original 128-KiB minimum; values above 2097151 or malformed/overflowing
+numbers are rejected during config loading. Startup converts to bytes with
+checked unsigned arithmetic. The internal constructor rejects zero or capacities
+above its signed-accounting limit before rounding or allocating.
+
+Cache requests reject empty/oversized payloads, NULL owner keys and negative
+costs. Eviction candidate sums use 64-bit temporaries; stored priorities and
+lifetime hit/miss/eviction counters saturate at `INT_MAX`. This defines behavior
+at the old signed-overflow boundary without changing legacy struct layouts or
+clearing resident pixels. It may produce priority ties once saturated.
+
+To check allocation failures, boundaries, coalescing, alignment and priority
+rollover, run `SANITIZE=1 sh tools/test_decompbuffer.sh` on Linux. The same test
+without sanitizers is wired into the two MinGW CI targets.
+
 ## Automatic select.def updates (opt-in)
 
 Enable discovery in `[Config]` in `data/mugen.cfg`:

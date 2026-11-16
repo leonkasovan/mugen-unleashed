@@ -9,6 +9,8 @@
 #include "render_policy.h"
 #include "soundcache.h"
 #include "selectupdate.h"
+#include <errno.h>
+#include <ctype.h>
 
 /* The [P<n> Gamepad] groups, loaded with the rest of the options and applied
  * after the pads open (their topology is only known then). */
@@ -334,10 +336,27 @@ int Config_Load(void)
     if (g_game->layered_sprite_max < 32) {
         g_game->layered_sprite_max = 32;
     }
-    Ini_GetInt(ini, "spritedecompressionbuffersize", &g_game->sprite_decompression_buffer_size);
-    if (g_game->sprite_decompression_buffer_size < 128) {
-        g_game->sprite_decompression_buffer_size = 128;
+    /* Port fix: parse without atoi overflow, and reject unrepresentable KiB
+     * settings before startup converts them to a byte allocation. Keep the
+     * original 128-KiB minimum for representable small/negative settings. */
+    value = Ini_GetValue(ini, "spritedecompressionbuffersize");
+    if (value != NULL) {
+        char *end;
+        long kib;
+        int parsed;
+        errno = 0;
+        kib = strtol(value, &end, 10);
+        parsed = end != value;
+        while (isspace((unsigned char)*end)) ++end;
+        if (errno == ERANGE || !parsed || *end != '\0' || kib > (long)DECOMP_MAX_KIB) {
+            Error_Printf("Invalid SpriteDecompressionBufferSize (maximum %u KiB).\n", DECOMP_MAX_KIB);
+            Ini_Free(ini);
+            return 0;
+        }
+        g_game->sprite_decompression_buffer_size = kib < 128 ? 128 : (int)kib;
     }
+    if (g_game->sprite_decompression_buffer_size < 128)
+        g_game->sprite_decompression_buffer_size = 128;
     Ini_GetInt(ini, "explodmax", &g_game->explod_max);
     if (g_game->explod_max < 8) {
         g_game->explod_max = 8;

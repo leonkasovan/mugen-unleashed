@@ -57,9 +57,15 @@ MUGEN_ASSERT_SIZE(Lz5Node, 0x10);
 
 /* ---- sprite decompression buffer ---- */
 
+/* Port limits: keep capacities and accounting representable in legacy int fields. */
+#define DECOMP_MAX_BYTES 0x7ffffc00u
+#define DECOMP_MAX_KIB (DECOMP_MAX_BYTES / 1024u)
+unsigned int DecompBuffer_ConfigBytes(int kib);
+
+
 /*
  * Block of a DecompBuffer, followed by its payload. Blocks tile the buffer;
- * a block of size 0 ends the list (the last 16 bytes of the buffer).
+ * a block of size 0 ends the list (the last sizeof(DecompBlock) bytes).
  */
 typedef struct DecompBlock {
     void *key;              /* 0x00 owner (the compressed sprite data), NULL for a free block */
