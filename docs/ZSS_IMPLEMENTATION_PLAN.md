@@ -672,3 +672,32 @@ contexts, locals, block execution and file dispatch remain pending.
 The sanitizer test of an empty header exposed a missing sentinel pointer in the
 native parameter adapter. The adapter now reserves and initializes that pointer
 for empty groups; the empty-header regression exercises the real INI path.
+
+### Owned state-program and body increment
+
+`zss_program.c/.h` now compiles a bounded in-memory source into an owned opaque
+program: multiple StateDefs, the enabled leaf controllers, and nested
+if/else-if/else bodies. Duplicate states, unsupported statements and malformed
+bodies fail without publishing partial output. Compiled expressions, controller
+payloads and properties survive release of the source. Arena growth uses stable
+indices and allocate/copy/publish ownership. Prototype limits are 64 states, 1024
+nodes, 32 block levels and 1 MiB source; root statements require line boundaries.
+
+An isolated explicit-stack body executor evaluates a guard once per visit and
+dispatches selected leaves through a callback carrying original STATECTRL bits.
+State-change/stop results unwind the old body immediately. Guards use real
+MUGEN expression evaluation, including float truth values. The production
+callback must eventually call StateCtrl_Run and provide state-entry, AI and
+hitpause bookkeeping; those engine hooks are not installed by this increment.
+
+Program compilation explicitly rejects locals and &&/|| in expressions rather
+than silently promising ZSS short circuit using the current eager CNS evaluator.
+Loops, functions, attributes and assignment statements are not enabled.
+The compiler does not yet resolve .zss files or install programs into StateDefs.
+
+The host bridge gate also tests program ownership, duplicate/malformed states,
+else selection, one-time guard evaluation after side effects, float conditions,
+stop propagation, empty bodies, arena growth, nesting limits and allocation
+failure cleanup. Runtime tests inject a recording controller-dispatch boundary;
+they do not claim end-to-end gameplay/controller execution or native device
+qualification.

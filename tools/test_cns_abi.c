@@ -39,7 +39,11 @@ void *Mem_Calloc(size_t n, size_t size)
     alloc_calls++;
     if (alloc_calls == fail_alloc) { g_outOfMemory = 1; return NULL; }
     p = calloc(n, size);
+#ifdef TEST_ZSS_CONTROLLER
+    if (p == NULL) {g_outOfMemory=1;return NULL;}
+#else
     assert(p);
+#endif
     for (i = 0; i < 512; i++) if (!tracked[i]) { tracked[i] = p; return p; }
     abort();
 }
@@ -294,6 +298,84 @@ static void zss_no_allocs(void)
 #include "scriptparams.h"
 #include "zss_controller.h"
 #include "zss_statedef.h"
+#include "zss_program.h"
+static int visited[16], visits, stop_visit;
+static int record_zss_controller(Player *p, StateCtrl *sc, void *context)
+{
+    assert(context==&owner && sc->type==SCTRL_CTRLSET && visits<16);
+    visited[visits++]=Expr_EvalInt(p,&sc->arg[0],0);
+    p->var[0]=visited[visits-1];
+    return visits==stop_visit ? STATECTRL_STOP|STATECTRL_CHANGED : 0;
+}
+static void test_zss_program(void)
+{
+    const char *source="[StateDef 200;type:S;]\nif var(0)=0 { CtrlSet{value:1} CtrlSet{value:2} } else if var(0)=9 { CtrlSet{value:9} } else { CtrlSet{value:8} }\nif .5 { CtrlSet{value:3} }\n[StateDef 201]\n";
+    const char *bad[]={"", "[StateDef 0] Null{}", "[StateDef\n0] Null{}", "[StateDef 0]\n[StateDef 0]", "[StateDef 0]\nif 1 {", "[StateDef 0]\nif 0 && var(0) {Null{}}", "[StateDef 0]\nwhile 1 {Null{}}", "[StateDef 0]\nNull{};", "[StateDef 0]\nelse {Null{}}", "[StateDef 0]\nNull{} Null{}"};
+    ZssProgram *program=NULL, *failed=NULL;
+    ZssDiagnostic d;
+    const StateDef *sd;
+    int result, number;
+    size_t i;
+    int calls;
+    char *owned_source=malloc(strlen(source)+1);
+    assert(owned_source);strcpy(owned_source,source);
+    assert(Zss_CompileProgram(owned_source,strlen(owned_source),&owner,&program,&d));
+    memset(owned_source,0,strlen(source));free(owned_source);
+    assert(Zss_ProgramStateCount(program)==2);
+    sd=Zss_ProgramState(program,0,&number);assert(sd && number==200 && sd->type==STATETYPE_STAND);
+    assert(!Zss_ProgramState(program,2,NULL));
+    player.var[0]=0;visits=stop_visit=0;
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert(!result && visits==3 && visited[0]==1 && visited[1]==2 && visited[2]==3);
+    player.var[0]=9;visits=0;
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert(visits==2 && visited[0]==9 && visited[1]==3);
+    player.var[0]=7;visits=0;
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert(visits==2 && visited[0]==8);
+    player.var[0]=0;visits=0;stop_visit=1;
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert(visits==1 && (result&STATECTRL_CHANGED) && (result&STATECTRL_STOP));
+    visits=0;assert(Zss_RunBody(program,1,&player,record_zss_controller,&owner,&result) && !result && !visits);
+    {
+        ZssProgram *saved=program;
+        assert(!Zss_CompileProgram("[bad]",5,&owner,&program,&d));
+        assert(program==saved);
+    }
+    Zss_FreeProgram(program);zss_no_allocs();
+    for(i=0;i<sizeof(bad)/sizeof(*bad);i++) {
+        assert(!Zss_CompileProgram(bad[i],strlen(bad[i]),&owner,&failed,&d));
+        assert(!failed && d.message);zss_no_allocs();
+    }
+    zss_calloc_calls=0;
+    assert(Zss_CompileProgram(source,strlen(source),&owner,&program,&d));
+    calls=zss_calloc_calls;Zss_FreeProgram(program);zss_no_allocs();
+    for(i=1;i<=(size_t)calls;i++) {
+        zss_calloc_calls=0;zss_fail_call=(int)i;
+        /* Include constructor, condition and arena-growth allocation failures. */
+        if(Zss_CompileProgram(source,strlen(source),&owner,&failed,&d)) {Zss_FreeProgram(failed);failed=NULL;}
+        assert(!failed);zss_no_allocs();
+    }
+    zss_fail_call=0;
+    {
+        char many[2048], *w=many;
+        for(i=0;i<10;i++)w+=sprintf(w,"[StateDef %u]\nNull{}\n",(unsigned)i);
+        assert(Zss_CompileProgram(many,strlen(many),&owner,&program,&d));
+        assert(Zss_ProgramStateCount(program)==10);Zss_FreeProgram(program);zss_no_allocs();
+        w=many;w+=sprintf(w,"[StateDef 0]\n");
+        for(i=0;i<33;i++)w+=sprintf(w,"if 1 {");
+        for(i=0;i<33;i++)*w++='}';*w=0;
+        assert(!Zss_CompileProgram(many,strlen(many),&owner,&failed,&d));zss_no_allocs();
+    }
+    alloc_calls=0;assert(Zss_CompileProgram(source,strlen(source),&owner,&program,&d));
+    calls=alloc_calls;Zss_FreeProgram(program);
+    for(i=1;i<=(size_t)calls;i++) {
+        alloc_calls=0;fail_alloc=(int)i;
+        if(Zss_CompileProgram(source,strlen(source),&owner,&failed,&d)){Zss_FreeProgram(failed);failed=NULL;}
+        assert(!failed);zss_no_allocs();
+    }
+    fail_alloc=0;puts("ok: owned ZSS states, nested branches, one-time guards and stop propagation");
+}
 static void test_zss_state_header(void)
 {
     StateDef sd={0}, empty={0};
@@ -401,6 +483,7 @@ int main(void)
 #ifdef TEST_ZSS_CONTROLLER
     test_zss_controller();
     test_zss_state_header();
+    test_zss_program();
 #else
     test_controller_parse(); test_variables(); test_clipboard();
     test_expr_allocs(); test_trigger_copy_math(); test_state_headers();

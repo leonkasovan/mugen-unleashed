@@ -28,7 +28,7 @@ ZSS_SOURCES=""
 if [ "${TEST_ZSS_CONTROLLER:-0}" = 1 ]; then
     FLAGS="$FLAGS -DTEST_ZSS_CONTROLLER"
     LDFLAGS="${LDFLAGS:-} -Wl,--wrap=calloc -Wl,--wrap=free"
-    ZSS_SOURCES="src/ini.c src/scriptparams.c src/zss_controller.c src/zss_lex.c src/zss_params.c src/zss_statedef.c"
+    ZSS_SOURCES="src/ini.c src/scriptparams.c src/zss_controller.c src/zss_lex.c src/zss_params.c src/zss_statedef.c src/zss_program.c"
 fi
 SAN=""
 if [ "${SANITIZE:-0}" = 1 ]; then
