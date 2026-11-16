@@ -25,6 +25,7 @@ jobs:
           SDL_AUDIODRIVER: dummy
         run: |
           sh tools/test_memprof_host.sh
+          SANITIZE=1 sh tools/test_pcx.sh
           sh tools/test_zoomdiff.sh
           sh tools/test_render_baseline.sh
           sh tools/test_sdl2helpers.sh

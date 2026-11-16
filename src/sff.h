@@ -6,6 +6,11 @@
  * into sprite sets (sprite.h).
  */
 
+/* Port additions: declared record boundaries for embedded PCX images. */
+void *Pcx_DecodeSized(Palette *pal, int *w, Stream *s, int *h, int *bpp,
+                      size_t *size, int flags, size_t length);
+SpriteSet *Pcx_LoadSized(Stream *s, int flags, size_t length);
+
 /* ---- SFF file format ---- */
 
 #define SFF_VERSION_101     0x01000100u     /* 1.01 */

@@ -146,196 +146,114 @@ int Sff2_ReadPaletteNode(Sff2PaletteNode *node, Stream *s)
 
 /* ---- PCX ---- */
 
-/* End-of-file test of the palette marker scan; other stream kinds count as ended. */
-static int Pcx_StreamEnded(Stream *s)
+/* Port fix: bounded PCX byte reader; negative reads include both EOF and I/O errors. */
+static int Pcx_Byte(Stream *s, size_t *left)
 {
-    if (s->type == STREAM_FILE) {
-        return feof(s->fp);
-    }
-    if ((unsigned int)(s->type - STREAM_MEMORY) < 2) {
-        return s->eof;
-    }
-    return 1;
+    if (*left == 0) return -1;
+    --*left;
+    return Stream_GetByte(s);
+}
+static unsigned int Pcx_U16(const unsigned char *p)
+{
+    return p[0] | (unsigned int)p[1] << 8;
 }
 
-/*
- * 0x00468C60: decodes the PCX image at the stream position into a new buffer
- * of *size bytes: *w x *h pixels of 8 bits, or 24 bits stored B, G, R (the
- * planes are written from the last byte of each pixel down). With pal, the
- * 256-color palette at the end of 8-bit images (or the 16-color header
- * palette when it is missing) is set up in pal, color 0 transparent. Flags
- * keeps the palette out of textures. The stream position is restored on
- * success and for unsupported depths; NULL on errors.
- *
- * Fix: reject unreadable dimensions, invalid scanlines and overflowing image
- * extents before allocating. Release pixels if palette initialization fails.
- * The bits == 4 palette case remains unreachable.
- */
-void *Pcx_Decode(Palette *pal, int *w_out, Stream *s, int *h_out, int *bpp_out, size_t *size_out, int flags)
+/* Port fix: decode within the declared PCX record, never adjacent SFF/FNT data.
+ * All failures release pixels, zero outputs and restore the input position.
+ * Missing palette markers retain the legacy header-palette fallback; a present
+ * marker must have a complete 768-byte palette. RGB output remains B,G,R. */
+void *Pcx_DecodeSized(Palette *pal, int *w_out, Stream *s, int *h_out,
+                      int *bpp_out, size_t *size_out, int flags, size_t length)
 {
-    unsigned char colors[256 * 4];
-    unsigned short value;
-    unsigned int dpi;
-    unsigned int pal_flags = PAL_COPY;
-    int empty = 0;
-    int xmin, ymin, w, h, bits, bytes_pp, size, i;
-    unsigned char *pixels;
-    long start;
-
-    memset(colors, 0, sizeof(colors));
-    *bpp_out = 0;
-    *h_out = 0;
-    *w_out = 0;
-    *size_out = 0;
-    if (flags) {
-        pal_flags = PAL_COPY | PAL_NO_TEXTURE;
-    }
-    start = Stream_Tell(s);
-
-    /* Manufacturer, version, encoding; then bits per pixel (per plane). */
-    Stream_GetByte(s);
-    Stream_GetByte(s);
-    Stream_GetByte(s);
-    if (Stream_GetByte(s) != 8) {
-        return NULL;
-    }
-    if (Stream_ReadU16(s, &value) != 0) return NULL;
-    xmin = (short)value;
-    if (Stream_ReadU16(s, &value) != 0) return NULL;
-    ymin = (short)value;
-    if (Stream_ReadU16(s, &value) != 0) return NULL;
-    w = (short)value - xmin + 1;
-    if (Stream_ReadU16(s, &value) != 0) return NULL;
-    h = (short)value - ymin + 1;
-    Stream_ReadU32(s, &dpi);
-    for (i = 0; i < 16; i++) {
-        colors[i * 4 + 0] = (unsigned char)Stream_GetByte(s);
-        colors[i * 4 + 1] = (unsigned char)Stream_GetByte(s);
-        colors[i * 4 + 2] = (unsigned char)Stream_GetByte(s);
-        colors[i * 4 + 3] = 0xFF;
-    }
-    Stream_GetByte(s);
-    bits = Stream_GetByte(s) * 8;
-    if (bits != 8 && bits != 24) {
-        Stream_Seek(s, start, SEEK_SET);
-        return NULL;
-    }
-    bytes_pp = (bits - 1) / 8 + 1;
-    /* Fix: reject invalid scanlines/dimensions before signed arithmetic or decoding. */
-    if (Stream_ReadU16(s, &value) != 0 || w <= 0 || h <= 0 ||
-        value < w || value > 32767 ||
-        (size_t)w > (size_t)INT_MAX / bytes_pp / h) {
-        Stream_Seek(s, start, SEEK_SET);
-        return NULL;
-    }
-    size = bytes_pp * h * w;
-    *size_out = size;
-    if (size <= 0) {
-        *size_out = bytes_pp;
-        w = 1;
-        h = 1;
-        empty = 1;
-    }
-    for (i = 0; i < 60; i++) {
-        Stream_GetByte(s);
-    }
-    pixels = calloc(1, *size_out);
-    if (pixels == NULL) {
-        g_outOfMemory = 1;
-        return NULL;
-    }
-
-    /* RLE: 0xC0 | count before a repeated byte. Bytes past the width are dropped. */
-    if (!empty && h > 0) {
-        int bpl = (short)value;
-        int line_bytes = bpl * bits / 8;
-        int stride = bytes_pp * w;
-        unsigned char *row = pixels;
-        int rows = h;
-
-        do {
-            int x = 0, px = 0, plane = 2;
-            while (x < line_bytes) {
-                int c = Stream_GetByte(s);
-                int run = 1;
-                if ((c & 0xC0) == 0xC0) {
-                    run = c & 0x3F;
-                    c = Stream_GetByte(s);
-                }
-                if (bits == 8) {
-                    while (run != 0) {
-                        run--;
-                        if (x < w) {
-                            row[x] = (unsigned char)c;
-                        }
-                        x++;
-                    }
-                } else {
-                    while (run != 0) {
-                        run--;
-                        if (px < w) {
-                            row[px * 3 + plane] = (unsigned char)c;
-                        }
-                        x++;
-                        if (x == bpl) {
-                            px = 0;
-                            plane = 1;
-                        } else if (x == bpl * 2) {
-                            px = 0;
-                            plane = 0;
-                        } else {
-                            px++;
-                        }
-                    }
-                }
+    unsigned char hdr[128], colors[1024] = {0};
+    unsigned char *pixels = NULL;
+    long start = Stream_Tell(s), end = Stream_GetSize(s);
+    unsigned int xmin, ymin, xmax, ymax;
+    size_t left, size;
+    int w, h, planes, bpl, y, i;
+    *w_out = *h_out = *bpp_out = 0; *size_out = 0;
+    if (start < 0 || end < start || length > (size_t)(end - start) || length < sizeof(hdr)) goto fail;
+    if (Stream_Read(hdr, 1, sizeof(hdr), s) != sizeof(hdr) ||
+        hdr[0] != 10 || hdr[2] != 1 || hdr[3] != 8) goto fail;
+    left = length - sizeof(hdr);
+    xmin = Pcx_U16(hdr + 4); ymin = Pcx_U16(hdr + 6);
+    xmax = Pcx_U16(hdr + 8); ymax = Pcx_U16(hdr + 10);
+    if (xmax < xmin || ymax < ymin) goto fail;
+    w = (int)(xmax - xmin + 1); h = (int)(ymax - ymin + 1);
+    planes = hdr[65]; bpl = Pcx_U16(hdr + 66);
+    if ((planes != 1 && planes != 3) || bpl < w || bpl > 32767 ||
+        (size_t)w > (size_t)INT_MAX / planes / h) goto fail;
+    size = (size_t)w * h * planes;
+    /* Even maximal RLE runs encode at most 63 bytes in two input bytes.
+     * Reject impossible tiny records before reserving a huge output buffer. */
+    if (((uint64_t)bpl * planes * h + 62) / 63 * 2 > left + 1) goto fail;
+    pixels = calloc(1, size);
+    if (pixels == NULL) { g_outOfMemory = 1; goto fail; }
+    for (y = 0; y < h; ++y) {
+        int x = 0, line = bpl * planes;
+        while (x < line) {
+            int c = Pcx_Byte(s, &left), run = 1;
+            if (c < 0) goto fail;
+            if ((c & 0xc0) == 0xc0) {
+                run = c & 63;
+                c = Pcx_Byte(s, &left);
+                if (c < 0 || run == 0) goto fail;
             }
-            row += stride;
-        } while (--rows != 0);
-    }
-
-    if (bits == 8) {
-        if (pal != NULL) {
-            /* The 256-color palette follows a 12 byte at the end of the image. */
-            for (;;) {
-                if (Pcx_StreamEnded(s)) {
-                    goto init_palette;
-                }
-                if (Stream_GetByte(s) == 12) {
-                    break;
-                }
-            }
-            for (i = 0; i < 256; i++) {
-                colors[i * 4 + 0] = (unsigned char)Stream_GetByte(s);
-                colors[i * 4 + 1] = (unsigned char)Stream_GetByte(s);
-                colors[i * 4 + 2] = (unsigned char)Stream_GetByte(s);
-                colors[i * 4 + 3] = 0xFF;
-            }
-            colors[3] = 0;
-        init_palette:
-            if (!Pal_Init(pal, 256, colors, pal_flags)) {
-                /* Fix: palette failure does not transfer pixel ownership. */
-                free(pixels);
-                return NULL;
+            if (run > line - x) goto fail;
+            while (run--) {
+                int plane = x / bpl, px = x % bpl;
+                if (px < w) pixels[((size_t)y * w + px) * planes + planes - 1 - plane] = (unsigned char)c;
+                ++x;
             }
         }
-    } else if (bits == 4 && pal != NULL) {
-        if (!Pal_Init(pal, 16, colors, pal_flags)) {
-            return NULL;
-        }
     }
-    *bpp_out = bits;
-    *w_out = w;
-    *h_out = h;
+    if (planes == 1 && pal != NULL) {
+        int c;
+        for (i = 0; i < 16; ++i) {
+            memcpy(colors + i * 4, hdr + 16 + i * 3, 3); colors[i * 4 + 3] = 255;
+        }
+        while (left) {
+            c = Pcx_Byte(s, &left);
+            if (c < 0) goto fail;
+            if (c != 12) continue;
+            if (left < 768) goto fail;
+            for (i = 0; i < 256; ++i) {
+                int j;
+                for (j = 0; j < 3; ++j) {
+                    c = Pcx_Byte(s, &left);
+                    if (c < 0) goto fail;
+                    colors[i * 4 + j] = (unsigned char)c;
+                }
+                colors[i * 4 + 3] = 255;
+            }
+            break;
+        }
+        colors[3] = 0;
+        if (!Pal_Init(pal, 256, colors, PAL_COPY | (flags ? PAL_NO_TEXTURE : 0))) goto fail;
+    }
+    *w_out = w; *h_out = h; *bpp_out = planes * 8; *size_out = size;
     Stream_Seek(s, start, SEEK_SET);
     return pixels;
+fail:
+    free(pixels);
+    if (start >= 0) Stream_Seek(s, start, SEEK_SET);
+    return NULL;
+}
+
+/* 0x00468C60: standalone PCX; embedded callers supply their record size. */
+void *Pcx_Decode(Palette *pal, int *w, Stream *s, int *h, int *bpp, size_t *size, int flags)
+{
+    long start = Stream_Tell(s), end = Stream_GetSize(s);
+    return Pcx_DecodeSized(pal, w, s, h, bpp, size, flags,
+                          start >= 0 && end >= start ? (size_t)(end - start) : 0);
 }
 
 /*
- * 0x00469410: a sprite set holding one PCX image as sprite (0, 0), with
+ * Port addition: bounded variant of the 0x00469410 PCX sprite-set loader, with
  * palette (0, 0) for 8-bit images. Flags keeps the image and the palette out
  * of textures.
  */
-SpriteSet *Pcx_Load(Stream *s, int flags)
+SpriteSet *Pcx_LoadSized(Stream *s, int flags, size_t length)
 {
     Palette pal;
     Sprite spr;
@@ -357,7 +275,7 @@ SpriteSet *Pcx_Load(Stream *s, int flags)
     if (set->palettes == NULL) {
         return NULL;
     }
-    pixels = Pcx_Decode(&pal, &w, s, &h, &bpp, &size, flags);
+    pixels = Pcx_DecodeSized(&pal, &w, s, &h, &bpp, &size, flags, length);
     if (pixels == NULL) {
         SpriteSet_Free(set);
         return NULL;
@@ -376,6 +294,13 @@ SpriteSet *Pcx_Load(Stream *s, int flags)
     }
     SpriteSet_AddSprite(set, &spr, 0, 0);
     return set;
+}
+
+/* 0x00469410: standalone PCX loader. */
+SpriteSet *Pcx_Load(Stream *s, int flags)
+{
+    long start = Stream_Tell(s), end = Stream_GetSize(s);
+    return Pcx_LoadSized(s, flags, start >= 0 && end >= start ? (size_t)(end - start) : 0);
 }
 
 /* ---- SFF v1.01 ---- */
@@ -427,7 +352,7 @@ SpriteSet *Sff1_Load(const Sff1Header *hdr, Stream *s)
             if (last_pal == -1 || !sub.same_palette) {
                 new_pal = &pal;
             }
-            pixels = Pcx_Decode(new_pal, &w, s, &h, &bpp, &size, 0);
+            pixels = Pcx_DecodeSized(new_pal, &w, s, &h, &bpp, &size, 0, (size_t)sub.size);
             if (pixels == NULL) {
                 goto fail;
             }
@@ -534,7 +459,7 @@ SpriteSet *Sff1_LoadSelected(Stream *s, const Sff1Header *hdr, const int *select
                     new_pal = &pal;
                 }
                 if (wanted) {
-                    void *pixels = Pcx_Decode(new_pal, &w, s, &h, &bpp, &size, 0);
+                    void *pixels = Pcx_DecodeSized(new_pal, &w, s, &h, &bpp, &size, 0, (size_t)sub.size);
                     if (pixels == NULL) {
                         goto fail;
                     }

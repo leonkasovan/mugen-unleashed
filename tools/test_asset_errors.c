@@ -19,6 +19,8 @@ void Memprof_Free(void*p){for(int i=0;i<64;i++)if(ptrs[i]==p){ptrs[i]=NULL;sizes
 void *Memprof_Realloc(void*p,size_t n){if(fail_realloc)return NULL;for(int i=0;i<64;i++)if(ptrs[i]==p){ptrs[i]=NULL;sizes[i]=0;break;}void*q=realloc(p,n);remember(q,n);return q;}
 static size_t live(void){size_t n=0;for(int i=0;i<64;i++)n+=sizes[i];return n;}
 void MatchLog_Printf(int level,const char*fmt,...){}
+long Stream_GetSize(Stream*s){return s->end-s->begin;}
+size_t Stream_Read(void*p,size_t z,size_t n,Stream*s){size_t a=(s->end-s->pos)/z;if(n>a)n=a;memcpy(p,s->pos,z*n);s->pos+=z*n;return n;}
 long Stream_Tell(Stream*s){return s->pos-s->begin;}
 int Stream_Seek(Stream*s,long n,int origin){s->pos=(origin==SEEK_SET?s->begin:origin==SEEK_END?s->end:s->pos)+n;s->eof=0;return 0;}
 int Stream_GetByte(Stream*s){if(s->pos>=s->end){s->eof=1;return -1;}return *s->pos++;}
@@ -63,11 +65,11 @@ int main(int argc,char**argv){
   assert(!memcmp(spr.pixels,rle8+4,4));
   Sprite_Free(&spr);
  }else if(!strcmp(argv[1],"pcx-palette")){
-  input[3]=8;input[8]=1;input[10]=1;input[65]=1;input[66]=2;input[132]=12;
+  input[0]=10;input[1]=5;input[2]=1;input[3]=8;input[8]=1;input[10]=1;input[65]=1;input[66]=2;input[132]=12;
   Palette pal;int w,h,bpp;size_t n;void*p=Pcx_Decode(&pal,&w,&stream,&h,&bpp,&n,0);
   assert(p == NULL && live() == 0);
  }else if(!strcmp(argv[1],"pcx-overflow")){
-  input[3]=8;input[4]=0;input[5]=128;input[8]=255;input[9]=127;input[10]=85;input[11]=85;input[65]=3;input[66]=1;
+  input[0]=10;input[1]=5;input[2]=1;input[3]=8;input[4]=0;input[5]=128;input[8]=255;input[9]=127;input[10]=85;input[11]=85;input[65]=3;input[66]=1;
   int w,h,bpp;size_t n;assert(Pcx_Decode(NULL,&w,&stream,&h,&bpp,&n,0) == NULL);
  }else if(!strcmp(argv[1],"sprite-rle-overflow")){
   unsigned char data[6]={4,0,0,0,0x7f,1};Sprite spr;g_spriteDecoders[2]=Rle8_Decode;

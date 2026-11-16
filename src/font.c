@@ -708,7 +708,7 @@ Font *Font_LoadFnt1(Stream *s, const FntHeader *hdr)
     }
     memset(&f.map, 0, sizeof(f.map));
     Stream_Seek(s, hdr->pcx_offset + base, SEEK_SET);
-    font->sprites = Pcx_Load(s, 1);
+    font->sprites = Pcx_LoadSized(s, 1, hdr->pcx_size > 0 ? (size_t)hdr->pcx_size : 0);
     if (font->sprites == NULL) {
         if (font->ttf != NULL) {
             TTF_CloseFont(font->ttf);
