@@ -36,6 +36,7 @@ jobs:
           sh tools/test_ttfcache.sh
           sh tools/test_batchplan.sh
           sh tools/test_ini_groups.sh
+          sh tools/test_selectupdate.sh
           sh tools/test_cns_abi.sh
           sh tools/test_zss_lex.sh
           sh tools/test_zss_controller.sh
@@ -87,6 +88,7 @@ jobs:
           sh tools/test_ttfcache.sh
           sh tools/test_batchplan.sh
           sh tools/test_ini_groups.sh
+          sh tools/test_selectupdate.sh
       - name: Check supported source/dependency contract
         shell: cmd
         run: |

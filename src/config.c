@@ -8,6 +8,7 @@
 #include "configmerge.h"
 #include "render_policy.h"
 #include "soundcache.h"
+#include "selectupdate.h"
 
 /* The [P<n> Gamepad] groups, loaded with the rest of the options and applied
  * after the pads open (their topology is only known then). */
@@ -278,6 +279,13 @@ int Config_Load(void)
     if (Ini_SelectGroup(ini, "config") == -1) {
         Error_Printf("Can't access [Config]\n");
         return 0;
+    }
+    /* Port addition: automatically discover new roster content at menu startup. */
+    {
+        int characters, stages;
+        Ini_GetIntDef(ini, "AutoUpdateChars", &characters, 0);
+        Ini_GetIntDef(ini, "AutoUpdateStages", &stages, 0);
+        SelectUpdate_Configure(characters, stages);
     }
     g = g_game;
     g->game_speed = 60;

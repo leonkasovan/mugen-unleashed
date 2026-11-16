@@ -11,6 +11,7 @@
 #include <float.h>
 
 #include "mugen.h"
+#include "selectupdate.h"
 
 #define SELECT_MAX_MATCHES      30      /* entries of [Options] arcade/team.maxmatches */
 #define SELECT_PAL_COUNT        12
@@ -48,6 +49,8 @@ int Select_OpenDef(const char *path)
         Error_Printf("Couldn't find file for selection screen: %s\n", path);
         return 0;
     }
+    /* Port addition: update the motif's actual roster before parsing it. */
+    SelectUpdate_Auto(found);
     ini = NULL;
     s = Stream_OpenFile(found, "rt");
     if (s != NULL) {
@@ -77,6 +80,12 @@ int Select_Init(void)
         }
         Log_Printf("OK");
         Log_Printf("\n");
+    } else if (SelectUpdate_Enabled()) {
+        /* Port addition: quick VS skips the select loader, but an explicitly
+         * requested discovery pass still uses the active motif's roster. */
+        char found[0x200];
+        if (File_Find(g_game->select_info.def_file, found, NULL, NULL))
+            SelectUpdate_Auto(found);
     }
     return 1;
 }

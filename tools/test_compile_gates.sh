@@ -28,7 +28,7 @@ INCS="$INCS -Iport/android/app/src/main/jni/src $PLAT_INC"
 SDL_CFLAGS=$("$PKGCONF" --cflags sdl2 | sed 's/-Dmain=SDL_main//')
 
 # Modules that are compiled for more than one backend and must stay portable.
-MODULES="src/pads.c src/config.c src/events.c src/sprite.c src/gfx.c"
+MODULES="src/pads.c src/config.c src/events.c src/sprite.c src/gfx.c src/select.c src/selectupdate.c"
 # system.c carries the renderer recovery entry points; it was missing from this
 # matrix, which is how an Android-only guard ended up calling GLES-only
 # functions in the default (MUGEN_GLES=OFF) APK build.

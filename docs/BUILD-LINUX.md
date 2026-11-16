@@ -832,6 +832,59 @@ stream-position restoration:
 SANITIZE=address,undefined sh tools/test_snd_ogg.sh /absolute/path/to/z.character.snd
 ```
 
+## Automatic select.def updates (opt-in)
+
+Enable discovery in `[Config]` in `data/mugen.cfg`:
+
+```ini
+[Config]
+AutoUpdateChars = 1
+AutoUpdateStages = 1
+```
+
+Both default to 0. They can be enabled separately. The ARM64, Android and Vita
+overlays include commented examples; uncomment a key there to override the
+game's value. No environment variable or manual roster-update command is needed.
+
+At startup, before loading the selection screen, the engine updates the
+**active screenpack's** `[Files] select` file. This also runs for quick VS when
+enabled. It follows the discovery behavior of
+[Ikemen-GO's select.def updaters](https://github.com/leonkasovan/Ikemen-GO/blob/stable/src/main.go#L175):
+
+- Immediate `chars/<name>/` directories with a matching `<name>.def` are
+  appended to `[Characters]` as `<name>, random`. If the definition's case
+  differs from the folder, its actual filename is used explicitly. Definitions
+  must contain `[Info]` and `[Files]`. Archives, nested character folders, and
+  folders without matching definitions are left for manual registration.
+- Immediate `stages/` definition files containing `[Info]` and `[StageInfo]`
+  are appended to `[ExtraStages]`. Storyboards and nested stage folders are
+  skipped.
+
+New entries are sorted. Existing entries, their flags/order, random slots,
+comments, blank lines, BOM, and existing line endings remain unchanged. Duplicate
+checks normalize case, slash styles and character shorthand versus explicit
+definition paths. Commented-out entries do not count as registered. Nothing is
+removed; select-grid dimensions are unchanged, so visible additions still need
+free cells in the screenpack's configured rows/columns.
+
+A changed roster is staged beside the original as `.update`. A `.bak` preserves
+the entire roster from immediately before that update; both sections are committed
+together. An unchanged roster is not rewritten, and its backup is not replaced.
+Missing sections are appended when needed. Discovery/read/write/backup/rename
+failures are logged and leave the original roster in place. This requires a
+writable roster directory; read-only packaged rosters continue using their
+existing entries. The updater accepts paths below 512 bytes and text files up
+to 16 MiB. Log lines beginning `select-update:` name each addition and backup.
+
+The native entry points are `Select_UpdateCharInSelectDef` and
+`Select_UpdateStageInSelectDef`; startup uses a combined pass to keep one backup.
+To exercise discovery, formatting, idempotence and injected write/allocation
+failures without game data:
+
+```sh
+SANITIZE=1 sh tools/test_selectupdate.sh
+```
+
 ## Lazy character sound cache (opt-in)
 
 Set these keys in `[Sound]` in `data/mugen.cfg`, or in the platform overlay:
