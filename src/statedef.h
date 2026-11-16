@@ -67,6 +67,11 @@ typedef struct StateRunCtx {
 } StateRunCtx;
 MUGEN_ASSERT_SIZE(StateRunCtx, 0x14);
 
+/* Port additions: property-only compilation shared with the ZSS front-end.
+ * Supply zeroed expression fields; caller frees partial output on failure. */
+int StateDef_CompileProperties(int number, StateDef *sd, Ini *ini, CharData *owner);
+void StateDef_FreeProperties(StateDef *sd);
+
 /* CustomStateInfo is defined in player.h (HitDef embeds it). */
 
 #endif /* MUGEN_STATEDEF_H */

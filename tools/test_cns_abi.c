@@ -293,6 +293,52 @@ static void zss_no_allocs(void)
 }
 #include "scriptparams.h"
 #include "zss_controller.h"
+#include "zss_statedef.h"
+static void test_zss_state_header(void)
+{
+    StateDef sd={0}, empty={0};
+    ZssDiagnostic d;
+    int n=77;
+    size_t i;
+    const char *good="[StateDef 200; type:S; movetype:A; physics:N; velset:2+3,-0.5; ctrl:1; juggle:var(1)+2;]";
+    const char *bad[]={"[StateDef 2147483648]","[StateDef -2147483649]","[StateDef 1.5]",
+        "[StateDef +1]","[StateDef 2 type:S]","[StateDef 2; type:Stand]",
+        "[StateDef 2; type:S; TYPE:A]","[StateDef 2; unknown:3]",
+        "[StateDef 2; ctrl:$i]","[StateDef 2; ctrl:2+3; anim:NoSuchTrigger]",
+        "[StateDef 2; ctrl:(1+2]","[StateDef 2] Null{}"};
+    assert(Zss_CompileStateHeader("[StateDef 0]",12,&owner,&n,&sd,&d));
+    assert(n==0 && sd.type==STATETYPE_STAND && sd.movetype==MOVETYPE_IDLE);
+    assert(Expr_EvalInt(&player,&sd.ctrl,0)==-1 && Expr_EvalFloat(&player,&sd.velset_x)==-FLT_MAX);
+    StateDef_FreeProperties(&sd);memset(&sd,0,sizeof(sd));
+    player.var[1]=7;
+    assert(Zss_CompileStateHeader(good,strlen(good),&owner,&n,&sd,&d));
+    assert(n==200 && sd.movetype==MOVETYPE_ATTACK && sd.ctrl.u.value.i==1);
+    assert(Expr_EvalFloat(&player,&sd.velset_x)==5 && Expr_EvalFloat(&player,&sd.velset_y)==-0.5f);
+    assert(Expr_EvalInt(&player,&sd.juggle,0)==9);StateDef_FreeProperties(&sd);memset(&sd,0,sizeof(sd));
+    assert(Zss_CompileStateHeader("[StateDef -2147483648]",strlen("[StateDef -2147483648]"),&owner,&n,&sd,&d));
+    assert(n==INT_MIN && !sd.juggle.count);StateDef_FreeProperties(&sd);memset(&sd,0,sizeof(sd));
+    {
+        const char *interval="[StateDef 1; juggle:var(1)=[1,9];]";
+        assert(Zss_CompileStateHeader(interval,strlen(interval),&owner,&n,&sd,&d));
+        assert(Expr_EvalInt(&player,&sd.juggle,0)==1);StateDef_FreeProperties(&sd);memset(&sd,0,sizeof(sd));
+    }
+    for(i=0;i<sizeof(bad)/sizeof(*bad);i++) {
+        n=77;assert(!Zss_CompileStateHeader(bad[i],strlen(bad[i]),&owner,&n,&sd,&d));
+        assert(n==77 && !memcmp(&sd,&empty,sizeof(sd)) && d.message);zss_no_allocs();
+    }
+    for(i=1;i<=8;i++) {
+        zss_calloc_calls=0;zss_fail_call=(int)i;
+        if(Zss_CompileStateHeader(good,strlen(good),&owner,&n,&sd,&d))StateDef_FreeProperties(&sd);
+        memset(&sd,0,sizeof(sd));zss_no_allocs();
+    }
+    zss_fail_call=0;
+    for(i=1;i<=6;i++) {
+        alloc_calls=0;fail_alloc=(int)i;
+        if(Zss_CompileStateHeader(good,strlen(good),&owner,&n,&sd,&d))StateDef_FreeProperties(&sd);
+        memset(&sd,0,sizeof(sd));zss_no_allocs();
+    }
+    fail_alloc=0;puts("ok: ZSS StateDef headers share CNS properties, defaults and partial cleanup");
+}
 static void test_zss_controller(void)
 {
     StateCtrl sc={0}, empty={0};
@@ -354,6 +400,7 @@ int main(void)
     g_exprStackTop = -1;
 #ifdef TEST_ZSS_CONTROLLER
     test_zss_controller();
+    test_zss_state_header();
 #else
     test_controller_parse(); test_variables(); test_clipboard();
     test_expr_allocs(); test_trigger_copy_math(); test_state_headers();

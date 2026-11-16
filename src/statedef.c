@@ -59,95 +59,13 @@ void StateRunCtx_Init(StateRunCtx *ctx, Player *p)
     ctx->root = p->root;
 }
 
-/* ------------------------------------------------------------ loading */
-
-/*
- * 0x0045B5E0: the [Statedef n] group whose header line is header (the
- * selected group of ini) and the [State ...] groups after it. ini->group is
- * restored on success.
- */
-int StateDef_Parse(const char *header, StateDef *sd, Ini *ini, CharData *owner)
+/* Port addition: shared property compiler. Caller supplies a zero-initialized
+ * StateDef; controller/source ownership is left intact. Negative states retain
+ * the original property-free behavior. FreeProperties also accepts partial output. */
+int StateDef_CompileProperties(int number, StateDef *sd, Ini *ini, CharData *owner)
 {
-    char prefix[0x40];
-    char name[0x40];
     const char *value;
     const char *end;
-    const char *h;
-    int saved_group = ini->group;
-    int number, count, i, k, n;
-
-    /* Validate before header+10 or source allocation. Short/invalid public
-     * inputs used to read past the header; error paths keep sd empty. */
-    memset(sd, 0, sizeof(*sd));
-    if (header == NULL || strlen(header) < 11 || strlen(header) >= sizeof(name) ||
-        !Str_StartsWithI(header, "[statedef ") || header[strlen(header) - 1] != ']') {
-        Error_Printf("Invalid statedef header\n");
-        return 0;
-    }
-    /*
-     * PORTABILITY FIX: atoi() wrapped a state number that does not fit (the
-     * result depends on the width of long), which silently selected another
-     * state. Out-of-range numbers are rejected instead.
-     */
-    {
-        char *num_end;
-        long long number64 = strtoll(header + 10, &num_end, 10);
-
-        if (num_end == header + 10 || number64 < -2147483648LL || number64 > 2147483647LL) {
-            Error_Printf("Statedef number out of range: %s\n", header);
-            return 0;
-        }
-        while (Char_IsSpace(*num_end)) {
-            num_end++;
-        }
-        if (*num_end != ']' || num_end[1] != '\0') {
-            Error_Printf("Invalid statedef number: %s\n", header);
-            return 0;
-        }
-        number = (int)number64;
-    }
-    if (g_game->keep_sources != 0) {
-        StateCtrlSource *src = calloc(1, sizeof(StateCtrlSource));
-        if (src == NULL) {
-            g_outOfMemory = 1;
-        }
-        sd->source = src;
-        if (src == NULL) {
-            Error_OutOfMemory();
-        }
-        sd->source->line = Ini_SourceLine(ini->cursor, ini);
-    }
-    /* The validated group name without the brackets. */
-    strcpy(name, header + 1);
-    name[strlen(name) - 1] = '\0';
-    if (Ini_SelectGroup(ini, name) == -1) {
-        Error_Printf("Can't access %s\n", header);
-        return 0;
-    }
-    count = 0;
-    h = Ini_NextGroup(ini);
-    sprintf(prefix, "state ");
-    while (h != NULL && Str_StartsWithI(h + 1, prefix)) {
-        count++;
-        h = Ini_NextGroup(ini);
-    }
-    Ini_SelectGroup(ini, name);
-    if (count <= 0) {
-        Error_Printf("Need at least one state controller\n");
-        return 0;
-    }
-    /* PORTABILITY FIX: rejected while compiling; Player_RunState used to write
-       sctrl_wait[] before its own check. */
-    if (count > STATEDEF_MAX_CTRLS) {
-        Error_Printf("State %i has %i controllers; the maximum is %i (%s)\n", number, count, STATEDEF_MAX_CTRLS,
-                     header);
-        return 0;
-    }
-    sd->ctrls = KeyedArray_Create(count, sizeof(StateCtrl));
-    if (sd->ctrls == NULL) {
-        return 0;
-    }
-
     if (number >= 0) {
         sd->type = STATETYPE_STAND;
         value = Ini_GetValue(ini, "type");
@@ -268,6 +186,109 @@ int StateDef_Parse(const char *header, StateDef *sd, Ini *ini, CharData *owner)
         }
     }
 
+    return 1;
+}
+
+void StateDef_FreeProperties(StateDef *sd)
+{
+    Expr_Free(&sd->juggle); Expr_Free(&sd->facep2);
+    Expr_Free(&sd->hitdefpersist); Expr_Free(&sd->hitcountpersist);
+    Expr_Free(&sd->movehitpersist); Expr_Free(&sd->sprpriority);
+    Expr_Free(&sd->velset_x); Expr_Free(&sd->velset_y);
+    Expr_Free(&sd->ctrl); Expr_Free(&sd->anim); Expr_Free(&sd->poweradd);
+}
+
+/* ------------------------------------------------------------ loading */
+
+/*
+ * 0x0045B5E0: the [Statedef n] group whose header line is header (the
+ * selected group of ini) and the [State ...] groups after it. ini->group is
+ * restored on success.
+ */
+int StateDef_Parse(const char *header, StateDef *sd, Ini *ini, CharData *owner)
+{
+    char prefix[0x40];
+    char name[0x40];
+    const char *h;
+    int saved_group = ini->group;
+    int number, count, i, k, n;
+
+    /* Validate before header+10 or source allocation. Short/invalid public
+     * inputs used to read past the header; error paths keep sd empty. */
+    memset(sd, 0, sizeof(*sd));
+    if (header == NULL || strlen(header) < 11 || strlen(header) >= sizeof(name) ||
+        !Str_StartsWithI(header, "[statedef ") || header[strlen(header) - 1] != ']') {
+        Error_Printf("Invalid statedef header\n");
+        return 0;
+    }
+    /*
+     * PORTABILITY FIX: atoi() wrapped a state number that does not fit (the
+     * result depends on the width of long), which silently selected another
+     * state. Out-of-range numbers are rejected instead.
+     */
+    {
+        char *num_end;
+        long long number64 = strtoll(header + 10, &num_end, 10);
+
+        if (num_end == header + 10 || number64 < -2147483648LL || number64 > 2147483647LL) {
+            Error_Printf("Statedef number out of range: %s\n", header);
+            return 0;
+        }
+        while (Char_IsSpace(*num_end)) {
+            num_end++;
+        }
+        if (*num_end != ']' || num_end[1] != '\0') {
+            Error_Printf("Invalid statedef number: %s\n", header);
+            return 0;
+        }
+        number = (int)number64;
+    }
+    if (g_game->keep_sources != 0) {
+        StateCtrlSource *src = calloc(1, sizeof(StateCtrlSource));
+        if (src == NULL) {
+            g_outOfMemory = 1;
+        }
+        sd->source = src;
+        if (src == NULL) {
+            Error_OutOfMemory();
+        }
+        sd->source->line = Ini_SourceLine(ini->cursor, ini);
+    }
+    /* The validated group name without the brackets. */
+    strcpy(name, header + 1);
+    name[strlen(name) - 1] = '\0';
+    if (Ini_SelectGroup(ini, name) == -1) {
+        Error_Printf("Can't access %s\n", header);
+        return 0;
+    }
+    count = 0;
+    h = Ini_NextGroup(ini);
+    sprintf(prefix, "state ");
+    while (h != NULL && Str_StartsWithI(h + 1, prefix)) {
+        count++;
+        h = Ini_NextGroup(ini);
+    }
+    Ini_SelectGroup(ini, name);
+    if (count <= 0) {
+        Error_Printf("Need at least one state controller\n");
+        return 0;
+    }
+    /* PORTABILITY FIX: rejected while compiling; Player_RunState used to write
+       sctrl_wait[] before its own check. */
+    if (count > STATEDEF_MAX_CTRLS) {
+        Error_Printf("State %i has %i controllers; the maximum is %i (%s)\n", number, count, STATEDEF_MAX_CTRLS,
+                     header);
+        return 0;
+    }
+    sd->ctrls = KeyedArray_Create(count, sizeof(StateCtrl));
+    if (sd->ctrls == NULL) {
+        return 0;
+    }
+
+    if (!StateDef_CompileProperties(number, sd, ini, owner)) {
+        return 0;
+    }
+
     sprintf(prefix, "state ");
     for (i = 0; i < count; i++) {
         h = Ini_NextGroup(ini);
@@ -378,17 +399,7 @@ void StateDefs_Free(StateDefs *defs)
                     StateCtrl_Free(sc);
                 }
             }
-            Expr_Free(&sd->juggle);
-            Expr_Free(&sd->facep2);
-            Expr_Free(&sd->hitdefpersist);
-            Expr_Free(&sd->hitcountpersist);
-            Expr_Free(&sd->movehitpersist);
-            Expr_Free(&sd->sprpriority);
-            Expr_Free(&sd->velset_x);
-            Expr_Free(&sd->velset_y);
-            Expr_Free(&sd->ctrl);
-            Expr_Free(&sd->anim);
-            Expr_Free(&sd->poweradd);
+            StateDef_FreeProperties(sd);
             KeyedArray_Free(sd->ctrls);
         }
     }

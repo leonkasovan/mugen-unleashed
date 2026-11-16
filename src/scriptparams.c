@@ -37,18 +37,18 @@ Ini *ScriptParams_ToIni(const ScriptParam *pairs, size_t count, const char **err
         bytes += key + value + 2;
     }
     /* Counts also bound pointer-array multiplication on 32-bit hosts. */
-    if (count + 1 > (size_t)-1 / sizeof(char *)) goto invalid;
+    if (count + 2 > (size_t)-1 / sizeof(char *)) goto invalid;
     ini = calloc(1, sizeof(*ini));
     if (ini == NULL) goto nomem;
     ini->refs = calloc(1, sizeof(*ini->refs));
     if (ini->refs == NULL) { free(ini); goto nomem; }
     *ini->refs = 1;
     ini->text = calloc(1, bytes);
-    ini->lines = calloc(count + 1, sizeof(*ini->lines));
+    ini->lines = calloc(count + 2, sizeof(*ini->lines));
     ini->group_lines = calloc(1, sizeof(*ini->group_lines));
     ini->src = calloc(1, sizeof(*ini->src));
     if (ini->text == NULL || ini->lines == NULL || ini->group_lines == NULL || ini->src == NULL) goto cleanup;
-    ini->src->line_map = calloc(count + 1, sizeof(*ini->src->line_map));
+    ini->src->line_map = calloc(count + 2, sizeof(*ini->src->line_map));
     if (ini->src->line_map == NULL) goto cleanup;
     out = ini->text;
     memcpy(out, "[zss]", 6); ini->lines[0] = out; out += 6;
@@ -65,6 +65,9 @@ Ini *ScriptParams_ToIni(const ScriptParam *pairs, size_t count, const char **err
         ini->src->line_map[i + 1] = pairs[i].line - 1;
     }
     memcpy(out, "[TPEnd]", 8);
+    /* Ini_EnterGroup takes the first value's offset even for an empty group.
+     * Keep a real sentinel pointer beyond line_count, as the INI API expects. */
+    ini->lines[count + 1] = out;
     ini->line_count = (int)count + 1; ini->group_count = 1;
     ini->text_size = (long)bytes;
     Ini_SelectGroupIndex(ini, 0);

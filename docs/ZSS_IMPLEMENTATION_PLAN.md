@@ -648,3 +648,27 @@ and unknown keys, malformed input, unchanged output on failure, and allocation
 failure cleanup. Shared controller subsystems outside the enabled subset retain
 the harness's existing explicit stubs. Linux CI now runs CNS, lexer and controller
 bridge gates. Native Windows/Android/Vita qualification remains OPEN.
+
+### StateDef header increment
+
+Added `Zss_CompileStateHeader` in `zss_statedef.c/.h`. It parses one header,
+checks the signed 32-bit state number, rejects duplicate/unknown properties and
+invalid literal type letters, and invokes the shared property compiler.
+`StateDef_CompileProperties` and `StateDef_FreeProperties` were extracted from
+`statedef.c`; CNS now uses the same routines with its original defaults, negative
+state behavior and numeric semantics. Original structure layouts are unchanged.
+
+`zss_params.c/.h` factors the controller parameter scanner into a reader also
+used by state headers. It distinguishes the header closing bracket from brackets
+inside interval expressions. Output owns only properties; no controller list is
+created and the header cannot yet be installed into a StateDefs collection.
+Both the output header and state number are unchanged on compile failure.
+
+The existing bridge gate now checks header defaults, compound/variable/vector
+properties, intervals, signed integer boundaries, malformed headers, partial
+compilation cleanup and injected allocation failures. File bodies, expression
+contexts, locals, block execution and file dispatch remain pending.
+
+The sanitizer test of an empty header exposed a missing sentinel pointer in the
+native parameter adapter. The adapter now reserves and initializes that pointer
+for empty groups; the empty-header regression exercises the real INI path.
