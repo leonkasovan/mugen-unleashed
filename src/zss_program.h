@@ -4,7 +4,7 @@
 typedef struct ZssProgram ZssProgram;
 /* Prototype profile: states, enabled controllers, nested if/else, assignments,
  * while, anonymous/named for ranges, single-name numeric let declarations,
- * and locals in the audited controller parameters.
+ * locals in the audited controller parameters, and short-circuit &&/||.
  * Explicit stN stream installation is experimental; locals in StateDef header
  * properties, functions and attributes are not enabled. Compilation
  * owns all output; source can be released immediately. *out is unchanged on

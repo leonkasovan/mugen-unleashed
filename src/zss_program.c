@@ -53,12 +53,6 @@ static int error(ZssParser *p, const char *message)
     return 0;
 }
 static int next(ZssParser *p) { return ZssLex_Next(&p->lex); }
-static int supported_token(ZssParser *p)
-{
-    if (p->lex.token.kind==ZSS_AND || p->lex.token.kind==ZSS_OR)
-        return error(p,"Lazy logical operators require pending ZSS short-circuit compilation");
-    return 1;
-}
 static int resolve_local(void *user, const char *name, size_t length)
 {
     ZssParser *p=user;
@@ -127,7 +121,8 @@ static int enclosed(ZssParser *p, int header)
     unsigned depth=1;
     int kind;
     while ((kind=next(p))>0) {
-        if (!supported_token(p)) return 0;
+        if (header && (kind==ZSS_AND || kind==ZSS_OR))
+            return error(p,"Logical StateDef properties need pending header contexts");
         if ((header && (kind=='[' || kind=='(')) || (!header && kind=='{')) depth++;
         if ((header && (kind==']' || kind==')')) || (!header && kind=='}')) {
             if (--depth==0) return kind==(header?']':'}') || error(p,"Wrong closing delimiter");
@@ -150,7 +145,7 @@ static int branch(ZssParser *p, unsigned depth, unsigned loops, int loop, uint32
     if (expression==NULL) return error(p,"Out of memory compiling condition");
     write=expression;
     while ((kind=next(p))!='{') {
-        if (kind<=0 || kind=='}' || !supported_token(p)) {
+        if (kind<=0 || kind=='}') {
             free(expression);return error(p,"Invalid or unsupported if condition");
         }
         if (++tokens>=EXPR_OP_STACK_SIZE) {free(expression);return error(p,"Condition token limit");}
@@ -187,7 +182,7 @@ static int branch(ZssParser *p, unsigned depth, unsigned loops, int loop, uint32
  * token in "- 2147483648" before applying unary negation. */
 /* Assignment expressions reuse the MUGEN numeric evaluator; the statement's
  * result is discarded; a let statement instead stores the numeric result.
- * Lazy logical operators remain rejected. */
+ * Logical operands lower through the explicit expression context. */
 static int assignment(ZssParser *p, int local, uint32_t *id, uint32_t *end_line)
 {
     char *text=calloc(1,p->lex.size*2+1), *write=text;
@@ -196,7 +191,7 @@ static int assignment(ZssParser *p, int local, uint32_t *id, uint32_t *end_line)
     uint32_t index;
     if (text==NULL) return error(p,"Out of memory compiling assignment");
     while ((kind=p->lex.token.kind)!=';') {
-        if (kind<=0 || kind=='{' || kind=='}' || !supported_token(p)) {
+        if (kind<=0 || kind=='{' || kind=='}') {
             free(text);return error(p,"Assignment must end with ';'");
         }
         if (++tokens>=EXPR_OP_STACK_SIZE) {free(text);return error(p,"Assignment token limit");}
@@ -239,7 +234,7 @@ static int range_loop(ZssParser *p, unsigned depth, unsigned loops, uint32_t *id
         if (text==NULL) return error(p,"Out of memory compiling for range");
         write=text;tokens=0;
         while ((kind=p->lex.token.kind)!=';' && kind!='{') {
-            if (kind<=0 || kind=='}' || !supported_token(p)) {
+            if (kind<=0 || kind=='}') {
                 free(text);return error(p,"Invalid for range expression");
             }
             if (++tokens>=EXPR_OP_STACK_SIZE) {free(text);return error(p,"For range token limit");}
@@ -451,7 +446,7 @@ int Zss_RunBody(ZssProgram *p, size_t state, Player *player,
                 }
                 type=Expr_EvalCtx(player,&n->condition,&i,&f,&evalctx);
                 if (type==0) return 0;
-                selected=type==1 ? i!=0 : type==2 ? f!=0 : 0;
+                selected=type==1 ? i!=0 : type==2 ? (!_isnan(f) && f!=0) : 0;
             }
             if (!selected) {top--;continue;}
             if (n->kind==NODE_FOR && n->local>=0 && frame->iterations) {
@@ -470,7 +465,7 @@ int Zss_RunBody(ZssProgram *p, size_t state, Player *player,
         case NODE_IF:
             type=Expr_EvalCtx(player,&n->condition,&i,&f,&evalctx);
             if (type==0) return 0;
-            selected=type==1 ? i!=0 : type==2 ? f!=0 : 0;
+            selected=type==1 ? i!=0 : type==2 ? (!_isnan(f) && f!=0) : 0;
             chosen=selected?n->child:n->otherwise;
             if (chosen!=NO_NODE) {
                 if (top>=MAX_DEPTH*2+2) return 0;

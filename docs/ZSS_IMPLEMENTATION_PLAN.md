@@ -1030,3 +1030,103 @@ Android NDK and Vita/device qualification remain open. Functions/call, multi-nam
 bindings, local := syntax, switch, persistence/hitpause attributes, lazy logical
 compilation, broader controller payloads and StateDef-local expressions remain
 outside the supported profile.
+
+### Short-circuit logical expressions
+
+Explicit-context compilation now enables && and || in ZSS body expressions,
+conditions, range headers and the audited controller parameters. Ordinary CNS
+compilation still emits its original eager logical operators. This distinction
+is selected by the explicit compile entry point, not a global language flag.
+StateDef header logical expressions remain rejected until their context is
+integrated; the legacy standalone header/controller APIs retain the MUGEN dialect.
+
+Reference behavior was rechecked against the pinned compiler's expBoolAnd /
+expBoolOr ([compiler.go:6042](https://github.com/ikemen-engine/Ikemen-GO/blob/b55af1a13c128c16b4d4331f8f1fe67dcd4f06df/src/compiler.go#L6042))
+and [BytecodeValue.ToB](https://github.com/ikemen-engine/Ikemen-GO/blob/b55af1a13c128c16b4d4331f8f1fe67dcd4f06df/src/bytecode.go#L1342)
+/ the [conditional jumps](https://github.com/ikemen-engine/Ikemen-GO/blob/b55af1a13c128c16b4d4331f8f1fe67dcd4f06df/src/bytecode.go#L2252).
+Dynamic logical paths retain the selected operand's value and type. They do not
+uniformly produce 0 or 1. Constant logical combinations normalize to a boolean.
+The context parser uses the reference's right associativity for these operators;
+CNS associativity is unchanged. For example:
+
+```text
+let x=7;
+let selected=$x || (var(0):=99);  # selected is 7; assignment is skipped
+let normalized=2 || 3;          # normalized is 1
+let chained=0;
+let chained=$chained || 2 || 3;  # right constant subtree yields 1
+```
+
+The compiler determines numeric dependencies without evaluating triggers or
+mutating gameplay while compiling. Literal/arithmetic subtrees, supported pure
+math calls, PI/E, and constant cond/ifelse trees normalize logical results as the
+reference's constant logical fold does. Variables, locals, RNG, assignments,
+redirections and branches containing those dependencies stay dynamic. Both
+branches are still parsed and validated, including dead operands. This is not
+an aggressive constant-folding optimizer: arithmetic and math evaluation still
+use this project's MUGEN numeric implementation and warnings. Full Ikemen
+numeric/controller equivalence is not claimed.
+
+Compilation first produces the shared, verified postfix input IR. Only the
+complete Expr_CompileCtx result is lowered, after inline trigger arguments have
+been assembled. Owned cond/redirect Exprs compile independently. New scalar
+EXPR_SC_AND / EXPR_SC_OR instructions hold relative forward displacements;
+EXPR_BOOL normalizes a pure logical result. A bounded tree/emission stack avoids
+recursive lowering. There are no branch-owned heap objects and no pointer/int
+encoding. The original Expr/Trigger layouts and CNS 128-token input limit remain
+unchanged. Lowered code is bounded to 256 words before legacy helper appends.
+Scratch lowering arrays are used only on the explicit-context logical path.
+
+The control-flow verifier checks both jump and fallthrough stack effects,
+consistent depths at merges, operand-stack limits, forward/in-range targets,
+exactly one final value, and instruction boundaries. In particular, the trailing
+comparison tag of a MUGEN interval is payload, never a valid jump target. Runtime
+jumps check their scalar bounds before addition and respect the current nested
+expression's stack base. Missing contexts or invalid direct jump encodings fail
+without leaving operands behind. Execution adds no recursive logical walker or
+per-evaluation heap allocation; the existing cond evaluator remains recursive.
+
+Logical truth treats zero, bottom and NaN as false. Selected dynamic operands
+retain their numeric representation. ZSS if/while and context-bearing cond truth
+checks also handle NaN as false. The NULL-context CNS behavior is unchanged.
+The legacy bitwise-not parser and evaluator disagree about operand count; ZSS
+now rejects ~ explicitly rather than certifying inconsistent stack behavior.
+CNS retains that documented quirk. Context parser operator-stack exhaustion is
+also a normal compile failure, rather than a process-aborting legacy error path.
+
+Ownership stays atomic: parsed triggers remain owned until lowered arrays are
+published together. Failure frees the original parse exactly once. Jump markers
+own scalar values only, so ordinary free/copy/clone behavior remains valid;
+relative targets also reach operations appended by Expr_MulFloat/Expr_Halve.
+
+Validation completed on Linux x86-64:
+
+- ASan/UBSan host tests pass (leak detection disabled in this environment), with
+  allocation-failure coverage for nested owned cond/jump expressions. Fixtures
+  cover skipped assignments, selected operand values/types, right-associated
+  chains, literal/arithmetic/constant-cond normalization, float/bottom/NaN truth,
+  skipped division warnings, intervals, nested cond, clone ownership, appended
+  scaling operations, malformed jump/merge/tag destinations and code growth past
+  the original postfix size. Oversized right-associative parses fail cleanly.
+- RNG tests count calls at the explicit host trigger boundary: a skipped random
+  operand causes no dispatch. They do not qualify RNG distributions or compare
+  an Ikemen runtime. A separate assertion confirms CNS still runs the assignment
+  in 0 && (var(1):=9), while the ZSS version skips it.
+- Existing CNS, lexer and review-regression suites pass. The review harness uses
+  MUGEN_MEMPROF_NO_WRAP=1; sanitizer leak detection is disabled there too. The four
+  changed production C units pass -Wall -Wextra -Werror syntax checks on the host,
+  including ANDROID_PORT. This is not an NDK link or an APK test.
+- The full native engine links with MUGEN_MODEL3D=0. A copied KFM smoke fixture
+  tests skipped assignment effects in if/while/range headers and controller
+  parameters; dynamic operand selection; constant math/ifelse normalization;
+  eager ifelse versus lazy cond; and a logical ChangeState value selecting 65001.
+  Only the conjunction of its value/counter checks reaches the success state.
+  Native logs show 65000 result 5 followed by 65001, then orderly cleanup after
+  the 12-second timeout. No original assets or display dimensions were changed.
+- Native plain-CNS parent/candidate quick-VS logs each contain 195 fragments,
+  identical after tools/compare_logs.py numeric normalization. This is a bounded
+  smoke/log regression, not a completed match or gameplay determinism proof.
+
+Windows/32-bit, Android NDK and Vita/device builds remain unqualified here.
+Functions/call, multi-name bindings, local :=, switch, persistence/hitpause
+attributes, broader controller payloads and StateDef-local contexts remain open.

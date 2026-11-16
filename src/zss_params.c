@@ -42,9 +42,6 @@ int Zss_ReadParamsCtx(ZssLexer *lex, int close, const char *type,
             message = "Incomplete parameter value";
             if (kind <= ZSS_EOF || kind == '{' || kind == '}') goto done;
             if (kind == ZSS_LOCAL && ctx == NULL) { message = "ZSS local parameter needs an explicit compile context"; goto done; }
-            if (ctx != NULL && (kind == ZSS_AND || kind == ZSS_OR)) {
-                message = "Lazy logical parameter expressions are not enabled"; goto done;
-            }
             if (kind == '(') parens++;
             if (kind == '[') brackets++;
             /* MUGEN intervals also use mixed [a,b) / (a,b] closures. */

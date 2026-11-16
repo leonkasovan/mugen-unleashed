@@ -10,13 +10,16 @@
  * push their results to.
  */
 
-/* Token types (Expr.t.types), also the types of evaluation stack entries. */
+/* Bytecode kinds (Expr.t.types); INT/FLOAT/BOTTOM also tag runtime values. */
 #define EXPR_INT            0
 #define EXPR_FLOAT          1
 #define EXPR_OP             2   /* token value is an EXPR_OP_* */
 #define EXPR_TRIGGER        3   /* token value is a Trigger * */
 #define EXPR_BOTTOM         4   /* evaluation stack/local frame: no value (division by zero...) */
 #define EXPR_LOCAL          5   /* port: scalar slot index, explicit ZSS context only */
+#define EXPR_SC_AND         6   /* port: keep false left, else pop; relative forward jump */
+#define EXPR_SC_OR          7   /* port: keep true left, else pop; relative forward jump */
+#define EXPR_BOOL           8   /* port: normalize pure numeric logical result */
 
 /* Expr.count of an expression folded to a single constant. */
 #define EXPR_CONST          (-1)
@@ -162,7 +165,9 @@ MUGEN_ASSERT_SIZE(Trigger, 0x38);
  * CNS entry points are unchanged. Local operands own no pointer payload.
  * Initialize depth to zero; recursive compilation restores it on every return.
  * resolve_local returns 0..255 or -1. Contexts borrow their tables/callbacks;
- * compiled code retains scalar slot indices only, never the context pointer. */
+ * compiled code retains scalar slot indices only, never the context pointer.
+ * ParseCtx produces postfix input IR. CompileCtx additionally lowers logical
+ * expressions; execute its result with EvalCtx even when it has no locals. */
 typedef struct ExprCompileCtx {
     void *user;
     int (*resolve_local)(void *user, const char *name, size_t length);

@@ -56,7 +56,7 @@ void Error_Printf(const char *fmt, ...) { (void)fmt; }
 void Error_Exit(void) { if (expect_exit) longjmp(exit_jump, 1); abort(); }
 void Error_Fatal(const char *fmt, ...) { (void)fmt; abort(); }
 void Error_OutOfMemory(void) { abort(); }
-static int player_warnings;
+static int player_warnings, random_reads;
 void Player_Warn(Player *p, const char *msg) { (void)p; (void)msg; player_warnings++; }
 void Player_WarnAt(Player *p, const StateCtrl *sc, const char *fmt, ...) { (void)p; (void)sc; (void)fmt; }
 void TextRing_SetPrintf(TextRing *ring, const char *fmt, ...)
@@ -121,6 +121,9 @@ static void test_trigger_eval(Player *p, const Trigger *t)
 }
 static void test_trigger_eval_ctx(Player *p, const Trigger *t, ExprEvalCtx *ctx)
 {
+    if (t->id==TRIGGER_RANDOM && t->redirect==TRIGGER_REDIRECT_NONE) {
+        random_reads++;ExprStack_Push(123,EXPR_INT);return;
+    }
     if (t->id==TRIGGER_COND && t->redirect==TRIGGER_REDIRECT_NONE) {
         Trigger_EvalCondCtx(p,t,ctx);return;
     }
@@ -387,7 +390,7 @@ static void test_zss_loops(void)
     const char *limit="[StateDef 0]\nvar(0):=0;\nwhile 1 {var(0):=var(0)+1;}\nvar(1):=9;\n";
     const char *fuel="[StateDef 0]\nwhile 1 {while 1 {}}\nCtrlSet{value:9}\n";
     const char *stop="[StateDef 0]\nwhile 1 {CtrlSet{value:1}}\nCtrlSet{value:2}\n";
-    const char *bad[]={"[StateDef 0]\nbreak;", "[StateDef 0]\ncontinue;", "[StateDef 0]\nvar(0):=1", "[StateDef 0]\n1+2;", "[StateDef 0]\nwhile 1 {break}", "[StateDef 0]\nwhile 1 {continue 2;}", "[StateDef 0]\nwhile var(0) && 1 {}"};
+    const char *bad[]={"[StateDef 0]\nbreak;", "[StateDef 0]\ncontinue;", "[StateDef 0]\nvar(0):=1", "[StateDef 0]\n1+2;", "[StateDef 0]\nwhile 1 {break}", "[StateDef 0]\nwhile 1 {continue 2;}", "[StateDef 0]\nwhile var(0) && {}"};
     ZssProgram *program=NULL, *failed=NULL;
     ZssDiagnostic d;
     int result, calls;
@@ -540,6 +543,113 @@ static void test_expression_contexts(void)
     memset(&expression,0,sizeof(expression));
     puts("ok: explicit expression contexts, nested cond/arguments, clone ownership and invalid-frame guards");
 }
+static void test_zss_lazy(void)
+{
+    const struct {const char *text;int x,type,side,warnings,random;float value;} cases[]={
+        {"0 && (var(1):=9)",0,1,0,0,0,0},
+        {"1 || (var(1):=9)",0,1,0,0,0,1},
+        {"2 || (var(1):=9)",0,1,0,0,0,2},
+        {"2 && (var(1):=9)",0,1,9,0,0,9},
+        {"var(0) && (var(1):=9)",0,1,0,0,0,0},
+        {"var(0) || (var(1):=9)",7,1,0,0,0,7},
+        {"var(0) && 2 && 3",1,1,0,0,0,1},
+        {"var(0) || 2 || 3",0,1,0,0,0,1},
+        {"2 || 3",0,1,0,0,0,1}, {"2 && 3",0,1,0,0,0,1},
+        {"(2+3) || 7",0,1,0,0,0,1},
+        {"cond(1,2,3) || 4",0,1,0,0,0,1},
+        {"cond(1,cond(1,2,3),4) || 5",0,1,0,0,0,1},
+        {"((var(0):=1) && 0) || (var(1):=8)",0,1,8,0,0,8},
+        {"var(0) && .5",1,2,0,0,0,.5f},
+        {"var(0) || .5",0,2,0,0,0,.5f}, {"0 || .5",0,1,0,0,0,1},
+        {"(1/0) && (var(1):=9)",0,3,0,1,0,0},
+        {"(1/0) || (var(1):=9)",0,1,9,1,0,9},
+        {"0 && (1/0)",0,1,0,0,0,0}, {"1 || (1/0)",0,1,0,0,0,1},
+        {"(var(0)=[0,2]) && (var(1):=9)",1,1,9,0,0,9},
+        {"(var(0)=[3,4]) && (var(1):=9)",1,1,0,0,0,0},
+        {"var(0) && random",0,1,0,0,0,0}, {"var(0) && random",1,1,0,0,1,123},
+        {"var(0) || random",7,1,0,0,0,7}, {"var(0) || random",0,1,0,0,1,123},
+        {"cond(1,7,(var(1):=9)) || 8",0,1,0,0,0,7},
+        {"var(0) || cond(1,(var(1):=4),0)",7,1,0,0,0,7},
+        {"var(0) || cond(1,(var(1):=4),0)",0,1,4,0,0,4}
+    };
+    const char *owned="cond($x,(var(1):=$y),$x||random) && (var(2):=3)";
+    Expr e={0}, copy={0};
+    ExprCompileCtx compile={&owner,context_slot,0};
+    ExprValue values[2]={{0},{0}};
+    char types[2]={EXPR_INT,EXPR_INT};
+    ExprEvalCtx frame={values,types,2};
+    const char *end;
+    char text[1024];
+    int result,type,calls,before=g_exprStackTop,at,save;
+    float f;
+    size_t j, used;
+    for(j=0;j<sizeof(cases)/sizeof(*cases);j++) {
+        assert(Expr_CompileCtx(cases[j].text,&e,&owner,&end,EXPR_WANT_ANY,&compile) && !*end);
+        assert(e.count>0 && expr_verify_lazy(e.u.tokens,e.t.types,e.count));
+        player.var[0]=cases[j].x;player.var[1]=player_warnings=random_reads=0;result=0;f=0;
+        type=Expr_EvalCtx(&player,&e,&result,&f,&frame);
+        if(type!=cases[j].type || (type==2 ? f!=cases[j].value : result!=(int)cases[j].value) ||
+            player.var[1]!=cases[j].side || player_warnings!=cases[j].warnings || random_reads!=cases[j].random)
+            fprintf(stderr,"lazy case %zu: type=%d int=%d float=%g side=%d warnings=%d random=%d\n",j,type,result,(double)f,player.var[1],player_warnings,random_reads);
+        assert(type==cases[j].type && (type==2 ? f==cases[j].value : result==(int)cases[j].value));
+        assert(player.var[1]==cases[j].side && player_warnings==cases[j].warnings && random_reads==cases[j].random && g_exprStackTop==before);
+        Expr_Free(&e);zss_no_allocs();
+    }
+    /* Legacy CNS remains eager and boolean-valued. */
+    assert(Expr_Compile("0 && (var(1):=9)",&e,&owner,&end,EXPR_WANT_ANY));player.var[1]=0;
+    assert(Expr_Eval(&player,&e,&result,&f)==1 && result==0 && player.var[1]==9);Expr_Free(&e);zss_no_allocs();
+    /* NaN and bottom have false logical truth, while the selected operand's
+     * numeric representation is retained on a non-folded path. */
+    values[0].f=NAN;types[0]=EXPR_FLOAT;
+    assert(Expr_CompileCtx("$x || 7",&e,&owner,&end,EXPR_WANT_ANY,&compile));
+    assert(Expr_EvalCtx(&player,&e,&result,&f,&frame)==1 && result==7);Expr_Free(&e);
+    assert(Expr_CompileCtx("cond($x && 1,2,3)",&e,&owner,&end,EXPR_WANT_ANY,&compile));
+    assert(Expr_EvalCtx(&player,&e,&result,&f,&frame)==1 && result==3);Expr_Free(&e);zss_no_allocs();types[0]=EXPR_INT;
+    /* Cloning nested cond payloads must retain their own verified jump code. */
+    values[0].i=0;values[1].i=4;
+    assert(Expr_CompileCtx(owned,&e,&owner,&end,EXPR_WANT_ANY,&compile));assert(Expr_Clone(&copy,&e));Expr_Free(&e);
+    assert(Expr_EvalCtx(&player,&copy,&result,&f,&frame)==1 && result==3);Expr_Free(&copy);zss_no_allocs();
+    /* Every incoming edge must agree on stack depth, and no jump may enter an
+     * interval comparison tag, leave the code, or point backward/to itself. */
+    assert(Expr_CompileCtx("var(0) || (var(1)=[0,2])",&e,&owner,&end,EXPR_WANT_ANY,&compile));
+    for(at=0;at<e.count && e.t.types[at]!=EXPR_SC_OR;at++);assert(at<e.count);save=e.u.tokens[at].i;
+    e.u.tokens[at].i=0;assert(!expr_verify_lazy(e.u.tokens,e.t.types,e.count));
+    assert(!Expr_EvalCtx(&player,&e,&result,&f,&frame) && g_exprStackTop==before);
+    e.u.tokens[at].i=INT_MAX;assert(!expr_verify_lazy(e.u.tokens,e.t.types,e.count));
+    assert(!Expr_EvalCtx(&player,&e,&result,&f,&frame) && g_exprStackTop==before);
+    e.u.tokens[at].i=1;assert(!expr_verify_lazy(e.u.tokens,e.t.types,e.count));
+    for(j=(size_t)at+1;j<(size_t)e.count;j++) if(e.t.types[j]==EXPR_OP && e.u.tokens[j].i==EXPR_OP_IN_CC) break;
+    assert(j+1<(size_t)e.count);e.u.tokens[at].i=(int)j+1-at;assert(!expr_verify_lazy(e.u.tokens,e.t.types,e.count));
+    e.u.tokens[at].i=save;assert(expr_verify_lazy(e.u.tokens,e.t.types,e.count));
+    assert(!Expr_Eval(&player,&e,&result,&f) && g_exprStackTop==before);Expr_Free(&e);zss_no_allocs();
+    used=0;for(j=0;j<60;j++) used+=(size_t)snprintf(text+used,sizeof(text)-used,j ? "||1" : "1");
+    assert(Expr_CompileCtx(text,&e,&owner,&end,EXPR_WANT_ANY,&compile));
+    assert(e.count>EXPR_MAX_TOKENS && Expr_EvalCtx(&player,&e,&result,&f,&frame)==1 && result==1);Expr_Free(&e);zss_no_allocs();
+    for(j=60;j<70;j++) used+=(size_t)snprintf(text+used,sizeof(text)-used,"||1");
+    assert(!Expr_CompileCtx(text,&e,&owner,&end,EXPR_WANT_ANY,&compile) && !compile.depth);zss_no_allocs();
+    assert(!Expr_CompileCtx("~1 || 0",&e,&owner,&end,EXPR_WANT_ANY,&compile));zss_no_allocs();
+    assert(!Expr_CompileCtx("~1",&e,&owner,&end,EXPR_WANT_ANY,&compile));zss_no_allocs();
+    /* Plain malloc buffers let the real reallocating legacy scaling helpers
+     * run without the harness's calloc-only allocation bookkeeping. All copied
+     * operands here are scalar; no trigger ownership is duplicated. */
+    assert(Expr_CompileCtx("$x || $y",&e,&owner,&end,EXPR_WANT_ANY,&compile));
+    copy.count=e.count;copy.u.tokens=malloc((size_t)e.count*sizeof(ExprValue));copy.t.types=malloc((size_t)e.count);
+    assert(copy.u.tokens && copy.t.types);
+    memcpy(copy.u.tokens,e.u.tokens,(size_t)e.count*sizeof(ExprValue));memcpy(copy.t.types,e.t.types,(size_t)e.count);Expr_Free(&e);
+    values[0].i=2;values[1].i=0;
+    Expr_MulFloat(&copy,2);assert(expr_verify_lazy(copy.u.tokens,copy.t.types,copy.count));
+    assert(Expr_EvalCtx(&player,&copy,&result,&f,&frame)==2 && f==4);
+    Expr_Halve(&copy);assert(expr_verify_lazy(copy.u.tokens,copy.t.types,copy.count));
+    assert(Expr_EvalCtx(&player,&copy,&result,&f,&frame)==2 && f==2);Expr_Free(&copy);zss_no_allocs();
+    zss_calloc_calls=0;assert(Expr_CompileCtx(owned,&e,&owner,&end,EXPR_WANT_ANY,&compile));calls=zss_calloc_calls;Expr_Free(&e);
+    for(j=1;j<=(size_t)calls;j++) {
+        zss_calloc_calls=0;zss_fail_call=(int)j;
+        if(Expr_CompileCtx(owned,&e,&owner,&end,EXPR_WANT_ANY,&compile)) Expr_Free(&e);
+        assert(!e.count && !compile.depth);zss_no_allocs();
+    }
+    zss_fail_call=0;
+    puts("ok: ZSS short circuit, value/type selection, forward-jump verification and nested ownership");
+}
 static int reenter_zss(Player *p, StateCtrl *sc, ExprEvalCtx *frame, void *context)
 {
     ZssProgram *program=context;
@@ -564,7 +674,7 @@ static void test_zss_controller_contexts(void)
         {"ClearClipboard{}",SCTRL_CLEARCLIPBOARD,-1}
     };
     const char *text="DisplayToClipboard{text:\"$x=%i y=%g k=%i\";params:$x,$y,cond($x=4,8,9)}";
-    const char *bad[]={"CtrlSet{value:$unknown}","CtrlSet{value:cond($x,1,$unknown)}","CtrlSet{value:$x,1}","CtrlSet{value:$x && 1}","CtrlSet{}","CtrlSet{value:$x;value:1}","Helper{id:$x}","ChangeState{ctrl:$x}","DisplayToClipboard{text:\"%i %i\";params:$x}","VelSet{x:$x,1}"};
+    const char *bad[]={"CtrlSet{value:$unknown}","CtrlSet{value:cond($x,1,$unknown)}","CtrlSet{value:$x,1}","CtrlSet{value:$x &&}","CtrlSet{}","CtrlSet{value:$x;value:1}","Helper{id:$x}","ChangeState{ctrl:$x}","DisplayToClipboard{text:\"%i %i\";params:$x}","VelSet{x:$x,1}"};
     const char *body="[StateDef 0]\nlet value=1;\nCtrlSet{value:$value}\nlet value=$value+1;\nCtrlSet{value:$value}\nfor i=1;3 {CtrlSet{value:$value+$i}}\n";
     StateCtrl sc={0}, failed={0};
     ZssProgram *program=NULL;
@@ -678,7 +788,7 @@ static void test_zss_locals(void)
 static void test_zss_program(void)
 {
     const char *source="[StateDef 200;type:S;]\nif var(0)=0 { CtrlSet{value:1} CtrlSet{value:2} } else if var(0)=9 { CtrlSet{value:9} } else { CtrlSet{value:8} }\nif .5 { CtrlSet{value:3} }\n[StateDef 201]\n";
-    const char *bad[]={"", "[StateDef 0] Null{}", "[StateDef\n0] Null{}", "[StateDef 0]\n[StateDef 0]", "[StateDef 0]\nif 1 {", "[StateDef 0]\nif 0 && var(0) {Null{}}", "[StateDef 0]\nNull{};", "[StateDef 0]\nelse {Null{}}", "[StateDef 0]\nNull{} Null{}"};
+    const char *bad[]={"", "[StateDef 0] Null{}", "[StateDef\n0] Null{}", "[StateDef 0]\n[StateDef 0]", "[StateDef 0]\nif 1 {", "[StateDef 0]\nif 0 && {Null{}}", "[StateDef 0;ctrl:1&&0]", "[StateDef 0]\nNull{};", "[StateDef 0]\nelse {Null{}}", "[StateDef 0]\nNull{} Null{}"};
     ZssProgram *program=NULL, *failed=NULL;
     ZssDiagnostic d;
     const StateDef *sd;
@@ -855,6 +965,7 @@ int main(void)
     test_zss_loops();
     test_zss_ranges();
     test_expression_contexts();
+    test_zss_lazy();
     test_zss_locals();
     test_zss_controller_contexts();
     test_zss_installation();

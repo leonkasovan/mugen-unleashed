@@ -1531,7 +1531,7 @@ static void Trigger_EvalCondCtx(Player *target, const Trigger *t, ExprEvalCtx *c
     if (r == 1) {
         expr += ci != 0 ? 1 : 2;
     } else if (r == 2) {
-        expr += cf == 0.0f ? 2 : 1;
+        expr += cf == 0.0f || (ctx!=NULL && _isnan(cf)) ? 2 : 1;
     } else if (r == 3) {
         ExprStack_Push(ci, EXPR_BOTTOM);
         return;

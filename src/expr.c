@@ -296,6 +296,12 @@ static int Expr_ParseBody(const char *s, ExprValue *out_tokens, char *out_types,
             goto next;
         }
         op = Expr_ReadOp(cur);
+        /* Port policy: the legacy ~ parser/runtime disagree on stack arity.
+         * Keep CNS's quirk; reject it in ZSS until a proper unary op is added. */
+        if (ctx!=NULL && op==EXPR_OP_BNOT) {
+            snprintf(g_libraryErrorText,sizeof(g_libraryErrorText),"Bitwise not is not enabled in ZSS expressions");
+            goto fail;
+        }
         if (op != 0 && *cur != '(' && *cur != '[' && *cur != ')' && *cur != ']') {
             if (op == EXPR_OP_SUB) {
                 if (last != PARSE_LAST_NONE && last != PARSE_LAST_UNUSED && last != PARSE_LAST_OP) {
@@ -336,7 +342,8 @@ static int Expr_ParseBody(const char *s, ExprValue *out_tokens, char *out_types,
         push_op:
             last = PARSE_LAST_OP;
             {
-                int right = Expr_IsRightAssoc(op);
+                int right = Expr_IsRightAssoc(op) ||
+                    (ctx!=NULL && (op==EXPR_OP_AND || op==EXPR_OP_OR));
 
                 prec = top_prec;
                 for (;;) {
@@ -361,6 +368,7 @@ static int Expr_ParseBody(const char *s, ExprValue *out_tokens, char *out_types,
             top++;
             if (top >= EXPR_OP_STACK_SIZE) {
                 sprintf(g_libraryErrorText, "Parser stack overflow error");
+                if (ctx!=NULL) goto fail;
                 Error_Exit();
             }
             ops[top] = (char)op;
@@ -708,6 +716,175 @@ int Expr_ParseCtx(const char *s, ExprValue *out_tokens, char *out_types, CharDat
     return n;
 }
 
+/* Port addition: turn the verified postfix tree into forward-only short-circuit
+ * code. Parsing remains shared; only explicit-context compilation lowers it.
+ * Scalar jump displacements survive clone/copy and appended scaling operations. */
+#define EXPR_ZSS_MAX_CODE (EXPR_MAX_TOKENS*2)
+static int expr_arity(int op)
+{
+    if (op>=EXPR_OP_IN_OO && op<=EXPR_OP_IN_CC) return 3;
+    if (op==EXPR_OP_NOT || op==EXPR_OP_NEG) return 1;
+    return 2;
+}
+static int expr_flow_depth(int *depths, int at, int value)
+{
+    if (value<0 || value>EXPR_STACK_SIZE) return 0;
+    if (depths[at]>=0 && depths[at]!=value) return 0;
+    depths[at]=value;return 1;
+}
+/* All control-flow edges must agree on operand depth. Interval compare tags
+ * are payload words, not instruction boundaries or legal jump destinations. */
+static int expr_verify_lazy(const ExprValue *code, const char *types, int n)
+{
+    int depths[EXPR_ZSS_MAX_CODE+1], boundary[EXPR_ZSS_MAX_CODE+1]={0};
+    int i,d,need,width,target;
+    if (n<1 || n>EXPR_ZSS_MAX_CODE) return 0;
+    for (i=0;i<=n;i++) depths[i]=-1;
+    for (i=0;i<n;i++) {
+        boundary[i]=1;
+        if (types[i]==EXPR_OP && code[i].i>=EXPR_OP_IN_OO && code[i].i<=EXPR_OP_IN_CC) {
+            if (i+1>=n || types[i+1]!=EXPR_OP ||
+                (code[i+1].i!=EXPR_OP_EQ && code[i+1].i!=EXPR_OP_NE)) return 0;
+            i++;
+        }
+    }
+    boundary[n]=1;depths[0]=0;
+    for (i=0;i<n;i++) {
+        if (!boundary[i]) continue;
+        d=depths[i];if (d<0) return 0;
+        width=1;
+        switch (types[i]) {
+        case EXPR_INT:case EXPR_FLOAT:case EXPR_LOCAL:
+            if (!expr_flow_depth(depths,i+1,d+1)) return 0;
+            break;
+        case EXPR_TRIGGER:
+            need=Trigger_ArgCount(code[i].trig->id);
+            if (d<need || !expr_flow_depth(depths,i+1,d-need+1)) return 0;
+            break;
+        case EXPR_OP:
+            if (code[i].i<EXPR_OP_EQ || code[i].i>EXPR_OP_MOD) return 0;
+            need=expr_arity(code[i].i);
+            if (need==3) width=2;
+            if (d<need || !expr_flow_depth(depths,i+width,d-need+1)) return 0;
+            break;
+        case EXPR_SC_AND:case EXPR_SC_OR:
+            /* Bounds are checked before adding the untrusted scalar offset. */
+            if (d<1 || code[i].i<1 || code[i].i>n-i) return 0;
+            target=i+code[i].i;
+            if (!boundary[target] || !expr_flow_depth(depths,target,d) ||
+                !expr_flow_depth(depths,i+1,d-1)) return 0;
+            break;
+        case EXPR_BOOL:
+            if (d<1 || !expr_flow_depth(depths,i+1,d)) return 0;
+            break;
+        default:return 0;
+        }
+    }
+    return depths[n]==1;
+}
+/* Dependency classification, not speculative evaluation: mathematical calls
+ * and constant cond/ifelse trees can normalize their logical parent, while
+ * variables, redirections, random and assignments must remain dynamic. */
+static int expr_pure(const Expr *e, unsigned depth);
+static int expr_pure_trigger(const Trigger *t, unsigned depth)
+{
+    int i;
+    if (depth>=EXPR_MAX_DEPTH || t->redirect!=TRIGGER_REDIRECT_NONE) return 0;
+    if (t->id==TRIGGER_COND) {
+        if (t->data==NULL) return 0;
+        for (i=0;i<3;i++) if (!expr_pure((const Expr *)t->data+i,depth+1)) return 0;
+        return 1;
+    }
+    return (t->id>=TRIGGER_SIN && t->id<=TRIGGER_CEIL) ||
+           t->id==TRIGGER_LOG || t->id==TRIGGER_PI || t->id==TRIGGER_E || t->id==TRIGGER_IFELSE;
+}
+static int expr_pure(const Expr *e, unsigned depth)
+{
+    int i;
+    if (depth>=EXPR_MAX_DEPTH) return 0;
+    if (e->count==EXPR_CONST) return e->t.type==EXPR_INT || e->t.type==EXPR_FLOAT;
+    if (e->count<0 || e->count>EXPR_ZSS_MAX_CODE) return 0;
+    for (i=0;i<e->count;i++) {
+        if (e->t.types[i]==EXPR_LOCAL) return 0;
+        if (e->t.types[i]==EXPR_TRIGGER && !expr_pure_trigger(e->u.tokens[i].trig,depth+1)) return 0;
+        if (e->t.types[i]==EXPR_OP && (e->u.tokens[i].i==EXPR_OP_ASSIGN || e->u.tokens[i].i==EXPR_OP_FASSIGN)) return 0;
+    }
+    return 1;
+}
+static int expr_lower_lazy(ExprValue *tokens, char *types, int n, ExprValue *out, char *kinds)
+{
+    struct Tree {int at,width,arity,pure,child[3];} nodes[EXPR_MAX_TOKENS];
+    struct Emit {int node,child,jump;} frames[EXPR_MAX_TOKENS];
+    int roots[EXPR_MAX_TOKENS], used=0, top=0, i,j,arity,width,pure,size=0,branch;
+    struct Tree *node;
+    struct Emit *frame;
+    for (i=0;i<n;i++) {
+        arity=0;width=1;pure=types[i]!=EXPR_LOCAL && types[i]!=EXPR_TRIGGER;
+        if (types[i]==EXPR_TRIGGER) {
+            arity=Trigger_ArgCount(tokens[i].trig->id);pure=expr_pure_trigger(tokens[i].trig,0);
+        }
+        else if (types[i]==EXPR_OP) {
+            arity=expr_arity(tokens[i].i);
+            if (arity==3) width=2;
+            if (tokens[i].i==EXPR_OP_ASSIGN || tokens[i].i==EXPR_OP_FASSIGN) pure=0;
+        } else if (types[i]!=EXPR_INT && types[i]!=EXPR_FLOAT && types[i]!=EXPR_LOCAL) return 0;
+        if (arity>3 || top<arity || used>=EXPR_MAX_TOKENS || i+width>n) return 0;
+        node=&nodes[used];node->at=i;node->width=width;node->arity=arity;
+        for (j=0;j<arity;j++) {node->child[j]=roots[top-arity+j];pure&=nodes[node->child[j]].pure;}
+        node->pure=pure;top-=arity;roots[top++]=used++;i+=width-1;
+    }
+    if (top!=1) return 0;
+    frames[0]=(struct Emit){roots[0],0,-1};top=1;
+    while (top) {
+        frame=&frames[top-1];node=&nodes[frame->node];
+        branch=types[node->at]==EXPR_OP &&
+               (tokens[node->at].i==EXPR_OP_AND || tokens[node->at].i==EXPR_OP_OR);
+        if (frame->child<node->arity) {
+            if (branch && frame->child==1) {
+                if (size>=EXPR_ZSS_MAX_CODE) return 0;
+                frame->jump=size;out[size].i=0;
+                kinds[size++]=tokens[node->at].i==EXPR_OP_AND ? EXPR_SC_AND : EXPR_SC_OR;
+            }
+            j=node->child[frame->child++];
+            if (top>=EXPR_MAX_TOKENS) return 0;
+            frames[top++]=(struct Emit){j,0,-1};continue;
+        }
+        if (branch) {
+            out[frame->jump].i=size-frame->jump;
+            /* Upstream non-folded paths retain the selected operand. Pure
+             * numeric subtrees normalize as its constant logical fold does. */
+            if (node->pure) {
+                if (size>=EXPR_ZSS_MAX_CODE) return 0;
+                out[size].i=0;kinds[size++]=EXPR_BOOL;
+            }
+        } else {
+            if (size+node->width>EXPR_ZSS_MAX_CODE) return 0;
+            for (j=0;j<node->width;j++) {out[size]=tokens[node->at+j];kinds[size++]=types[node->at+j];}
+        }
+        top--;
+    }
+    return expr_verify_lazy(out,kinds,size) ? size : 0;
+}
+
+/* Publish the arrays together; callers retain parsed trigger ownership until
+ * this succeeds. Lazy scratch storage is allocated on the C stack only on the
+ * explicit-context logical path, not on ordinary CNS compilations. */
+static int expr_publish(Expr *e, const ExprValue *tokens, const char *types, int n)
+{
+    ExprValue *code=Mem_Calloc(n,sizeof(*code));
+    char *kinds=Mem_Calloc(n,1);
+    if (code==NULL || kinds==NULL) {free(code);free(kinds);return 0;}
+    memcpy(code,tokens,n*sizeof(*code));memcpy(kinds,types,n);
+    e->u.tokens=code;e->t.types=kinds;e->count=n;return 1;
+}
+static int expr_compile_lazy(Expr *e, ExprValue *tokens, char *types, int n)
+{
+    ExprValue lowered[EXPR_ZSS_MAX_CODE];
+    char kinds[EXPR_ZSS_MAX_CODE];
+    int size=expr_lower_lazy(tokens,types,n,lowered,kinds);
+    return size>0 && expr_publish(e,lowered,kinds,size);
+}
+
 /*
  * 0x004023D0: compiles s into e (whose old contents are not freed). A single
  * number is stored as a constant. Returns 1 when s is NULL, leaving e alone.
@@ -720,7 +897,7 @@ int Expr_CompileCtx(const char *s, Expr *e, CharData *owner, const char **end, i
 {
     ExprValue tokens[EXPR_MAX_TOKENS];
     char types[EXPR_MAX_TOKENS];
-    int n, i;
+    int n, i, lazy=0, ok;
 
     if (s == NULL) {
         return 1;
@@ -736,26 +913,12 @@ int Expr_CompileCtx(const char *s, Expr *e, CharData *owner, const char **end, i
         owner->expr_count++;
         return 1;
     }
-    /* Portability fix: publish both allocations together. A partial failure
-     * must not leak one array or leave a half-built expression behind. */
-    {
-        ExprValue *code = Mem_Calloc(n, sizeof(ExprValue));
-        char *kinds = Mem_Calloc(n, 1);
-        if (code == NULL || kinds == NULL) {
-            free(code);
-            free(kinds);
-            for (i = 0; i < n; i++) {
-                if (types[i] == EXPR_TRIGGER) {
-                    Trigger_Free(tokens[i].trig);
-                }
-            }
-            return 0;
-        }
-        memcpy(code, tokens, n * sizeof(ExprValue));
-        memcpy(kinds, types, n);
-        e->u.tokens = code;
-        e->t.types = kinds;
-        e->count = n;
+    if (ctx!=NULL) for (i=0;i<n;i++) if (types[i]==EXPR_OP &&
+        (tokens[i].i==EXPR_OP_AND || tokens[i].i==EXPR_OP_OR)) {lazy=1;break;}
+    ok=lazy ? expr_compile_lazy(e,tokens,types,n) : expr_publish(e,tokens,types,n);
+    if (!ok) {
+        for (i=0;i<n;i++) if (types[i]==EXPR_TRIGGER) Trigger_Free(tokens[i].trig);
+        return 0;
     }
     owner->expr_count++;
     return 1;
@@ -1028,6 +1191,11 @@ int Expr_Eval(Player *p, const Expr *e, int *iout, float *fout)
 {
     return Expr_EvalCtx(p,e,iout,fout,NULL);
 }
+static int expr_script_truth(ExprValue value, int type)
+{
+    return type==EXPR_INT ? value.i!=0 : type==EXPR_FLOAT ?
+           !_isnan(value.f) && value.f!=0.0f : 0;
+}
 int Expr_EvalCtx(Player *p, const Expr *e, int *iout, float *fout, ExprEvalCtx *ctx)
 {
     float fa = 0.0f, fb = 0.0f, fx = 0.0f;
@@ -1065,6 +1233,19 @@ int Expr_EvalCtx(Player *p, const Expr *e, int *iout, float *fout, ExprEvalCtx *
         case EXPR_INT:
         case EXPR_FLOAT:
             ExprStack_Push(e->u.tokens[i].i, *tp);
+            continue;
+        case EXPR_SC_AND:case EXPR_SC_OR:case EXPR_BOOL:
+            if (ctx==NULL || g_exprStackTop<=base) {g_exprStackTop=base;return 0;}
+            top=g_exprStackTop;rtype=g_exprStackType[top];
+            if (rtype!=EXPR_INT && rtype!=EXPR_FLOAT && rtype!=EXPR_BOTTOM) {g_exprStackTop=base;return 0;}
+            r=expr_script_truth(g_exprStackValue[top],rtype);
+            if (*tp==EXPR_BOOL) {
+                g_exprStackValue[top].i=r;g_exprStackType[top]=EXPR_INT;continue;
+            }
+            idx=e->u.tokens[i].i;
+            if (idx<1 || idx>count-i) {g_exprStackTop=base;return 0;}
+            if ((*tp==EXPR_SC_AND && !r) || (*tp==EXPR_SC_OR && r)) i+=idx-1;
+            else g_exprStackTop--;
             continue;
         case EXPR_LOCAL:
             idx = e->u.tokens[i].i;
