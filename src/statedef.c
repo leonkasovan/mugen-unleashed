@@ -21,6 +21,7 @@
  *   128 or more, stored in a byte) becomes 0.
  */
 #include "mugen.h"
+#include "zss_binding.h"
 
 /* 0x0045B210: the players a running state of p refers to. */
 void StateRunCtx_Init(StateRunCtx *ctx, Player *p)
@@ -323,6 +324,15 @@ static int load_statedefs(Ini *ini, KeyedArray *list, int count, CharData *owner
             h = Ini_NextGroup(ini);
         }
         number = Expr_Atoi32(h + 10);
+        /* Port addition: preserve all-CNS collisions; reject mixed collisions
+         * rather than letting a later CNS file silently hide a ZSS body. */
+        {
+            int existing=KeyedArray_Find(list,number,0);
+            if (existing!=-1 && Zss_IsBoundState((StateDef *)(list->data+list->elem_size*existing))) {
+                Error_Printf("CNS state %i collides with a ZSS state\n",number);
+                return 0;
+            }
+        }
         if (!StateDef_Parse(h, &sd, ini, owner)) {
             Error_Printf("Error in %s\n", h);
             return 0;
@@ -380,6 +390,7 @@ void StateDefs_Free(StateDefs *defs)
     KeyedArray *list;
     StateDef *sd;
     StateCtrl *sc;
+    int bound;
 
     if (defs == NULL) {
         return;
@@ -387,6 +398,7 @@ void StateDefs_Free(StateDefs *defs)
     list = defs->list;
     if (list->count != 0) {
         for (sd = KeyedArray_First(list); sd != NULL; sd = KeyedArray_Next(list)) {
+            bound=Zss_IsBoundState(sd);
             if (sd->source != NULL) {
                 if (sd->source->statedef != NULL) {
                     free(sd->source->statedef);
@@ -399,7 +411,9 @@ void StateDefs_Free(StateDefs *defs)
                     StateCtrl_Free(sc);
                 }
             }
-            StateDef_FreeProperties(sd);
+            /* Port addition: bound ZSS headers borrow immutable properties
+             * owned by their reference-counted program. */
+            if (!bound) StateDef_FreeProperties(sd);
             KeyedArray_Free(sd->ctrls);
         }
     }

@@ -98,7 +98,8 @@ enum {
     SCTRL_TAG = 550,                /* parsed, but fatal when run */
     SCTRL_TAGIN = 551,              /* run only: never produced by the parser */
     SCTRL_TAGOUT = 552,             /* run only */
-    SCTRL_NOP = 1000                /* run only: does nothing */
+    SCTRL_NOP = 1000,               /* run only: does nothing */
+    SCTRL_ZSS_BODY = 1001           /* port-private: installed ZSS program body */
 };
 
 /* Kind of variable of VarSet/VarAdd/ParentVarSet/ParentVarAdd (StateCtrl.arg[2]). */

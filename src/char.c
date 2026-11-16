@@ -12,6 +12,7 @@
  * CharData.consts, which every player copies.
  */
 #include "mugen.h"
+#include "zss_binding.h"
 
 #define LUA_REGISTRYINDEX   (-10000)
 #define LUA_TTABLE          5
@@ -736,6 +737,19 @@ CharData *Char_LoadDef(const char *dir, Stream *s)
         if (zs == NULL) {
             Error_Printf("\nCould not open file: %s\n", buf);
             return NULL;
+        }
+        /* Port addition: explicit additional ZSS states. Keep cns/cmd and the
+         * primary state source on their legacy paths in this prototype. */
+        if (strlen(buf)>=4 && _stricmp(buf+strlen(buf)-4,".zss")==0) {
+            ZssDiagnostic diagnostic;
+            if (!Zss_LoadStateStream(zs,c->states,c,&diagnostic)) {
+                Error_Printf("ZSS %s:%u:%u: %s\n",buf,(unsigned)diagnostic.line,
+                             (unsigned)diagnostic.column,diagnostic.message);
+                Stream_Close(zs);zs=NULL;
+                Ini_Free(def);Char_Free(c);return NULL;
+            }
+            if (!is_zip) {Stream_Close(zs);zs=NULL;}
+            Log_Printf("OK\n");continue;
         }
         ini = Ini_Parse(zs, mode);
         if (ini == NULL) {

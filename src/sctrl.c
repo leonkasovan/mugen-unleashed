@@ -37,6 +37,7 @@
  *   name every parameter "zoom.<name>".
  */
 #include "mugen.h"
+#include "zss_binding.h"
 #include <limits.h>
 
 /* ------------------------------------------------------------ sound helpers */
@@ -1355,6 +1356,9 @@ int StateCtrl_Run(Player *p, StateCtrl *sc, StateRunCtx *ctx)
     int r;
     int n;
 
+    /* Port addition: leaves use the ordinary runner, so its snapshots and AI
+     * state-change bookkeeping happen once per leaf, not twice per body. */
+    if (sc->type == SCTRL_ZSS_BODY) return Zss_RunBoundBody(p, sc->params, ctx);
     p->ctrl_state_no = p->state_no;
     p->ctrl_statetype = p->statetype;
     p->ctrl_movetype = p->movetype;
@@ -4916,6 +4920,9 @@ void StateCtrl_Free(StateCtrl *sc)
         Expr_Free(&sc->arg[i]);
     }
     switch (sc->type) {
+    case SCTRL_ZSS_BODY:
+        Zss_FreeBoundBody(sc->params);sc->params=NULL;
+        break;
     case SCTRL_PLAYSND:
         PlaySndParams_Free(sc->params);
         break;

@@ -701,3 +701,69 @@ stop propagation, empty bodies, arena growth, nesting limits and allocation
 failure cleanup. Runtime tests inject a recording controller-dispatch boundary;
 they do not claim end-to-end gameplay/controller execution or native device
 qualification.
+
+### Experimental engine integration
+
+Explicit additional sources in character DEF `st0` through `st9` entries now
+dispatch `.zss` files before INI parsing. The primary st/cns source, command
+definitions and common-state loader retain their existing paths. There is no
+automatic .cns.zss fallback yet. Use unused state numbers: collisions are rejected
+both when installing ZSS and when subsequently loading CNS into a bound state.
+
+Installation builds a replacement keyed array transactionally. A private
+SCTRL_ZSS_BODY controller owns a reference to the program and dispatches leaves
+through StateCtrl_Run, preserving the existing state entry, controller result,
+hitpause and negative-state loops. Original structures and their layout checks
+are unchanged. Installed headers borrow immutable property expressions from the
+retained program; StateDefs_Free releases bindings rather than double-freeing
+those expressions. There is no process-global program registry. Install/free
+operations follow the existing character/StateDefs ownership lifecycle and must
+not run concurrently on the same collection/program.
+
+The outer state loop resets command hints; guarded leaves preserve those hints
+for the existing AI state-change bookkeeping. Detailed AI/custom-state behavior
+and concurrent precache qualification remain OPEN. No new attributes, locals,
+loops, functions or lazy expression semantics are enabled by this integration.
+
+For diagnostics, MUGEN_ZSS_TRACE=1 at load time enables at most four body-result
+log entries per installed state binding. Default logs remain unchanged.
+
+Example DEF entry (keep ordinary cns, st, cmd and stcommon resources):
+
+```text
+st9 = experimental.zss
+```
+
+Example extra state file, entered via an ordinary CNS ChangeState controller:
+
+```text
+[StateDef 65000; type:S; movetype:I; physics:N; ctrl:0;]
+if time=0 { ChangeState{value:65001;ctrl:0} }
+[StateDef 65001; type:S; movetype:I; physics:S;]
+CtrlSet{value:1}
+```
+
+Validation on Linux x86-64: the full native engine linked with MUGEN_MODEL3D=0,
+using the existing SDL2 dependency set. A missing private glib development header
+package was extracted into the disposable test subtree; no project dependency
+was added. An offscreen System-renderer KFM smoke test used a copied installation
+and explicit st9 file. The log recorded:
+
+```text
+Loading cns zss-smoke.zss...OK
+ZSS state 65000 body result 5
+ZSS state 65001 body result 0
+```
+
+Result 5 contains the existing stop/state-change bits and confirms native leaf
+dispatch and transition into the second ZSS state. The run was bounded by a
+12-second timeout (exit 124); the engine logged cleanup and successful termination
+after the termination signal. It was not a completed match or a determinism
+comparison. Original install files and display dimensions were not changed.
+
+Host tests cover atomic installation, existing-state preservation, collision
+rejection, retained references, collection destruction, memory Stream loading
+and allocation-failure rollback. Their Stream reader is an explicit I/O boundary;
+the native smoke run exercised the real file/Stream path. Native Windows,
+Android, Vita, ZIP characters, complete gameplay and unsupported language
+features remain unqualified.

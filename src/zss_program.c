@@ -5,6 +5,8 @@
 #include "zss_params.h"
 #include "zss_statedef.h"
 #include "zss_program.h"
+#include "zss_binding.h"
+#include <limits.h>
 #define NO_NODE UINT32_MAX
 #define MAX_NODES 1024u
 #define MAX_STATES 64u
@@ -22,6 +24,7 @@ typedef struct ZssState {
     StateDef properties;
 } ZssState;
 struct ZssProgram {
+    unsigned references;
     ZssNode *nodes;
     ZssState *states;
     uint32_t node_count, node_capacity, state_count, state_capacity;
@@ -189,6 +192,7 @@ int Zss_CompileProgram(const char *source, size_t size, CharData *owner,
     if (!ZssLex_Init(&p.lex,source,size,65536)) return error(&p,p.lex.error);
     p.program=calloc(1,sizeof(*p.program));
     if (p.program==NULL) return error(&p,"Out of memory creating ZSS program");
+    p.program->references=1;
     next(&p);
     while (p.lex.token.kind!=ZSS_EOF) {
         start=p.lex.token;
@@ -222,7 +226,7 @@ fail:
 void Zss_FreeProgram(ZssProgram *p)
 {
     uint32_t i;
-    if (p==NULL) return;
+    if (p==NULL || --p->references!=0) return;
     for (i=0;i<p->node_count;i++) {Expr_Free(&p->nodes[i].condition);StateCtrl_Free(&p->nodes[i].controller);}
     for (i=0;i<p->state_count;i++) StateDef_FreeProperties(&p->states[i].properties);
     free(p->nodes);free(p->states);free(p);
@@ -262,4 +266,110 @@ int Zss_RunBody(ZssProgram *p, size_t state, Player *player,
         while (index==NO_NODE && top) index=pending[--top];
     }
     *result=bits;return 1;
+}
+
+/* Port integration: a private controller owns one reference to an immutable
+ * program. No global sidecar or pointer into a growing StateDef array is used. */
+typedef struct ZssBinding {
+    ZssProgram *program;
+    size_t state;
+    unsigned trace_budget;
+} ZssBinding;
+void Zss_FreeBoundBody(void *binding)
+{
+    ZssBinding *b=binding;
+    if (b==NULL) return;
+    Zss_FreeProgram(b->program);free(b);
+}
+static int run_bound_leaf(Player *p, StateCtrl *controller, void *context)
+{
+    /* Keep command hints collected by this body's guards for the existing AI
+     * bookkeeping in StateCtrl_Run. The outer state loop reset them already. */
+    return StateCtrl_Run(p,controller,context);
+}
+int Zss_RunBoundBody(Player *p, void *binding, StateRunCtx *context)
+{
+    ZssBinding *b=binding;
+    int result=0;
+    if (b==NULL || !Zss_RunBody(b->program,b->state,p,run_bound_leaf,context,&result)) {
+        Player_Warn(p,"ZSS body execution failed");return STATECTRL_STOP;
+    }
+    /* Opt-in, bounded diagnostics for qualifying the experimental engine path. */
+    if (b->trace_budget) {
+        b->trace_budget--;
+        Log_Printf("ZSS state %i body result %i\n",b->program->states[b->state].number,result);
+    }
+    return result;
+}
+int Zss_IsBoundState(const StateDef *sd)
+{
+    const StateCtrl *sc;
+    if (sd==NULL || sd->ctrls==NULL || sd->ctrls->count!=1) return 0;
+    sc=(const StateCtrl *)(sd->ctrls->data+sd->ctrls->elem_size*sd->ctrls->first);
+    return sc->type==SCTRL_ZSS_BODY && sc->params!=NULL;
+}
+static void free_staged_state(StateDef *sd)
+{
+    int i;
+    if (sd->ctrls!=NULL) {
+        for (i=0;i<sd->ctrls->capacity;i++) if (sd->ctrls->slots[i].used)
+            StateCtrl_Free((StateCtrl *)(sd->ctrls->data+sd->ctrls->elem_size*i));
+        KeyedArray_Free(sd->ctrls);
+    }
+    /* Property expressions are borrowed from the retained program. */
+}
+int Zss_InstallProgram(ZssProgram *p, StateDefs *defs, const char **error)
+{
+    StateDef *staged=NULL;
+    KeyedArray *merged=NULL, *old;
+    StateCtrl sc={0};
+    ZssBinding *binding;
+    Expr always={0};
+    uint32_t i;
+    int k;
+    const char *why="Invalid ZSS installation target";
+    if (error!=NULL) *error=NULL;
+    if (p==NULL || defs==NULL || defs->list==NULL || !p->state_count) goto fail;
+    old=defs->list;
+    if (old->elem_size!=(int)sizeof(StateDef)) goto fail;
+    if (old->count>INT_MAX-(int)p->state_count || p->references>UINT_MAX-p->state_count) goto fail;
+    for (i=0;i<p->state_count;i++) if (KeyedArray_Find(old,p->states[i].number,0)!=-1) {
+        why="ZSS state collides with an already loaded state";goto fail;
+    }
+    why="Out of memory installing ZSS states";
+    staged=calloc(p->state_count,sizeof(*staged));if (staged==NULL) goto fail;
+    for (i=0;i<p->state_count;i++) {
+        /* Immutable properties stay owned by the program, whose body binding
+         * retains it. StateDefs_Free skips these borrowed expressions. */
+        staged[i]=p->states[i].properties;
+        staged[i].ctrls=KeyedArray_Create(1,sizeof(StateCtrl));
+        if (staged[i].ctrls==NULL) goto fail;
+        sc.triggers=KeyedArray_Create(1,sizeof(Expr));if (sc.triggers==NULL) goto fail;
+        Expr_SetInt(&always,1);
+        if (KeyedArray_Add(sc.triggers,&always,0,0)==-1) goto fail;
+        sc.type=SCTRL_ZSS_BODY;sc.trigger_groups=1;sc.persistent=1;
+        binding=calloc(1,sizeof(*binding));if (binding==NULL) goto fail;
+        binding->program=p;binding->state=i;
+        {
+            const char *trace=getenv("MUGEN_ZSS_TRACE");
+            binding->trace_budget=trace!=NULL && !strcmp(trace,"1") ? 4u : 0u;
+        }
+        p->references++;
+        sc.params=binding;
+        if (KeyedArray_Add(staged[i].ctrls,&sc,SCTRL_ZSS_BODY,0)==-1) goto fail;
+        memset(&sc,0,sizeof(sc));
+    }
+    merged=KeyedArray_Create(old->count+(int)p->state_count,sizeof(StateDef));
+    if (merged==NULL) goto fail;
+    for (k=0;k<old->capacity;k++) if (old->slots[k].used &&
+        KeyedArray_Add(merged,old->data+old->elem_size*k,old->slots[k].key1,old->slots[k].key2)==-1) goto fail;
+    for (i=0;i<p->state_count;i++) if (KeyedArray_Add(merged,&staged[i],p->states[i].number,0)==-1) goto fail;
+    /* Only array storage is replaced; existing payload ownership transfers. */
+    defs->list=merged;KeyedArray_Free(old);free(staged);return 1;
+fail:
+    StateCtrl_Free(&sc);
+    KeyedArray_Free(merged);
+    if (staged!=NULL) {for (i=0;i<p->state_count;i++) free_staged_state(&staged[i]);free(staged);}
+    if (error!=NULL) *error=why;
+    return 0;
 }

@@ -299,6 +299,65 @@ static void zss_no_allocs(void)
 #include "zss_controller.h"
 #include "zss_statedef.h"
 #include "zss_program.h"
+#include "zss_binding.h"
+/* Stream I/O is the explicit boundary; compilation/installation are real. */
+size_t Stream_Read(void *out,size_t size,size_t count,Stream *s)
+{
+    size_t available=(size_t)(s->end-s->pos), bytes=size*count;
+    if(bytes>available){bytes=available;g_streamError=STREAM_ERR_EOF;}
+    memcpy(out,s->pos,bytes);s->pos+=bytes;return bytes/size;
+}
+static void test_zss_installation(void)
+{
+    const char *source="[StateDef 65000;anim:2+3;]\nCtrlSet{value:1}\n[StateDef -2]\nNull{}\n";
+    ZssProgram *program=NULL;
+    ZssDiagnostic d;
+    StateDefs *defs;
+    StateDef *sd;
+    const char *error;
+    int calls,i,slot;
+    Stream stream={0};
+    assert(Zss_CompileProgram(source,strlen(source),&owner,&program,&d));
+    defs=calloc(1,sizeof(*defs));assert(defs);defs->list=KeyedArray_Create(1,sizeof(StateDef));assert(defs->list);
+    zss_calloc_calls=0;
+    assert(Zss_InstallProgram(program,defs,&error));calls=zss_calloc_calls;
+    assert(defs->list->count==2);
+    slot=KeyedArray_Find(defs->list,65000,0);assert(slot>=0);
+    sd=(StateDef *)(defs->list->data+defs->list->elem_size*slot);
+    assert(Zss_IsBoundState(sd) && Expr_EvalInt(&player,&sd->anim,0)==5);
+    assert(!Zss_InstallProgram(program,defs,&error) && error && defs->list->count==2);
+    StateDefs_Free(defs);
+    /* Caller reference still owns the program after a collection is destroyed. */
+    assert(Zss_ProgramStateCount(program)==2);
+    for(i=1;i<=calls;i++) {
+        KeyedArray *old;
+        defs=calloc(1,sizeof(*defs));assert(defs);defs->list=KeyedArray_Create(1,sizeof(StateDef));assert(defs->list);
+        old=defs->list;zss_calloc_calls=0;zss_fail_call=i;
+        assert(!Zss_InstallProgram(program,defs,&error));
+        assert(defs->list==old && !old->count);zss_fail_call=0;StateDefs_Free(defs);
+    }
+    {
+        StateDef existing={0};
+        StateCtrl no_op={0};
+        KeyedArray *old;
+        defs=calloc(1,sizeof(*defs));assert(defs);defs->list=KeyedArray_Create(1,sizeof(StateDef));assert(defs->list);
+        existing.ctrls=KeyedArray_Create(1,sizeof(StateCtrl));assert(existing.ctrls);
+        no_op.type=SCTRL_NOP;assert(KeyedArray_Add(existing.ctrls,&no_op,SCTRL_NOP,0)>=0);
+        assert(KeyedArray_Add(defs->list,&existing,42,0)>=0);
+        assert(Zss_InstallProgram(program,defs,&error) && defs->list->count==3);
+        slot=KeyedArray_Find(defs->list,42,0);assert(slot>=0);
+        sd=(StateDef *)(defs->list->data+defs->list->elem_size*slot);
+        assert(sd->ctrls==existing.ctrls && !Zss_IsBoundState(sd));
+        old=defs->list;assert(!Zss_InstallProgram(program,defs,&error) && defs->list==old);
+        StateDefs_Free(defs);
+    }
+    Zss_FreeProgram(program);zss_no_allocs();
+    defs=calloc(1,sizeof(*defs));assert(defs);defs->list=KeyedArray_Create(1,sizeof(StateDef));assert(defs->list);
+    stream.type=STREAM_MEMORY;stream.begin=stream.pos=(void *)source;stream.end=stream.begin+strlen(source);
+    assert(Zss_LoadStateStream(&stream,defs,&owner,&d));
+    assert(defs->list->count==2);StateDefs_Free(defs);zss_no_allocs();
+    puts("ok: atomic ZSS state installation, retained ownership and Stream loading");
+}
 static int visited[16], visits, stop_visit;
 static int record_zss_controller(Player *p, StateCtrl *sc, void *context)
 {
@@ -484,6 +543,7 @@ int main(void)
     test_zss_controller();
     test_zss_state_header();
     test_zss_program();
+    test_zss_installation();
 #else
     test_controller_parse(); test_variables(); test_clipboard();
     test_expr_allocs(); test_trigger_copy_math(); test_state_headers();

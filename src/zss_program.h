@@ -2,12 +2,13 @@
 #define MUGEN_ZSS_PROGRAM_H
 #include "zss_controller.h"
 typedef struct ZssProgram ZssProgram;
-/* Prototype profile: states, enabled controllers, nested if/else. No file
- * resolver, installation, loops, locals, functions or attributes yet. Compile
+/* Prototype profile: states, enabled controllers, nested if/else. Explicit stN stream installation is
+ * experimental; loops, locals, functions and attributes are not enabled. Compile
  * owns all output; source can be released immediately. *out is unchanged on
  * failure. Program limits: 64 states, 1024 nodes, 32 nested blocks, 1 MiB. */
 int Zss_CompileProgram(const char *source, size_t size, CharData *owner,
                        ZssProgram **out, ZssDiagnostic *diagnostic);
+/* Release one owned reference; installed state bindings retain their own. */
 void Zss_FreeProgram(ZssProgram *program);
 size_t Zss_ProgramStateCount(const ZssProgram *program);
 const StateDef *Zss_ProgramState(const ZssProgram *program, size_t index, int *number);
