@@ -2074,4 +2074,15 @@ void *Memprof_Realloc(void *ptr, size_t size);
 void Memprof_Free(void *ptr);
 void *Memprof_LuaAlloc(void *ud, void *ptr, size_t osize, size_t nsize);
 
+
+/* Port additions: explicit ZSS contexts; legacy entry points pass NULL. */
+int Expr_ParseCtx(const char *s, ExprValue *tokens, char *types, CharData *owner, int max, const char **end, int want, ExprCompileCtx *ctx);
+int Expr_CompileCtx(const char *s, Expr *e, CharData *owner, const char **end, int want, ExprCompileCtx *ctx);
+int Expr_EvalCtx(Player *p, const Expr *e, int *iout, float *fout, ExprEvalCtx *ctx);
+int Expr_EvalIntCtx(Player *p, const Expr *e, int warn, ExprEvalCtx *ctx);
+int Trigger_ParseCtx(const char *s, CharData *owner, ExprValue *tokens, char *types, int max, const char **end, ExprCompileCtx *ctx);
+void Trigger_EvalCtx(Player *p, const Trigger *t, ExprEvalCtx *ctx);
+int Cns_ParseExprListCtx(const char *s, CharData *owner, const char **end, Expr **out, ExprCompileCtx *ctx);
+int Cns_ParseArgsCtx(const char *s, const char *fmt, CharData *owner, const char **end, ExprValue *tokens, char *types, int *count, int max, ExprCompileCtx *ctx);
+
 #endif /* MUGEN_SYMBOLS_H */

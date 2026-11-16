@@ -14,10 +14,10 @@
 #define MAX_DEPTH 32u
 #define MAX_LOOP 2500u
 #define MAX_STEPS 100000u
-enum {NODE_CONTROLLER, NODE_IF, NODE_WHILE, NODE_EXPRESSION, NODE_BREAK, NODE_CONTINUE, NODE_FOR};
+enum {NODE_CONTROLLER, NODE_IF, NODE_WHILE, NODE_EXPRESSION, NODE_BREAK, NODE_CONTINUE, NODE_FOR, NODE_LET};
 
 typedef struct ZssNode {
-    int kind;
+    int kind, local;
     uint32_t next, child, otherwise;
     Expr condition;
     Expr range[3];
@@ -25,7 +25,7 @@ typedef struct ZssNode {
 } ZssNode;
 typedef struct ZssState {
     int number;
-    uint32_t first;
+    uint32_t first, locals;
     StateDef properties;
 } ZssState;
 struct ZssProgram {
@@ -39,6 +39,9 @@ typedef struct ZssParser {
     ZssProgram *program;
     CharData *owner;
     ZssDiagnostic *diagnostic;
+    ExprCompileCtx context;
+    ZssToken locals[256];
+    unsigned local_count;
 } ZssParser;
 static int error(ZssParser *p, const char *message)
 {
@@ -52,9 +55,36 @@ static int error(ZssParser *p, const char *message)
 static int next(ZssParser *p) { return ZssLex_Next(&p->lex); }
 static int supported_token(ZssParser *p)
 {
-    if (p->lex.token.kind==ZSS_LOCAL || p->lex.token.kind==ZSS_AND || p->lex.token.kind==ZSS_OR)
-        return error(p,"Locals and lazy logical operators require pending ZSS expression contexts");
+    if (p->lex.token.kind==ZSS_AND || p->lex.token.kind==ZSS_OR)
+        return error(p,"Lazy logical operators require pending ZSS short-circuit compilation");
     return 1;
+}
+static int resolve_local(void *user, const char *name, size_t length)
+{
+    ZssParser *p=user;
+    unsigned i;
+    size_t j;
+    for (i=0;i<p->local_count;i++) {
+        const ZssToken *t=&p->locals[i];
+        if (t->length!=length) continue;
+        for (j=0;j<length;j++) if (tolower((unsigned char)name[j]) !=
+            tolower((unsigned char)p->lex.source[t->offset+j])) break;
+        if (j==length) return (int)i;
+    }
+    return -1;
+}
+/* '_' discards a binding without consuming a slot. Names enter scope before
+ * the initializer is compiled, matching uninitialized self-read as bottom. */
+static int declare_local(ZssParser *p)
+{
+    ZssToken t=p->lex.token;
+    int slot;
+    if (t.kind!=ZSS_IDENT) {error(p,"Expected a local variable name");return -1;}
+    if (t.length==1 && p->lex.source[t.offset]=='_') return -2;
+    slot=resolve_local(p,p->lex.source+t.offset,t.length);
+    if (slot>=0) return slot;
+    if (p->local_count>=256) {error(p,"ZSS local variable limit (256)");return -1;}
+    p->locals[p->local_count]=t;return (int)p->local_count++;
 }
 /* Bounded vectors use allocate/copy/publish, so OOM never loses the old arena. */
 static void *grow(void *old, uint32_t *capacity, uint32_t count, size_t bytes, uint32_t limit)
@@ -81,6 +111,7 @@ static uint32_t node(ZssParser *p)
     }
     s->nodes=nodes;
     index=s->node_count++;
+    s->nodes[index].local=-1;
     s->nodes[index].next=s->nodes[index].child=s->nodes[index].otherwise=NO_NODE;
     return index;
 }
@@ -127,7 +158,7 @@ static int branch(ZssParser *p, unsigned depth, unsigned loops, int loop, uint32
         memcpy(write,p->lex.source+p->lex.token.offset,p->lex.token.length);write+=p->lex.token.length;
     }
     end=expression;
-    if (!tokens || !Expr_Compile(expression,&p->program->nodes[id].condition,p->owner,&end,EXPR_WANT_ANY) || *end) {
+    if (!tokens || !Expr_CompileCtx(expression,&p->program->nodes[id].condition,p->owner,&end,EXPR_WANT_ANY,&p->context) || *end) {
         free(expression);return error(p,"Condition rejected by MUGEN expression compiler");
     }
     free(expression);
@@ -155,8 +186,9 @@ static int branch(ZssParser *p, unsigned depth, unsigned loops, int loop, uint32
  * compiler recognizes -2147483648 as a signed literal, but clamps the positive
  * token in "- 2147483648" before applying unary negation. */
 /* Assignment expressions reuse the MUGEN numeric evaluator; the statement's
- * result is discarded. Locals and lazy logical operators remain rejected. */
-static int assignment(ZssParser *p, uint32_t *id, uint32_t *end_line)
+ * result is discarded; a let statement instead stores the numeric result.
+ * Lazy logical operators remain rejected. */
+static int assignment(ZssParser *p, int local, uint32_t *id, uint32_t *end_line)
 {
     char *text=calloc(1,p->lex.size*2+1), *write=text;
     const char *end;
@@ -173,31 +205,35 @@ static int assignment(ZssParser *p, uint32_t *id, uint32_t *end_line)
         memcpy(write,p->lex.source+p->lex.token.offset,p->lex.token.length);write+=p->lex.token.length;
         next(p);
     }
-    if (!has_assignment) {free(text);return error(p,"Expression with unused value");}
+    if (local==-1 && !has_assignment) {free(text);return error(p,"Expression with unused value");}
     index=node(p);
     if (index==NO_NODE) {free(text);return 0;}
-    p->program->nodes[index].kind=NODE_EXPRESSION;
+    p->program->nodes[index].kind=local==-1 ? NODE_EXPRESSION : NODE_LET;
+    p->program->nodes[index].local=local;
     end=text;
-    if (!Expr_Compile(text,&p->program->nodes[index].condition,p->owner,&end,EXPR_WANT_ANY) || *end) {
+    if (!Expr_CompileCtx(text,&p->program->nodes[index].condition,p->owner,&end,EXPR_WANT_ANY,&p->context) || *end) {
         free(text);return error(p,"Assignment rejected by MUGEN compiler");
     }
     free(text);*id=index;*end_line=p->lex.token.line;next(p);return 1;
 }
-/* Port addition: anonymous inclusive integer ranges. Named counters require
- * the pending local-variable expression context and are rejected explicitly. */
+/* Port addition: inclusive integer ranges, optionally bound to a lexical local. */
 static int range_loop(ZssParser *p, unsigned depth, unsigned loops, uint32_t *id, uint32_t *end_line)
 {
     uint32_t index=node(p), child=NO_NODE;
     char *text, *write;
     const char *end;
     unsigned part;
-    int kind, tokens;
+    int kind, tokens, local;
     if (index==NO_NODE) return 0;
     if (depth>=MAX_DEPTH) return error(p,"ZSS block nesting limit");
     p->program->nodes[index].kind=NODE_FOR;
     next(p);
-    if (p->lex.token.kind==ZSS_IDENT)
-        return error(p,"Named for counters require pending local-variable support; parenthesize anonymous expressions");
+    if (p->lex.token.kind==ZSS_IDENT) {
+        local=declare_local(p);if (local==-1) return 0;
+        p->program->nodes[index].local=local;
+        if (next(p)!='=') return error(p,"Expected '=' after for counter name");
+        next(p);
+    }
     for (part=0;part<3;part++) {
         text=calloc(1,p->lex.size*2+1);
         if (text==NULL) return error(p,"Out of memory compiling for range");
@@ -212,7 +248,7 @@ static int range_loop(ZssParser *p, unsigned depth, unsigned loops, uint32_t *id
             next(p);
         }
         end=text;
-        if (!tokens || !Expr_Compile(text,&p->program->nodes[index].range[part],p->owner,&end,EXPR_WANT_ANY) || *end) {
+        if (!tokens || !Expr_CompileCtx(text,&p->program->nodes[index].range[part],p->owner,&end,EXPR_WANT_ANY,&p->context) || *end) {
             free(text);return error(p,"For range rejected by MUGEN compiler");
         }
         free(text);
@@ -239,6 +275,12 @@ static int body(ZssParser *p, unsigned depth, unsigned loops, uint32_t *first)
         if (kind==ZSS_EOF || kind=='}' || kind=='[') return 1;
         if (ZssLex_Is(&p->lex,"if") || ZssLex_Is(&p->lex,"while")) {
             if (!branch(p,depth,loops,ZssLex_Is(&p->lex,"while"),&id,&end_line)) return 0;
+        } else if (ZssLex_Is(&p->lex,"let")) {
+            int local;
+            next(p);local=declare_local(p);if (local==-1) return 0;
+            if (next(p)!='=') return error(p,"Expected '=' after one let name; multiple bindings are not enabled");
+            next(p);
+            if (!assignment(p,local,&id,&end_line)) return 0;
         } else if (ZssLex_Is(&p->lex,"for")) {
             if (!range_loop(p,depth,loops,&id,&end_line)) return 0;
         } else if (ZssLex_Is(&p->lex,"break") || ZssLex_Is(&p->lex,"continue")) {
@@ -249,11 +291,11 @@ static int body(ZssParser *p, unsigned depth, unsigned loops, uint32_t *first)
             end_line=p->lex.token.line;next(p);
         } else {
             ZssLexer peek=p->lex;
-            if (ZssLex_Is(&p->lex,"let") || ZssLex_Is(&p->lex,"call") ||
+            if (ZssLex_Is(&p->lex,"call") ||
                 ZssLex_Is(&p->lex,"switch") || ZssLex_Is(&p->lex,"persistent") || ZssLex_Is(&p->lex,"ignorehitpause"))
                 return error(p,"This ZSS statement is not implemented yet");
             if (kind!=ZSS_IDENT || ZssLex_Next(&peek)!='{') {
-                if (!assignment(p,&id,&end_line)) return 0;
+                if (!assignment(p,-1,&id,&end_line)) return 0;
                 goto linked;
             }
             start=p->lex.token;
@@ -283,6 +325,7 @@ int Zss_CompileProgram(const char *source, size_t size, CharData *owner,
     uint32_t i, first, header_end;
     ZssState *states;
     p.owner=owner;p.diagnostic=diagnostic;
+    p.context.user=&p;p.context.resolve_local=resolve_local;
     if (diagnostic!=NULL) memset(diagnostic,0,sizeof(*diagnostic));
     p.lex.token.line=p.lex.token.column=1;
     if (source==NULL || owner==NULL || out==NULL || size>ZSS_MAX_SOURCE)
@@ -313,8 +356,9 @@ int Zss_CompileProgram(const char *source, size_t size, CharData *owner,
         if (p.lex.token.kind!=ZSS_EOF && p.lex.token.line==header_end) {
             error(&p,"StateDef header must end on its own line");goto fail;
         }
+        p.local_count=0;
         if (!body(&p,0,0,&first)) goto fail;
-        p.program->states[i].first=first;
+        p.program->states[i].first=first;p.program->states[i].locals=p.local_count;
     }
     if (!p.program->state_count) {error(&p,"Program needs a StateDef");goto fail;}
     *out=p.program;return 1;
@@ -343,13 +387,24 @@ const StateDef *Zss_ProgramState(const ZssProgram *p, size_t index, int *number)
 }
 /* Preserve MUGEN numeric conversion and bottom-as-zero without a fatal
  * evaluator path if a malformed expression somehow reaches the prototype. */
-static int range_value(Player *player, const Expr *expression, int32_t *value)
+static int local_integer(ExprEvalCtx *ctx, int slot)
+{
+    return ctx->types[slot]==EXPR_INT ? ctx->values[slot].i :
+           ctx->types[slot]==EXPR_FLOAT ? Ftol((double)ctx->values[slot].f) : 0;
+}
+static int eval_value(Player *player, const Expr *e, ExprEvalCtx *ctx, int local, int32_t *value)
 {
     int i=0, type;
     float f=0;
-    type=Expr_Eval(player,expression,&i,&f);
+    type=Expr_EvalCtx(player,e,&i,&f,ctx);
     if (!type) return 0;
-    *value=type==1 ? i : type==2 ? Ftol((double)f) : 0;
+    if (local>=0) {
+        ctx->types[local]=type==1 ? EXPR_INT : type==2 ? EXPR_FLOAT : EXPR_BOTTOM;
+        ctx->values[local].i=0;
+        if (type==1) ctx->values[local].i=i;
+        else if (type==2) ctx->values[local].f=f;
+    }
+    if (value!=NULL) *value=type==1 ? i : type==2 ? Ftol((double)f) : 0;
     return 1;
 }
 int Zss_RunBody(ZssProgram *p, size_t state, Player *player,
@@ -362,7 +417,12 @@ int Zss_RunBody(ZssProgram *p, size_t state, Player *player,
     int bits=0, i=0, type, selected, warned=0;
     float f=0;
     ZssNode *n;
+    ExprValue local_values[256]={{0}};
+    char local_types[256];
+    ExprEvalCtx evalctx={local_values,local_types,0};
     if (p==NULL || state>=p->state_count || player==NULL || run==NULL || result==NULL) return 0;
+    evalctx.count=p->states[state].locals;
+    memset(local_types,EXPR_BOTTOM,sizeof(local_types));
     frames[0]=(struct Frame){p->states[state].first,0,0,0,0,0};
     while (top) {
         struct Frame *frame=&frames[top-1];
@@ -377,7 +437,7 @@ int Zss_RunBody(ZssProgram *p, size_t state, Player *player,
                 if (frame->iterations) {
                     /* Go int32 range arithmetic wraps. Do it in int64 first,
                      * avoiding signed-overflow UB and implementation-defined casts. */
-                    int64_t value=(int64_t)frame->value+frame->increment;
+                    int64_t value=(int64_t)(n->local>=0 ? local_integer(&evalctx,n->local) : frame->value)+frame->increment;
                     if (value>INT32_MAX) value-=INT64_C(4294967296);
                     if (value<INT32_MIN) value+=INT64_C(4294967296);
                     frame->value=(int32_t)value;
@@ -389,11 +449,14 @@ int Zss_RunBody(ZssProgram *p, size_t state, Player *player,
                     if (!warned++) Player_Warn(player,"ZSS loop stopped after 2500 iterations");
                     top--;continue;
                 }
-                type=Expr_Eval(player,&n->condition,&i,&f);
+                type=Expr_EvalCtx(player,&n->condition,&i,&f,&evalctx);
                 if (type==0) return 0;
                 selected=type==1 ? i!=0 : type==2 ? f!=0 : 0;
             }
             if (!selected) {top--;continue;}
+            if (n->kind==NODE_FOR && n->local>=0 && frame->iterations) {
+                local_values[n->local].i=frame->value;local_types[n->local]=EXPR_INT;
+            }
             if (frame->iterations>=MAX_LOOP) {
                 if (!warned++) Player_Warn(player,"ZSS loop stopped after 2500 iterations");
                 top--;continue;
@@ -405,7 +468,7 @@ int Zss_RunBody(ZssProgram *p, size_t state, Player *player,
         frame->current=n->next;
         switch (n->kind) {
         case NODE_IF:
-            type=Expr_Eval(player,&n->condition,&i,&f);
+            type=Expr_EvalCtx(player,&n->condition,&i,&f,&evalctx);
             if (type==0) return 0;
             selected=type==1 ? i!=0 : type==2 ? f!=0 : 0;
             chosen=selected?n->child:n->otherwise;
@@ -417,15 +480,18 @@ int Zss_RunBody(ZssProgram *p, size_t state, Player *player,
         case NODE_FOR:
             if (top>=MAX_DEPTH*2+2) return 0;
             frames[top]=(struct Frame){(uint32_t)(n-p->nodes),0,1,0,0,0};
-            if (!range_value(player,&n->range[0],&frames[top].value) ||
-                !range_value(player,&n->range[1],&frames[top].end) ||
-                !range_value(player,&n->range[2],&frames[top].increment)) return 0;
+            if (!eval_value(player,&n->range[0],&evalctx,n->local,&frames[top].value) ||
+                !eval_value(player,&n->range[1],&evalctx,-1,&frames[top].end) ||
+                !eval_value(player,&n->range[2],&evalctx,-1,&frames[top].increment)) return 0;
             top++;break;
         case NODE_WHILE:
             if (top>=MAX_DEPTH*2+2) return 0;
             frames[top++]=(struct Frame){(uint32_t)(n-p->nodes),0,1,0,0,0};break;
+        case NODE_LET:
+            if (!eval_value(player,&n->condition,&evalctx,n->local,NULL)) return 0;
+            break;
         case NODE_EXPRESSION:
-            if (!Expr_Eval(player,&n->condition,&i,&f)) return 0;
+            if (!Expr_EvalCtx(player,&n->condition,&i,&f,&evalctx)) return 0;
             break;
         case NODE_BREAK:
         case NODE_CONTINUE:

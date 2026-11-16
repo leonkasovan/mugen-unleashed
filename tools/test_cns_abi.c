@@ -95,23 +95,36 @@ float Units_From320(float v) { (void)v; abort(); }
 int Ini_ReadString(Ini *ini, const char *key, unsigned int size, char *out)
 { (void)ini; (void)key; (void)size; (void)out; abort(); }
 static void test_trigger_eval(Player *p, const Trigger *t);
+static void test_trigger_eval_ctx(Player *p, const Trigger *t, ExprEvalCtx *ctx);
 
 #define free audit_free
 #include "../src/trigger.c"
-#define Trigger_Eval test_trigger_eval
+#define Trigger_EvalCtx test_trigger_eval_ctx
 #include "../src/expr.c"
 #undef free
-#undef Trigger_Eval
+#undef Trigger_EvalCtx
 #include "../src/sctrl.c"
 #include "../src/statedef.c"
 
 static void test_trigger_eval(Player *p, const Trigger *t)
 {
     int idx;
-    assert(t->id == TRIGGER_VAR && t->redirect == TRIGGER_REDIRECT_NONE);
+    assert((t->id == TRIGGER_VAR || t->id == TRIGGER_FVAR) && t->redirect == TRIGGER_REDIRECT_NONE);
     assert(Trigger_PopInt(p, &idx) != EXPR_BOTTOM);
-    assert(idx >= 0 && idx < PLAYER_VAR_COUNT);
-    ExprStack_Push(p->var[idx], EXPR_INT);
+    if (t->id==TRIGGER_FVAR) {
+        assert(idx>=0 && idx<PLAYER_FVAR_COUNT);
+        ExprStack_Push(float_bits(p->fvar[idx]),EXPR_FLOAT);
+    } else {
+        assert(idx >= 0 && idx < PLAYER_VAR_COUNT);
+        ExprStack_Push(p->var[idx], EXPR_INT);
+    }
+}
+static void test_trigger_eval_ctx(Player *p, const Trigger *t, ExprEvalCtx *ctx)
+{
+    if (t->id==TRIGGER_COND && t->redirect==TRIGGER_REDIRECT_NONE) {
+        Trigger_EvalCondCtx(p,t,ctx);return;
+    }
+    test_trigger_eval(p,t);
 }
 static void keys(const char *type, const char *range)
 {
@@ -425,7 +438,7 @@ static void test_zss_ranges(void)
     const char *source="[StateDef 0]\nvar(0):=0;\nvar(1):=0;\nfor (var(1):=var(1)+1);(var(1):=var(1)+2);(var(1):=var(1)+1) {var(0):=var(0)+1;var(1):=99;}\n";
     const char *nested="[StateDef 0]\nvar(0):=0;\nvar(1):=0;\nfor 1;3 {var(0):=var(0)+1; for 0;9 {var(1):=var(1)+1; if var(1)%3=1 {continue;} if var(1)%3=0 {break;}}}\n";
     const char *stop="[StateDef 0]\nfor 0;3 {CtrlSet{value:1}}\nCtrlSet{value:2}\n";
-    const char *bad[]={"for 0 {}", "for ;3 {}", "for 0; {}", "for 0;3; {}", "for 0;3;1;2 {}", "for i=0;3 {}", "for let $i=0;3 {}", "for 0;3 {break}", "for 0;3", "for 0;3 {", "for 0;3 {} else {}"};
+    const char *bad[]={"for 0 {}", "for ;3 {}", "for 0; {}", "for 0;3; {}", "for 0;3;1;2 {}", "for let $i=0;3 {}", "for 0;3 {break}", "for 0;3", "for 0;3 {", "for 0;3 {} else {}"};
     char text[1024];
     ZssProgram *program=NULL, *failed=NULL;
     ZssDiagnostic d;
@@ -481,6 +494,126 @@ static void test_zss_ranges(void)
     }
     zss_fail_call=0;
     puts("ok: anonymous inclusive for ranges, entry evaluation, integer wrap, guards and cleanup");
+}
+static int context_slot(void *user, const char *name, size_t length)
+{
+    assert(user==&owner);
+    return length==1 && *name=='x' ? 0 : length==1 && *name=='y' ? 1 : -1;
+}
+static void test_expression_contexts(void)
+{
+    Expr expression={0}, copy={0};
+    ExprCompileCtx compile={&owner,context_slot,0};
+    ExprValue values[2]={{0},{0}}, code[1]={{0}};
+    char types[2]={EXPR_INT,EXPR_INT}, kinds[1]={EXPR_LOCAL};
+    ExprEvalCtx frame={values,types,2};
+    const char *end;
+    char nested[256];
+    int result, before=g_exprStackTop;
+    float f;
+    size_t j;
+    values[0].i=3;values[1].i=1;player.var[3]=7;
+    assert(!Expr_Compile("$x",&expression,&owner,NULL,EXPR_WANT_ANY));zss_no_allocs();
+    assert(Expr_CompileCtx("$x+cond($y,var($x),$x*2)",&expression,&owner,&end,EXPR_WANT_ANY,&compile) && !*end && !compile.depth);
+    assert(Expr_EvalCtx(&player,&expression,&result,&f,&frame)==1 && result==10 && g_exprStackTop==before);
+    values[1].i=0;assert(Expr_EvalCtx(&player,&expression,&result,&f,&frame)==1 && result==9);
+    assert(Expr_Clone(&copy,&expression));Expr_Free(&expression);
+    values[0].i=4;values[1].i=1;player.var[4]=8;
+    assert(Expr_EvalCtx(&player,&copy,&result,&f,&frame)==1 && result==12);
+    Expr_Free(&copy);zss_no_allocs();
+    assert(Expr_CompileCtx("$x",&expression,&owner,&end,EXPR_WANT_ANY,&compile));
+    assert(!Expr_Eval(&player,&expression,&result,&f) && g_exprStackTop==before);
+    types[0]=EXPR_FLOAT;values[0].f=1.25f;
+    assert(Expr_EvalCtx(&player,&expression,&result,&f,&frame)==2 && f==1.25f);
+    types[0]=EXPR_BOTTOM;values[0].i=0;
+    assert(Expr_EvalCtx(&player,&expression,&result,&f,&frame)==3);
+    Expr_Free(&expression);zss_no_allocs();
+    assert(!Expr_CompileCtx("cond(1,$x,$unknown)",&expression,&owner,&end,EXPR_WANT_ANY,&compile) && !compile.depth);zss_no_allocs();
+    for(j=0;j<70;j++) nested[j]='(';
+    nested[70]='$';nested[71]='x';for(j=72;j<142;j++) nested[j]=')';nested[142]=0;
+    assert(!Expr_CompileCtx(nested,&expression,&owner,&end,EXPR_WANT_ANY,&compile) && !compile.depth);zss_no_allocs();
+    /* Invalid slot/type contexts fail without reading outside the frame or
+     * leaving an operand on the legacy expression stack. */
+    expression.count=1;expression.u.tokens=code;expression.t.types=kinds;
+    code[0].i=256;assert(!Expr_EvalCtx(&player,&expression,&result,&f,&frame) && g_exprStackTop==before);
+    code[0].i=0;types[0]=99;assert(!Expr_EvalCtx(&player,&expression,&result,&f,&frame) && g_exprStackTop==before);
+    memset(&expression,0,sizeof(expression));
+    puts("ok: explicit expression contexts, nested cond/arguments, clone ownership and invalid-frame guards");
+}
+static int reenter_zss(Player *p, StateCtrl *sc, void *context)
+{
+    ZssProgram *program=context;
+    int result;
+    assert(sc->type==SCTRL_CTRLSET);
+    assert(Zss_RunBody(program,1,p,reenter_zss,context,&result) && !result);
+    return 0;
+}
+static void test_zss_locals(void)
+{
+    const char *source="[StateDef 0]\nlet a=1;\nlet b=2.5;\nlet a=$a+3;\nvar(0):=$a;\nfvar(0):=$b;\nvar(1):=0;\nfor i=0;3 {var(1):=var(1)+$i;}\nvar(2):=$i;\n";
+    const char *mutate="[StateDef 0]\nvar(0):=0;\nfor i=0;4 {var(0):=var(0)+1;let i=$i+1;}\nvar(1):=$i;\n";
+    const char *lifetime="[StateDef 0]\nvar(0):=0;\nif var(2)=0 {let x=9;}\nif $x {var(0):=9;}\n";
+    const char *nested="[StateDef 0]\nvar(0):=0;\nfor i=1;3 {for j=1;3 {if $j=2 {continue;} if $i=3 {break;} var(0):=var(0)+$i*$j;}}\n";
+    const char *bad[]={"let a=;", "let a=1", "let a,b=1,2;", "let $a=1;", "let a=1;\n$a:=2;", "var(0):=$unknown;", "let a=$unknown;", "let a=1;\nCtrlSet{value:$a}", "let a=1;\n[StateDef 1]\nvar(0):=$a;", "for i=0;3; {}"};
+    ZssProgram *program=NULL, *failed=NULL;
+    ZssDiagnostic d;
+    char text[16384];
+    size_t j, used;
+    int result, calls;
+    assert(Zss_CompileProgram(source,strlen(source),&owner,&program,&d));
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert(!result && player.var[0]==4 && player.fvar[0]==2.5f && player.var[1]==6 && player.var[2]==3);
+    Zss_FreeProgram(program);zss_no_allocs();
+    assert(Zss_CompileProgram(mutate,strlen(mutate),&owner,&program,&d));
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert(!result && player.var[0]==3 && player.var[1]==5);Zss_FreeProgram(program);zss_no_allocs();
+    assert(Zss_CompileProgram(lifetime,strlen(lifetime),&owner,&program,&d));player.var[2]=0;
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));assert(player.var[0]==9);
+    player.var[2]=1;assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));assert(!player.var[0]);
+    Zss_FreeProgram(program);zss_no_allocs();
+    assert(Zss_CompileProgram(nested,strlen(nested),&owner,&program,&d));
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert(player.var[0]==12);Zss_FreeProgram(program);zss_no_allocs();
+    strcpy(text,"[StateDef 0]\nfor i=2;$i+2 {let _=var(0):=var(0)+1;}\nvar(1):=$i;\n");
+    assert(Zss_CompileProgram(text,strlen(text),&owner,&program,&d));player.var[0]=0;
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert(player.var[0]==3 && player.var[1]==4);Zss_FreeProgram(program);zss_no_allocs();
+    strcpy(text,"[StateDef 0]\nlet A=0;\nvar($a):=7;\nvar(1):=var($A);\n");
+    assert(Zss_CompileProgram(text,strlen(text),&owner,&program,&d));
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert(player.var[0]==7 && player.var[1]==7);Zss_FreeProgram(program);zss_no_allocs();
+    /* Every slot, including 255, is scalar and bounded on either pointer width. */
+    used=(size_t)snprintf(text,sizeof(text),"[StateDef 0]\n");
+    for(j=0;j<256;j++) used+=(size_t)snprintf(text+used,sizeof(text)-used,"let x%zu=%zu;\n",j,j);
+    strcpy(text+used,"var(0):=$x255;\n");
+    assert(Zss_CompileProgram(text,strlen(text),&owner,&program,&d));
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));assert(player.var[0]==255);
+    Zss_FreeProgram(program);zss_no_allocs();strcpy(text+used,"let x256=0;\n");
+    assert(!Zss_CompileProgram(text,strlen(text),&owner,&failed,&d));assert(!failed && d.message);zss_no_allocs();
+    for(j=0;j<sizeof(bad)/sizeof(*bad);j++) {
+        snprintf(text,sizeof(text),"[StateDef 0]\n%s",bad[j]);
+        assert(!Zss_CompileProgram(text,strlen(text),&owner,&failed,&d));assert(!failed && d.message);zss_no_allocs();
+    }
+    strcpy(text,"[StateDef 0]\nlet x=3;\nCtrlSet{value:1}\nvar(0):=$x;\n[StateDef 1]\nlet x=9;\nvar(1):=$x;\n");
+    assert(Zss_CompileProgram(text,strlen(text),&owner,&program,&d));
+    assert(Zss_RunBody(program,0,&player,reenter_zss,program,&result));
+    assert(!result && player.var[0]==3 && player.var[1]==9);Zss_FreeProgram(program);zss_no_allocs();
+    strcpy(text,"[StateDef 0]\nfvar(0):=0;\nfor i=1.5;3 {fvar(0):=fvar(0)+$i;}\nvar(0):=$i;\n");
+    assert(Zss_CompileProgram(text,strlen(text),&owner,&program,&d));
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert(!result && player.fvar[0]==6.5f && player.var[0]==3);Zss_FreeProgram(program);zss_no_allocs();
+    strcpy(text,"[StateDef 0]\nvar(0):=0;\nfor i=0;2500 {var(0):=var(0)+1;}\nvar(1):=$i;\n");
+    assert(Zss_CompileProgram(text,strlen(text),&owner,&program,&d));player_warnings=0;
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert(!result && player.var[0]==2500 && player.var[1]==2500 && player_warnings==1);Zss_FreeProgram(program);zss_no_allocs();
+    zss_calloc_calls=0;assert(Zss_CompileProgram(source,strlen(source),&owner,&program,&d));calls=zss_calloc_calls;Zss_FreeProgram(program);
+    for(j=1;j<=(size_t)calls;j++) {
+        zss_calloc_calls=0;zss_fail_call=(int)j;
+        if(Zss_CompileProgram(source,strlen(source),&owner,&failed,&d)){Zss_FreeProgram(failed);failed=NULL;}
+        assert(!failed);zss_no_allocs();
+    }
+    zss_fail_call=0;
+    puts("ok: numeric locals, named for counters, lexical slots, fresh frames and allocation rollback");
 }
 static void test_zss_program(void)
 {
@@ -661,6 +794,8 @@ int main(void)
     test_zss_program();
     test_zss_loops();
     test_zss_ranges();
+    test_expression_contexts();
+    test_zss_locals();
     test_zss_installation();
 #else
     test_controller_parse(); test_variables(); test_clipboard();

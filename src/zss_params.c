@@ -36,7 +36,7 @@ int Zss_ReadParams(ZssLexer *lex, int close, const char *type,
         while (kind != ';' && !(kind == close && parens == 0 && brackets == 0)) {
             message = "Incomplete parameter value";
             if (kind <= ZSS_EOF || kind == '{' || kind == '}') goto done;
-            if (kind == ZSS_LOCAL) { message = "ZSS locals require the pending expression-context implementation"; goto done; }
+            if (kind == ZSS_LOCAL) { message = "ZSS locals in parameters require pending context plumbing"; goto done; }
             if (kind == '(') parens++;
             if (kind == '[') brackets++;
             /* MUGEN intervals also use mixed [a,b) / (a,b] closures. */

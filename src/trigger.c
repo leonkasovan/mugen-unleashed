@@ -499,6 +499,10 @@ static void Trigger_FreeOwned(Trigger *t);
 
 int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types, int max, const char **end)
 {
+    return Trigger_ParseCtx(s,owner,tokens,types,max,end,NULL);
+}
+int Trigger_ParseCtx(const char *s, CharData *owner, ExprValue *tokens, char *types, int max, const char **end, ExprCompileCtx *ctx)
+{
     char name[0x100];
     char word[0x100];
     char arg_types[EXPR_MAX_TOKENS];
@@ -563,7 +567,7 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
         }
         if (t.redirect != TRIGGER_REDIRECT_NONE) {
             if (s[pos] == '(') {
-                if (!Expr_Compile(s + pos + 1, &t.redirect_arg, owner, &e, EXPR_WANT_INT)) {
+                if (!Expr_CompileCtx(s + pos + 1, &t.redirect_arg, owner, &e, EXPR_WANT_INT, ctx)) {
                     goto fail;
                 }
                 if (*e != ')') {
@@ -662,7 +666,7 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
         if (s[pos] != '(') {
             goto fail;
         }
-        n = Cns_ParseArgs(s + pos + 1, "n:)", owner, &e, arg_tokens, arg_types, &count, max);
+        n = Cns_ParseArgsCtx(s + pos + 1, "n:)", owner, &e, arg_tokens, arg_types, &count, max, ctx);
         ntok += count; /* owns successful arguments even when the list is rejected */
         if (n != 1 || *e != ')') {
             goto fail;
@@ -676,7 +680,7 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
         if (s[pos] != '(') {
             goto fail;
         }
-        n = Cns_ParseArgs(s + pos + 1, "nn:)", owner, &e, arg_tokens + ntok, arg_types + ntok, &count, max - ntok);
+        n = Cns_ParseArgsCtx(s + pos + 1, "nn:)", owner, &e, arg_tokens + ntok, arg_types + ntok, &count, max - ntok, ctx);
         ntok += count; /* owns successful arguments even when the list is rejected */
         if (n != 2 || *e != ')') {
             goto fail;
@@ -690,7 +694,7 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
         if (s[pos] != '(') {
             goto fail;
         }
-        n = Cns_ParseArgs(s + pos + 1, "nnn:)", owner, &e, arg_tokens + ntok, arg_types + ntok, &count, max - ntok);
+        n = Cns_ParseArgsCtx(s + pos + 1, "nnn:)", owner, &e, arg_tokens + ntok, arg_types + ntok, &count, max - ntok, ctx);
         ntok += count; /* owns successful arguments even when the list is rejected */
         if (n != 3 || *e != ')') {
             goto fail;
@@ -704,7 +708,7 @@ int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types
         if (s[pos] != '(') {
             goto fail;
         }
-        n = Cns_ParseExprList(s + pos + 1, owner, &e, &exprs);
+        n = Cns_ParseExprListCtx(s + pos + 1, owner, &e, &exprs, ctx);
         if (n != 3 || *e != ')') {
             if (n <= 0) {
                 goto fail;
@@ -1513,6 +1517,42 @@ static int trigger_rounded_int(Player *p, int id, float value)
     return Ftol((double)f);
 }
 
+/* Port addition: the nested expression keeps the lexical frame even when its
+ * player target was redirected. Shared by the trigger dispatch and host probe. */
+static void Trigger_EvalCondCtx(Player *target, const Trigger *t, ExprEvalCtx *ctx)
+{
+    const Expr *expr;
+    int r;
+    float cf;
+    int ci;
+
+    expr = (const Expr *)t->data;
+    r = Expr_EvalCtx(target, expr, &ci, &cf, ctx);
+    if (r == 1) {
+        expr += ci != 0 ? 1 : 2;
+    } else if (r == 2) {
+        expr += cf == 0.0f ? 2 : 1;
+    } else if (r == 3) {
+        ExprStack_Push(ci, EXPR_BOTTOM);
+        return;
+    } else {
+        Player_Warn(target, "COND condition couldn't be evaluated; assuming False -- engine's fault");
+        expr += 2;
+    }
+    r = Expr_EvalCtx(target, expr, &ci, &cf, ctx);
+    if (r == 1) {
+        ExprStack_Push(ci, EXPR_INT);
+    } else if (r == 2) {
+        ExprStack_Push(float_bits(cf), EXPR_FLOAT);
+    } else if (r == 3) {
+        ExprStack_Push(ci, EXPR_BOTTOM);
+    } else {
+        Player_Warn(target, "COND evaluation caused an error; returning bottom -- engine's fault");
+        ExprStack_Push(0, EXPR_BOTTOM);
+    }
+    return;
+}
+
 /*
  * 0x00456350: evaluates trigger t for player p (after redirection) and pushes
  * the value on the evaluation stack (its arguments, when it has some, are
@@ -1520,6 +1560,10 @@ static int trigger_rounded_int(Player *p, int id, float value)
  * bottom, mostly with a warning.
  */
 void Trigger_Eval(Player *p, const Trigger *t)
+{
+    Trigger_EvalCtx(p,t,NULL);
+}
+void Trigger_EvalCtx(Player *p, const Trigger *t, ExprEvalCtx *ctx)
 {
     GameVars *g;
     Player *target;
@@ -1532,7 +1576,6 @@ void Trigger_Eval(Player *p, const Trigger *t)
     Player *e1, *e2, *other;
     AnimState *st;
     AnimAction *action;
-    const Expr *expr;
     ExprValue v1, v2, v3;
     double d;
     float fval = 0.0f, f;
@@ -1561,7 +1604,7 @@ void Trigger_Eval(Player *p, const Trigger *t)
         }
         break;
     case TRIGGER_REDIRECT_HELPER:
-        idx = Expr_EvalInt(p, &t->redirect_arg, 1);
+        idx = Expr_EvalIntCtx(p, &t->redirect_arg, 1, ctx);
         if (idx < 0) {
             idx = 0;
             Player_Warn(p, "Illegal helper ID in retargeted trigger");
@@ -1576,7 +1619,7 @@ void Trigger_Eval(Player *p, const Trigger *t)
     case TRIGGER_REDIRECT_TARGET: {
         Player **entry;
 
-        idx = Expr_EvalInt(p, &t->redirect_arg, 1);
+        idx = Expr_EvalIntCtx(p, &t->redirect_arg, 1, ctx);
         if (idx < -1) {
             idx = -1;
             Player_Warn(p, "Illegal target ID in retargeted trigger");
@@ -1591,7 +1634,7 @@ void Trigger_Eval(Player *p, const Trigger *t)
         break;
     }
     case TRIGGER_REDIRECT_PARTNER:
-        idx = Expr_EvalInt(p, &t->redirect_arg, 1);
+        idx = Expr_EvalIntCtx(p, &t->redirect_arg, 1, ctx);
         if (idx < 0) {
             idx = 0;
             Player_Warn(p, "Illegal partner number in retargeted trigger");
@@ -1604,7 +1647,7 @@ void Trigger_Eval(Player *p, const Trigger *t)
         }
         break;
     case TRIGGER_REDIRECT_ENEMY:
-        idx = Expr_EvalInt(p, &t->redirect_arg, 1);
+        idx = Expr_EvalIntCtx(p, &t->redirect_arg, 1, ctx);
         if (idx < 0) {
             idx = 0;
             Player_Warn(p, "Illegal enemy number in retargeted trigger");
@@ -1617,7 +1660,7 @@ void Trigger_Eval(Player *p, const Trigger *t)
         }
         break;
     case TRIGGER_REDIRECT_ENEMYNEAR:
-        idx = Expr_EvalInt(p, &t->redirect_arg, 1);
+        idx = Expr_EvalIntCtx(p, &t->redirect_arg, 1, ctx);
         if (idx < 0) {
             idx = 0;
             Player_Warn(p, "Illegal near enemy number in retargeted trigger");
@@ -1630,7 +1673,7 @@ void Trigger_Eval(Player *p, const Trigger *t)
         }
         break;
     case TRIGGER_REDIRECT_PLAYERID:
-        idx = Expr_EvalInt(p, &t->redirect_arg, 1);
+        idx = Expr_EvalIntCtx(p, &t->redirect_arg, 1, ctx);
         if (idx < 0) {
             idx = 0;
             Player_Warn(p, "Illegal player number in retargeted trigger");
@@ -2505,36 +2548,9 @@ void Trigger_Eval(Player *p, const Trigger *t)
         }
         ival = Player_FindById(arg) != NULL;
         break;
-    case TRIGGER_COND: {
-        float cf;
-        int ci;
-
-        expr = (const Expr *)t->data;
-        r = Expr_Eval(target, expr, &ci, &cf);
-        if (r == 1) {
-            expr += ci != 0 ? 1 : 2;
-        } else if (r == 2) {
-            expr += cf == 0.0f ? 2 : 1;
-        } else if (r == 3) {
-            ExprStack_Push(ci, EXPR_BOTTOM);
-            return;
-        } else {
-            Player_Warn(target, "COND condition couldn't be evaluated; assuming False -- engine's fault");
-            expr += 2;
-        }
-        r = Expr_Eval(target, expr, &ci, &cf);
-        if (r == 1) {
-            ExprStack_Push(ci, EXPR_INT);
-        } else if (r == 2) {
-            ExprStack_Push(float_bits(cf), EXPR_FLOAT);
-        } else if (r == 3) {
-            ExprStack_Push(ci, EXPR_BOTTOM);
-        } else {
-            Player_Warn(target, "COND evaluation caused an error; returning bottom -- engine's fault");
-            ExprStack_Push(0, EXPR_BOTTOM);
-        }
+    case TRIGGER_COND:
+        Trigger_EvalCondCtx(target,t,ctx);
         return;
-    }
     default:
         Error_Printf("Missing trigger code %i\n", t->id);
         Error_Exit();

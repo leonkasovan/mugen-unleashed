@@ -221,7 +221,7 @@ int Expr_ReadOp(const char *s)
  * message in g_libraryErrorText for some of them), -1 when s is NULL.
  */
 static int Expr_ParseBody(const char *s, ExprValue *out_tokens, char *out_types, CharData *owner, int max,
-                          const char **end, int want)
+                          const char **end, int want, ExprCompileCtx *ctx)
 {
     /*
      * The output and the sub-parse buffers are adjacent, as in the original:
@@ -263,6 +263,18 @@ static int Expr_ParseBody(const char *s, ExprValue *out_tokens, char *out_types,
     for (;;) {
         if (end != NULL && *cur == ',') {
             break;
+        }
+        if (*cur == '$') {
+            const char *name = ++cur;
+            int slot;
+            if (ctx == NULL || ctx->resolve_local == NULL ||
+                !(isalpha((unsigned char)*cur) || *cur == '_')) goto fail;
+            while (isalnum((unsigned char)*cur) || *cur == '_') cur++;
+            slot = ctx->resolve_local(ctx->user, name, (size_t)(cur-name));
+            if (slot < 0 || slot >= 256 || n >= max) goto fail;
+            tokens[n].i = slot; types[n++] = EXPR_LOCAL;
+            last = PARSE_LAST_NUMBER;
+            goto next;
         }
         if ((Char_IsDigit(cur[0]) || (cur[0] == '-' && Char_IsDigit(cur[1])) ||
              (cur[0] == '.' && Char_IsDigit(cur[1])) || (cur[0] == '-' && cur[1] == '.' && Char_IsDigit(cur[2]))) &&
@@ -395,12 +407,12 @@ static int Expr_ParseBody(const char *s, ExprValue *out_tokens, char *out_types,
                 goto fail;
             }
             last = PARSE_LAST_INTERVAL;
-            count1 = Expr_Parse(cur + 1, sub_tokens, sub_types, owner, max - n, &bracket_end, EXPR_WANT_ANY);
+            count1 = Expr_ParseCtx(cur + 1, sub_tokens, sub_types, owner, max - n, &bracket_end, EXPR_WANT_ANY, ctx);
             if (count1 == 0 || *bracket_end != ',') {
                 goto fail;
             }
-            count2 = Expr_Parse(bracket_end + 1, sub_tokens + count1, sub_types + count1, owner, max - count1 - n,
-                                &bracket_end, EXPR_WANT_ANY);
+            count2 = Expr_ParseCtx(bracket_end + 1, sub_tokens + count1, sub_types + count1, owner, max - count1 - n,
+                                &bracket_end, EXPR_WANT_ANY, ctx);
             if (count2 == 0) {
                 goto fail;
             }
@@ -424,7 +436,7 @@ static int Expr_ParseBody(const char *s, ExprValue *out_tokens, char *out_types,
             if (last == PARSE_LAST_NUMBER) {
                 goto fail;
             }
-            count1 = Expr_Parse(cur + 1, sub_tokens, sub_types, owner, max - n, &paren_end, EXPR_WANT_ANY);
+            count1 = Expr_ParseCtx(cur + 1, sub_tokens, sub_types, owner, max - n, &paren_end, EXPR_WANT_ANY, ctx);
             if (count1 != 0) {
                 if (*paren_end != ',') {
                     if (*paren_end != ')') {
@@ -441,8 +453,8 @@ static int Expr_ParseBody(const char *s, ExprValue *out_tokens, char *out_types,
                     cur = paren_end + 1;
                     goto next;
                 }
-                count2 = Expr_Parse(paren_end + 1, sub_tokens + count1, sub_types + count1, owner,
-                                    max - count1 - n, &paren_end, EXPR_WANT_ANY);
+                count2 = Expr_ParseCtx(paren_end + 1, sub_tokens + count1, sub_types + count1, owner,
+                                    max - count1 - n, &paren_end, EXPR_WANT_ANY, ctx);
                 if (count2 == 0) {
                     goto fail;
                 }
@@ -478,7 +490,7 @@ static int Expr_ParseBody(const char *s, ExprValue *out_tokens, char *out_types,
             }
             break;
         } else if (isalnum(c) || c == '_') {
-            count = Trigger_Parse(cur, owner, &tokens[n], &types[n], max - n, &trig_end);
+            count = Trigger_ParseCtx(cur, owner, &tokens[n], &types[n], max - n, &trig_end, ctx);
             if (count == 0) {
                 snprintf(g_libraryErrorText, sizeof(g_libraryErrorText), "Died parsing %s", s);
                 goto fail;
@@ -570,6 +582,7 @@ static int Expr_ParseBody(const char *s, ExprValue *out_tokens, char *out_types,
         switch (types[i]) {
         case EXPR_INT:
         case EXPR_FLOAT:
+        case EXPR_LOCAL:
             depth++;
             break;
         case EXPR_OP:
@@ -672,9 +685,15 @@ static int expr_parse_depth;
 int Expr_Parse(const char *s, ExprValue *out_tokens, char *out_types, CharData *owner, int max, const char **end,
                int want)
 {
+    return Expr_ParseCtx(s,out_tokens,out_types,owner,max,end,want,NULL);
+}
+int Expr_ParseCtx(const char *s, ExprValue *out_tokens, char *out_types, CharData *owner, int max, const char **end,
+                  int want, ExprCompileCtx *ctx)
+{
     int n;
+    int *depth = ctx != NULL ? &ctx->depth : &expr_parse_depth;
 
-    if (expr_parse_depth >= EXPR_MAX_DEPTH) {
+    if (*depth >= EXPR_MAX_DEPTH) {
         snprintf(g_libraryErrorText, sizeof(g_libraryErrorText), "Expression too deeply nested");
         return 0;
     }
@@ -683,9 +702,9 @@ int Expr_Parse(const char *s, ExprValue *out_tokens, char *out_types, CharData *
     if (max > EXPR_MAX_TOKENS) {
         max = EXPR_MAX_TOKENS;
     }
-    expr_parse_depth++;
-    n = Expr_ParseBody(s, out_tokens, out_types, owner, max, end, want);
-    expr_parse_depth--;
+    (*depth)++;
+    n = Expr_ParseBody(s, out_tokens, out_types, owner, max, end, want, ctx);
+    (*depth)--;
     return n;
 }
 
@@ -695,6 +714,10 @@ int Expr_Parse(const char *s, ExprValue *out_tokens, char *out_types, CharData *
  */
 int Expr_Compile(const char *s, Expr *e, CharData *owner, const char **end, int want)
 {
+    return Expr_CompileCtx(s,e,owner,end,want,NULL);
+}
+int Expr_CompileCtx(const char *s, Expr *e, CharData *owner, const char **end, int want, ExprCompileCtx *ctx)
+{
     ExprValue tokens[EXPR_MAX_TOKENS];
     char types[EXPR_MAX_TOKENS];
     int n, i;
@@ -702,7 +725,7 @@ int Expr_Compile(const char *s, Expr *e, CharData *owner, const char **end, int 
     if (s == NULL) {
         return 1;
     }
-    n = Expr_Parse(s, tokens, types, owner, EXPR_MAX_TOKENS, end, want);
+    n = Expr_ParseCtx(s, tokens, types, owner, EXPR_MAX_TOKENS, end, want, ctx);
     if (n == 0) {
         return 0;
     }
@@ -941,9 +964,13 @@ void Expr_Halve(Expr *e)
 /* 0x004028C0: evaluates e as an int; floats are truncated, with a warning if warn. */
 int Expr_EvalInt(Player *p, const Expr *e, int warn)
 {
+    return Expr_EvalIntCtx(p,e,warn,NULL);
+}
+int Expr_EvalIntCtx(Player *p, const Expr *e, int warn, ExprEvalCtx *ctx)
+{
     float fval;
     int ival;
-    int ret = Expr_Eval(p, e, &ival, &fval);
+    int ret = Expr_EvalCtx(p, e, &ival, &fval, ctx);
 
     if (ret == 0) {
         sprintf(g_libraryErrorText, EXPR_FATAL_MALFORMED, g_game->frames, p->name, p->id, p->state_no);
@@ -995,6 +1022,10 @@ float Expr_EvalFloat(Player *p, const Expr *e)
  */
 int Expr_Eval(Player *p, const Expr *e, int *iout, float *fout)
 {
+    return Expr_EvalCtx(p,e,iout,fout,NULL);
+}
+int Expr_EvalCtx(Player *p, const Expr *e, int *iout, float *fout, ExprEvalCtx *ctx)
+{
     float fa = 0.0f, fb = 0.0f, fx = 0.0f;
     ExprValue a, b, x, result;
     int at = 0, bt, xt, mode = 0, rtype;
@@ -1031,8 +1062,17 @@ int Expr_Eval(Player *p, const Expr *e, int *iout, float *fout)
         case EXPR_FLOAT:
             ExprStack_Push(e->u.tokens[i].i, *tp);
             continue;
+        case EXPR_LOCAL:
+            idx = e->u.tokens[i].i;
+            if (ctx == NULL || ctx->values == NULL || ctx->types == NULL ||
+                idx < 0 || (size_t)idx >= ctx->count ||
+                (ctx->types[idx] != EXPR_INT && ctx->types[idx] != EXPR_FLOAT && ctx->types[idx] != EXPR_BOTTOM)) {
+                g_exprStackTop = base; return 0;
+            }
+            ExprStack_Push(ctx->values[idx].i,ctx->types[idx]);
+            continue;
         case EXPR_TRIGGER:
-            Trigger_Eval(p, e->u.tokens[i].trig);
+            Trigger_EvalCtx(p, e->u.tokens[i].trig, ctx);
             continue;
         case EXPR_OP:
             break;

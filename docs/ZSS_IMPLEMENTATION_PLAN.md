@@ -868,3 +868,91 @@ Verification completed on Linux x86-64:
 
 Native 32-bit/Windows toolchains, Android NDK and VitaSDK were unavailable for
 this increment. Their builds and device behavior remain open qualification work.
+
+### Numeric local frames and named for counters
+
+Added explicit ExprCompileCtx/ExprEvalCtx entry points to the shared expression
+compiler/evaluator. The original exported CNS signatures are NULL-context
+wrappers. Trigger arguments, redirect arguments, intervals/groups and cond's
+owned nested Exprs propagate their context. No process-global current-locals
+pointer or ZSS mode was introduced. The original global expression operand stack
+and legacy diagnostic state remain; this is not a thread-safety qualification.
+Expr, Trigger, Player and original StateDef layouts are unchanged.
+
+EXPR_LOCAL is a scalar slot operand (0..255), not a pointer or an overloaded
+character var/fvar index. The compiler resolves names through a callback and
+keeps only indices in the owned expression. Source spans and the compile context
+can disappear after compilation. The verifier counts local reads as operands;
+free/copy/clone retain ordinary scalar ownership. Evaluation checks frame bounds
+and accepted value types before reading a local; a rejected direct local read
+restores the previous operand-stack top.
+
+Supported in this increment:
+
+```text
+[StateDef 200]
+let total = 0;
+for i = 0; 3 { let total = $total + $i; }
+var(0) := $total;
+let index = 2;
+var($index) := $total;
+```
+
+- Single-name numeric let declarations and reassignment (`let total = ...;`).
+  The `_` binding evaluates and discards its value without consuming a local slot.
+- Numeric local reads in body expressions, if/while conditions, range headers,
+  trigger arguments and nested cond expressions. Original numeric operations,
+  conversions and bottom behavior remain the MUGEN profile, not full Ikemen
+  expression equivalence.
+- Anonymous and named inclusive for ranges. Named counters share the state's
+  local table. A body assignment to its counter changes the value used for the
+  next increment. Begin/end/increment are evaluated once on entry; the initial
+  binding retains its numeric type, while subsequent counter steps use int32
+  conversion and defined wrapping arithmetic. The final local remains the last
+  executed body's value when the range exhausts. The existing guards remain.
+
+Names are state-wide compile-time bindings, rather than C block-scoped variables.
+A declaration enters scope before compiling its initializer; uninitialized or
+conditionally skipped bindings read as bottom. Each body invocation allocates a
+fresh bounded value/type frame, initialized to bottom. Reentrant runs and shared
+programs have distinct frames. Locals are neither character variables nor values
+persisting between ticks. The 256-slot limit is enforced, and redeclaring an
+existing name reuses its slot.
+
+Current explicit exclusions: multi-name let/return binding, local `:=` assignment
+(use let reassignment), locals in controller or StateDef parameters, functions/
+calls, switch, persistence/hitpause attributes and lazy &&/|| compilation. The
+parameter reader still rejects local tokens before the legacy controller parser.
+Its context plumbing is the next integration step; the leaf runtime must receive
+the same explicit frame before parameters containing locals can be enabled.
+
+Validation on Linux x86-64:
+
+- The ZSS/controller host gate passes under ASan/UBSan with leak detection disabled
+  in this environment. It covers local type/bottom reads, slot 255 and overflow
+  rejection, unknown/out-of-state names, fresh/reentrant frames, body-mutated
+  named counters, float initial counters, loop-guard final values, nested
+  break/continue, allocation-failure rollback and unsupported forms.
+- Explicit expression probes exercise real compilation, nested cond evaluation,
+  local trigger arguments, cloning/freeing, unknown nested bindings, recursive
+  depth rollback, and invalid direct local frame/index/type checks. var/fvar
+  access and controller dispatch remain declared host-test boundaries; cond's
+  evaluation helper is shared with the real trigger runner.
+- Existing CNS and lexer suites pass. The review-regression suite also passes
+  under ASan/UBSan with MUGEN_MEMPROF_NO_WRAP=1 for the standalone harness; its
+  trigger-parser boundary was updated to the new context entry point.
+- The four changed production C units pass -Wall -Wextra -Werror syntax checks
+  on the host, including an ANDROID_PORT check. This is not an NDK build.
+- The full native engine links with MUGEN_MODEL3D=0. A copied KFM smoke fixture
+  computes 6 with a named range, stores it through var($index), reads it through
+  cond and playerid($actor), and runs a local-controlled while loop. State 65000
+  changes to 65001 only after both checks pass. The native log records result 5,
+  execution of state 65001, and orderly shutdown after the 12-second timeout.
+  Root redirection was not qualified by this regular-player fixture.
+- A native parent-commit engine was built separately. Plain-CNS quick-VS smoke
+  runs of parent and candidate produced 195 fragments each, identical with
+  tools/compare_logs.py numeric normalization. This is log-level regression
+  evidence, not a gameplay-state/determinism comparison or a completed match.
+
+Original installations and display dimensions were not changed. Native 32-bit,
+Windows, Android NDK and Vita builds/devices remain open qualification work.

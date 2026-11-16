@@ -22,8 +22,8 @@ void Error_Fatal(const char *fmt, ...) { (void)fmt; abort(); }
 void *Mem_Calloc(size_t n, size_t bytes) { return calloc(n, bytes); }
 int Char_IsSpace(int c) { return c > 0 && c < 128 && isspace(c); }
 int Char_IsDigit(int c) { return c >= '0' && c <= '9'; }
-int Trigger_Parse(const char *s, CharData *owner, ExprValue *v, char *t, int max, const char **end)
-{ (void)s; (void)owner; (void)v; (void)t; (void)max; (void)end; abort(); }
+int Trigger_ParseCtx(const char *s, CharData *owner, ExprValue *v, char *t, int max, const char **end, ExprCompileCtx *ctx)
+{ (void)s; (void)owner; (void)v; (void)t; (void)max; (void)end; (void)ctx; abort(); }
 void Trigger_Free(Trigger *t) { (void)t; abort(); }
 int Trigger_ArgCount(int id) { (void)id; abort(); }
 int Pads_SlotUsesController(int slot) { (void)slot; return 0; }

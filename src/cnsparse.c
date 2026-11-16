@@ -186,6 +186,10 @@ int Cns_ParseValues(const char *s, const char *fmt, CharData *owner, const char 
  */
 int Cns_ParseExprList(const char *s, CharData *owner, const char **end, Expr **out)
 {
+    return Cns_ParseExprListCtx(s,owner,end,out,NULL);
+}
+int Cns_ParseExprListCtx(const char *s, CharData *owner, const char **end, Expr **out, ExprCompileCtx *ctx)
+{
     static const char fmt[] = "nnn:)";
     const char *cur = s;
     const char *e;
@@ -214,7 +218,7 @@ int Cns_ParseExprList(const char *s, CharData *owner, const char **end, Expr **o
         return 0;
     }
     for (i = 0; i < count; i++) {
-        if (!Expr_Compile(cur, &exprs[i], owner, &e, want_of(fmt[i]))) {
+        if (!Expr_CompileCtx(cur, &exprs[i], owner, &e, want_of(fmt[i]), ctx)) {
             break;
         }
         if (*e == ',') {
@@ -253,6 +257,11 @@ int Cns_ParseExprList(const char *s, CharData *owner, const char **end, Expr **o
 int Cns_ParseArgs(const char *s, const char *fmt, CharData *owner, const char **end, ExprValue *tokens, char *types,
                   int *count, int max)
 {
+    return Cns_ParseArgsCtx(s,fmt,owner,end,tokens,types,count,max,NULL);
+}
+int Cns_ParseArgsCtx(const char *s, const char *fmt, CharData *owner, const char **end, ExprValue *tokens, char *types,
+                  int *count, int max, ExprCompileCtx *ctx)
+{
     const char *cur = s;
     const char *e;
     int nargs, i, n, k;
@@ -266,7 +275,7 @@ int Cns_ParseArgs(const char *s, const char *fmt, CharData *owner, const char **
         return 0;
     }
     for (i = 0; i < nargs; i++) {
-        n = Expr_Parse(cur, tokens + ntok, types + ntok, owner, max - ntok, &e, want_of(fmt[i]));
+        n = Expr_ParseCtx(cur, tokens + ntok, types + ntok, owner, max - ntok, &e, want_of(fmt[i]), ctx);
         if (n == 0) {
             break;
         }
