@@ -620,3 +620,31 @@ detection disabled because LeakSanitizer cannot run under this environment's
 ptrace; Android-preprocessor host variant; existing CNS ABI regression suite.
 The Android variant is not an NDK build or a device pass. No native Windows
 or Vita toolchain qualification was performed.
+
+### Controller bridge increment
+
+The next increment adds `scriptparams.c/.h` and `zss_controller.c/.h`.
+`Zss_CompileController` parses one standalone controller, then invokes the
+existing `StateCtrl_ParseParams`; it publishes an owned StateCtrl only after
+success. The native parameter adapter creates a normal owned Ini directly,
+without calling Ini_Parse or stripping quoted semicolons. Keys are canonicalized
+without mutating global INI case settings. Source-line mappings are retained.
+
+Enabled prototype controllers: VelSet, VelAdd, PosSet, PosAdd, CtrlSet,
+ChangeState, ChangeAnim, Turn, Null, DisplayToClipboard, AppendToClipboard and
+ClearClipboard. Each has an explicit accepted-key schema. Complex payload
+controllers remain rejected until their partial-parse ownership is audited.
+
+This increment uses existing MUGEN expression semantics. Explicit expression
+contexts, ZSS short circuit, locals, block/file parsing, loader dispatch and
+execution are still pending; it does not enable .zss characters. Current bounds
+are 1 MiB per standalone source, 128 user parameters and 63 tokens per parameter;
+these prototype limits must be revisited against the reference corpus.
+
+Tests: `sh tools/test_zss_controller.sh` links the real INI, controller,
+expression and trigger parsing implementations in the existing CNS host harness.
+It checks numeric expressions, var references, literal delimiters/case, duplicate
+and unknown keys, malformed input, unchanged output on failure, and allocation
+failure cleanup. Shared controller subsystems outside the enabled subset retain
+the harness's existing explicit stubs. Linux CI now runs CNS, lexer and controller
+bridge gates. Native Windows/Android/Vita qualification remains OPEN.

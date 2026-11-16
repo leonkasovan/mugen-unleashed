@@ -36,6 +36,9 @@ jobs:
           sh tools/test_ttfcache.sh
           sh tools/test_batchplan.sh
           sh tools/test_ini_groups.sh
+          sh tools/test_cns_abi.sh
+          sh tools/test_zss_lex.sh
+          sh tools/test_zss_controller.sh
           sh tools/test_gl_errors.sh
           sh tools/test_model.sh
       - uses: actions/upload-artifact@v4

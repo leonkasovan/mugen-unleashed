@@ -14,7 +14,7 @@ CC="${CC:-cc}"
 OUT="${OUT:-$PWD/build/tmp/cns-abi-test}"
 mkdir -p "$OUT/tmp"
 export TMPDIR="$OUT/tmp"
-FLAGS="$TARGET_FLAGS ${CFLAGS:-} -std=gnu11 -O1 -g -UNDEBUG -ffunction-sections -fdata-sections"
+FLAGS="$TARGET_FLAGS ${CFLAGS:-} -DMUGEN_MEMPROF_NO_WRAP=1 -std=gnu11 -O1 -g -UNDEBUG -ffunction-sections -fdata-sections"
 FLAGS="$FLAGS -fno-asynchronous-unwind-tables -DSDL_MAIN_HANDLED"
 FLAGS="$FLAGS -Isrc ${SDL_CFLAGS:-$(${PKG_CONFIG:-pkg-config} --cflags sdl2)} -idirafter third_party/sdk/include"
 FLAGS="$FLAGS -Ithird_party/glad-2.1 -Ithird_party/minizip-0.15 -Ithird_party/libpng-1.2.38"
@@ -24,6 +24,12 @@ FLAGS="$FLAGS -Ithird_party/lua-5.1.4/src -Ithird_party/libresample/include"
 case "$($CC -dumpmachine)" in
     *mingw*) FLAGS="$FLAGS -flto=auto" ;;
 esac
+ZSS_SOURCES=""
+if [ "${TEST_ZSS_CONTROLLER:-0}" = 1 ]; then
+    FLAGS="$FLAGS -DTEST_ZSS_CONTROLLER"
+    LDFLAGS="${LDFLAGS:-} -Wl,--wrap=calloc -Wl,--wrap=free"
+    ZSS_SOURCES="src/ini.c src/scriptparams.c src/zss_controller.c src/zss_lex.c"
+fi
 SAN=""
 if [ "${SANITIZE:-0}" = 1 ]; then
     SAN="-fsanitize=address,undefined,float-cast-overflow -fno-omit-frame-pointer"
@@ -37,7 +43,7 @@ $CC $FLAGS -c src/globals.c -o "$OUT/globals.o"
 # shellcheck disable=SC2086
 $CC $FLAGS $SAN -DMem_Calloc=Test_UtilMem_Calloc -c src/util.c -o "$OUT/util.o"
 # shellcheck disable=SC2086
-$CC $FLAGS $SAN tools/test_cns_abi.c src/cnsparse.c src/keyedarray.c src/compat_linux.c \
+$CC $FLAGS $SAN tools/test_cns_abi.c $ZSS_SOURCES src/cnsparse.c src/keyedarray.c src/compat_linux.c \
     "$OUT/globals.o" "$OUT/util.o" -Wl,--gc-sections ${LDFLAGS:-} -lm -o "$OUT/test_cns_abi"
 # shellcheck disable=SC2086
 ${RUNNER:-} "$OUT/test_cns_abi"

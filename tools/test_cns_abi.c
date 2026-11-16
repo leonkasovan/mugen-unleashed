@@ -67,6 +67,7 @@ void TextRing_Printf(TextRing *ring, const char *fmt, ...)
     (void)ring;
     va_start(ap, fmt); vsnprintf(clipboard + n, sizeof(clipboard) - n, fmt, ap); va_end(ap);
 }
+#ifndef TEST_ZSS_CONTROLLER
 char *Ini_GetValue(Ini *ini, const char *key)
 {
     int i;
@@ -82,6 +83,7 @@ int Ini_SelectGroup(Ini *ini, const char *group) { (void)ini; (void)group; ini_r
 int Ini_CountGroups(Ini *ini, const char *prefix) { (void)ini; (void)prefix; return 0; }
 const char *Ini_NextGroup(Ini *ini) { (void)ini; return NULL; }
 int Ini_SourceLine(int line, Ini *ini) { (void)line; (void)ini; return 0; }
+#endif
 /* These parse branches are outside the cases exercised by this harness. */
 int Trans_Parse(const char *s, int *dst, int *src) { (void)s; (void)dst; (void)src; abort(); }
 float Units_From320(float v) { (void)v; abort(); }
@@ -265,15 +267,102 @@ static void test_state_headers(void)
     }
     puts("ok: state headers rejected before offset reads and allocations");
 }
+#ifdef TEST_ZSS_CONTROLLER
+/* Link wrappers cover constructor/temporary allocations too, including OOM. */
+static void *zss_allocs[1024];
+static int zss_calloc_calls, zss_fail_call;
+void *__real_calloc(size_t n,size_t size);
+void __real_free(void *p);
+void *__wrap_calloc(size_t n,size_t size)
+{
+    void *p;int i;
+    if(++zss_calloc_calls==zss_fail_call) return NULL;
+    p=__real_calloc(n,size);if(!p)return NULL;
+    for(i=0;i<1024;i++)if(!zss_allocs[i]){zss_allocs[i]=p;return p;}
+    abort();
+}
+void __wrap_free(void *p)
+{
+    int i;
+    for(i=0;i<1024;i++)if(zss_allocs[i]==p){zss_allocs[i]=NULL;break;}
+    __real_free(p);
+}
+static void zss_no_allocs(void)
+{
+    int i;check_no_allocs();for(i=0;i<1024;i++)assert(!zss_allocs[i]);
+}
+#include "scriptparams.h"
+#include "zss_controller.h"
+static void test_zss_controller(void)
+{
+    StateCtrl sc={0}, empty={0};
+    ZssDiagnostic diagnostic;
+    ScriptParam pairs[]={{"type","Null",1},{"text","\"MiX;#[]{}\"",7}};
+    const char *error;
+    Ini *ini=ScriptParams_ToIni(pairs,2,&error);
+    const char *valid="VelSet { x: 2 + # comment\n 3; y: -0.5; }";
+    const char *text="DisplayToClipboard { text: \"MiX;#[]{}\"; }";
+    const char *bad[]={"VelSet{x:1; X:2}","VelSet{x:1};","VelSet{x:$i}","VelSet{x:}","VelSet{x:(1+2}","VelSet{x:1e}","NoSuchController{}","VelSet{type:Null}","VelSet{x:1} Null{}","VelSet{unknown:1}","HitDef{}","Null{x:1}","ChangeState{}","ChangeState{value:2+3;ctrl:NoSuchTrigger}","DisplayToClipboard{text:\"%d\";params:1,2}"};
+    size_t i;
+    assert(ini && !error);
+    assert(!strcmp(Ini_GetValue(ini,"text"),pairs[1].value));
+    assert(Ini_SourceLine(Ini_FindKeyLine(ini,"text"),ini)==6);
+    assert(Ini_CountGroups(ini,"zss")==1);Ini_Rewind(ini);
+    assert(!strcmp(Ini_GetValue(ini,"type"),"Null"));Ini_Free(ini);
+    assert(Zss_CompileController(valid,strlen(valid),&owner,&sc,&diagnostic));
+    assert(sc.type==SCTRL_VELSET && Expr_EvalFloat(&player,&sc.arg[3])==5.0f);
+    assert(Expr_EvalFloat(&player,&sc.arg[4])==-0.5f);StateCtrl_Free(&sc);memset(&sc,0,sizeof(sc));
+    player.var[1]=7;
+    { const char *v="VelSet{x:var(1)+3}";
+      assert(Zss_CompileController(v,strlen(v),&owner,&sc,&diagnostic));
+      assert(Expr_EvalFloat(&player,&sc.arg[3])==10);StateCtrl_Free(&sc);memset(&sc,0,sizeof(sc)); }
+    assert(Zss_CompileController(text,strlen(text),&owner,&sc,&diagnostic));
+    assert(!strcmp(((CnsText *)sc.params)->text,"MiX;#[]{}"));StateCtrl_Free(&sc);memset(&sc,0,sizeof(sc));
+    for(i=0;i<sizeof(bad)/sizeof(*bad);i++) {
+        assert(!Zss_CompileController(bad[i],strlen(bad[i]),&owner,&sc,&diagnostic));
+        assert(diagnostic.message && diagnostic.line && diagnostic.column);
+        assert(!memcmp(&sc,&empty,sizeof(sc)));check_no_allocs();
+    }
+    g_iniCaseSensitive=1;
+    assert(Zss_CompileController("VelSet{X:3}",11,&owner,&sc,&diagnostic));
+    assert(Expr_EvalFloat(&player,&sc.arg[3])==3);StateCtrl_Free(&sc);memset(&sc,0,sizeof(sc));
+    g_iniCaseSensitive=0;
+    zss_no_allocs();
+    for(i=1;i<=8;i++) {
+        zss_calloc_calls=0;zss_fail_call=(int)i;
+        if(Zss_CompileController(valid,strlen(valid),&owner,&sc,&diagnostic))StateCtrl_Free(&sc);
+        else assert(diagnostic.message);
+        memset(&sc,0,sizeof(sc));zss_no_allocs();
+    }
+    zss_fail_call=0;
+    for(i=1;i<=2;i++) {
+        alloc_calls=0;fail_alloc=(int)i;
+        assert(!Zss_CompileController(valid,strlen(valid),&owner,&sc,&diagnostic));
+        assert(!memcmp(&sc,&empty,sizeof(sc)));zss_no_allocs();
+    }
+    fail_alloc=0;
+    pairs[1].key="TYPE";assert(!ScriptParams_ToIni(pairs,2,&error) && error);
+    pairs[1].key="bad=key";assert(!ScriptParams_ToIni(pairs,2,&error));
+    check_no_allocs();puts("ok: ZSS controller parsing uses real INI and MUGEN parameter/expression compilers");
+}
+#endif
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
     TEST_REPORT_ABI();
     g_game = &game; owner.mugenversion = 0x01010000;
     g_exprStackTop = -1;
+#ifdef TEST_ZSS_CONTROLLER
+    test_zss_controller();
+#else
     test_controller_parse(); test_variables(); test_clipboard();
     test_expr_allocs(); test_trigger_copy_math(); test_state_headers();
+#endif
     assert(g_exprStackTop == -1); check_no_allocs();
+#ifdef TEST_ZSS_CONTROLLER
+    puts("ok: ZSS controller bridge regressions passed");
+#else
     puts("ok: CNS ABI regressions passed");
+#endif
     return 0;
 }
