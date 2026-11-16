@@ -306,6 +306,31 @@ SpriteSet *Pcx_Load(Stream *s, int flags)
 /* ---- SFF v1.01 ---- */
 
 /*
+ * Port fix: legacy SFF v1 writers can count an omitted shared palette in
+ * sub.size. Bound each PCX by the next subheader (or EOF for the last one),
+ * as well as its declared size, so it cannot consume the following record.
+ * start is the stream position after the SFF header, including any prefix.
+ */
+static size_t Sff1_PcxLength(const Sff1SubHeader *sub, Stream *s, long start)
+{
+    long pos = Stream_Tell(s), end = Stream_GetSize(s);
+    uint64_t limit;
+    size_t available;
+
+    if (start < SFF_HEADER_SIZE || pos < start || end < pos || sub->size <= 0) {
+        return 0;
+    }
+    limit = sub->next_offset != 0
+                ? (uint64_t)(start - SFF_HEADER_SIZE) + sub->next_offset
+                : (uint64_t)end;
+    if (limit < (uint64_t)pos || limit > (uint64_t)end) {
+        return 0;
+    }
+    available = (size_t)(limit - (uint64_t)pos);
+    return (size_t)sub->size < available ? (size_t)sub->size : available;
+}
+
+/*
  * 0x004677D0: every sprite of a v1.01 file. Palettes are numbered (0, n) in
  * load order. Linked sprites copy the linked sprite by slot index without a
  * range check.
@@ -352,7 +377,7 @@ SpriteSet *Sff1_Load(const Sff1Header *hdr, Stream *s)
             if (last_pal == -1 || !sub.same_palette) {
                 new_pal = &pal;
             }
-            pixels = Pcx_DecodeSized(new_pal, &w, s, &h, &bpp, &size, 0, (size_t)sub.size);
+            pixels = Pcx_DecodeSized(new_pal, &w, s, &h, &bpp, &size, 0, Sff1_PcxLength(&sub, s, start));
             if (pixels == NULL) {
                 goto fail;
             }
@@ -459,7 +484,7 @@ SpriteSet *Sff1_LoadSelected(Stream *s, const Sff1Header *hdr, const int *select
                     new_pal = &pal;
                 }
                 if (wanted) {
-                    void *pixels = Pcx_DecodeSized(new_pal, &w, s, &h, &bpp, &size, 0, (size_t)sub.size);
+                    void *pixels = Pcx_DecodeSized(new_pal, &w, s, &h, &bpp, &size, 0, Sff1_PcxLength(&sub, s, start));
                     if (pixels == NULL) {
                         goto fail;
                     }

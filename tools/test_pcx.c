@@ -4,6 +4,8 @@
 #include <errno.h>
 #include <stdint.h>
 #include <stdarg.h>
+/* Exercise the SFF record-bound calculation together with the real decoder. */
+#include "../src/sff.c"
 int g_outOfMemory, g_streamError;
 static unsigned char captured[1024];
 static int fail_palette;
@@ -88,6 +90,40 @@ int main(int argc, char **argv) {
     p=Pcx_DecodeSized(NULL,&w,&bounded,&h,&depth,&size,0,130);assert(!p);
     b[128]=0xc3;
     p=Pcx_DecodeSized(NULL,&w,&bounded,&h,&depth,&size,0,130);assert(!p);
+    {
+        unsigned char file[1024] = {0};
+        const long prefix = 17, start = prefix + SFF_HEADER_SIZE;
+        const long pcx = start + 32, next = pcx + 130;
+        Stream record = {.type=STREAM_MEMORY, .begin=file, .pos=file+pcx, .end=file+next};
+        Sff1SubHeader sub = {.size=130+768, .same_palette=1};
+        size_t length;
+
+        header(file+pcx,2,1,1,2); file[pcx+128]=1; file[pcx+129]=2;
+        /* Last shared-palette record: declared size extends beyond EOF. */
+        length=Sff1_PcxLength(&sub,&record,start); assert(length==130);
+        p=Pcx_DecodeSized(NULL,&w,&record,&h,&depth,&size,0,length);
+        assert(p && size==2 && !memcmp(p,"\1\2",2)); free(p);
+        /* Non-final record, embedded SFF: next_offset is SFF-relative. */
+        record.end=file+sizeof(file); sub.next_offset=(unsigned)(next-prefix);
+        file[next]=12; memset(file+next+1,0x44,sizeof(file)-next-1);
+        length=Sff1_PcxLength(&sub,&record,start); assert(length==130);
+        p=Pcx_DecodeSized(&pal,&w,&record,&h,&depth,&size,0,length);
+        assert(p && captured[0]==0); free(p); /* adjacent palette marker is ignored */
+        sub.size=129; assert(Sff1_PcxLength(&sub,&record,start)==129);
+        p=Pcx_DecodeSized(NULL,&w,&record,&h,&depth,&size,0,Sff1_PcxLength(&sub,&record,start));
+        assert(!p); /* A short declared size still truncates the image. */
+        sub.size=898; sub.next_offset=(unsigned)(next-prefix-1);
+        p=Pcx_DecodeSized(NULL,&w,&record,&h,&depth,&size,0,Sff1_PcxLength(&sub,&record,start));
+        assert(!p); /* A following record cannot supply the missing pixel. */
+        sub.size=898; sub.next_offset=(unsigned)(pcx-prefix-1);
+        assert(Sff1_PcxLength(&sub,&record,start)==0);
+        sub.next_offset=sizeof(file); assert(Sff1_PcxLength(&sub,&record,start)==0);
+        sub.next_offset=(unsigned)(next-prefix); sub.size=130;
+        file[pcx+128]=0xc3; /* RLE run crosses the scanline: still rejected. */
+        p=Pcx_DecodeSized(NULL,&w,&record,&h,&depth,&size,0,Sff1_PcxLength(&sub,&record,start));
+        assert(!p);
+        puts("PASS: shared-palette SFF v1 EOF/next-record bounds and embedded offsets");
+    }
     puts("PASS: PCX bounds, encoding, truncation, unsigned coordinates and record isolation");
     return 0;
 }
