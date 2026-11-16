@@ -7,6 +7,7 @@
 #include "mugen.h"
 #include "configmerge.h"
 #include "render_policy.h"
+#include "soundcache.h"
 
 /* The [P<n> Gamepad] groups, loaded with the rest of the options and applied
  * after the pads open (their topology is only known then). */
@@ -53,8 +54,8 @@ void Config_ApplyJoystickSlot(int player);
  * change nothing asks for. A port ships its file beside the game's:
  *
  *   PS Vita      data/mugen.psvita.cfg   port/psvita/mugen.psvita.cfg
- *   Android      data/mugen.android.cfg  (not packaged yet)
- *   Linux arm64  data/mugen.arm64.cfg    (not packaged yet)
+ *   Android      data/mugen.android.cfg  port/android/mugen.android.cfg
+ *   Linux arm64  data/mugen.arm64.cfg    port/arm64/mugen.arm64.cfg
  *
  * Absent is normal and not an error: the game's file is then used unmodified,
  * which is also what happens on a tree copied without the platform file.
@@ -572,6 +573,18 @@ int Config_Load(void)
     if (Ini_SelectGroup(ini, "sound") == -1) {
         Error_Printf("Can't access [Sound]\n");
         return 0;
+    }
+    /* Port addition: sidecar config preserves the original GameVars layout. */
+    {
+        int lazy, automatic, initial_mb, maximum_mb;
+        const char *prewarm, *trace_path;
+        Ini_GetIntDef(ini, "Snd.LazyDecode", &lazy, 0);
+        Ini_GetIntDef(ini, "Snd.Cache.AutoGrow", &automatic, 0);
+        Ini_GetIntDef(ini, "Snd.Cache.InitialMB", &initial_mb, 8);
+        Ini_GetIntDef(ini, "Snd.Cache.MaxMB", &maximum_mb, 20);
+        prewarm = Ini_GetValue(ini, "Snd.Cache.Prewarm");
+        trace_path = Ini_GetValue(ini, "Snd.Cache.Trace");
+        SoundCache_Configure(lazy, automatic, initial_mb, maximum_mb, prewarm, trace_path);
     }
     g = g_game;
     g->wav_volume = 900.0;      /* overwritten below: only the default argument counts */

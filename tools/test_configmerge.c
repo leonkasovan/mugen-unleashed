@@ -61,5 +61,29 @@ int main(void)
         ++count;
     }
     printf("ok: %d localized write-back cases, per-key overrides and inheritance\n", count);
+    /* Port sound cache settings must override per key, while volumes stay
+     * owned by the game's options screen, on every shipped platform. */
+    {
+        const char *paths[] = { "port/arm64/mugen.arm64.cfg",
+            "port/android/mugen.android.cfg", "port/psvita/mugen.psvita.cfg" };
+        const char *names[] = { "Snd.LazyDecode", "Snd.Cache.AutoGrow",
+            "Snd.Cache.InitialMB", "Snd.Cache.MaxMB" };
+        const int expected[] = { 1, 1, 8, 20 };
+        for (i = 0; i < 3; ++i) {
+            char base_text[] = "[Sound]\nMasterVolume=60\nSnd.LazyDecode=0\n"
+                "Snd.Cache.AutoGrow=0\nSnd.Cache.InitialMB=16\nSnd.Cache.MaxMB=64\n";
+            Ini *base = parse(base_text), *over = Ini_Open(paths[i]), *merged;
+            char *text = NULL;
+            int len, keys, skipped, value;
+            assert(over && ConfigMerge_Text(base, over, &text, &len, &keys, &skipped));
+            merged = parse(text);
+            assert(Ini_SelectGroup(merged, "Sound") != -1);
+            assert(Ini_GetInt(merged, "MasterVolume", &value) && value == 60);
+            for (j = 0; j < 4; ++j)
+                assert(Ini_GetInt(merged, names[j], &value) && value == expected[j]);
+            Ini_Free(merged); Ini_Free(over); Ini_Free(base); free(text);
+        }
+        puts("ok: ARM64/Android/Vita sound cache overlays override cache keys and preserve volumes");
+    }
     return 0;
 }

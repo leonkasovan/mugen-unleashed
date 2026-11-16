@@ -831,3 +831,65 @@ stream-position restoration:
 ```sh
 SANITIZE=address,undefined sh tools/test_snd_ogg.sh /absolute/path/to/z.character.snd
 ```
+
+## Lazy character sound cache (opt-in)
+
+Set these keys in `[Sound]` in `data/mugen.cfg`, or in the platform overlay:
+
+```ini
+[Sound]
+Snd.LazyDecode = 1
+Snd.Cache.AutoGrow = 1
+Snd.Cache.InitialMB = 8
+Snd.Cache.MaxMB = 20
+```
+
+The ARM64, Android and PS Vita overlays ship these values. With missing keys,
+lazy decoding and automatic growth default to off, the initial budget to 8 MiB,
+and the maximum to 20 MiB. Sound-cache environment variables are no longer read.
+
+This retains encoded character-bank entries and decodes them on first use.
+A global LRU manages decoded character PCM; prepared, playing and looping sounds
+cannot be evicted and can exceed the soft ceiling. System/common/lifebar/
+storyboard banks remain eager. Encoded sources and decoder temporaries are
+separate from the PCM budget. Sources remain until their banks are freed.
+
+Both budgets accept 0–1024 MiB; invalid values use their defaults. A maximum
+below the initial budget is raised to the initial budget. Zero initial budget
+keeps only leased PCM after frame maintenance and disables growth.
+
+With automatic growth enabled, resident PCM above the target raises it in roughly
+25% steps rounded up to whole MiB, clamped to the maximum. No memory is reserved
+in advance. The target does not shrink until all lazy banks are freed. At the
+ceiling normal LRU eviction continues. Set `Snd.Cache.AutoGrow = 0` for a fixed
+budget. Growth responds to resident PCM, including one-off sounds; it does not
+estimate available system RAM or predict reuse. Budget changes are logged.
+
+Optional `Snd.Cache.Prewarm = 1000:0,1010:0` warms group:number pairs during each
+character bank load within the same global budget. Pick warm sounds from actual
+request traces; this does not predict arbitrary PlaySnd expressions.
+
+Optional `Snd.Cache.Trace = /path/requests.csv` appends request, prepare, start,
+release, frame maintenance, bank-free and format-reset events. Paths are relative
+to the game working directory unless absolute. Prewarm and trace strings are
+copied at config load (up to 4095 bytes each). Start with a fresh trace for an
+independent run. Replay simulates fixed budgets, not the automatic policy:
+
+```sh
+python3 tools/soundcache_trace.py /path/requests.csv --budgets 8 16 32
+SANITIZE=address,undefined sh tools/test_soundcache.sh /absolute/path/z.character.snd
+```
+
+The test also accepts a ZIP containing `bank.snd` and closes the source before
+first use. The runtime log reports encoded bytes, PCM bytes, pinned bytes,
+budget, hits, misses, evictions and maximum decode duration once per second.
+Existing memory profiling still sees both source buffers and decoded PCM.
+
+Cold misses are **synchronous**. SDL2_mixer's Ogg loader can hold the audio lock
+across full decoding, so a worker around that API would not remove audio stalls.
+Desktop configs without these keys keep eager loading; the three platform
+overlays explicitly enable lazy loading. The independent decoder/worker
+backend, automatic trace-derived prefetch, real-device audio qualification, and
+default rollout remain gated as described in
+[the design plan](LAZY_SOUND_DECODING_PLAN.md). No new codec dependency or audio
+callback decoding was introduced.
