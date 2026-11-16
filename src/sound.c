@@ -16,6 +16,7 @@
 #include "mugen.h"
 #include <SDL_mixer.h>
 #include <libresample.h>
+#include "soundcache.h"
 
 
 #define SOUND_VOLUME_SCALE 1.28     /* percent to SDL_mixer volume (MIX_MAX_VOLUME = 128) */
@@ -141,6 +142,7 @@ void Sound_Deinit(void)
     if (g_sndOpen == 0) {
         return;
     }
+    SoundCache_Invalidate();
     Mix_CloseAudio();
     if (g_sndResampler != NULL) {
         Resampler *r = g_sndResampler;
@@ -208,7 +210,9 @@ void Snd_Free(Snd *snd)
     if (snd == NULL) {
         return;
     }
+    SoundCache_FreeBank(snd);
     map = snd->map;
+    if (map == NULL) { free(snd); return; }
     if (map->count != 0) {
         /* Inlined iteration over the used elements (0x466990 / 0x4669B0). */
         int i = map->first;
@@ -309,7 +313,7 @@ int Sound_PlayOnSlot(int slot, Snd *snd, int group, int number, double volume)
             if (e->type == SND_ENTRY_CHUNK) {
                 Mix_Volume(channel, g_sndMuted != 0 ? 0 : (int)(volume * SOUND_VOLUME_SCALE));
             }
-            Mix_PlayChannelTimed(channel, e->chunk, g_sndSlots[slot].loop != 0 ? -1 : 0, -1);
+            SoundCache_Started(slot, Mix_PlayChannelTimed(channel, g_sndSlots[slot].chunk, g_sndSlots[slot].loop != 0 ? -1 : 0, -1));
         }
     }
     return channel;
@@ -334,7 +338,7 @@ int Sound_PrepareSlot(int slot, Snd *snd, int group, int number)
     }
     Sound_ReleaseStopped();
     map = snd->map;
-    index = KeyedArray_Find(map, group, number);
+    index = SoundCache_Find(snd, group, number);
     if (index == -1) {
         return -1;
     }
@@ -347,12 +351,14 @@ int Sound_PrepareSlot(int slot, Snd *snd, int group, int number)
     if (channel == -1) {
         channel = Sound_FindFreeChannel();
         if (channel == -1) {
+            g_sndSlots[slot].chunk = NULL;
             return -1;
         }
         g_sndSlots[slot].channel = channel;
     } else {
         Mix_HaltChannel(channel);
     }
+    SoundCache_Bind(slot, snd, index);
     Sound_SetSlotVolume(slot, 50.0);
     Sound_SetSlotPan(slot, 0);
     /* Inlined Sound_SetSlotLoop(slot, 0). */
@@ -375,7 +381,8 @@ void Sound_PlaySlot(int slot)
         return;
     }
     Mix_Volume(channel, g_sndMuted != 0 ? 0 : g_sndSlots[slot].mix_volume);
-    Mix_PlayChannelTimed(channel, g_sndSlots[slot].chunk, g_sndSlots[slot].loop != 0 ? -1 : 0, -1);
+    if (g_sndSlots[slot].chunk != NULL)
+        SoundCache_Started(slot, Mix_PlayChannelTimed(channel, g_sndSlots[slot].chunk, g_sndSlots[slot].loop != 0 ? -1 : 0, -1));
 }
 
 /* 0x0046EB80: sets the volume of slot (percent, clamped to 0..100; NaN is kept). */
@@ -459,7 +466,8 @@ void Sound_ReleaseStopped(void)
     }
     for (i = 0; i < g_sndSlotCount; i++) {
         int channel = g_sndSlots[i].channel;
-        if (channel != -1 && g_sndSlots[i].reserved == 0 && Mix_Playing(channel) == 0) {
+        if (channel != -1 && g_sndSlots[i].reserved == 0 && !SoundCache_Prepared(i) && Mix_Playing(channel) == 0) {
+            SoundCache_Release(i);
             g_sndSlots[i].channel = -1;
             g_sndSlots[i].owner = -1;
             g_sndSlots[i].chunk = NULL;
@@ -518,7 +526,12 @@ void Sound_Stop(int id)
         return;
     }
     if (id == -1) {
+        int i;
         Mix_HaltChannel(-1);
+        for (i = 0; i < g_sndSlotCount; ++i) {
+            if (SoundCache_Bound(i)) g_sndSlots[i].chunk = NULL;
+            SoundCache_Release(i);
+        }
         return;
     }
     slot = Sound_FindSlot(id);
@@ -528,6 +541,8 @@ void Sound_Stop(int id)
         if (s->channel != -1) {
             Mix_HaltChannel(s->channel);
         }
+        if (SoundCache_Bound(slot)) s->chunk = NULL;
+        SoundCache_Release(slot);
     }
 }
 
@@ -933,6 +948,12 @@ fail:
  */
 Snd *Snd_Parse(Stream *s, int *status)
 {
+    return Snd_ParseWithPolicy(s, status, 0);
+}
+
+/* Port addition: retain owned encoded entries for opt-in character banks. */
+Snd *Snd_ParseWithPolicy(Stream *s, int *status, int lazy)
+{
     SndFileHeader header;
     SndSubHeader sub;
     Snd *snd = NULL;
@@ -941,13 +962,19 @@ Snd *Snd_Parse(Stream *s, int *status)
     long start = Stream_Tell(s);
     int offset;
     int i;
+    int *visited = NULL;
+    long length = Stream_GetSize(s);
 
-    if (Stream_Read(&header, sizeof(header), 1, s) != 1 || strcmp(header.signature, SND_SIGNATURE) != 0) {
+    if (Stream_Read(&header, sizeof(header), 1, s) != 1 || memcmp(header.signature, SND_SIGNATURE, sizeof(header.signature)) != 0 || header.count < 0 || header.count > Stream_GetSize(s) / 16) {
         goto fail;
     }
     snd = Snd_Create(header.count);
     if (snd == NULL) {
         goto fail;
+    }
+    if (lazy && header.count) {
+        visited = calloc(header.count, sizeof(*visited));
+        if (visited == NULL) goto fail;
     }
     offset = header.first;
     for (i = 0; i < header.count; i++) {
@@ -955,16 +982,32 @@ Snd *Snd_Parse(Stream *s, int *status)
         Stream *ms;
         struct Mix_Chunk *chunk;
 
+        if (lazy) {
+            int j;
+            if (offset < (int)sizeof(header) || (long)offset > length - start - 16) goto fail;
+            for (j = 0; j < i; ++j) if (visited[j] == offset) goto fail;
+            visited[i] = offset;
+        }
+        if (offset < 0 || start < 0 || length < 0 ||
+            (uint64_t)offset + (uint64_t)start + sizeof(sub) > (uint64_t)length) goto fail;
         Stream_Seek(s, offset + start, SEEK_SET);
         if (Stream_Read(&sub, sizeof(sub), 1, s) != 1) {
             goto fail;
         }
-        buf = malloc(sub.size);
+        if (sub.size < 0 || (uint64_t)offset + (uint64_t)start + sizeof(sub) + (uint64_t)sub.size > (uint64_t)length) goto fail;
+        buf = malloc(sub.size != 0 ? sub.size : 1);
         if (buf == NULL) {
             goto fail;
         }
-        /* Never -1: a short read goes unnoticed. */
-        if (Stream_Read(buf, sub.size, 1, s) == (size_t)-1 || (ms = Stream_OpenMemory(buf, sub.size)) == NULL) {
+        if (Stream_Read(buf, 1, sub.size, s) != (size_t)sub.size) { free(buf); goto fail; }
+        if (lazy) {
+            SndEntry e = {1, SND_ENTRY_CHUNK, 0, NULL};
+            int index = KeyedArray_Add(snd->map, &e, sub.group, sub.number);
+            if (index < 0 || !SoundCache_Add(snd, index, buf, sub.size)) { free(buf); goto fail; }
+            offset = sub.next;
+            continue;
+        }
+        if ((ms = Stream_OpenMemory(buf, sub.size)) == NULL) {
             free(buf);
             goto fail;
         }
@@ -981,6 +1024,8 @@ Snd *Snd_Parse(Stream *s, int *status)
         }
         offset = sub.next;
     }
+    free(visited);
+    if (lazy) SoundCache_WarmBank(snd);
     Stream_Seek(s, start, SEEK_SET);
     if (status != NULL) {
         *status = result;
@@ -988,6 +1033,7 @@ Snd *Snd_Parse(Stream *s, int *status)
     return snd;
 
 fail:
+    free(visited);
     Snd_Free(snd);
     if (status != NULL) {
         *status = SND_ERR_FAILED;

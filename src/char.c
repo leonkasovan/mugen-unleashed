@@ -12,6 +12,7 @@
  * CharData.consts, which every player copies.
  */
 #include "mugen.h"
+#include "soundcache.h"
 
 #define LUA_REGISTRYINDEX   (-10000)
 #define LUA_TTABLE          5
@@ -895,7 +896,7 @@ CharData *Char_LoadDef(const char *dir, Stream *s)
             if (is_zip) {
                 Stream_ZipUnload(zs);
                 Stream_ZipLoad(zs, buf);
-                c->snd = Snd_Parse(zs, &status);
+                c->snd = Snd_ParseWithPolicy(zs, &status, SoundCache_Enabled());
                 if (c->snd == NULL) {
                     Error_Printf("Can't load %s\n", buf);
                     return NULL;
@@ -914,7 +915,7 @@ CharData *Char_LoadDef(const char *dir, Stream *s)
                     Error_Printf("Could not open file: %s\n", buf);
                     return NULL;
                 }
-                c->snd = Snd_Parse(ss, &status);
+                c->snd = Snd_ParseWithPolicy(ss, &status, SoundCache_Enabled());
                 if (c->snd == NULL) {
                     Error_Printf("Can't load %s\n", buf);
                     return NULL;

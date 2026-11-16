@@ -226,4 +226,6 @@ MUGEN_ASSERT_OFFSET(SoundSlot, volume, 0x10);
 MUGEN_ASSERT_OFFSET(SoundSlot, loop, 0x24);
 MUGEN_ASSERT_SIZE(SoundSlot, 0x28);
 
+Snd *Snd_ParseWithPolicy(Stream *s, int *status, int lazy);
+
 #endif /* MUGEN_SOUND_H */

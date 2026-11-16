@@ -1036,6 +1036,10 @@ install: $(STRIPPED)
 	@echo "  INSTALL $(INSTALL_DIR)/$(INSTALL_NAME)"
 	$(Q)mkdir -p $(INSTALL_DIR)
 	$(Q)cp $(STRIPPED) $(INSTALL_DIR)/$(INSTALL_NAME)
+ifeq ($(MUGEN_TARGET),linux-arm64)
+	$(Q)mkdir -p $(INSTALL_DIR)/data
+	$(Q)cp port/arm64/mugen.arm64.cfg $(INSTALL_DIR)/data/mugen.arm64.cfg
+endif
 ifeq ($(MUGEN_GLES),1)
 # The GLES renderer loads GLSL ES sources from data/gles/*, next to the game's
 # own data/ (src/gles_render.c gles_read_shader). They are ours, not game
