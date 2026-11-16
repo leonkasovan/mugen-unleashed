@@ -42,25 +42,6 @@ static unsigned int SpriteCache_DeclaredSize(const void *data)
            ((unsigned int)p[2] << 16) | ((unsigned int)p[3] << 24);
 }
 
-/* Whether the decompression pool already holds the decoded block of `data`. */
-static int SpriteCache_HasBlock(const void *data)
-{
-    DecompBuffer *buf = g_spriteDecompBuffer;
-    DecompBlock *block;
-
-    if (buf == NULL) {
-        return 0;
-    }
-    block = (DecompBlock *)buf->data;
-    while (block->size != 0) {
-        if (block->key == data) {
-            return 1;
-        }
-        block = (DecompBlock *)((char *)block + block->size);
-    }
-    return 0;
-}
-
 /*
  * Port addition (SFF memory plan, P0/C2): the lazy decoder path with the
  * checks the eager one in Sprite_Init already has.
@@ -86,10 +67,9 @@ int SpriteCache_Acquire(void *data, int format, size_t size, size_t expected, vo
     if (expected == 0) {
         expected = declared;
     }
-    /* Walk the encoded span only when it is not already decoded: a pool hit is
-     * an image that validated and decoded once, and re-walking every span on
-     * every draw would put the check in the frame budget. */
-    if (!SpriteCache_HasBlock(data) && !Sprite_ValidateCompressed(data, size, format, expected)) {
+    /* Port fix: a pointer hit does not establish the caller's codec, encoded
+     * extent or output size. Validate every request before consulting the pool. */
+    if (!Sprite_ValidateCompressed(data, size, format, expected)) {
         return 0;
     }
     key.pool = g_spriteDecompBuffer;

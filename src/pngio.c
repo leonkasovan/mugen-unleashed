@@ -388,14 +388,14 @@ unsigned char *Png_Encode32(const void *pixels, int width, int height, int *size
 
 /*
  * 0x00477A60: sprite formats 10-12 decoder: data is the sprite data (the
- * decoded size, then the PNG), size includes that prefix. Returns the Stream_Close
- * result (the decoding result is dropped), 0 if out of memory.
+ * decoded size, then the PNG), size includes that prefix. Port fix: returns
+ * nonzero on success, zero on read/close failure or allocation failure.
  */
 int Png_Decode(const void *data, int size, void *dest)
 {
     /* Fix: the prefix is not part of the PNG byte stream. */
     Stream *s;
-    int decode;
+    int decode, close_result;
     if (size < PNG_SPRITE_PREFIX) return 0;
     s = Stream_OpenMemory((unsigned char *)data + PNG_SPRITE_PREFIX, size - PNG_SPRITE_PREFIX);
 
@@ -410,7 +410,9 @@ int Png_Decode(const void *data, int size, void *dest)
      * half-decoded entry and retried nothing. The eager path ignores this value,
      * so its behaviour is unchanged.
      */
-    return decode == 0 && Stream_Close(s) != 0;
+    /* Port fix: close on failure too; Stream_Close uses zero for success. */
+    close_result = Stream_Close(s);
+    return decode == 0 && close_result == 0;
 }
 
 /* ---- mugen-unleashed: RGBA decoding for the textures of 3D models (model.c) ---- */

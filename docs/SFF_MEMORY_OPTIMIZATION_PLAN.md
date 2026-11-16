@@ -556,7 +556,7 @@ of P3, that can be built and measured on Windows x86 without new platform work.
 | Plan item | Change | File |
 |---|---|---|
 | C1 identity | The desktop and GLES stream texture caches key an entry on the image's own source span, codec and extent (`SpriteTexKey_Matches`), never on the decoded pool address. Linked sprites therefore share one texture. | `src/sprite.c`, `src/glrender.c`, `src/gles_render.c` |
-| C2 validation | `SpriteCache_Acquire` checks the encoded span, codec and declared extent before taking pool space, and only when the image is not resident yet; `Sprite_GetPixels` passes the extent derived from the sprite's own dimensions. `Png_Decode` now returns the image read result, so a failed PNG is evicted rather than published. | `src/misc.c`, `src/sprite.c`, `src/pngio.c` |
+| C2 validation | `SpriteCache_Acquire` checks the encoded span, codec and declared extent before taking pool space, including cache hits; `Sprite_GetPixels` passes the extent derived from the sprite's own dimensions. `Png_Decode` now returns the image read result, so a failed PNG is evicted rather than published. | `src/misc.c`, `src/sprite.c`, `src/pngio.c` |
 | P1 accounting | `SpriteSet_MemUse` includes the encoded `SpriteSet.data` block (tracked in a sidecar keyed by the set allocation) and each owned row table. | `src/sprite.c`, `src/sff.c` |
 | P3 CPU residency | SFF v2 ldata and tdata images stay encoded at load in a build whose `Gl_Init` set `g_gfxFlags` bit 1. `MUGEN_SFF_EAGER=1` restores the original decode-at-load policy. | `src/sff.c` |
 | P3 GPU residency | A byte-budgeted LRU stream texture cache serves sprites that are not `SPRITE_FORMAT_TEXTURE`, so a lazy image is decoded and uploaded once instead of per draw. `MUGEN_SFFTEXMB` sets the budget (default 64 MiB). Entries are invalidated per freed set, not globally, because `Sprite_DrawGL` frees a temporary render-target set every frame while paletted sprites are scaled. `MUGEN_SFFTEXLOG=1` prints hit/miss/eviction/peak counters at shutdown; off by default so a normal `mugen.log` stays comparable. | `src/glrender.c` |
@@ -603,11 +603,27 @@ difference in sprite, palette or decode lines. Frame cadence is unchanged at
 - **GLES key fix** (`src/gles_render.c`) is compiled only in a GLES target
   (Android, Linux arm64, Vita). No device was run.
 - **Oversized admission (section 6)** is not implemented: an image whose decoded
-  extent exceeds the whole pool still yields no pixels instead of a transient
-  lease. Hyper DBZ's largest image fits; a game with a sprite larger than its
-  decompression buffer would draw that sprite blank where the eager path drew
-  it.
+  extent exceeds the whole pool now retains eager loading (review correction
+  below), rather than using a transient lease. Hyper DBZ's largest image fits; a game with a sprite larger than its
+  decompression buffer keeps the original eager memory cost for that sprite.
 - P2 (independently owned encoded sources and detached palettes), P4
   (source-based context recovery instead of decoded GLES backings), P5 (v1/PCX
   lazy loading, file-backed sources), P6 (warming) and P7 (per-platform rollout)
   are untouched.
+
+### Review corrections (2026-11-16)
+
+- PNG success now combines zero-success read/close results; closing is unconditional.
+- Every CPU cache acquisition validates the caller's codec, encoded span and
+  decoded extent, including pointer hits. This intentionally repeats validation
+  until immutable validation records can safely key the full metadata tuple.
+- Lazy SFF loading retains eager decoding for images that exceed pool capacity,
+  accounting for pointer alignment, block header and end marker. Thus oversized
+  admission no longer silently loses images on the formerly eager desktop path.
+  A bounded transient lease remains future work; these images retain the old
+  full decoded allocation/load-time upload and its memory cost.
+- Desktop/Vita GL cache eviction reserves logical image bytes before upload.
+  Native driver padding/staging and physical GPU allocation remain device tests.
+- Added Linux-host real PNG/cache/admission regressions and constrained-driver
+  cache replacement coverage in the desktop/Vita GL mock suite. These do not
+  establish native Android/Vita device qualification.

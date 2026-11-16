@@ -91,6 +91,7 @@ void Test_DrawGL(SpriteSet *set,int s,const DrawParams *dp);
 #endif
 #include "../src/gfx.c"
 
+static size_t review_gpu_limit;
 static GLenum pending;
 static unsigned next_id = 10, binding, color_attachment, depth_attachment;
 static int image_calls, sub_calls, fail_image, fail_read, fail_depth, fail_fbo, fail_bind_null;
@@ -148,7 +149,9 @@ static void APIENTRY parameter(GLenum t, GLenum p, GLint v)
 { parameter_calls++; if (v == -123) pending = GL_INVALID_ENUM; }
 static void APIENTRY pixel_store(GLenum t, GLint v) {}
 static void APIENTRY image(GLenum t, GLint l, GLint i, GLsizei w, GLsizei h, GLint b, GLenum f, GLenum ty, const void *p)
-{ image_calls++; if (fail_image) { fail_image = 0; pending = GL_OUT_OF_MEMORY; } }
+{ image_calls++;
+  if (review_gpu_limit && g_glTexMemory + (size_t)w*h*(f==GL_RGBA?4:f==GL_RGB?3:1) > review_gpu_limit) pending=GL_OUT_OF_MEMORY;
+  if (fail_image) { fail_image = 0; pending = GL_OUT_OF_MEMORY; } }
 static void APIENTRY subimage(GLenum t, GLint l, GLint x, GLint y, GLsizei w, GLsizei h, GLenum f, GLenum ty, const void *p)
 { sub_calls++; if (fail_image) { fail_image = 0; pending = GL_OUT_OF_MEMORY; } }
 static void APIENTRY get_int(GLenum p, GLint *v)
@@ -727,6 +730,31 @@ static void test_vita_render_cache(void)
 }
 #endif
 
+#ifndef TEST_GLES
+void *Sprite_GetPixels(SpriteSet *set,int index) { return ((Sprite *)set->sprites->data)[index].pixels; }
+int SpriteTexKey_Matches(const void *a,int f,int w,int h,int b,const void *c,int g,int x,int y,int d)
+{ return a==c && f==g && w==x && h==y && b==d; }
+int Sprite_TextureStep(int size,int max) { assert(0);return 1; }
+void *Sprite_Downscale(const void *p,int w,int h,int x,int y,int b) { assert(0);return NULL; }
+static void test_stream_reservation(void)
+{
+    unsigned char *a=calloc(1,1u<<20), *b=calloc(1,1u<<20);
+    Sprite spr={.pixels=a,.format=SPRITE_FORMAT_RAW,.w=512,.h=512,.bpp=32};
+    KeyedArray array={.data=(void *)&spr,.elem_size=sizeof(spr)};
+    SpriteSet set={.sprites=&array};
+    unsigned long long evictions=g_glrStreamEvictions;
+    assert(a && b && !g_glTexMemory);
+    g_glrStreamBudget=review_gpu_limit=1u<<20;
+    assert(Glr_StreamTexture(&set,0,&spr));
+    spr.pixels=b;
+    assert(Glr_StreamTexture(&set,0,&spr));
+    assert(g_glrStreamCount==1 && g_glrStreamEvictions==evictions+1);
+    Glr_StreamDropAll(1);free(g_glrStream);g_glrStream=NULL;g_glrStreamCapacity=0;
+    review_gpu_limit=g_glrStreamBudget=0;free(a);free(b);
+    puts("ok: stream cache evicts before a constrained GPU allocation");
+}
+#endif
+
 /* The old Vita streaming-sprite cache test was removed when that cache
  * ceased to exist in glrender.c. The remaining Vita regression above still
  * exercises the production program/uniform/sampler caches, texture uploads,
@@ -738,7 +766,11 @@ int main(void)
     assert(sizeof(void *)*8 == TEST_EXPECT_BITS);
 #endif
     printf("abi: %u-bit build\n",(unsigned)(sizeof(void *)*8));
-    install();test_sizes_uploads();test_targets_capture();test_failed_restore_detaches();test_programs_lifetime();
+    install();
+#ifndef TEST_GLES
+    test_stream_reservation();
+#endif
+    test_sizes_uploads();test_targets_capture();test_failed_restore_detaches();test_programs_lifetime();
 #ifdef TEST_VITA
     test_vita_render_cache();
 #endif

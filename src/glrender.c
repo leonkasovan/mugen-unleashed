@@ -1548,6 +1548,21 @@ static GlTex *Glr_StreamTexture(SpriteSet *set, int sprite, Sprite *spr)
         w = spr->w / step_x;
         h = spr->h / step_y;
     }
+    /* Port fix: reserve residency before asking the driver to allocate. */
+    {
+        size_t incoming;
+        size_t budget = Glr_StreamBudget();
+        size_t channels = spr->bpp <= 8 ? 1 : spr->bpp == 24 ? 3 : 4;
+        if (!GlImage_Size(w, h, channels, NULL, &incoming)) {
+            free(scaled);
+            return NULL;
+        }
+        while (g_glrStreamCount > 0 &&
+               (incoming > budget || g_glrStreamBytes > budget - incoming ||
+                g_glrStreamCount >= GLR_STREAM_MAX_ENTRIES)) {
+            Glr_StreamEvict();
+        }
+    }
     tex = GlTex_Create();
     if (tex == NULL) {
         free(scaled);

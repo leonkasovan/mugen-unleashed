@@ -598,7 +598,7 @@ fail:
  * software rasterizer draws from Sprite_GetPixels, which is the bounded pool
  * this policy feeds.
  */
-static int Sff_DecodeOnLoad(void)
+static int Sff_DecodeOnLoad(const Sff2SpriteNode *node)
 {
     static int eager = -1;
 
@@ -608,6 +608,19 @@ static int Sff_DecodeOnLoad(void)
         eager = (env != NULL && env[0] == '1' && env[1] == '\0') ? 1 : 0;
         MatchLog_Printf(SFF_LOG_INFO, "SFF v2 decode policy: %s\n",
                         eager ? "eager (original)" : "lazy (encoded source, textures on demand)");
+    }
+    /* Port fix: retain eager decoding for images that cannot fit the pool,
+     * including alignment, the block header and the end marker. This avoids
+     * silently dropping valid large images under the default lazy policy. */
+    if (!eager) {
+        size_t stride = ((size_t)node->depth + 7) / 8;
+        size_t bytes, capacity;
+        if (!g_spriteDecompBuffer || !node->w || !node->h || !stride ||
+            (size_t)node->w > (size_t)-1 / node->h / stride) return 1;
+        bytes = (size_t)node->w * node->h * stride;
+        capacity = g_spriteDecompBuffer->size;
+        if (capacity < 2 * sizeof(DecompBlock) + sizeof(void *) - 1 ||
+            bytes > capacity - 2 * sizeof(DecompBlock) - (sizeof(void *) - 1)) return 1;
     }
     return eager;
 }
@@ -812,7 +825,7 @@ SpriteSet *Sff2_Load(Stream *s, const Sff2Header *hdr, const int *select)
                  * image stays encoded and is decoded on demand, so loading a
                  * character does not allocate a texture per unused sprite. */
                 if (!Sprite_Init(SPRITE_INIT_COPY |
-                                 ((Sff_DecodeOnLoad() || (g_gfxFlags & 1) == 0) ? SPRITE_INIT_DECODE : 0),
+                                 ((Sff_DecodeOnLoad(node) || (g_gfxFlags & 1) == 0) ? SPRITE_INIT_DECODE : 0),
                                  &spr, node->format, buf, node->data_size,
                                  (short)node->w, (short)node->h, node->depth, node->x, node->y)) {
                     free(NULL);
@@ -822,7 +835,7 @@ SpriteSet *Sff2_Load(Stream *s, const Sff2Header *hdr, const int *select)
                 }
                 free(buf);
             } else {
-                unsigned int flags = (Sff_DecodeOnLoad() && (g_gfxFlags & 1)) ? SPRITE_INIT_DECODE : 0;
+                unsigned int flags = (Sff_DecodeOnLoad(node) && (g_gfxFlags & 1)) ? SPRITE_INIT_DECODE : 0;
                 unsigned int at;
                 if (!load_all) {
                     Stream_Seek(s, Sff_StreamPos(node->data_offset + hdr->ldata_offset, start), SEEK_SET);
