@@ -13,6 +13,7 @@
  */
 #include "mugen.h"
 #include <limits.h>
+#include <stdlib.h>
 
 #define SFF_LOG_INFO    7
 #define SFF_LOG_ERROR   3
@@ -576,6 +577,42 @@ fail:
 /* ---- SFF v2.x ---- */
 
 /*
+ * Port addition (docs/SFF_MEMORY_OPTIMIZATION_PLAN.md, phase P3): whether SFF v2
+ * images are decoded (and, with a GL renderer, uploaded as textures) at load
+ * time, as the original did, instead of staying encoded until first use.
+ *
+ * MEMORY: the original decoded every ldata image when g_gfxFlags had bit 1 set
+ * (desktop GL does), which allocates a full decoded buffer and a GL texture per
+ * sprite of the file -- 25 to 90 MB of textures for one Hyper DBZ character
+ * whose encoded SFF is 2 to 23 MB -- whether or not the animation ever shows
+ * it. Lazy keeps the encoded span (already resident in SpriteSet.data) and
+ * resolves an image on demand into the bounded decompression pool, so the
+ * residency follows what the fight actually draws.
+ *
+ * MUGEN_SFF_EAGER=1 restores the original policy, which is the rollback switch
+ * the plan requires until every platform has native evidence.
+ *
+ * The trigger is still g_gfxFlags bit 1, so builds that never set it (a plain
+ * software renderer, and GLES, whose Gl_Init does not set it) keep their old
+ * lazy behaviour, while OpenGLScreen and OpenGL change over. In OpenGLScreen the
+ * software rasterizer draws from Sprite_GetPixels, which is the bounded pool
+ * this policy feeds.
+ */
+static int Sff_DecodeOnLoad(void)
+{
+    static int eager = -1;
+
+    if (eager < 0) {
+        const char *env = getenv("MUGEN_SFF_EAGER");
+
+        eager = (env != NULL && env[0] == '1' && env[1] == '\0') ? 1 : 0;
+        MatchLog_Printf(SFF_LOG_INFO, "SFF v2 decode policy: %s\n",
+                        eager ? "eager (original)" : "lazy (encoded source, textures on demand)");
+    }
+    return eager;
+}
+
+/*
  * Links spr to the palette of node index pal_index: the palette that went
  * into slot pal_index of the palette table (palettes fill it in file order).
  */
@@ -686,6 +723,8 @@ SpriteSet *Sff2_Load(Stream *s, const Sff2Header *hdr, const int *select)
     }
     data = malloc(data_size);
     set->data = data;
+    /* Port addition (SFF memory plan, P1): let SpriteSet_MemUse report it. */
+    SpriteSet_SetDataSourceSize(set, data_size);
     if (data == NULL) {
         goto fail_nodes;
     }
@@ -769,7 +808,12 @@ SpriteSet *Sff2_Load(Stream *s, const Sff2Header *hdr, const int *select)
                     free(buf);
                     goto fail_sprites;
                 }
-                if (!Sprite_Init(SPRITE_INIT_COPY | SPRITE_INIT_DECODE, &spr, node->format, buf, node->data_size,
+                /* Port addition (SFF memory plan P3): on a GL build the tdata
+                 * image stays encoded and is decoded on demand, so loading a
+                 * character does not allocate a texture per unused sprite. */
+                if (!Sprite_Init(SPRITE_INIT_COPY |
+                                 ((Sff_DecodeOnLoad() || (g_gfxFlags & 1) == 0) ? SPRITE_INIT_DECODE : 0),
+                                 &spr, node->format, buf, node->data_size,
                                  (short)node->w, (short)node->h, node->depth, node->x, node->y)) {
                     free(NULL);
                     SpriteSet_Free(set);
@@ -778,7 +822,7 @@ SpriteSet *Sff2_Load(Stream *s, const Sff2Header *hdr, const int *select)
                 }
                 free(buf);
             } else {
-                unsigned int flags = (g_gfxFlags & 1) ? SPRITE_INIT_DECODE : 0;
+                unsigned int flags = (Sff_DecodeOnLoad() && (g_gfxFlags & 1)) ? SPRITE_INIT_DECODE : 0;
                 unsigned int at;
                 if (!load_all) {
                     Stream_Seek(s, Sff_StreamPos(node->data_offset + hdr->ldata_offset, start), SEEK_SET);

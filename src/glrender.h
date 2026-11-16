@@ -56,4 +56,11 @@ typedef void (__stdcall *GlFramebufferTexture2DFn)(unsigned int target, unsigned
                                                     unsigned int texture_target, unsigned int texture, int level);
 typedef void (__stdcall *GlRenderbufferStorageFn)(unsigned int target, unsigned int internal_format, int w, int h);
 
+/*
+ * Port addition (SFF memory plan, P3): drops the streaming sprite textures
+ * whose keys are spans inside a sprite set that is being freed. `struct
+ * SpriteSet *` because this header is included before sprite.h in some units.
+ */
+void Gl_OnSpriteSetFreed(struct SpriteSet *set);
+
 #endif /* MUGEN_GLRENDER_H */

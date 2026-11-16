@@ -395,14 +395,22 @@ int Png_Decode(const void *data, int size, void *dest)
 {
     /* Fix: the prefix is not part of the PNG byte stream. */
     Stream *s;
+    int decode;
     if (size < PNG_SPRITE_PREFIX) return 0;
     s = Stream_OpenMemory((unsigned char *)data + PNG_SPRITE_PREFIX, size - PNG_SPRITE_PREFIX);
 
     if (s == NULL) {
         return 0;
     }
-    Png_ReadStream(s, dest);
-    return Stream_Close(s);
+    decode = Png_ReadStream(s, dest);
+    /*
+     * Fix (port change, SFF memory plan C2): the image read result is what says
+     * whether dest holds an image. Returning only Stream_Close reported success
+     * for a truncated or undecodable PNG, so the lazy sprite cache published a
+     * half-decoded entry and retried nothing. The eager path ignores this value,
+     * so its behaviour is unchanged.
+     */
+    return decode == 0 && Stream_Close(s) != 0;
 }
 
 /* ---- mugen-unleashed: RGBA decoding for the textures of 3D models (model.c) ---- */

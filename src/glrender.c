@@ -38,6 +38,7 @@
 #include "vita_diagnostics.h"
 #include "vita_vertex_interface.h"
 #endif
+#include <stdlib.h>
 #include "shader_src.h"
 #include "gl_size.h"
 #include "batchprof.h"
@@ -46,6 +47,10 @@ static void Glr_ForgetFormat(const GlTex *tex);
 static int *Glr_FormatSlot(const GlTex *tex);
 static void Glr_FreeProgram(GlProgram *prog);
 static int Glr_LogObject(unsigned int obj, int is_shader);
+/* Streaming sprite texture cache (defined with Gl_DrawSprite below). */
+static size_t Glr_StreamBudget(void);
+static void Glr_StreamDropAll(int delete_gl);
+static void Glr_StreamLog(void);
 static unsigned int g_attachedTexture, g_attachedDepth;
 
 /* Port fix: reject unsafe payloads and impossible storage before touching GL. */
@@ -894,6 +899,9 @@ int Gl_Deinit(void)
     Glr_FreeSysTex(g_glSysTex[1]);
     Glr_FreeSysTex(g_glSysTex[0]);
     g_glSysTex[0] = g_glSysTex[1] = NULL;
+    /* Port addition (SFF memory plan, P3): cached stream textures belong to
+     * this context. */
+    Glr_StreamDropAll(1);
     if (g_glFramebuffer != 0) {
         g_glewBindFramebufferEXT(GLR_FRAMEBUFFER, 0);
         g_glewDeleteFramebuffersEXT(1, &g_glFramebuffer);
@@ -915,6 +923,7 @@ int Gl_Deinit(void)
 #endif
     g_glInitialized = 0;
     Glr_FreePremultiply();
+    Glr_StreamLog();
     MatchLog_Printf(7,
                     "GL draw statistics:\nSprite Texture: %llu\nSprite Stream : %llu\nPal Texture   : %llu\nPal "
                     "Stream    : %llu\nTex compress  : %llu\nMax used tex mem: %lluk\n",
@@ -1246,11 +1255,338 @@ void Gl_SetPalFxSuppressed(int on)
 }
 #endif
 
+/* ---- bounded streaming texture cache (SFF memory plan, P3) ---- */
+
 /*
- * 0x0047B830: draws a sprite with the draw parameters: the sprite (uploaded
- * to a system texture unless it is a texture) and its palette (likewise) go
- * through the programs, transformed by the modelview built from dp, with
- * blending set from dp.
+ * Sprites that are not SPRITE_FORMAT_TEXTURE used to be uploaded into the one
+ * system scratch texture before every draw. That was cheap while the SFF loader
+ * decoded every image at load time, because such sprites were rare; with the
+ * lazy policy (Sff_DecodeOnLoad) most images arrive here still encoded, and the
+ * scratch path would decode and upload the same image again on every draw --
+ * the per-frame re-upload that once cost the GLES path 300 ms a frame before
+ * its own streaming cache existed (gles_render.c).
+ *
+ * Each distinct image therefore keeps a texture of its own while it is in use,
+ * bounded by bytes rather than by slot count: eight slots can hold eight very
+ * large images. The key is the image's own identity -- the encoded span of a
+ * compressed sprite (spr->pixels, which lives as long as the set's data block)
+ * or the pixel buffer of anything else -- plus format and extent. It is
+ * deliberately NOT the decoded address from g_spriteDecompBuffer: that pool
+ * recycles addresses (DecompBuffer_Alloc), so two different images can share
+ * one, and a cache keyed on it hands back the wrong pixels (plan C1).
+ *
+ * Entries belong to the set owning their source, but tracking owners buys
+ * little: character and stage changes are rare, so Gl_OnSpriteSetFreed drops
+ * the cache whole. MUGEN_SFFTEXMB sets the budget in MiB (default 64).
+ */
+#define GLR_STREAM_MAX_ENTRIES 1024
+
+typedef struct GlrStreamEntry {
+    const void *source;
+    int format;
+    int w;
+    int h;
+    int bpp;
+    GlTex *tex;
+    unsigned long tick;
+} GlrStreamEntry;
+
+static GlrStreamEntry *g_glrStream;
+static int g_glrStreamCount;
+static int g_glrStreamCapacity;
+static unsigned long g_glrStreamClock;
+static size_t g_glrStreamBytes;
+static size_t g_glrStreamPeak;
+static size_t g_glrStreamBudget;
+static unsigned long long g_glrStreamHits;
+static unsigned long long g_glrStreamMisses;
+static unsigned long long g_glrStreamEvictions;
+
+/* Budget in bytes: MUGEN_SFFTEXMB MiB, or 64 MiB. */
+static size_t Glr_StreamBudget(void)
+{
+    if (g_glrStreamBudget == 0) {
+        const char *env = getenv("MUGEN_SFFTEXMB");
+        long mb = env != NULL ? strtol(env, NULL, 10) : 0;
+
+        if (mb < 1) {
+            mb = 64;
+        }
+        g_glrStreamBudget = (size_t)mb * 1024u * 1024u;
+    }
+    return g_glrStreamBudget;
+}
+
+/* Frees one entry's texture: its bytes leave the cache and g_glTexMemory. */
+static void Glr_StreamRelease(GlrStreamEntry *entry)
+{
+    if (entry->tex == NULL) {
+        return;
+    }
+    if (entry->tex->size <= g_glrStreamBytes) {
+        g_glrStreamBytes -= entry->tex->size;
+    } else {
+        g_glrStreamBytes = 0;
+    }
+    GlTex_Free(entry->tex);
+    entry->tex = NULL;
+}
+
+/* Removes entry index, moving the last one into its place. */
+static void Glr_StreamDrop(int index)
+{
+    Glr_StreamRelease(&g_glrStream[index]);
+    g_glrStream[index] = g_glrStream[--g_glrStreamCount];
+}
+
+/*
+ * Frees every cached entry. delete_gl 0 drops the GL names without calling into
+ * a context that may already be gone.
+ */
+static void Glr_StreamDropAll(int delete_gl)
+{
+    int i;
+
+    for (i = 0; i < g_glrStreamCount; i++) {
+        if (!delete_gl && g_glrStream[i].tex != NULL) {
+            g_glrStream[i].tex->id = 0;
+        }
+        Glr_StreamRelease(&g_glrStream[i]);
+    }
+    g_glrStreamCount = 0;
+    g_glrStreamBytes = 0;
+}
+
+/* Whether one of set's own sprites stores `source` as its pixel buffer. */
+static int Glr_SetOwnsPixel(SpriteSet *set, const void *source)
+{
+    KeyedArray *sprites = set->sprites;
+    int i;
+
+    if (sprites == NULL || sprites->data == NULL) {
+        return 0;
+    }
+    for (i = 0; i < sprites->count; i++) {
+        const Sprite *spr = (const Sprite *)(sprites->data + sprites->elem_size * i);
+
+        if (spr->owns_pixels && spr->pixels == source) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * Port addition (SFF memory plan, P3): drops the entries whose key is a span of
+ * this set's data block or a buffer one of its sprites owns. Everything else
+ * stays -- in particular the cache survives the temporary render-target sets
+ * Sprite_DrawGL creates for scaled sprites, which are freed every frame.
+ */
+void Gl_OnSpriteSetFreed(SpriteSet *set)
+{
+    const unsigned char *base = set != NULL ? (const unsigned char *)set->data : NULL;
+    size_t bytes = SpriteSet_GetDataSourceSize(set);
+    int i;
+
+    if (!g_glInitialized) {
+        /* The context is gone: forget the entries without GL deletes. */
+        Glr_StreamDropAll(0);
+        return;
+    }
+    for (i = g_glrStreamCount - 1; i >= 0; i--) {
+        const unsigned char *source = g_glrStream[i].source;
+        int drop = 0;
+
+        if (base != NULL && (size_t)source >= (size_t)base &&
+            (size_t)source < (size_t)base + bytes) {
+            drop = 1;
+        } else if (set != NULL && set->shared == NULL && Glr_SetOwnsPixel(set, source)) {
+            drop = 1;
+        }
+        if (drop) {
+            Glr_StreamDrop(i);
+        }
+    }
+}
+
+static GlrStreamEntry *Glr_StreamFind(const void *source, int format, int w, int h, int bpp)
+{
+    int i;
+
+    for (i = 0; i < g_glrStreamCount; i++) {
+        GlrStreamEntry *entry = &g_glrStream[i];
+
+        if (SpriteTexKey_Matches(entry->source, entry->format, entry->w, entry->h, entry->bpp,
+                                 source, format, w, h, bpp)) {
+            entry->tick = ++g_glrStreamClock;
+            return entry;
+        }
+    }
+    return NULL;
+}
+
+/* Evicts the least recently used entry. */
+static void Glr_StreamEvict(void)
+{
+    int i;
+    int oldest = -1;
+    unsigned long tick = 0;
+
+    for (i = 0; i < g_glrStreamCount; i++) {
+        if (oldest < 0 || g_glrStream[i].tick < tick) {
+            oldest = i;
+            tick = g_glrStream[i].tick;
+        }
+    }
+    if (oldest >= 0) {
+        Glr_StreamDrop(oldest);
+        g_glrStreamEvictions++;
+    }
+}
+
+/*
+ * Records tex for source, evicting least recently used entries until the budget
+ * can hold it. NULL when the record cannot be stored; the caller then frees tex
+ * rather than leaking it.
+ */
+static GlrStreamEntry *Glr_StreamAdd(const void *source, int format, int w, int h, int bpp, GlTex *tex)
+{
+    size_t budget = Glr_StreamBudget();
+    size_t bytes = tex->size;
+    GlrStreamEntry *entry;
+
+    /* One image larger than the whole budget is still drawn; it is evicted
+     * before any other entry next time. */
+    while (g_glrStreamCount > 0 && g_glrStreamBytes + bytes > budget) {
+        Glr_StreamEvict();
+    }
+    if (g_glrStreamCount == g_glrStreamCapacity) {
+        int capacity = g_glrStreamCapacity == 0 ? 64 : g_glrStreamCapacity * 2;
+        GlrStreamEntry *grown;
+
+        if (capacity > GLR_STREAM_MAX_ENTRIES) {
+            capacity = GLR_STREAM_MAX_ENTRIES;
+        }
+        if (capacity <= g_glrStreamCapacity) {
+            return NULL;
+        }
+        grown = realloc(g_glrStream, (size_t)capacity * sizeof(*grown));
+        if (grown == NULL) {
+            return NULL;
+        }
+        g_glrStream = grown;
+        g_glrStreamCapacity = capacity;
+    }
+    entry = &g_glrStream[g_glrStreamCount++];
+    entry->source = source;
+    entry->format = format;
+    entry->w = w;
+    entry->h = h;
+    entry->bpp = bpp;
+    entry->tex = tex;
+    entry->tick = ++g_glrStreamClock;
+    g_glrStreamBytes += bytes;
+    if (g_glrStreamBytes > g_glrStreamPeak) {
+        g_glrStreamPeak = g_glrStreamBytes;
+    }
+    return entry;
+}
+
+/*
+ * The texture holding sprite `sprite` of set, uploading it on first use and
+ * applying Sprite_Init's downscale recipe when it does not fit the driver's
+ * limit. NULL when the image cannot be decoded, uploaded or recorded.
+ */
+static GlTex *Glr_StreamTexture(SpriteSet *set, int sprite, Sprite *spr)
+{
+    GlrStreamEntry *entry;
+    GlTex *tex;
+    void *pixels;
+    void *upload;
+    void *scaled = NULL;
+    int step_x = 1;
+    int step_y = 1;
+    int w = spr->w;
+    int h = spr->h;
+    int max_size;
+
+    entry = Glr_StreamFind(spr->pixels, spr->format, spr->w, spr->h, spr->bpp);
+    if (entry != NULL) {
+        g_glrStreamHits++;
+        return entry->tex;
+    }
+    g_glrStreamMisses++;
+    pixels = Sprite_GetPixels(set, sprite);
+    if (pixels == NULL) {
+        return NULL;
+    }
+    upload = pixels;
+    max_size = g_renderMode == RENDER_MODE_GL ? g_glMaxTextureSize : SPRITE_MAX_TEXTURE_SIZE;
+    if (max_size > 0 && (w > max_size || h > max_size)) {
+        if (w > max_size) {
+            step_x = Sprite_TextureStep(w, max_size);
+        }
+        if (h > max_size) {
+            step_y = Sprite_TextureStep(h, max_size);
+        }
+        if (step_x < 1) {
+            step_x = 1;
+        }
+        if (step_y < 1) {
+            step_y = 1;
+        }
+        scaled = Sprite_Downscale(pixels, w, h, step_x, step_y, spr->bpp);
+        if (scaled == NULL) {
+            return NULL;
+        }
+        upload = scaled;
+        /* Same effect Sprite_Init gives a sprite it downscales at load time.
+         * An assignment, not a multiply, keeps this correct when the image is
+         * re-uploaded after an eviction. */
+        spr->scale_x = (float)step_x;
+        spr->scale_y = (float)step_y;
+        w = spr->w / step_x;
+        h = spr->h / step_y;
+    }
+    tex = GlTex_Create();
+    if (tex == NULL) {
+        free(scaled);
+        return NULL;
+    }
+    if (!GlTex_Upload2D(h, spr->bpp, tex, upload, w)) {
+        free(scaled);
+        GlTex_Free(tex);
+        return NULL;
+    }
+    free(scaled);
+    if (Glr_StreamAdd(spr->pixels, spr->format, spr->w, spr->h, spr->bpp, tex) == NULL) {
+        GlTex_Free(tex);
+        return NULL;
+    }
+    return tex;
+}
+
+/*
+ * Reports the streaming cache at shutdown. Opt-in (MUGEN_SFFTEXLOG=1) because
+ * a default mugen.log must stay comparable with the original's.
+ */
+static void Glr_StreamLog(void)
+{
+    const char *env = getenv("MUGEN_SFFTEXLOG");
+
+    if (env == NULL || env[0] != '1' || (g_glrStreamHits == 0 && g_glrStreamMisses == 0)) {
+        return;
+    }
+    Log_Printf("SFF stream textures: hit %llu miss %llu evict %llu peak %luk budget %luk\n",
+               g_glrStreamHits, g_glrStreamMisses, g_glrStreamEvictions,
+               (unsigned long)(g_glrStreamPeak >> 10), (unsigned long)(Glr_StreamBudget() >> 10));
+}
+
+/*
+ * 0x0047B830: draws a sprite with the draw parameters: the sprite (a texture,
+ * or uploaded into the streaming cache) and its palette (likewise) go through
+ * the programs, transformed by the modelview built from dp, with blending set
+ * from dp.
  */
 void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
 {
@@ -1279,9 +1615,18 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
         g_glStatSpriteTexture++;
         tex = spr->pixels;
     } else {
-        void *pixels = Sprite_GetPixels(set, sprite);
-        if (pixels == NULL || !GlTex_Upload2D(h, spr->bpp, tex, pixels, w)) {
-            return;
+        GlTex *streamed = Glr_StreamTexture(set, sprite, spr);
+
+        if (streamed != NULL) {
+            tex = streamed;
+        } else {
+            /* Refused only when the record cannot be stored or the upload
+             * failed; the scratch texture still gets the sprite drawn. */
+            void *pixels = Sprite_GetPixels(set, sprite);
+
+            if (pixels == NULL || !GlTex_Upload2D(h, spr->bpp, tex, pixels, w)) {
+                return;
+            }
         }
         g_glStatSpriteStream++;
     }

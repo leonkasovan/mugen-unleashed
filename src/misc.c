@@ -6,6 +6,7 @@
  * callback.
  */
 #include "mugen.h"
+#include <limits.h>
 
 /* DecompBlock and DecompRequest are defined in spritecodec.h. */
 
@@ -32,26 +33,69 @@ void SpriteCache_Remove(void *data)
     }
 }
 
+/* Little-endian decoded-size prefix of compressed sprite data. */
+static unsigned int SpriteCache_DeclaredSize(const void *data)
+{
+    const unsigned char *p = data;
+
+    return (unsigned int)p[0] | ((unsigned int)p[1] << 8) |
+           ((unsigned int)p[2] << 16) | ((unsigned int)p[3] << 24);
+}
+
+/* Whether the decompression pool already holds the decoded block of `data`. */
+static int SpriteCache_HasBlock(const void *data)
+{
+    DecompBuffer *buf = g_spriteDecompBuffer;
+    DecompBlock *block;
+
+    if (buf == NULL) {
+        return 0;
+    }
+    block = (DecompBlock *)buf->data;
+    while (block->size != 0) {
+        if (block->key == data) {
+            return 1;
+        }
+        block = (DecompBlock *)((char *)block + block->size);
+    }
+    return 0;
+}
+
 /*
- * 0x00477EF0: the decoded pixels of the compressed sprite data `data`
- * (SFF v2 compression `format`, size bytes) in *out: the cached copy, or a
- * new block decoded with g_spriteDecoders. Returns 0 without a cache, when
- * no block can be had or for an unknown format (the new block stays
- * allocated then).
+ * Port addition (SFF memory plan, P0/C2): the lazy decoder path with the
+ * checks the eager one in Sprite_Init already has.
+ *
+ * `expected` is the decoded extent the caller computed from the sprite's own
+ * width, height and bpp (0: trust the input's prefix). The whole encoded span,
+ * the codec and the declared output length are checked before any cache space
+ * is taken, so a malformed image never publishes a half-decoded block that the
+ * renderer would then upload. A failed PNG decode frees its block again for the
+ * same reason (Png_Decode reports the image read result).
  */
-int SpriteCache_Get(void *data, int format, int size, void **out)
+int SpriteCache_Acquire(void *data, int format, size_t size, size_t expected, void **out)
 {
     DecompRequest key;
+    unsigned int declared;
     int hit;
     void *pixels;
 
-    if (g_spriteDecompBuffer == NULL) {
+    if (g_spriteDecompBuffer == NULL || data == NULL || out == NULL || size < SPRITE_CODEC_PREFIX) {
+        return 0;
+    }
+    declared = SpriteCache_DeclaredSize(data);
+    if (expected == 0) {
+        expected = declared;
+    }
+    /* Walk the encoded span only when it is not already decoded: a pool hit is
+     * an image that validated and decoded once, and re-walking every span on
+     * every draw would put the check in the frame budget. */
+    if (!SpriteCache_HasBlock(data) && !Sprite_ValidateCompressed(data, size, format, expected)) {
         return 0;
     }
     key.pool = g_spriteDecompBuffer;
-    key.size = *(const unsigned int *)data;
+    key.size = declared;
     key.key = data;
-    key.cost = *(const int *)data;
+    key.cost = (int)(size > (size_t)INT_MAX ? INT_MAX : size);
     /* The pointer comes back at full width; "hit" says whether it is already
      * decoded. (It used to be packed into the pointer's upper 32 bits -- see
      * DecompBuffer_Get.) */
@@ -63,12 +107,42 @@ int SpriteCache_Get(void *data, int format, int size, void **out)
         *out = pixels;
         return 1;
     }
-    if ((unsigned int)(format - 2) > 10) {
+    if ((unsigned int)(format - SPRITE_FORMAT_DECODE_MIN) >
+        (unsigned int)(SPRITE_FORMAT_DECODE_MAX - SPRITE_FORMAT_DECODE_MIN) ||
+        g_spriteDecoders[format] == NULL) {
+        SpriteCache_Remove(data);
         return 0;
     }
-    g_spriteDecoders[format](data, size, pixels);
+    if (format >= 10 && format <= 12) {
+        if (g_spriteDecoders[format](data, size, pixels) == 0) {
+            SpriteCache_Remove(data);
+            return 0;
+        }
+    } else {
+        /* The legacy codecs' return value is not a status (Rle8_Decode returns
+         * 0, the LZ5/RLE5 ones return the bytes written); the validator above
+         * walked the whole span, which is what establishes that they succeed. */
+        g_spriteDecoders[format](data, size, pixels);
+    }
     *out = pixels;
     return 1;
+}
+
+/*
+ * 0x00477EF0: the decoded pixels of the compressed sprite data `data`
+ * (SFF v2 compression `format`, size bytes) in *out: the cached copy, or a
+ * new block decoded with g_spriteDecoders. Returns 0 without a cache, when
+ * no block can be had or for an unknown format.
+ *
+ * Fix (port change): the checks of SpriteCache_Acquire now apply here too, so
+ * corrupt input is rejected instead of being decoded into the pool.
+ */
+int SpriteCache_Get(void *data, int format, int size, void **out)
+{
+    if (data == NULL || size < SPRITE_CODEC_PREFIX) {
+        return 0;
+    }
+    return SpriteCache_Acquire(data, format, (size_t)size, 0, out);
 }
 
 /*

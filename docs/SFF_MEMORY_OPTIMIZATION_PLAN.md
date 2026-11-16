@@ -1,6 +1,8 @@
 # SFF loading and GPU residency: memory optimization plan
 
-Status: researched proposal; the loader/cache changes below are **not implemented**.
+Status: **partially implemented** — P0, P1 and the desktop half of P3 are in the
+loader/renderer (see "Implementation record" at the end). P2, P4-P7 and the
+per-platform qualification they require are still open.
 Source baseline: `sdl2` at `5ef86f3cd9652bc99c3bb06a3227355805791ada`.
 Research date: 2026-11-16. Applies to Windows x86/x64, Linux x64/arm64,
 Android and PS Vita. Preserve the configured resolution; qualify handhelds at
@@ -542,4 +544,70 @@ External primary references (recommendations above are project-specific inferenc
 - [Khronos OpenGL ES specification, texture image specification section](https://registry.khronos.org/OpenGL/specs/es/2.0/es_full_spec_2.0.pdf): client pixel data is copied into GL-managed image storage; distinguish upload source lifetime from application reconstruction needs.
 - [Android renderer lifecycle reference](https://developer.android.com/reference/android/opengl/GLSurfaceView.Renderer#onSurfaceCreated(android.opengl.GL10,%20android.opengl.EGLConfig)): resources associated with a lost EGL context need reconstruction. This SDL application uses its own lifecycle hooks; the Java callback is not a proposed integration point.
 - [SDL2 development FAQ](https://wiki.libsdl.org/SDL2/FAQDevelopment): video/render ownership constrains worker design; use CPU-only work and renderer-thread uploads here.
-- [libpng manual](https://www.libpng.org/pub/png/libpng-1.2.5-manual.html) and the pinned `third_party/libpng-1.2.38/pngread.c`: full-image/row reading and interlace handling inform the optional staging investigation. Validate against the actually linked libpng version on each target; the repository and distro builds do not all use the same version.
+- [libpng manual](https://www.libpng.org/pub/png/libpng-1.2.5-manual.html) and the pinned `third_party/libpng-1.2.38/pngread.c`: full-image/row reading and interlace handling inform the optional staging investigation. Validate against the actually linked libpng  version on each target; the repository and distro builds do not all use the same version.
+
+## 15. Implementation record
+
+Implemented on 2026-11-16. Scope: the parts of P0 and P1, and the desktop half
+of P3, that can be built and measured on Windows x86 without new platform work.
+
+### What changed
+
+| Plan item | Change | File |
+|---|---|---|
+| C1 identity | The desktop and GLES stream texture caches key an entry on the image's own source span, codec and extent (`SpriteTexKey_Matches`), never on the decoded pool address. Linked sprites therefore share one texture. | `src/sprite.c`, `src/glrender.c`, `src/gles_render.c` |
+| C2 validation | `SpriteCache_Acquire` checks the encoded span, codec and declared extent before taking pool space, and only when the image is not resident yet; `Sprite_GetPixels` passes the extent derived from the sprite's own dimensions. `Png_Decode` now returns the image read result, so a failed PNG is evicted rather than published. | `src/misc.c`, `src/sprite.c`, `src/pngio.c` |
+| P1 accounting | `SpriteSet_MemUse` includes the encoded `SpriteSet.data` block (tracked in a sidecar keyed by the set allocation) and each owned row table. | `src/sprite.c`, `src/sff.c` |
+| P3 CPU residency | SFF v2 ldata and tdata images stay encoded at load in a build whose `Gl_Init` set `g_gfxFlags` bit 1. `MUGEN_SFF_EAGER=1` restores the original decode-at-load policy. | `src/sff.c` |
+| P3 GPU residency | A byte-budgeted LRU stream texture cache serves sprites that are not `SPRITE_FORMAT_TEXTURE`, so a lazy image is decoded and uploaded once instead of per draw. `MUGEN_SFFTEXMB` sets the budget (default 64 MiB). Entries are invalidated per freed set, not globally, because `Sprite_DrawGL` frees a temporary render-target set every frame while paletted sprites are scaled. `MUGEN_SFFTEXLOG=1` prints hit/miss/eviction/peak counters at shutdown; off by default so a normal `mugen.log` stays comparable. | `src/glrender.c` |
+
+SFF v1.01 (PCX) loading is unchanged and still eager.
+
+### Measured result (real game)
+
+`Hyper DBZ 5.0d`, Windows x86, `-nosound -p1 chars/GokuZ2/GokuZ2.def` (SFF 1.01)
+`-p2 chars/VegetaZ2/Normal_VegetaZ2.def` (SFF 2.00) `-p1.ai 1 -p2.ai 1 -rounds 2`.
+Peak working set sampled every 200 ms with `tasklist`. Same binary on both
+sides; only `MUGEN_SFF_EAGER` differs, and the pairs alternate.
+
+| Run | Eager (original policy) | Lazy (new policy) |
+|---|---|---|
+| 1 | 183.8 MB | 152.8 MB |
+| 2 | 180.4 MB | 151.1 MB |
+| 3 | 178.8 MB | 150.1 MB |
+| mean | 181.0 MB | 151.3 MB |
+
+**29.7 MB (16.4%) less peak working set on average.** The difference matches the
+assets: `armor_vegeta.sff` is 7.0 MB encoded and 30.2 MB decoded (2310 unique
+images, 196 linked), and that decoded set used to be allocated for every sprite
+at load. The largest single image in the character set is 3.98 MB, inside the
+16 MB `SpriteDecompressionBufferSize` this game configures, so no image exceeds
+the decoded pool.
+
+Fidelity: both sides reach "Successful program termination".
+`tools/compare_logs.py` reports one fragment difference — an extra "Resetting
+round" in the eager run, i.e. round timing inside the sampling window — and no
+difference in sprite, palette or decode lines. Frame cadence is unchanged at
+60.1 fps on both sides.
+
+### Not verified, and why
+
+- **Desktop GL stream cache.** The test machine cannot create a GL context at
+  all: `RenderMode = OpenGL` fails at start-up (`trying 640x480x32 mode
+  0x0...failed`), which is why this game ships `RenderMode = OpenGLScreen`
+  (render mode 1, software rasterizer feeding a GL screen quad). The lazy path
+  was therefore exercised through `Sprite_GetPixels` by the software drawers,
+  not through `Gl_DrawSprite`; the cache compiles and links but has no runtime
+  evidence yet. Criterion 2 of section 12 (zero decodes/uploads for a resident
+  image) still needs a GL-capable machine.
+- **GLES key fix** (`src/gles_render.c`) is compiled only in a GLES target
+  (Android, Linux arm64, Vita). No device was run.
+- **Oversized admission (section 6)** is not implemented: an image whose decoded
+  extent exceeds the whole pool still yields no pixels instead of a transient
+  lease. Hyper DBZ's largest image fits; a game with a sprite larger than its
+  decompression buffer would draw that sprite blank where the eager path drew
+  it.
+- P2 (independently owned encoded sources and detached palettes), P4
+  (source-based context recovery instead of decoded GLES backings), P5 (v1/PCX
+  lazy loading, file-backed sources), P6 (warming) and P7 (per-platform rollout)
+  are untouched.

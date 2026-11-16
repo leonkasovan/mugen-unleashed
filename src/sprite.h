@@ -68,4 +68,29 @@ typedef int (__cdecl *SpriteDecodeFn)(const void *data, size_t size, void *out);
 /* Port fix: check compressed input and output bounds before legacy decoding. */
 int Sprite_ValidateCompressed(const void *data, size_t size, int format, size_t expected);
 
+/* ---- port additions (docs/SFF_MEMORY_OPTIMIZATION_PLAN.md) ---- */
+
+/*
+ * Lazy decode with the eager path's validation (misc.c): *out is the decoded
+ * pixels in the shared pool, or 0 when the encoded data is malformed. `expected`
+ * is the decoded extent from the sprite's own dimensions (0: the input's
+ * declared size).
+ */
+int SpriteCache_Acquire(void *data, int format, size_t size, size_t expected, void **out);
+
+/* Downscale factor for an image side that must fit max_size (sprite.c). */
+int Sprite_TextureStep(int size, int max_size);
+
+/*
+ * Identity of an uploaded image: its source span, codec and extent. The GL
+ * streaming caches key on this, never on a decoded pool address, which
+ * DecompBuffer_Alloc recycles between images.
+ */
+int SpriteTexKey_Matches(const void *source_a, int format_a, int w_a, int h_a, int bpp_a,
+                         const void *source_b, int format_b, int w_b, int h_b, int bpp_b);
+
+/* Size of the encoded block SpriteSet.data; the original struct has no field for it. */
+void SpriteSet_SetDataSourceSize(const SpriteSet *set, size_t bytes);
+size_t SpriteSet_GetDataSourceSize(const SpriteSet *set);
+
 #endif /* MUGEN_SPRITE_H */

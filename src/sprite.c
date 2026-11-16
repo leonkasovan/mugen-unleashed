@@ -6,8 +6,11 @@
  * points, which dispatch to the OpenGL renderer or to the software one.
  */
 #include "mugen.h"
+#include <limits.h>
 #ifdef MUGEN_GLES
 #include "gles_render.h"
+#elif !defined(ANDROID_PORT)
+#include "glrender.h"
 #endif
 
 #define SPRITE_LOG_ERROR    1
@@ -38,8 +41,11 @@ static unsigned int GlTex_Size(const void *tex)
 /*
  * Downscale factor that makes a side of size pixels fit max_size: the next
  * power of two of size, divided by max_size.
+ *
+ * Port addition: the GL streaming cache (glrender.c) applies this same recipe
+ * to an image it downscales on first use, so the two must agree.
  */
-static int Sprite_TextureStep(int size, int max_size)
+int Sprite_TextureStep(int size, int max_size)
 {
     unsigned int v = (unsigned int)size - 1;
 
@@ -52,6 +58,88 @@ static int Sprite_TextureStep(int size, int max_size)
         v++;
     }
     return (int)(v / (unsigned int)max_size);
+}
+
+/*
+ * Port addition (SFF memory plan, P0/C1): whether two GL cache records describe
+ * the same image. Kept in one place so the desktop and GLES streaming caches
+ * cannot drift apart on the point that matters: the identity is the source
+ * span and the decode format, not the address the decoder happened to use.
+ */
+int SpriteTexKey_Matches(const void *source_a, int format_a, int w_a, int h_a, int bpp_a,
+                         const void *source_b, int format_b, int w_b, int h_b, int bpp_b)
+{
+    return source_a == source_b && format_a == format_b &&
+           w_a == w_b && h_a == h_b && bpp_a == bpp_b;
+}
+
+/*
+ * Port addition (SFF memory plan, P1/C3): the size of a set's encoded data
+ * block. SpriteSet has no field for it, and SpriteSet_MemUse left it out, so
+ * the log under-reported every SFF v2 set by its whole ldata size. The table is
+ * keyed by the set's own allocation, which never moves (unlike the sprite
+ * array, which KeyedArray_Grow reallocates). SpriteSet_Free drops the entry.
+ */
+typedef struct SpriteSetDataSize {
+    const SpriteSet *set;
+    size_t bytes;
+} SpriteSetDataSize;
+
+static SpriteSetDataSize *g_setDataSizes;
+static int g_setDataSizeCount;
+static int g_setDataSizeCapacity;
+
+void SpriteSet_SetDataSourceSize(const SpriteSet *set, size_t bytes)
+{
+    int i;
+
+    if (set == NULL) {
+        return;
+    }
+    for (i = 0; i < g_setDataSizeCount; i++) {
+        if (g_setDataSizes[i].set == set) {
+            g_setDataSizes[i].bytes = bytes;
+            return;
+        }
+    }
+    if (g_setDataSizeCount == g_setDataSizeCapacity) {
+        int capacity = g_setDataSizeCapacity == 0 ? 32 : g_setDataSizeCapacity * 2;
+        SpriteSetDataSize *grown = realloc(g_setDataSizes, (size_t)capacity * sizeof(*grown));
+
+        if (grown == NULL) {
+            return;
+        }
+        g_setDataSizes = grown;
+        g_setDataSizeCapacity = capacity;
+    }
+    g_setDataSizes[g_setDataSizeCount].set = set;
+    g_setDataSizes[g_setDataSizeCount].bytes = bytes;
+    g_setDataSizeCount++;
+}
+
+size_t SpriteSet_GetDataSourceSize(const SpriteSet *set)
+{
+    int i;
+
+    for (i = 0; i < g_setDataSizeCount; i++) {
+        if (g_setDataSizes[i].set == set) {
+            return g_setDataSizes[i].bytes;
+        }
+    }
+    return 0;
+}
+
+static void SpriteSet_ForgetDataSourceSize(const SpriteSet *set)
+{
+    int i;
+
+    for (i = 0; i < g_setDataSizeCount; i++) {
+        if (g_setDataSizes[i].set == set) {
+            g_setDataSizes[i] = g_setDataSizes[g_setDataSizeCount - 1];
+            g_setDataSizeCount--;
+            return;
+        }
+    }
 }
 
 /*
@@ -461,6 +549,13 @@ int SpriteSet_Free(SpriteSet *set)
     /* Port addition: the GLES renderer's streaming textures are keyed on the
      * sprite pixels this call is about to release. */
     Gles_OnSpriteSetFreed();
+#elif !defined(ANDROID_PORT)
+    /* Same for the desktop GL streaming cache: its keys are spans inside this
+     * set's data block or its sprites' pixel buffers. Only this set's entries
+     * are dropped -- the engine frees temporary render-target sets every frame
+     * while sprites are scaled, and flushing the cache for those would defeat
+     * it. */
+    Gl_OnSpriteSetFreed(set);
 #endif
     if (set->palettes != NULL) {
         Palette *pal;
@@ -483,6 +578,7 @@ int SpriteSet_Free(SpriteSet *set)
     } else {
         set->shared->refs--;
     }
+    SpriteSet_ForgetDataSourceSize(set);
     free(set);
     return 1;
 }
@@ -564,6 +660,7 @@ void *Sprite_GetPixels(SpriteSet *set, int sprite)
 {
     Sprite *spr = Sprite_At(set, sprite);
     void *out = NULL;
+    size_t stride;
 
     if (spr == NULL) {
         return NULL;
@@ -574,7 +671,23 @@ void *Sprite_GetPixels(SpriteSet *set, int sprite)
     if (spr->format == SPRITE_FORMAT_SURFACE) {
         return ((SDL_Surface *)spr->pixels)->pixels;
     }
-    SpriteCache_Get(spr->pixels, spr->format, spr->pixels_size, &out);
+    if (spr->format < SPRITE_FORMAT_DECODE_MIN || spr->format > SPRITE_FORMAT_DECODE_MAX) {
+        /* Fix (port change): a texture's pixels is a GlTex, whose first word is
+         * the GL name; the old fall-through read that as a decoded size and
+         * handed it to the decompression pool. */
+        return NULL;
+    }
+    if (spr->pixels == NULL || spr->w <= 0 || spr->h <= 0) {
+        return NULL;
+    }
+    /* Fix (port change, SFF memory plan C2): pass the extent this sprite
+     * declared so the lazy decoder checks the encoded data against it. */
+    stride = (size_t)((spr->bpp + 7) >> 3);
+    if (stride == 0 || (size_t)spr->w > SIZE_MAX / (size_t)spr->h / stride) {
+        return NULL;
+    }
+    SpriteCache_Acquire(spr->pixels, spr->format, (size_t)spr->pixels_size,
+                        (size_t)spr->w * (size_t)spr->h * stride, &out);
     return out;
 }
 
@@ -826,6 +939,10 @@ void SpriteSet_MemUse(SpriteSet *set, unsigned int *sys_bytes, unsigned int *tex
             Sprite *spr;
             for (spr = KeyedArray_First(set->sprites); spr != NULL; spr = KeyedArray_Next(set->sprites)) {
                 sys += sizeof(Sprite);
+                /* Port addition: the row table Sprite_InitRows allocated. */
+                if (spr->owns_rows && spr->rows != NULL && spr->h > 0) {
+                    sys += (unsigned int)spr->h * (unsigned int)sizeof(int);
+                }
                 if (spr->owns_pixels) {
                     sys += spr->pixels_size;
                     if (spr->format == SPRITE_FORMAT_TEXTURE && spr->pixels != NULL) {
@@ -833,6 +950,13 @@ void SpriteSet_MemUse(SpriteSet *set, unsigned int *sys_bytes, unsigned int *tex
                     }
                 }
             }
+        }
+        /* Port addition (SFF memory plan, P1/C3): the encoded data block is
+         * part of the set's system memory, not a temporary copy. */
+        if (set->shared == NULL) {
+            size_t bytes = SpriteSet_GetDataSourceSize(set);
+
+            sys += (unsigned int)(bytes > (size_t)UINT_MAX ? (size_t)UINT_MAX : bytes);
         }
         sys += sizeof(SpriteSet);
     }

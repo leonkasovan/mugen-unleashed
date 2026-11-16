@@ -188,10 +188,13 @@ static unsigned int gles_palette_hash(const unsigned char *bytes)
  * times, measured at 300 ms of CPU per frame on an RG351MP (one 256 KiB upload
  * per tile, per frame), against ~2 ms for the whole 2D frame elsewhere.
  *
- * Keying on the pixel pointer is sound because a loaded sprite's pixels never
- * move or change: SpriteCache owns the decoded buffer for the life of the
- * sprite. Width, height and bpp are part of the key anyway so a recycled buffer
- * address cannot be mistaken for a different sprite. A context loss bumps the
+ * The key is the image's own identity, not the decoded buffer's address: the
+ * decompression pool recycles payload addresses (DecompBuffer_Alloc), so a key
+ * built from the address Sprite_GetPixels returns can hit another image's slot
+ * and skip the upload -- the same extent, a different picture. `source` is
+ * therefore the sprite's own source span (encoded data for a compressed
+ * sprite, the surface for an SDL one), with codec, width, height and depth as
+ * the rest of the key (SpriteTexKey_Matches, plan C1). A context loss bumps the
  * generation, which invalidates every slot's contents without touching the
  * names (those are dropped by Gles_OnContextLost).
  */
@@ -199,7 +202,8 @@ static unsigned int gles_palette_hash(const unsigned char *bytes)
 
 typedef struct GlesStreamSlot {
     GlTex tex;
-    const void *pixels;
+    const void *source;     /* stable image identity, never a decoded pool address */
+    int format;
     int w, h, bpp;
     int valid;
     unsigned long tick;
@@ -232,7 +236,7 @@ void Gles_OnSpriteSetFreed(void)
 
     for (i = 0; i < GLES_STREAM_SLOTS; i++) {
         g_glesStream[i].valid = 0;
-        g_glesStream[i].pixels = NULL;
+        g_glesStream[i].source = NULL;
     }
 }
 
@@ -240,7 +244,7 @@ void Gles_OnSpriteSetFreed(void)
  * The slot that already holds `pixels`, or a recycled one to upload into.
  * *hit reports which, so the caller knows whether an upload is needed.
  */
-static GlesStreamSlot *gles_stream_slot(const void *pixels, int w, int h, int bpp, int *hit)
+static GlesStreamSlot *gles_stream_slot(const void *source, int format, int w, int h, int bpp, int *hit)
 {
     GlesStreamSlot *free_slot = NULL;
     GlesStreamSlot *lru = NULL;
@@ -250,7 +254,8 @@ static GlesStreamSlot *gles_stream_slot(const void *pixels, int w, int h, int bp
         GlesStreamSlot *slot = &g_glesStream[i];
 
         if (slot->valid && slot->generation == g_glesStreamGeneration &&
-            slot->pixels == pixels && slot->w == w && slot->h == h && slot->bpp == bpp) {
+            SpriteTexKey_Matches(slot->source, slot->format, slot->w, slot->h, slot->bpp,
+                                 source, format, w, h, bpp)) {
             slot->tick = ++g_glesStreamClock;
             *hit = 1;
             return slot;
@@ -1756,7 +1761,8 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
             GlesStreamSlot *slot;
             int hit = 0;
 
-            slot = gles_stream_slot(pixels, spr->w, spr->h, spr->bpp, &hit);
+            /* Key on the sprite's own source, not on the pooled decode. */
+            slot = gles_stream_slot(spr->pixels, spr->format, spr->w, spr->h, spr->bpp, &hit);
             if (slot == NULL) {
                 return;
             }
@@ -1778,7 +1784,8 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
                     BatchProf_Split(BATCHPROF_SPLIT_UPLOAD_SPRITE, now - bp_upload);
                     bp_upload = now;
                 }
-                slot->pixels = pixels;
+                slot->source = spr->pixels;
+                slot->format = spr->format;
                 slot->w = spr->w;
                 slot->h = spr->h;
                 slot->bpp = spr->bpp;
