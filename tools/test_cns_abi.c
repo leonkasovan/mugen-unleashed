@@ -412,6 +412,76 @@ static void test_zss_loops(void)
     zss_fail_call=0;
     puts("ok: assignments, nested while, break/continue, loop guard and total fuel");
 }
+static void test_zss_ranges(void)
+{
+    const struct {const char *range;int count, warnings;} cases[]={
+        {"0;3",4,0}, {"3;0;-1",4,0}, {"0;5;2",3,0},
+        {"5;0;-2",3,0}, {"0;0",1,0}, {"3;0",0,0}, {"0;3;-1",0,0},
+        {"0;3;0",2500,1}, {"3;0;0",2500,1}, {"0;2499",2500,0},
+        {"0;2500",2500,1}, {"0.9;2.9",3,0},
+        {"2147483646;2147483647;1",2500,1},
+        {"-2147483647;-2147483648;-1",2500,1}
+    };
+    const char *source="[StateDef 0]\nvar(0):=0;\nvar(1):=0;\nfor (var(1):=var(1)+1);(var(1):=var(1)+2);(var(1):=var(1)+1) {var(0):=var(0)+1;var(1):=99;}\n";
+    const char *nested="[StateDef 0]\nvar(0):=0;\nvar(1):=0;\nfor 1;3 {var(0):=var(0)+1; for 0;9 {var(1):=var(1)+1; if var(1)%3=1 {continue;} if var(1)%3=0 {break;}}}\n";
+    const char *stop="[StateDef 0]\nfor 0;3 {CtrlSet{value:1}}\nCtrlSet{value:2}\n";
+    const char *bad[]={"for 0 {}", "for ;3 {}", "for 0; {}", "for 0;3; {}", "for 0;3;1;2 {}", "for i=0;3 {}", "for let $i=0;3 {}", "for 0;3 {break}", "for 0;3", "for 0;3 {", "for 0;3 {} else {}"};
+    char text[1024];
+    ZssProgram *program=NULL, *failed=NULL;
+    ZssDiagnostic d;
+    size_t j;
+    int result, calls;
+    for(j=0;j<sizeof(cases)/sizeof(*cases);j++) {
+        snprintf(text,sizeof(text),"[StateDef 0]\nvar(0):=0;\nfor %s {var(0):=var(0)+1;}\nvar(2):=7;\n",cases[j].range);
+        if (!Zss_CompileProgram(text,strlen(text),&owner,&program,&d)) {fprintf(stderr,"range %s: %s at %u:%u\n",cases[j].range,d.message,d.line,d.column);assert(0);}
+        player_warnings=0;player.var[2]=0;
+        assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+        if(result || player.var[0]!=cases[j].count || player.var[2]!=7 || player_warnings!=cases[j].warnings)
+            fprintf(stderr,"range %s: count=%d warnings=%d result=%d tail=%d\n",cases[j].range,player.var[0],player_warnings,result,player.var[2]);
+        assert(!result && player.var[0]==cases[j].count && player.var[2]==7 && player_warnings==cases[j].warnings);
+        Zss_FreeProgram(program);zss_no_allocs();
+    }
+    /* Begin/end/step execute once, left to right, even when the body mutates
+     * their source vars. Every invocation gets a fresh counter and endpoints. */
+    assert(Zss_CompileProgram(source,strlen(source),&owner,&program,&d));
+    for(j=0;j<2;j++) {
+        assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+        assert(!result && player.var[0]==1 && player.var[1]==99);
+    }
+    Zss_FreeProgram(program);zss_no_allocs();
+    assert(Zss_CompileProgram(nested,strlen(nested),&owner,&program,&d));
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert(!result && player.var[0]==3 && player.var[1]==9);Zss_FreeProgram(program);zss_no_allocs();
+    assert(Zss_CompileProgram(stop,strlen(stop),&owner,&program,&d));visits=0;stop_visit=1;
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert(visits==1 && (result&STATECTRL_STOP) && (result&STATECTRL_CHANGED));Zss_FreeProgram(program);zss_no_allocs();stop_visit=0;
+    for(j=0;j<sizeof(bad)/sizeof(*bad);j++) {
+        snprintf(text,sizeof(text),"[StateDef 0]\n%s",bad[j]);
+        assert(!Zss_CompileProgram(text,strlen(text),&owner,&failed,&d));assert(!failed && d.message);zss_no_allocs();
+    }
+    strcpy(text,"[StateDef 0]\nvar(0):=0;\nvar(1):=0;\nfor 0;3 {var(0):=var(0)+1;continue;var(1):=9;}\n");
+    assert(Zss_CompileProgram(text,strlen(text),&owner,&program,&d));player_warnings=0;
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert(!result && player.var[0]==4 && player.var[1]==0 && !player_warnings);Zss_FreeProgram(program);zss_no_allocs();
+    strcpy(text,"[StateDef 0]\nfor 0;2499 {for 0;2499 {}}\nCtrlSet{value:9}\n");
+    assert(Zss_CompileProgram(text,strlen(text),&owner,&program,&d));visits=player_warnings=0;
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert((result&STATECTRL_STOP) && !(result&STATECTRL_CHANGED) && !visits && player_warnings==1);Zss_FreeProgram(program);zss_no_allocs();
+    /* Signed minimum must survive token lowering in assignments, guards and
+     * controller parameter values, not become unary negation of a clamped max. */
+    strcpy(text,"[StateDef 0]\nvar(0):=-2147483648;\nif var(0)=-2147483648 {CtrlSet{value:-2147483648}}\n");
+    assert(Zss_CompileProgram(text,strlen(text),&owner,&program,&d));visits=0;
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert(!result && visits==1 && visited[0]==INT32_MIN);Zss_FreeProgram(program);zss_no_allocs();
+    zss_calloc_calls=0;assert(Zss_CompileProgram(source,strlen(source),&owner,&program,&d));calls=zss_calloc_calls;Zss_FreeProgram(program);
+    for(j=1;j<=(size_t)calls;j++) {
+        zss_calloc_calls=0;zss_fail_call=(int)j;
+        if(Zss_CompileProgram(source,strlen(source),&owner,&failed,&d)){Zss_FreeProgram(failed);failed=NULL;}
+        assert(!failed);zss_no_allocs();
+    }
+    zss_fail_call=0;
+    puts("ok: anonymous inclusive for ranges, entry evaluation, integer wrap, guards and cleanup");
+}
 static void test_zss_program(void)
 {
     const char *source="[StateDef 200;type:S;]\nif var(0)=0 { CtrlSet{value:1} CtrlSet{value:2} } else if var(0)=9 { CtrlSet{value:9} } else { CtrlSet{value:8} }\nif .5 { CtrlSet{value:3} }\n[StateDef 201]\n";
@@ -590,6 +660,7 @@ int main(void)
     test_zss_state_header();
     test_zss_program();
     test_zss_loops();
+    test_zss_ranges();
     test_zss_installation();
 #else
     test_controller_parse(); test_variables(); test_clipboard();

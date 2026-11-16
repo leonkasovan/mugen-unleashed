@@ -49,7 +49,8 @@ int Zss_ReadParams(ZssLexer *lex, int close, const char *type,
             if (tokens >= EXPR_OP_STACK_SIZE - 1) {
                 message = "Parameter exceeds initial ZSS bridge token limit"; goto done;
             }
-            if (tokens++) *write++ = ' ';
+            /* Preserve signed literal spelling at the shared MUGEN boundary. */
+            if (tokens++ && !(write[-1] == '-' && (kind == ZSS_INT || kind == ZSS_FLOAT))) *write++ = ' ';
             n = lex->token.length;
             memcpy(write, lex->source + lex->token.offset, n); write += n;
             kind = ZssLex_Next(lex);

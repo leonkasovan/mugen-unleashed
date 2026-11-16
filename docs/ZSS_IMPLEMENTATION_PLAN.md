@@ -807,3 +807,64 @@ confirming the assignment/loop path reached the real controller runner. The
 12-second run used the same bounded smoke-test procedure as the preceding
 integration increment; it is not a completed match or determinism comparison.
 Original game files and display dimensions were not changed.
+
+### Anonymous for-range increment
+
+The experimental program compiler now accepts anonymous inclusive integer ranges:
+
+```text
+for 0; 3 { ... }       # four visits, default increment +1
+for 3; 0; -1 { ... }   # four visits, descending
+for 0; 5; 2 { ... }    # three visits
+```
+
+This is range syntax, not C-style init/condition/update. Begin, end and increment
+are evaluated once, left to right, on each entry. Values use the existing MUGEN
+numeric evaluator and explicit integer conversion (floats truncate, bottom gives
+zero). This remains the documented MUGEN numeric profile, not complete upstream
+expression compatibility. A positive increment uses <= end, a negative increment
+uses >= end. A zero increment repeats until break/state-change or the loop guard,
+even when begin/end would be reversed for a positive increment.
+
+The counter and evaluated endpoints live in invocation-local execution frames.
+Nested break/continue target the nearest loop, continue still advances the range,
+and controller stop/state-change unwinds the body. Signed 32-bit addition wraps
+through int64 arithmetic with explicit reduction; it does not rely on C signed
+overflow or pointer width. The 2500-iteration and total-work guards still apply.
+A naturally exhausted 2500-visit range does not produce a guard warning; a range
+that would need another visit does. Endpoint wraparound can keep a range alive,
+so it is deliberately covered by the guard tests.
+
+Named counters (`for i = ...`, `$i`) are rejected pending numeric local-variable
+contexts. Anonymous expressions starting with an identifier must be parenthesized,
+as in `for (var(0)); 3 { ... }`, to avoid the reference's named-counter dispatch.
+Do not describe all for syntax as supported. Locals/let, functions/call, switch,
+block attributes and lazy &&/|| expressions remain pending.
+
+The boundary tests also found a token-lowering defect: spacing the minus away
+from `2147483648` caused the legacy compiler to clamp the positive token before
+negating it. Numeric tokens now stay adjacent to a preceding minus in program
+expressions and header/controller parameter values. The regression verifies
+`-2147483648` through assignment, conditional comparison and controller evaluation.
+Existing CNS parsing is unchanged.
+
+Verification completed on Linux x86-64:
+
+- Real compiler/evaluator host tests pass under ASan/UBSan (leak detection disabled
+  in this environment); tracked allocations and injected calloc failures cover
+  partial range-header ownership and rollback.
+- Fixtures cover inclusive/default/descending/nonunit/zero increments, reversed
+  bounds, float conversion, exact guard boundaries, signed counter wrap, one-time
+  endpoint evaluation, repeated invocation, nested break/continue, state-change
+  unwinding, malformed headers and unsupported named counters.
+- Existing CNS and lexer suites pass. Both changed production units pass a host
+  syntax check with ANDROID_PORT and -Wall -Wextra -Werror. This is not an NDK build.
+- The full native engine links with MUGEN_MODEL3D=0. A copied KFM installation
+  enters ZSS state 65000, runs ascending and descending ranges plus a range with
+  continue/break, and changes to 65001 only when var(0)=10 and var(1)=4. The log
+  records the load, result 5 from state 65000, execution of 65001, and clean shutdown
+  after the 12-second timeout. Original game files and display dimensions remain
+  unchanged. This is a smoke test, not full-match or determinism qualification.
+
+Native 32-bit/Windows toolchains, Android NDK and VitaSDK were unavailable for
+this increment. Their builds and device behavior remain open qualification work.
