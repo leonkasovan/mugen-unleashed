@@ -11,9 +11,12 @@
 #define MAX_NODES 1024u
 #define MAX_STATES 64u
 #define MAX_DEPTH 32u
+#define MAX_LOOP 2500u
+#define MAX_STEPS 100000u
+enum {NODE_CONTROLLER, NODE_IF, NODE_WHILE, NODE_EXPRESSION, NODE_BREAK, NODE_CONTINUE};
 
 typedef struct ZssNode {
-    int branch;
+    int kind;
     uint32_t next, child, otherwise;
     Expr condition;
     StateCtrl controller;
@@ -100,8 +103,8 @@ static int enclosed(ZssParser *p, int header)
     }
     return error(p,"Unclosed ZSS header or controller");
 }
-static int body(ZssParser *p, unsigned depth, uint32_t *first);
-static int branch(ZssParser *p, unsigned depth, uint32_t *index, uint32_t *end_line)
+static int body(ZssParser *p, unsigned depth, unsigned loops, uint32_t *first);
+static int branch(ZssParser *p, unsigned depth, unsigned loops, int loop, uint32_t *index, uint32_t *end_line)
 {
     uint32_t id=node(p), child=NO_NODE, other=NO_NODE;
     char *expression, *write;
@@ -109,7 +112,7 @@ static int branch(ZssParser *p, unsigned depth, uint32_t *index, uint32_t *end_l
     int tokens=0, kind;
     if (id==NO_NODE) return 0;
     if (depth>=MAX_DEPTH) return error(p,"ZSS block nesting limit");
-    p->program->nodes[id].branch=1;
+    p->program->nodes[id].kind=loop ? NODE_WHILE : NODE_IF;
     expression=calloc(1,p->lex.size*2+1);
     if (expression==NULL) return error(p,"Out of memory compiling condition");
     write=expression;
@@ -127,17 +130,17 @@ static int branch(ZssParser *p, unsigned depth, uint32_t *index, uint32_t *end_l
     }
     free(expression);
     next(p);
-    if (!body(p,depth+1,&child)) return 0;
+    if (!body(p,depth+1,loops+(loop ? 1u : 0u),&child)) return 0;
     if (p->lex.token.kind!='}') return error(p,"Expected '}' after if body");
     *end_line=p->lex.token.line;next(p);
-    if (ZssLex_Is(&p->lex,"else")) {
+    if (!loop && ZssLex_Is(&p->lex,"else")) {
         next(p);
         if (ZssLex_Is(&p->lex,"if")) {
-            if (!branch(p,depth+1,&other,end_line)) return 0;
+            if (!branch(p,depth+1,loops,0,&other,end_line)) return 0;
         } else {
             if (p->lex.token.kind!='{') return error(p,"Expected if or '{' after else");
             next(p);
-            if (!body(p,depth+1,&other)) return 0;
+            if (!body(p,depth+1,loops,&other)) return 0;
             if (p->lex.token.kind!='}') return error(p,"Expected '}' after else body");
             *end_line=p->lex.token.line;next(p);
         }
@@ -146,7 +149,36 @@ static int branch(ZssParser *p, unsigned depth, uint32_t *index, uint32_t *end_l
     p->program->nodes[id].child=child;p->program->nodes[id].otherwise=other;
     *index=id;return 1;
 }
-static int body(ZssParser *p, unsigned depth, uint32_t *first)
+/* Assignment expressions reuse the MUGEN numeric evaluator; the statement's
+ * result is discarded. Locals and lazy logical operators remain rejected. */
+static int assignment(ZssParser *p, uint32_t *id, uint32_t *end_line)
+{
+    char *text=calloc(1,p->lex.size*2+1), *write=text;
+    const char *end;
+    int tokens=0, has_assignment=0, kind;
+    uint32_t index;
+    if (text==NULL) return error(p,"Out of memory compiling assignment");
+    while ((kind=p->lex.token.kind)!=';') {
+        if (kind<=0 || kind=='{' || kind=='}' || !supported_token(p)) {
+            free(text);return error(p,"Assignment must end with ';'");
+        }
+        if (++tokens>=EXPR_OP_STACK_SIZE) {free(text);return error(p,"Assignment token limit");}
+        if (kind==ZSS_ASSIGN) has_assignment=1;
+        if (tokens>1) *write++=' ';
+        memcpy(write,p->lex.source+p->lex.token.offset,p->lex.token.length);write+=p->lex.token.length;
+        next(p);
+    }
+    if (!has_assignment) {free(text);return error(p,"Expression with unused value");}
+    index=node(p);
+    if (index==NO_NODE) {free(text);return 0;}
+    p->program->nodes[index].kind=NODE_EXPRESSION;
+    end=text;
+    if (!Expr_Compile(text,&p->program->nodes[index].condition,p->owner,&end,EXPR_WANT_ANY) || *end) {
+        free(text);return error(p,"Assignment rejected by MUGEN compiler");
+    }
+    free(text);*id=index;*end_line=p->lex.token.line;next(p);return 1;
+}
+static int body(ZssParser *p, unsigned depth, unsigned loops, uint32_t *first)
 {
     uint32_t last=NO_NODE, id, end_line;
     ZssToken start;
@@ -155,12 +187,25 @@ static int body(ZssParser *p, unsigned depth, uint32_t *first)
     for (;;) {
         kind=p->lex.token.kind;
         if (kind==ZSS_EOF || kind=='}' || kind=='[') return 1;
-        if (kind!=ZSS_IDENT) return error(p,"Expected a controller or if statement");
-        if (ZssLex_Is(&p->lex,"if")) {
-            if (!branch(p,depth,&id,&end_line)) return 0;
+        if (ZssLex_Is(&p->lex,"if") || ZssLex_Is(&p->lex,"while")) {
+            if (!branch(p,depth,loops,ZssLex_Is(&p->lex,"while"),&id,&end_line)) return 0;
+        } else if (ZssLex_Is(&p->lex,"break") || ZssLex_Is(&p->lex,"continue")) {
+            if (!loops) return error(p,"Break/continue can only appear inside a loop");
+            id=node(p);if (id==NO_NODE) return 0;
+            p->program->nodes[id].kind=ZssLex_Is(&p->lex,"break") ? NODE_BREAK : NODE_CONTINUE;
+            if (next(p)!=';') return error(p,"Expected ';' after break/continue");
+            end_line=p->lex.token.line;next(p);
         } else {
+            ZssLexer peek=p->lex;
+            if (ZssLex_Is(&p->lex,"for") || ZssLex_Is(&p->lex,"let") || ZssLex_Is(&p->lex,"call") ||
+                ZssLex_Is(&p->lex,"switch") || ZssLex_Is(&p->lex,"persistent") || ZssLex_Is(&p->lex,"ignorehitpause"))
+                return error(p,"This ZSS statement is not implemented yet");
+            if (kind!=ZSS_IDENT || ZssLex_Next(&peek)!='{') {
+                if (!assignment(p,&id,&end_line)) return 0;
+                goto linked;
+            }
             start=p->lex.token;
-            if (next(p)!='{') return error(p,"Unsupported ZSS statement or missing '{'");
+            next(p);
             if (!enclosed(p,0)) return 0;
             id=node(p);if (id==NO_NODE) return 0;
             if (!Zss_CompileController(p->lex.source+start.offset,p->lex.pos-start.offset,
@@ -169,6 +214,7 @@ static int body(ZssParser *p, unsigned depth, uint32_t *first)
             }
             end_line=p->lex.token.line;next(p);
         }
+linked:
         if (*first==NO_NODE) *first=id;
         if (last!=NO_NODE) p->program->nodes[last].next=id;
         last=id;
@@ -215,7 +261,7 @@ int Zss_CompileProgram(const char *source, size_t size, CharData *owner,
         if (p.lex.token.kind!=ZSS_EOF && p.lex.token.line==header_end) {
             error(&p,"StateDef header must end on its own line");goto fail;
         }
-        if (!body(&p,0,&first)) goto fail;
+        if (!body(&p,0,0,&first)) goto fail;
         p.program->states[i].first=first;
     }
     if (!p.program->state_count) {error(&p,"Program needs a StateDef");goto fail;}
@@ -241,29 +287,65 @@ const StateDef *Zss_ProgramState(const ZssProgram *p, size_t index, int *number)
 int Zss_RunBody(ZssProgram *p, size_t state, Player *player,
                 ZssControllerRun run, void *context, int *result)
 {
-    uint32_t pending[MAX_DEPTH+1], top=0, index;
-    int bits=0, i=0, type, selected;
+    /* A sequence frame resumes after a child block. Loop frames own iteration
+     * counts, so shared programs and reentrant runs never share loop cursors. */
+    struct Frame {uint32_t current, iterations;int loop;} frames[MAX_DEPTH*2+2];
+    uint32_t top=1, steps=0, count, chosen;
+    int bits=0, i=0, type, selected, warned=0;
     float f=0;
     ZssNode *n;
     if (p==NULL || state>=p->state_count || player==NULL || run==NULL || result==NULL) return 0;
-    index=p->states[state].first;
-    while (index!=NO_NODE) {
-        n=&p->nodes[index];
-        if (n->branch) {
+    frames[0]=(struct Frame){p->states[state].first,0,0};
+    while (top) {
+        struct Frame *frame=&frames[top-1];
+        if (++steps>MAX_STEPS) {
+            Player_Warn(player,"ZSS execution stopped at total step budget");
+            *result=bits|STATECTRL_STOP;return 1;
+        }
+        if (frame->current==NO_NODE) {top--;continue;}
+        n=&p->nodes[frame->current];
+        if (frame->loop) {
+            if (frame->iterations>=MAX_LOOP) {
+                if (!warned++) Player_Warn(player,"ZSS loop stopped after 2500 iterations");
+                top--;continue;
+            }
             type=Expr_Eval(player,&n->condition,&i,&f);
             if (type==0) return 0;
             selected=type==1 ? i!=0 : type==2 ? f!=0 : 0;
-            if (n->next!=NO_NODE) {
-                if (top>=MAX_DEPTH+1) return 0;
-                pending[top++]=n->next;
+            if (!selected) {top--;continue;}
+            frame->iterations++;
+            if (top>=MAX_DEPTH*2+2) return 0;
+            frames[top++]=(struct Frame){n->child,0,0};continue;
+        }
+        frame->current=n->next;
+        switch (n->kind) {
+        case NODE_IF:
+            type=Expr_Eval(player,&n->condition,&i,&f);
+            if (type==0) return 0;
+            selected=type==1 ? i!=0 : type==2 ? f!=0 : 0;
+            chosen=selected?n->child:n->otherwise;
+            if (chosen!=NO_NODE) {
+                if (top>=MAX_DEPTH*2+2) return 0;
+                frames[top++]=(struct Frame){chosen,0,0};
             }
-            index=selected?n->child:n->otherwise;
-        } else {
+            break;
+        case NODE_WHILE:
+            if (top>=MAX_DEPTH*2+2) return 0;
+            frames[top++]=(struct Frame){(uint32_t)(n-p->nodes),0,1};break;
+        case NODE_EXPRESSION:
+            if (!Expr_Eval(player,&n->condition,&i,&f)) return 0;
+            break;
+        case NODE_BREAK:
+        case NODE_CONTINUE:
+            count=top;
+            while (count && !frames[count-1].loop) count--;
+            if (!count) return 0;
+            top=n->kind==NODE_BREAK ? count-1 : count;break;
+        default:
             bits|=run(player,&n->controller,context);
             if (bits&STATECTRL_STOP) {*result=bits;return 1;}
-            index=n->next;
+            break;
         }
-        while (index==NO_NODE && top) index=pending[--top];
     }
     *result=bits;return 1;
 }

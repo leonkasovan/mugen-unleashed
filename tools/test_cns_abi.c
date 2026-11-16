@@ -56,7 +56,8 @@ void Error_Printf(const char *fmt, ...) { (void)fmt; }
 void Error_Exit(void) { if (expect_exit) longjmp(exit_jump, 1); abort(); }
 void Error_Fatal(const char *fmt, ...) { (void)fmt; abort(); }
 void Error_OutOfMemory(void) { abort(); }
-void Player_Warn(Player *p, const char *msg) { (void)p; (void)msg; }
+static int player_warnings;
+void Player_Warn(Player *p, const char *msg) { (void)p; (void)msg; player_warnings++; }
 void Player_WarnAt(Player *p, const StateCtrl *sc, const char *fmt, ...) { (void)p; (void)sc; (void)fmt; }
 void TextRing_SetPrintf(TextRing *ring, const char *fmt, ...)
 {
@@ -366,10 +367,55 @@ static int record_zss_controller(Player *p, StateCtrl *sc, void *context)
     p->var[0]=visited[visits-1];
     return visits==stop_visit ? STATECTRL_STOP|STATECTRL_CHANGED : 0;
 }
+static void test_zss_loops(void)
+{
+    const char *source="[StateDef 0]\nvar(0):=0;\nwhile var(0)<6 { var(0):=var(0)+1; if var(0)=2 { continue; } if var(0)=4 { break; } }\nvar(1):=var(0);\nfvar(0):=1.25;\n";
+    const char *nested="[StateDef 0]\nvar(0):=0;\nvar(1):=0;\nwhile var(0)<3 { var(0):=var(0)+1; var(2):=0; while var(2)<5 { var(2):=var(2)+1; if var(2)=2 {continue;} if var(2)=4 {break;} var(1):=var(1)+1; } }\n";
+    const char *limit="[StateDef 0]\nvar(0):=0;\nwhile 1 {var(0):=var(0)+1;}\nvar(1):=9;\n";
+    const char *fuel="[StateDef 0]\nwhile 1 {while 1 {}}\nCtrlSet{value:9}\n";
+    const char *stop="[StateDef 0]\nwhile 1 {CtrlSet{value:1}}\nCtrlSet{value:2}\n";
+    const char *bad[]={"[StateDef 0]\nbreak;", "[StateDef 0]\ncontinue;", "[StateDef 0]\nvar(0):=1", "[StateDef 0]\n1+2;", "[StateDef 0]\nwhile 1 {break}", "[StateDef 0]\nwhile 1 {continue 2;}", "[StateDef 0]\nwhile var(0) && 1 {}"};
+    ZssProgram *program=NULL, *failed=NULL;
+    ZssDiagnostic d;
+    int result, calls;
+    size_t i;
+    visits=stop_visit=player_warnings=0;
+    assert(Zss_CompileProgram(source,strlen(source),&owner,&program,&d));
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert(!result && !visits && player.var[0]==4 && player.var[1]==4 && player.fvar[0]==1.25f && !player_warnings);
+    /* Execution frames are fresh on every call, not stored in shared nodes. */
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));assert(player.var[0]==4);
+    Zss_FreeProgram(program);zss_no_allocs();
+    assert(Zss_CompileProgram(nested,strlen(nested),&owner,&program,&d));
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert(player.var[0]==3 && player.var[1]==6 && player.var[2]==4);Zss_FreeProgram(program);zss_no_allocs();
+    assert(Zss_CompileProgram(limit,strlen(limit),&owner,&program,&d));player_warnings=0;
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert(!result && player.var[0]==2500 && player.var[1]==9 && player_warnings==1);
+    player_warnings=0;assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert(player.var[0]==2500 && player_warnings==1);Zss_FreeProgram(program);zss_no_allocs();
+    assert(Zss_CompileProgram(fuel,strlen(fuel),&owner,&program,&d));visits=player_warnings=0;
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert((result&STATECTRL_STOP) && !(result&STATECTRL_CHANGED) && !visits && player_warnings>=1);Zss_FreeProgram(program);zss_no_allocs();
+    assert(Zss_CompileProgram(stop,strlen(stop),&owner,&program,&d));visits=0;stop_visit=1;
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert(visits==1 && (result&STATECTRL_STOP) && (result&STATECTRL_CHANGED));Zss_FreeProgram(program);zss_no_allocs();stop_visit=0;
+    for(i=0;i<sizeof(bad)/sizeof(*bad);i++) {
+        assert(!Zss_CompileProgram(bad[i],strlen(bad[i]),&owner,&failed,&d));assert(!failed && d.message);zss_no_allocs();
+    }
+    zss_calloc_calls=0;assert(Zss_CompileProgram(source,strlen(source),&owner,&program,&d));calls=zss_calloc_calls;Zss_FreeProgram(program);
+    for(i=1;i<=(size_t)calls;i++) {
+        zss_calloc_calls=0;zss_fail_call=(int)i;
+        if(Zss_CompileProgram(source,strlen(source),&owner,&failed,&d)){Zss_FreeProgram(failed);failed=NULL;}
+        assert(!failed);zss_no_allocs();
+    }
+    zss_fail_call=0;
+    puts("ok: assignments, nested while, break/continue, loop guard and total fuel");
+}
 static void test_zss_program(void)
 {
     const char *source="[StateDef 200;type:S;]\nif var(0)=0 { CtrlSet{value:1} CtrlSet{value:2} } else if var(0)=9 { CtrlSet{value:9} } else { CtrlSet{value:8} }\nif .5 { CtrlSet{value:3} }\n[StateDef 201]\n";
-    const char *bad[]={"", "[StateDef 0] Null{}", "[StateDef\n0] Null{}", "[StateDef 0]\n[StateDef 0]", "[StateDef 0]\nif 1 {", "[StateDef 0]\nif 0 && var(0) {Null{}}", "[StateDef 0]\nwhile 1 {Null{}}", "[StateDef 0]\nNull{};", "[StateDef 0]\nelse {Null{}}", "[StateDef 0]\nNull{} Null{}"};
+    const char *bad[]={"", "[StateDef 0] Null{}", "[StateDef\n0] Null{}", "[StateDef 0]\n[StateDef 0]", "[StateDef 0]\nif 1 {", "[StateDef 0]\nif 0 && var(0) {Null{}}", "[StateDef 0]\nNull{};", "[StateDef 0]\nelse {Null{}}", "[StateDef 0]\nNull{} Null{}"};
     ZssProgram *program=NULL, *failed=NULL;
     ZssDiagnostic d;
     const StateDef *sd;
@@ -543,6 +589,7 @@ int main(void)
     test_zss_controller();
     test_zss_state_header();
     test_zss_program();
+    test_zss_loops();
     test_zss_installation();
 #else
     test_controller_parse(); test_variables(); test_clipboard();

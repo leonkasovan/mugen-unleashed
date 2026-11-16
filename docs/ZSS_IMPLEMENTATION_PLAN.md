@@ -769,3 +769,41 @@ and allocation-failure rollback. Their Stream reader is an explicit I/O boundary
 the native smoke run exercised the real file/Stream path. Native Windows,
 Android, Vita, ZIP characters, complete gameplay and unsupported language
 features remain unqualified.
+
+### Assignment and while-loop increment
+
+The program compiler now accepts side-effecting assignment statements with a
+required semicolon, while loops, and lexically checked break/continue statements.
+It reuses the existing MUGEN numeric expression compiler/evaluator, including
+var/fvar assignment behavior. A bare expression without an assignment is rejected.
+Locals and lazy &&/|| expressions remain explicitly unsupported. For loops,
+functions, let declarations and block attributes are not enabled yet.
+
+Body execution now uses bounded sequence/loop frames. Conditions are checked
+each iteration; break exits the nearest loop, continue advances that loop, and
+controller state-change/stop bits unwind the whole old body. Iteration counters
+are invocation-local, so repeated runs and shared programs do not reuse cursors.
+There are no loop-time allocations or C-recursive execution calls.
+
+A loop is stopped after 2500 iterations; execution then continues after that
+loop. Its warning is limited to once per body invocation. A separate deterministic
+100000-control-step budget aborts the current body with STATECTRL_STOP when
+nested work is excessive. This additional budget is an engine-specific safety
+rule, not a claim about upstream Ikemen semantics. It is a prototype limit to
+qualify against a real corpus. No wall-clock timing controls gameplay.
+
+Verification: Linux x86-64 controller/program tests pass under ASan/UBSan
+(leak detection disabled in this environment), including nested loops,
+break/continue, numeric assignments, state-change unwinding, loop and total-work
+guards, fresh execution frames and injected allocation failures. Existing CNS
+and lexer suites pass. An Android-preprocessor host syntax check passes; this
+is not an NDK build or a device qualification.
+
+The full native Linux engine linked with MUGEN_MODEL3D=0. In a copied offscreen
+KFM fixture, state 65000 initialized var(0), incremented it in a while loop,
+continued at 2, broke at 4, and changed to state 65001 only if the result was 4.
+The native log showed state 65000 returning result 5 and state 65001 executing,
+confirming the assignment/loop path reached the real controller runner. The
+12-second run used the same bounded smoke-test procedure as the preceding
+integration increment; it is not a completed match or determinism comparison.
+Original game files and display dimensions were not changed.
