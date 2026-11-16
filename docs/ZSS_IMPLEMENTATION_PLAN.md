@@ -603,3 +603,20 @@ Recommended first implementation task: Z0 and Z1, followed by the explicit
 stN-based Z2 prototype. The main engineering cost is safe shared compiler/runtime
 integration, not recognizing braces and keywords.
 
+
+## 17. Implementation progress
+
+2026-11-16: the allocation-free native C lexer is implemented in
+`src/zss_lex.c/.h`, with regression coverage in `tools/test_zss_lex.c/.sh`.
+It retains raw length-delimited source spans and tracks lines/columns, including
+BOM and CRLF handling. Comments, numeric exponents, operators, locals, string
+delimiters, token bounds and sticky errors are covered. The caller owns source
+lifetime and selects a token-size bound. This is the lexical portion of Z2;
+Z1 compiler-context/parameter interfaces and the remaining parser/runtime work
+are still pending. No .zss file is dispatched or executed yet.
+
+Verification: Linux x86-64 warning-clean lexer tests; ASan/UBSan with leak
+detection disabled because LeakSanitizer cannot run under this environment's
+ptrace; Android-preprocessor host variant; existing CNS ABI regression suite.
+The Android variant is not an NDK build or a device pass. No native Windows
+or Vita toolchain qualification was performed.
