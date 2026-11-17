@@ -1651,7 +1651,7 @@ Supported numeric profile:
 | MapSet / MapAdd | Required `map` static key and `value` numeric expression, evaluated once against the live state/function local frame |
 | Numeric addition | int32 wrap; mixed numeric operands promote to float32; bottom propagates |
 | MapReset{} | Discard the actor's overrides and restore its numeric DEF defaults; helper defaults are empty |
-| DEF [Map] | Optional constant numeric expressions for explicitly ZSS-enabled characters only; reject dynamic/string values and duplicate normalized keys |
+| DEF [Map] | Optional values compiling to one numeric constant for explicitly ZSS-enabled characters; reject dynamic/string values and duplicate normalized keys |
 | Actor ownership | Values belong to the executing actor, including custom states and trigger redirection; players sharing CharData remain isolated |
 | Lifecycle | Main-player maps survive ordinary round resets; explicit MapReset, helper reuse and player destruction clear overrides; character destruction releases defaults |
 
@@ -1684,10 +1684,14 @@ stale map reuse through an address recycled without that hook.
 
 Explicitly unsupported: dynamic/string-valued/indexed maps, `map(k):=v`,
 parent/root/team mutation controllers, redirectid, selective reset exclusions,
-helper `extendsmap`/map initializer extensions, first-class strings/int64,
-fractional AI configuration, AILevelSet and NoAILevel assertions. The native AI
+helper `extendsmap`/map initializer extensions, first-class strings, int64 value
+semantics, fractional AI configuration, AILevelSet and NoAILevel assertions. The native AI
 field is integral; returning a float does not implement Ikemen's fractional AI
-configuration. These restrictions remain compile failures, not silent aliases.
+configuration. Unsupported key/controller/parameter forms fail compilation.
+Defaults must compile to one numeric constant: ordinary numeric literals work,
+while general arithmetic initializers such as `1+2` are rejected. Integer
+literals retain the shared engine parser's int32 saturation; an out-of-range
+integer is clamped to int32, not represented as an int64 value.
 
 Validation on Linux x86-64:
 
