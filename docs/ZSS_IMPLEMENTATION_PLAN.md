@@ -11,10 +11,10 @@ functions/calls, result bindings and cross-file first-wins lookup are
 implemented, including numeric PlaySnd payloads, static F/S prefixes and
 PalFX/BGPalFX/AllPalFX local expressions. Numeric aiLevelF, static map lookups,
 MapSet/MapAdd/MapReset and numeric DEF defaults are implemented. AssertSpecial
-now supports the twenty existing MUGEN flags through the shared runner. The
-unchanged upstream KFM stops on the Ikemen-only `nocrouch` flag
-(kfm.zss:67:30). Broader controller payloads, block attributes and unsupported
-Ikemen extensions remain open.
+now supports the twenty existing MUGEN flags plus ZSS-only `nocrouch` through
+the shared runner and real input consumer. The unchanged upstream KFM stops on
+NotHitBy (kfm.zss:87:1). Broader controller payloads, block attributes and
+unsupported Ikemen extensions remain open.
 
 ## 1. Decision
 
@@ -1827,3 +1827,103 @@ noairjump, nobrake and autoguard, which also appear in the pinned AI source.
 An accepted name without a functioning consumer is not an implementation.
 Persistence/hitpause block attributes and remaining combat/effect payloads are
 still separate required work before claiming complete ZSS character support.
+
+
+### ZSS nocrouch assertion and input consumer (2026-11-18)
+
+`AssertSpecial{flag:nocrouch}` now has a functioning, actor-owned consumer.
+The name is enabled only by the explicit ZSS compile context. Legacy CNS's
+AssertSpecial_ParseFlag table still rejects it. The existing three-flag schema
+and MUGEN flags remain unchanged; mixing nocrouch with player/global MUGEN flags
+is supported. Dynamic names, enabled, redirectid, flag4..flag8 and all other
+unimplemented Ikemen assertion names remain rejected.
+
+The pinned
+[char.go](https://github.com/ikemen-engine/Ikemen-GO/blob/b55af1a13c128c16b4d4331f8f1fe67dcd4f06df/src/char.go)
+is authoritative for the timing: actionPrepare tests ASF_nocrouch while deciding
+automatic standing-to-crouching, then clears assertions before state execution.
+Thus input preparation consumes the preceding update's assertion. The reference
+does not clear the Down command, force an already crouched player to stand, or
+block explicit ChangeState. Its MUGEN-1.x profile clears assertions even during
+hitpause, while global pauses skip preparation/expiry. The new consumer fits
+this engine's existing input-before-state ordering; no state prepass, VM double
+execution, undo of state changes or CNS input-order change was introduced.
+
+| Behavior | Implemented rule |
+|---|---|
+| Held Down while standing | nocrouch prevents only automatic selection of crouch; no crouch velocity reset occurs |
+| Raw input / commands | Down stays held and command history is updated normally; `command="holddown"` remains true |
+| Already crouched | Holding Down maintains crouch; releasing it can still return to standing |
+| Other input | Jump selection and existing control/guard logic retain their behavior |
+| Scripted movement | Explicit ChangeState remains allowed, including a scripted state-10 crouch |
+| Lifetime | Read during input, clear before each running actor's state execution, reassert from that state update if required |
+| Paused actor | Keep the assertion when its preparation is skipped (running=0) |
+| Running hitpause | Clear at preparation, matching the supported MUGEN-1.x assertion profile; ZSS ignorehitpause block support remains open |
+| Ownership | Executing actor, not its character/program owner, parent, enemy or another helper |
+| Reset / teardown | Player_Reset (also called by Helper_Create) and Player_Free clear records; ID validation also rejects stale reused addresses |
+
+`zss_assert.c/.h` owns an allocation-free sidecar of 64 native Player-pointer/
+generation-ID records. The engine allows four players plus at most 56 helpers.
+There are no pointer-to-integer casts, packed byte offsets or added original
+struct fields. New assertion metadata uses private destination kind 2 and a
+validated integer index; the old global/player kinds stay 0/1. The storage is
+independent of numeric maps: MapReset does not clear assertions, and tick expiry
+does not clear persistent map values. SDL2 spinlocks protect store operations;
+parsing, expression evaluation, warnings and callbacks execute outside the lock.
+Reads allocate nothing and invalid indices are rejected. An exhausted record
+budget warns and stops the ZSS body rather than pretending the flag was set.
+
+The only input change is the nocrouch guard at the existing standing-to-crouch
+selection in Player_UpdateInput. Round_Tick expires extension flags at its
+existing assertion-reset point. No input bits, command identifiers, gamepad
+bindings, display dimensions or ordinary CNS controller semantics changed.
+
+Validation on Linux x86-64:
+
+- ASan/UBSan/float-cast-overflow bridge/loader tests pass with explicit allocation
+  trackers. Cases cover ZSS-only parsing, six-slot metadata, local function calls,
+  mixed MUGEN/extension destinations, identical-ID actor/helper isolation,
+  generation reuse, NULL/invalid access, record exhaustion/reuse, paused/running
+  expiry and independence from MapReset. The 64-record set/read test allocates
+  nothing. Legacy CNS rejection and the original twenty flag tests remain active.
+  Old late-failure fixtures now use NoSuchFlag rather than an implemented flag.
+- A new isolated harness runs the real Player_UpdateInput. Only command/history
+  processing, AI bookkeeping and state entry are recording boundaries. It checks
+  allowed/blocked standing crouch, preserved raw Down/command input, running vs
+  paused expiry, state-100 velocity behavior, existing crouch hold/release, ctrl=0,
+  jump precedence and actor/helper isolation. No production input function was
+  copied into the harness. Full command matching is covered by the native case.
+- The native MUGEN_MODEL3D=0 build and all fourteen copied-game scenarios pass.
+  The new scenario waits for the existing bounded state-0 trace, injects one SDL
+  Down event, verifies `holddown` while crouching is suppressed, omits reassertion
+  and requires automatic entry to state 10. It then reasserts nocrouch and requires
+  a scripted state-10 transition before success state 65001. Failure is 65002.
+- The Linux-only test companion interposes SDL_PollEvent using LD_PRELOAD and
+  reads the existing autoflushed log to synchronize input. This native input
+  scenario requires a C compiler, SDL2 headers and dynamically linked SDL2. It neither reads
+  private engine memory nor introduces production hooks. It runs only for the
+  selected nocrouch fixture and records delivery of the Down event. That copied
+  fixture binds P1 Crouch to engine key ID 274 and replaces only the duplicate
+  common state 0, preserving the source game and production collision guard.
+  Its helper/compiler temporaries stay in the selected repository output tree.
+- Mutation checks deliberately remove the input consumer, then prevent extension
+  assertion expiry. Both native runs fail in state 65002 and never reach 65001.
+  Production sources/binary are restored before the final fourteen-scenario run.
+- CNS ABI and lexer suites pass. Changed production units pass strict host
+  ANDROID_PORT syntax checks. Windows 32/64, Android NDK/APK and Vita/device
+  execution are unavailable and remain unqualified; no new ABI layout was added.
+  Sanitizer leak detection is disabled here; explicit allocation trackers remain
+  active. Real helper spawn/reuse, native paused-match/hitpause execution and
+  concurrent actor updates are not independently qualified by these host tests.
+- All seventeen pinned KFM hashes still match. The unchanged character gets past
+  its line-67 nocrouch controller and exits 1 at
+  `ZSS kfm.zss:87:1: Controller not yet enabled in the ZSS bridge`, the
+  `NotHitBy{value:SCA;time:1}` controller. Later primary/additional/common code is
+  still unqualified. This is a failed compatibility probe, not playable KFM.
+
+Next implementation target: audit the shared HitBy/NotHitBy payload, attribute
+parsing and time/slot application through the explicit frame, then rerun the
+unchanged corpus. Retain the bounded assertion sidecar for future separately
+qualified nojump/noairjump/nobrake/autoguard consumers; do not accept those names
+until their effects exist. Persistence/hitpause attributes and the remaining
+combat/effect controllers are still required before claiming full ZSS support.

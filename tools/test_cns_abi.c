@@ -1071,6 +1071,7 @@ static void test_zss_controller(void)
 #include "test_zss_palfx.inc"
 #include "test_zss_ai_map.inc"
 #include "test_zss_assertspecial.inc"
+#include "test_zss_nocrouch.inc"
 #endif
 int main(void)
 {
@@ -1097,6 +1098,7 @@ int main(void)
     test_zss_palfx();
     test_zss_ai_map();
     test_zss_assertspecial();
+    test_zss_nocrouch();
 #else
     test_controller_parse(); test_variables(); test_clipboard();
     test_expr_allocs(); test_trigger_copy_math(); test_state_headers();

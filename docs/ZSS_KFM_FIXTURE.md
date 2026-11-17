@@ -57,8 +57,7 @@ Loading character chars/kfm_zss/kfm_zss.def...
 Loading cmd command set kfm.cmd...OK
 Loading cns kfm.const...
 Character kfm_zss.def failed to load
-AssertSpecial flag "nocrouch" not valid
-ZSS kfm.zss:67:30: Controller parameters rejected by MUGEN compiler
+ZSS kfm.zss:87:1: Controller not yet enabled in the ZSS bridge
 ```
 
 The latest probe (2026-11-18) exited **1**, rather than reaching gameplay.
@@ -69,9 +68,10 @@ AllPalFX now support the shared numeric payload and local frame. EndState,
 SysSnd, CSnd and EXFX compile. Numeric aiLevelF and static map lookup/mutation/
 reset/defaults are implemented; the walk-state conditions at line 41 now compile.
 AssertSpecial now supports all twenty existing MUGEN flags, so the line-63
-nowalk/noautoturn statement compiles. The first stop is line 67, the Ikemen-only
-`AssertSpecial{flag:nocrouch}`. It is rejected, not silently ignored or aliased.
-This replaces the unsupported controller at line 63, aiLevelF at line 41,
+nowalk/noautoturn statement compiles. ZSS-only nocrouch now has bounded actor
+storage, tick expiry and a real input consumer, so line 67 also compiles. The
+first stop is `NotHitBy{value:SCA;time:1}` at line 87. This replaces nocrouch
+at line 67, the unsupported controller at line 63, aiLevelF at line 41,
 PalFX at line 34, PlaySnd at line 24, unsupported functions at line 16 and the earlier misleading CNS error
 at line 2559. No upstream script was edited to get past these failures.
 This remains a failed compatibility probe,
@@ -116,6 +116,15 @@ mutant fail. Its synthetic state 0 replaces only the duplicate in a copied
 common file; the production collision guard and upstream fixture are intact.
 Host tests check all twenty player/global flag destinations and safe rejection
 of long flag names, unsupported flags and unsupported parameters.
+A fourteenth scenario injects a real SDL Down event after state 0 starts, checks
+that holddown stays visible while nocrouch blocks automatic crouch, and requires
+automatic crouch after expiry plus a scripted crouch while the flag is set.
+Both removing the input consumer and making the flag sticky fail this case.
+The Linux-only LD_PRELOAD event companion uses public SDL calls and the existing
+trace and requires dynamically linked SDL2; it adds no production test hook.
+A separate sanitizer harness exercises
+Player_UpdateInput with recording command/state-entry boundaries. Native paused-
+match, hitpause, helper lifecycle and other platform execution remain open.
 F/common-bank selection has host boundary coverage rather than an independently
 traced native common-sound playback. ZIP stream lookup/ownership is checked at the host harness boundary;
 an end-to-end zipped character run remains open (QuickVS accepts loose DEF paths,
@@ -128,12 +137,11 @@ not the roster's ZIP-entry notation).
 | Primary and common-state ZSS loading | Implemented and covered by isolated fixtures; compiling this character's common file remains blocked by its earlier primary-source failure |
 | Functions and calls | Numeric functions/calls, frames, result bindings and first-wins cross-file lookup implemented |
 | Block attributes | Sources use `persistent(0)` and `ignorehitpause` |
-| More controller payloads | PlaySnd, the three PalFX variants and the twenty MUGEN AssertSpecial flags implemented; combat/effect coverage remains incomplete |
+| More controller payloads | PlaySnd, the three PalFX variants, twenty MUGEN AssertSpecial flags and ZSS nocrouch implemented; NotHitBy/combat/effect coverage remains incomplete |
 | Explicit Ikemen extensions | Numeric `aiLevelF`, static `map(...)`, self MapSet/MapAdd/MapReset and numeric defaults implemented; dynamic/indexed/string maps and other extensions remain rejected |
 
-The remaining unsupported rows are source-inspection requirements. The Ikemen
-`nocrouch` assertion is the first observed compiler blocker; later files have not
-compiled successfully.
+The remaining unsupported rows are source-inspection requirements. NotHitBy is
+the first observed compiler blocker; later files have not compiled successfully.
 Keep the corpus unchanged as an integration target. Add small isolated regression
 fixtures for each missing semantic feature, then rerun this complete character.
 The successful switch/loop smoke fixture uses the original CNS KFM with added

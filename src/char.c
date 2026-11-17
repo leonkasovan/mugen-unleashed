@@ -12,6 +12,7 @@
  * CharData.consts, which every player copies.
  */
 #include "mugen.h"
+#include "zss_assert.h"
 #include "zss_binding.h"
 #include "zss_map.h"
 #include "soundcache.h"
@@ -257,7 +258,9 @@ void Player_UpdateInput(Player *p)
         if (back != 0 && fwd == 0) {
             change = 1;
         }
-        if (p->input.keys[KEY_CROUCH] != 0) {
+        /* Port addition: suppress only automatic stand-to-crouch. Commands,
+         * crouch maintenance, and explicit scripted state changes are intact. */
+        if (p->input.keys[KEY_CROUCH] != 0 && !ZssAssert_Test(p,ZSS_ASSERT_NO_CROUCH)) {
             change = 11;
         }
         if (p->input.keys[KEY_JUMP] != 0) {
@@ -2216,6 +2219,7 @@ void Player_Free(Player *p)
     if (p == NULL) {
         return;
     }
+    ZssAssert_ClearPlayer(p);
     ZssMap_ResetPlayer(p);
     if (p->ai_learn) {
         Ai_Merge(&p->data->ai, &p->ai_data);
@@ -2507,6 +2511,9 @@ void Player_Reset(Player *p)
     Coord c;
     int life, i;
 
+    /* Port addition: round reset and Helper_Create's reset start fresh flags;
+     * numeric maps deliberately have a different persistence lifecycle. */
+    ZssAssert_ClearPlayer(p);
     if (p->data == NULL) {
         return;
     }

@@ -49,7 +49,7 @@ $CC $FLAGS $SAN -DMem_Calloc=Test_UtilMem_Calloc -c src/util.c -o "$OUT/util.o"
 # shellcheck disable=SC2086
 $CC $FLAGS $SAN $ZSS_LEAF -c src/zss_program.c -o "$OUT/zss_program.o"
 # shellcheck disable=SC2086
-$CC $FLAGS $SAN tools/test_cns_abi.c $ZSS_SOURCES src/zss_map.c src/cnsparse.c src/keyedarray.c src/compat_linux.c \
+$CC $FLAGS $SAN tools/test_cns_abi.c $ZSS_SOURCES src/zss_assert.c src/zss_map.c src/cnsparse.c src/keyedarray.c src/compat_linux.c \
     "$OUT/globals.o" "$OUT/util.o" "$OUT/zss_program.o" -Wl,--gc-sections ${LDFLAGS:-} -lm -o "$OUT/test_cns_abi"
 # shellcheck disable=SC2086
 ${RUNNER:-} "$OUT/test_cns_abi"
@@ -59,4 +59,11 @@ if [ "${TEST_ZSS_CONTROLLER:-0}" = 1 ]; then
     $CC $FLAGS $SAN tools/test_zss_loading.c -Wl,--gc-sections -lm -o "$OUT/test_zss_loading"
     # shellcheck disable=SC2086
     ${RUNNER:-} "$OUT/test_zss_loading"
+    # Real input decision logic with recording command/state-entry boundaries.
+    # No allocator wrappers are needed: assertion storage is allocation-free.
+    # shellcheck disable=SC2086
+    $CC $FLAGS $SAN tools/test_zss_input.c src/zss_assert.c "$OUT/globals.o" \
+        -Wl,--gc-sections -lm -o "$OUT/test_zss_input"
+    # shellcheck disable=SC2086
+    ${RUNNER:-} "$OUT/test_zss_input"
 fi

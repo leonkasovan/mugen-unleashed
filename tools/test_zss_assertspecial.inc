@@ -34,7 +34,7 @@ static void test_zss_assertspecial(void)
     };
     const char *bad[]={
         "AssertSpecial{}","AssertSpecial{flag2:nowalk}","AssertSpecial{flag3:invisible}",
-        "AssertSpecial{flag:nocrouch}","AssertSpecial{flag:nowalk;flag2:noailevel}",
+        "AssertSpecial{flag:NoSuchFlag}","AssertSpecial{flag:nowalk;flag2:noailevel}",
         "AssertSpecial{flag:nowalk;flag2:intro;flag3:animfreeze}",
         "AssertSpecial{flag:nowalk;enabled:0}","AssertSpecial{flag:nowalk;redirectid:1}",
         "AssertSpecial{flag:nowalk;flag4:invisible}","AssertSpecial{flag:nowalk;flag8:intro}",
@@ -130,7 +130,7 @@ static void test_zss_assertspecial(void)
     assert(Zss_RunBody(program,0,&player,run_assert_leaf,&owner,&result) && !result);
     assert(player.nowalk==1 && player.noautoturn==1 && game.assert_timerfreeze==1);
     Zss_FreeProgram(program);program=NULL;zss_no_allocs();
-    source="[StateDef 0]\nAssertSpecial{flag:nowalk}\n[Function bad()]\nAssertSpecial{flag:nocrouch}\n";
+    source="[StateDef 0]\nAssertSpecial{flag:nowalk}\n[Function bad()]\nAssertSpecial{flag:NoSuchFlag}\n";
     assert(!Zss_CompileProgram(source,strlen(source),&owner,&program,&diagnostic) && program==NULL);zss_no_allocs();
     game=saved_game;player=saved_player;g_outOfMemory=0;
     puts("ok: 20 AssertSpecial flags, exact targets, CNS parity, local call frames, rejection and OOM cleanup");

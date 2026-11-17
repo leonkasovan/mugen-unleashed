@@ -37,6 +37,7 @@
  *   name every parameter "zoom.<name>".
  */
 #include "mugen.h"
+#include "zss_assert.h"
 #include "zss_map.h"
 #include "zss_binding.h"
 #include <limits.h>
@@ -736,7 +737,11 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
                     continue;
                 }
             }
-            if (!AssertSpecial_ParseFlag(s, &kind, &index)) {
+            /* Port addition: ZSS-only flag metadata. Keep legacy CNS names and
+             * its original global/player byte banks unchanged. */
+            if (ctx!=NULL && !_stricmp(s,"nocrouch")) {
+                kind=ZSS_ASSERT_KIND;index=ZSS_ASSERT_NO_CROUCH;
+            } else if (!AssertSpecial_ParseFlag(s, &kind, &index)) {
                 if (i == 0) {
                     Error_Printf("AssertSpecial flag \"%s\" not valid\n", s);
                 } else if (i == 1) {
@@ -1896,11 +1901,17 @@ static int run_remappal(Player *p, StateCtrl *sc)
 static int assert_flag_ctx(Player *p, StateCtrl *sc, int i, ExprEvalCtx *frame)
 {
     int idx = Expr_EvalIntCtx(p, &sc->arg[i], 0, frame);
+    int kind;
 
     if (idx == -1) {
         return 0;
     }
-    if (Expr_EvalIntCtx(p, &sc->arg[3 + i], 0, frame) == 0) {
+    kind=Expr_EvalIntCtx(p, &sc->arg[3 + i], 0, frame);
+    if (kind==ZSS_ASSERT_KIND) {
+        if (!ZssAssert_Set(p,idx)) {
+            Player_Warn(p,"ZSS assertion storage budget exhausted");return -1;
+        }
+    } else if (kind == 0) {
         ((unsigned char *)g_game + offsetof(GameVars, assert_intro))[idx] = 1;
     } else {
         ((unsigned char *)p + offsetof(Player, nostandguard))[idx] = 1;
@@ -2561,9 +2572,9 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
         return 0;
     }
     case SCTRL_ASSERTSPECIAL:
-        assert_flag_ctx(p, sc, 0, frame);
-        assert_flag_ctx(p, sc, 1, frame);
-        assert_flag_ctx(p, sc, 2, frame);
+        if (assert_flag_ctx(p, sc, 0, frame)<0 ||
+            assert_flag_ctx(p, sc, 1, frame)<0 ||
+            assert_flag_ctx(p, sc, 2, frame)<0) return STATECTRL_STOP;
         return 0;
     case SCTRL_ZOOM:
         return run_zoom(p, sc);

@@ -9,6 +9,7 @@
  * stay in double and are rounded to float where the original stores a float.
  */
 #include "mugen.h"
+#include "zss_assert.h"
 
 #define Rd_Sin(x) sin(x)
 
@@ -931,8 +932,11 @@ int Round_Tick(ScreenLoop *screen)
     g->zoom_scale = 1.0f;
     for (i = g->players_first; i <= g->players_last; i++) {
         Player *p = g->players[i];
-        if (p != NULL && p->active && run[i] != 0) {
-            memset(&p->nostandguard, 0, 9);
+        if (p != NULL && p->active) {
+            if (run[i] != 0) memset(&p->nostandguard, 0, 9);
+            /* Port addition: input above consumes the preceding update's
+             * assertions; only running actors expire them before state code. */
+            ZssAssert_BeginTick(p,run[i]);
         }
     }
     /* the players' updates: attackers first, then the rest; again while helpers get created */

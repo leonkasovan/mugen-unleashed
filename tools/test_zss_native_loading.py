@@ -6,6 +6,7 @@ import io
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import signal
 import struct
@@ -87,6 +88,36 @@ ASSERT_PROBE = (
     "[Function hold(enabled)]\n"
     "if $enabled {AssertSpecial{flag:noautoturn;flag2:nowalk}}\n"
 )
+NOCROUCH_PROBE = (
+    "[StateDef -2]\n"
+    "if var(58)=0 {var(58):=1; ChangeState{value:0;ctrl:1}}\n"
+    "if stateNo=10 {\n"
+    "if var(57)=2 && command=\"holddown\" {var(57):=3; AssertSpecial{flag:nocrouch} ChangeState{value:0;ctrl:1}}\n"
+    "else if var(57)=3 && command=\"holddown\" {ChangeState{value:65001}} else {ChangeState{value:65002}}\n}\n"
+    "[StateDef 0;type:S;movetype:I;physics:N;]\nCtrlSet{value:1}\n"
+    "if var(57)=0 {AssertSpecial{flag:nocrouch} if command=\"holddown\" {var(57):=1;}}\n"
+    "else if var(57)=1 {if command=\"holddown\" {var(57):=2;} else {ChangeState{value:65002}}}\n"
+    "else if var(57)=3 {AssertSpecial{flag:nocrouch} ChangeState{value:10}}\n"
+    "else {ChangeState{value:65002}}\n"
+    "[StateDef 65001;type:S;movetype:I;physics:N;]\nCtrlSet{value:0}\n"
+    "[StateDef 65002;type:S;movetype:I;physics:N;]\nCtrlSet{value:0}\n"
+)
+
+
+def build_key_injector(out):
+    """A Linux-only SDL event source; engine code and game assets are untouched."""
+    flags = shlex.split(subprocess.check_output([os.environ.get("PKG_CONFIG", "pkg-config"), "--cflags", "sdl2"], text=True))
+    includes = ["src", "third_party/glad-2.1", "third_party/minizip-0.15",
+                "third_party/lua-5.1.4/src", "third_party/libresample/include"]
+    library = out / "zss-keyinject.so"
+    temporary = out / "keyinject-tmp"
+    temporary.mkdir(exist_ok=True)
+    subprocess.run(shlex.split(os.environ.get("CC", "cc")) + ["-std=c11", "-Wall", "-Wextra", "-Werror", "-shared", "-fPIC",
+                   "-DSDL_MAIN_HANDLED", "-DMUGEN_MEMPROF_NO_WRAP=1"]
+                   + flags + ["-I" + str(ROOT / path) for path in includes]
+                   + [str(ROOT / "tools/test_zss_keyinject.c"), "-ldl", "-o", str(library)],
+                   env=dict(os.environ, TMPDIR=str(temporary)), check=True)
+    return library
 
 
 def sound_bank():
@@ -129,6 +160,7 @@ def main():
         parser.error("output must be inside the repository and outside the source game tree")
     out.mkdir(parents=True, exist_ok=True)
     cases = [
+        ("nocrouch-input", "nocrouch", False),
         ("assert-special", "assert", False),
         ("numeric-maps-human", "maps", False),
         ("numeric-maps-ai", "maps", False),
@@ -149,6 +181,7 @@ def main():
             parser.error("unknown scenario: " + ", ".join(sorted(unknown)))
         cases = [case for case in cases if case[0] in args.case]
     env = dict(os.environ, SDL_VIDEODRIVER="offscreen", SDL_AUDIODRIVER="dummy", MUGEN_ZSS_TRACE="1")
+    injector = build_key_injector(out) if any(case[1] == "nocrouch" for case in cases) else None
     for name, route, invalid in cases:
         with tempfile.TemporaryDirectory(prefix=name + "-", dir=out) as temporary:
             game = Path(temporary) / "game"
@@ -160,6 +193,15 @@ def main():
             text = cfg.read_text()
             for key, value in (("RenderMode", "System"), ("FullScreen", "0"), ("Precache", "0")):
                 text = re.sub(r"(?mi)^" + key + r"\s*=.*$", key + " = " + value, text)
+            if route == "nocrouch":
+                def bind_down(section):
+                    bound, count = re.subn(r"(?mi)^Crouch\s*=.*$", "Crouch = 274", section[0])
+                    if count != 1:
+                        raise RuntimeError("nocrouch-input: missing P1 Crouch key binding")
+                    return bound
+                text, count = re.subn(r"(?ims)^\[P1 Keys\].*?(?=^\[|\Z)", bind_down, text)
+                if count != 1:
+                    raise RuntimeError("nocrouch-input: missing P1 Keys section")
             if route == "sounds":
                 for key, value in (("Sound", "1"), ("Snd.LazyDecode", "1"), ("Snd.Cache.Prewarm", ""),
                                    ("Snd.Cache.Trace", "zss-sound.csv")):
@@ -174,14 +216,14 @@ def main():
             definition = (char / "kfm.def").read_text()
             (char / "kfm.def").unlink()
             probe = "[StateDef -2]\nUnknown{}\n" if invalid else PROBE
-            if route in ("sounds", "palfx", "maps", "assert"):
+            if route in ("sounds", "palfx", "maps", "assert", "nocrouch"):
                 probe = {"sounds": SOUND_PROBE, "palfx": PALFX_PROBE, "maps": MAP_PROBE,
-                         "assert": ASSERT_PROBE}[route]
+                         "assert": ASSERT_PROBE, "nocrouch": NOCROUCH_PROBE}[route]
                 definition = re.sub(r"(?m)^st\s*=.*$", "st = probe.ZsS\nst9 = kfm.cns", definition)
                 if route == "maps":
                     probe = probe.replace("AI_EXPECT", "aiLevelF>0 && aiLevelF=aiLevel" if name.endswith("-ai") else "aiLevelF=0")
                     definition += "\n[Map]\nseed = " + ("var(1)" if invalid else "44") + "\nratio = 1.5\n"
-                if route == "assert":
+                if route in ("assert", "nocrouch"):
                     # This synthetic fixture owns state 0 so native autoturn
                     # can be observed. Keep the ZSS/CNS collision guard intact;
                     # remove only its duplicate from this copied common file.
@@ -217,8 +259,11 @@ def main():
                 "-p1", "probe", "-p2", "kfm", "-sessionseed", "424242"]
             if name == "numeric-maps-ai":
                 command += ["-p1.ai", "1"]
+            process_env = dict(env)
+            if route == "nocrouch":
+                process_env["LD_PRELOAD"] = str(injector) + (":" + env["LD_PRELOAD"] if env.get("LD_PRELOAD") else "")
             with (out / (name + "-stdout.log")).open("w") as stdout:
-                process = subprocess.Popen(command, cwd=game, env=env, stdout=stdout, stderr=subprocess.STDOUT)
+                process = subprocess.Popen(command, cwd=game, env=process_env, stdout=stdout, stderr=subprocess.STDOUT)
                 timed_out = False
                 try:
                     code = process.wait(timeout=5)
@@ -245,7 +290,9 @@ def main():
                   or (route != "cns" and "ZSS state -2 body result 0" not in log)
                   or (route == "cns" and "ZSS state" in log)):
                 raise RuntimeError(name + ": expected a loaded/running ZSS body; inspect " + str(out))
-            if not invalid and route in ("functions", "sounds", "palfx", "maps", "assert") and (
+            if route == "nocrouch" and "zss-keyinject: down" not in stdout:
+                raise RuntimeError(name + ": no SDL down event was injected (requires dynamically linked SDL2)")
+            if not invalid and route in ("functions", "sounds", "palfx", "maps", "assert", "nocrouch") and (
                 "ZSS state -2 body result 5" not in log or "ZSS state 65001 body result 0" not in log
                 or "ZSS state 65002 body result" in log
             ):
