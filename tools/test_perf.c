@@ -41,6 +41,7 @@ static Uint64 Test_Frequency(void) { return 1000; }
 #include "../src/frame.c"
 /* Standalone frame test does not link the optional memory-profiler module. */
 void Memprof_Tick(void) {}
+void SoundCache_Tick(void) {}
 
 static int swaps, uploads, desktop_presents, fail_upload;
 static GameVars game;
