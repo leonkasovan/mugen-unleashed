@@ -75,6 +75,18 @@ MAP_PROBE = (
     "[StateDef 65002;type:S;movetype:I;physics:N;]\nCtrlSet{value:0}\n"
     "[Function write(value)]\nMapSet{map:\"OwNeD\";value:$value}\n"
 )
+ASSERT_PROBE = (
+    "[StateDef -2]\n"
+    "if var(58)=0 {var(58):=1; ChangeState{value:0;ctrl:1}}\n"
+    "[StateDef 0;type:S;movetype:I;physics:N;]\nCtrlSet{value:1}\n"
+    "if time=0 {if facing!=-1 {Turn{}} call hold(1);}\n"
+    "else if time=1 {if facing!=-1 {ChangeState{value:65002}}}\n"
+    "else if time>=2 {if facing=1 {ChangeState{value:65001}} else {ChangeState{value:65002}}}\n"
+    "[StateDef 65001;type:S;movetype:I;physics:N;]\nCtrlSet{value:0}\n"
+    "[StateDef 65002;type:S;movetype:I;physics:N;]\nCtrlSet{value:0}\n"
+    "[Function hold(enabled)]\n"
+    "if $enabled {AssertSpecial{flag:noautoturn;flag2:nowalk}}\n"
+)
 
 
 def sound_bank():
@@ -117,6 +129,7 @@ def main():
         parser.error("output must be inside the repository and outside the source game tree")
     out.mkdir(parents=True, exist_ok=True)
     cases = [
+        ("assert-special", "assert", False),
         ("numeric-maps-human", "maps", False),
         ("numeric-maps-ai", "maps", False),
         ("invalid-map-default", "maps", True),
@@ -161,12 +174,24 @@ def main():
             definition = (char / "kfm.def").read_text()
             (char / "kfm.def").unlink()
             probe = "[StateDef -2]\nUnknown{}\n" if invalid else PROBE
-            if route in ("sounds", "palfx", "maps"):
-                probe = {"sounds": SOUND_PROBE, "palfx": PALFX_PROBE, "maps": MAP_PROBE}[route]
+            if route in ("sounds", "palfx", "maps", "assert"):
+                probe = {"sounds": SOUND_PROBE, "palfx": PALFX_PROBE, "maps": MAP_PROBE,
+                         "assert": ASSERT_PROBE}[route]
                 definition = re.sub(r"(?m)^st\s*=.*$", "st = probe.ZsS\nst9 = kfm.cns", definition)
                 if route == "maps":
                     probe = probe.replace("AI_EXPECT", "aiLevelF>0 && aiLevelF=aiLevel" if name.endswith("-ai") else "aiLevelF=0")
                     definition += "\n[Map]\nseed = " + ("var(1)" if invalid else "44") + "\nratio = 1.5\n"
+                if route == "assert":
+                    # This synthetic fixture owns state 0 so native autoturn
+                    # can be observed. Keep the ZSS/CNS collision guard intact;
+                    # remove only its duplicate from this copied common file.
+                    common, removed = re.subn(
+                        r"(?ims)^\[statedef[ \t]+0[ \t]*\].*?(?=^\[statedef[ \t]|\Z)",
+                        "", (game / "data/common1.cns").read_text())
+                    if removed != 1:
+                        raise RuntimeError("assert-special: expected exactly one common state 0")
+                    (char / "assert-common.cns").write_text(common)
+                    definition = re.sub(r"(?m)^stcommon\s*=.*$", "stcommon = assert-common.cns", definition)
                 if route == "sounds":
                     definition = re.sub(r"(?m)^sound\s*=.*$", "sound = probe.snd", definition)
                     (char / "probe.snd").write_bytes(sound_bank())
@@ -220,7 +245,7 @@ def main():
                   or (route != "cns" and "ZSS state -2 body result 0" not in log)
                   or (route == "cns" and "ZSS state" in log)):
                 raise RuntimeError(name + ": expected a loaded/running ZSS body; inspect " + str(out))
-            if not invalid and route in ("functions", "sounds", "palfx", "maps") and (
+            if not invalid and route in ("functions", "sounds", "palfx", "maps", "assert") and (
                 "ZSS state -2 body result 5" not in log or "ZSS state 65001 body result 0" not in log
                 or "ZSS state 65002 body result" in log
             ):

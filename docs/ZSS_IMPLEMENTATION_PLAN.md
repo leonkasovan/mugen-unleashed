@@ -5,14 +5,15 @@ Sections 1-16 retain the original research/design baseline; section 17 records
 implemented increments, verification and remaining qualification gaps.
 Research date: 2026-11-16 (Asia/Jakarta).
 
-Current loader coverage (2026-11-17): explicit `.zss` primary `st`, additional
+Current loader coverage (2026-11-18): explicit `.zss` primary `st`, additional
 `st0`..`st9`, and `stcommon`. Constants and CMD remain on the CNS path. Numeric
 functions/calls, result bindings and cross-file first-wins lookup are
 implemented, including numeric PlaySnd payloads, static F/S prefixes and
 PalFX/BGPalFX/AllPalFX local expressions. Numeric aiLevelF, static map lookups,
-MapSet/MapAdd/MapReset and numeric DEF defaults are implemented. The unchanged
-upstream KFM now passes its first walk state and stops at AssertSpecial
-(kfm.zss:63:1). Broader controller payloads, block attributes and unsupported
+MapSet/MapAdd/MapReset and numeric DEF defaults are implemented. AssertSpecial
+now supports the twenty existing MUGEN flags through the shared runner. The
+unchanged upstream KFM stops on the Ikemen-only `nocrouch` flag
+(kfm.zss:67:30). Broader controller payloads, block attributes and unsupported
 Ikemen extensions remain open.
 
 ## 1. Decision
@@ -1727,3 +1728,102 @@ Next priority: audit AssertSpecial flag parsing/application with local-frame
 support and strict unsupported-flag rejection, then persistence/hitpause block
 attributes and remaining combat/effect payloads. Keep the pinned corpus intact
 and continue adding small behavioral regressions before enabling each facility.
+
+
+### AssertSpecial MUGEN flags and safe name parsing (2026-11-18)
+
+The audited ZSS controller bridge now accepts `AssertSpecial` with a required
+`flag` and optional `flag2`/`flag3`. Names are compile-time, case-insensitive
+identifiers. They compile to the same six integer metadata expressions used by
+CNS: three flag indices and three destination kinds. No owned payload,
+controller ID, Player/GameVars field, layout or dependency was added.
+
+The supported flags are the engine's complete MUGEN set:
+
+| Destination | Flags |
+|---|---|
+| Executing actor | nostandguard, nocrouchguard, noairguard, noautoturn, noshadow, nojugglecheck, nowalk, unguardable, invisible |
+| Game | intro, roundnotover, noko, nokosnd, nokoslow, nomusic, globalnoshadow, timerfreeze, nobardisplay, nobg, nofg |
+
+`assert_flag_ctx` forwards the live evaluation frame from StateCtrl_ApplyCtx;
+its NULL-frame path preserves CNS behavior. Flag metadata is always constant:
+locals may select a block or supply function arguments, but `$name` is not a
+dynamic flag name. A missing optional flag remains index -1, including when
+flag2 is absent and flag3 is present. Reasserting a flag is idempotent. Actor
+flags affect the executing actor, and global flags affect GameVars. In this
+MUGEN profile `noko` is global, rather than silently adopting Ikemen-specific
+per-character NoKO semantics.
+
+Reference audit: the pinned
+[compiler_functions.go](https://github.com/ikemen-engine/Ikemen-GO/blob/b55af1a13c128c16b4d4331f8f1fe67dcd4f06df/src/compiler_functions.go)
+accepts the same MUGEN names, requires flag, and additionally supports many
+Ikemen flags, flag4..flag8, enabled and redirectid. Its
+[bytecode.go](https://github.com/ikemen-engine/Ikemen-GO/blob/b55af1a13c128c16b4d4331f8f1fe67dcd4f06df/src/bytecode.go)
+resolves target/enabled values and sets actor/global assertions. Those extra
+parameters and unsupported flag names remain hard failures here. In particular,
+`nocrouch`, `noailevel`, `nojump`, `noairjump`, `nobrake`, `animfreeze` and
+`autoguard` are not aliases for a nearby MUGEN flag.
+
+```text
+[Function hold(enabled)]
+if $enabled {AssertSpecial{flag:noautoturn;flag2:nowalk}}
+
+[StateDef 100]
+call hold(1);
+AssertSpecial{flag:roundnotover}
+```
+
+During the audit, AssertSpecial_ParseFlag was found to strcpy an unbounded
+parameter into a 64-byte stack buffer. The shared helper now rejects NULL or a
+name of 64 bytes or more before copying, preserving output slots on failure.
+This explicit portability fix covers both CNS and ZSS. Successful names and
+legacy controller semantics are unchanged. ZSS still rejects missing flag,
+quoted/dynamic/numeric flag names, expression/vector values, duplicate keys,
+unknown flags and unsupported parameters. A late invalid flag releases the
+whole construction/program; an earlier valid flag is never run during parsing.
+
+Validation on Linux x86-64:
+
+- ASan/UBSan/float-cast-overflow host suites pass. Every one of the twenty names
+  is applied to its independently named Player/GameVars field, while complete
+  snapshots verify other fields and a second actor stay unchanged. Cases cover
+  exact CNS/ZSS metadata/output parity, mixed global/actor destinations, omitted
+  flag2 with flag3 present, case variants, repeated assertion, state/function
+  local frames, bad forms, 63/64/4095-byte rejected names and injected calloc
+  failures. Allocation trackers are empty after each construction/teardown.
+  Leak detection remains disabled in this environment.
+- The native MUGEN_MODEL3D=0 engine builds. All thirteen copied-game scenarios
+  pass, including a new AssertSpecial function fixture that turns P1 away from
+  P2 in state 0: noautoturn must preserve facing for the next tick, then ordinary
+  turning must resume after one tick without reassertion. Success is state
+  65001; failure is state 65002. This observes the real leaf runner, flag consumer
+  and Round_Tick clearing, not a test-only engine hook or a log-only controller.
+- To give that synthetic fixture ownership of state 0, the test removes exactly
+  one duplicate state-0 section from its copied common file and points the copied
+  DEF to it. The production CNS/ZSS collision guard is unchanged. Neither the
+  source game tree nor the pinned upstream character is modified.
+- Mutation checks deliberately skip the actor's noautoturn write, then separately
+  omit Round_Tick's actor-flag clearing. The native scenario rejects both with
+  failure state 65002 and no success state. Production sources and binary are
+  restored before the final full run. The mutation scripts/binaries are scratch
+  artifacts, not production branches or permanent hooks.
+- CNS ABI and lexer suites pass. Changed production units pass strict host
+  ANDROID_PORT syntax checks. No MinGW x86/x64, Android NDK or Vita compiler/device
+  is available here; those execution paths are not qualified by host syntax.
+- All seventeen upstream fixture hashes match. The unchanged KFM exits 1 with
+  `AssertSpecial flag "nocrouch" not valid` and
+  `ZSS kfm.zss:67:30: Controller parameters rejected by MUGEN compiler`.
+  Its line-63 nowalk/noautoturn controller now compiles. Later combat/additional/
+  common sources remain unqualified; KFM is still not playable.
+
+Next implementation target: the input-related Ikemen assertion profile, starting
+with nocrouch. Audit each flag's consumer and reset/hitpause timing before
+accepting its name. Use a bounded per-actor extension sidecar keyed by native
+pointer plus generation ID if new state is required, with helper-reuse/player-
+free cleanup and no original layout growth. Cover allowed and blocked automatic
+crouch transitions, unaffected command-expression reads/scripted ChangeState,
+actor/helper isolation, tick expiry and pause behavior. Then audit nojump,
+noairjump, nobrake and autoguard, which also appear in the pinned AI source.
+An accepted name without a functioning consumer is not an implementation.
+Persistence/hitpause block attributes and remaining combat/effect payloads are
+still separate required work before claiming complete ZSS character support.

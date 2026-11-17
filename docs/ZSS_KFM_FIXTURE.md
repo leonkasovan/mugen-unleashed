@@ -57,19 +57,22 @@ Loading character chars/kfm_zss/kfm_zss.def...
 Loading cmd command set kfm.cmd...OK
 Loading cns kfm.const...
 Character kfm_zss.def failed to load
-ZSS kfm.zss:63:1: Controller not yet enabled in the ZSS bridge
+AssertSpecial flag "nocrouch" not valid
+ZSS kfm.zss:67:30: Controller parameters rejected by MUGEN compiler
 ```
 
-The latest probe (2026-11-17) exited **1**, rather than reaching gameplay.
+The latest probe (2026-11-18) exited **1**, rather than reaching gameplay.
 Primary `st`, additional `st0`..`st9` and `stcommon` dispatch explicit `.zss`
 suffixes through the ZSS compiler. Functions/calls and PlaySnd's numeric/local
 parameters and static F/S sound prefixes are implemented. PalFX, BGPalFX and
 AllPalFX now support the shared numeric payload and local frame. EndState,
 SysSnd, CSnd and EXFX compile. Numeric aiLevelF and static map lookup/mutation/
 reset/defaults are implemented; the walk-state conditions at line 41 now compile.
-The first stop is line 63, `AssertSpecial{flag:nowalk;flag2:noautoturn}`.
-This replaces the aiLevelF failure at line 41, PalFX at line 34, PlaySnd at
-line 24, unsupported functions at line 16 and the earlier misleading CNS error
+AssertSpecial now supports all twenty existing MUGEN flags, so the line-63
+nowalk/noautoturn statement compiles. The first stop is line 67, the Ikemen-only
+`AssertSpecial{flag:nocrouch}`. It is rejected, not silently ignored or aliased.
+This replaces the unsupported controller at line 63, aiLevelF at line 41,
+PalFX at line 34, PlaySnd at line 24, unsupported functions at line 16 and the earlier misleading CNS error
 at line 2559. No upstream script was edited to get past these failures.
 This remains a failed compatibility probe,
 not PASS/SKIP or a test of playable ZSS combat. The upstream character's additional
@@ -106,6 +109,13 @@ Host cases cover typed storage, integer wrap, helper/default isolation, generati
 reuse, bounded storage, cloned key ownership and allocation-failure cleanup.
 Full-round map persistence, real helper lifecycle and concurrent precache remain
 unqualified. See the latest implementation record for the exact numeric subset.
+A thirteenth scenario calls AssertSpecial from a function, verifies that
+noautoturn suppresses automatic turning for a tick, and requires turning to
+resume when the flag expires. Both a missing-write mutant and a sticky-flag
+mutant fail. Its synthetic state 0 replaces only the duplicate in a copied
+common file; the production collision guard and upstream fixture are intact.
+Host tests check all twenty player/global flag destinations and safe rejection
+of long flag names, unsupported flags and unsupported parameters.
 F/common-bank selection has host boundary coverage rather than an independently
 traced native common-sound playback. ZIP stream lookup/ownership is checked at the host harness boundary;
 an end-to-end zipped character run remains open (QuickVS accepts loose DEF paths,
@@ -118,11 +128,12 @@ not the roster's ZIP-entry notation).
 | Primary and common-state ZSS loading | Implemented and covered by isolated fixtures; compiling this character's common file remains blocked by its earlier primary-source failure |
 | Functions and calls | Numeric functions/calls, frames, result bindings and first-wins cross-file lookup implemented |
 | Block attributes | Sources use `persistent(0)` and `ignorehitpause` |
-| More controller payloads | PlaySnd and the three PalFX variants implemented; combat/effect controller coverage remains incomplete |
+| More controller payloads | PlaySnd, the three PalFX variants and the twenty MUGEN AssertSpecial flags implemented; combat/effect coverage remains incomplete |
 | Explicit Ikemen extensions | Numeric `aiLevelF`, static `map(...)`, self MapSet/MapAdd/MapReset and numeric defaults implemented; dynamic/indexed/string maps and other extensions remain rejected |
 
-The remaining unsupported rows are source-inspection requirements. AssertSpecial
-is the first observed compiler blocker; later files have not compiled successfully.
+The remaining unsupported rows are source-inspection requirements. The Ikemen
+`nocrouch` assertion is the first observed compiler blocker; later files have not
+compiled successfully.
 Keep the corpus unchanged as an integration target. Add small isolated regression
 fixtures for each missing semantic feature, then rerun this complete character.
 The successful switch/loop smoke fixture uses the original CNS KFM with added

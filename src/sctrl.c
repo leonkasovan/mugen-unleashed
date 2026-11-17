@@ -199,7 +199,8 @@ static const struct {const char *name;int type;} script_controllers[]={
     {"appendtoclipboard",SCTRL_APPENDTOCLIPBOARD},{"clearclipboard",SCTRL_CLEARCLIPBOARD},
     {"playsnd",SCTRL_PLAYSND},{"palfx",SCTRL_PALFX},
     {"bgpalfx",SCTRL_PALFX},{"allpalfx",SCTRL_PALFX},
-    {"mapset",SCTRL_ZSS_MAP},{"mapadd",SCTRL_ZSS_MAP},{"mapreset",SCTRL_ZSS_MAP}
+    {"mapset",SCTRL_ZSS_MAP},{"mapadd",SCTRL_ZSS_MAP},{"mapreset",SCTRL_ZSS_MAP},
+    {"assertspecial",SCTRL_ASSERTSPECIAL}
 };
 int StateCtrl_ScriptType(const char *name)
 {
@@ -1888,15 +1889,18 @@ static int run_remappal(Player *p, StateCtrl *sc)
     return 0;
 }
 
-/* AssertSpecial flag i (0..2): index arg[i] (-1: none), kind arg[3 + i] (0 global, else the player's). */
-static int assert_flag(Player *p, StateCtrl *sc, int i)
+/* AssertSpecial flag i (0..2): index arg[i] (-1: none), kind arg[3 + i]
+ * (0 global, else the player's). Port addition: retain the explicit frame
+ * through the leaf runner; parsed flag metadata is always constant, never a
+ * dynamic flag-name expression. NULL frame preserves the original CNS path. */
+static int assert_flag_ctx(Player *p, StateCtrl *sc, int i, ExprEvalCtx *frame)
 {
-    int idx = Expr_EvalInt(p, &sc->arg[i], 0);
+    int idx = Expr_EvalIntCtx(p, &sc->arg[i], 0, frame);
 
     if (idx == -1) {
         return 0;
     }
-    if (Expr_EvalInt(p, &sc->arg[3 + i], 0) == 0) {
+    if (Expr_EvalIntCtx(p, &sc->arg[3 + i], 0, frame) == 0) {
         ((unsigned char *)g_game + offsetof(GameVars, assert_intro))[idx] = 1;
     } else {
         ((unsigned char *)p + offsetof(Player, nostandguard))[idx] = 1;
@@ -2557,9 +2561,9 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
         return 0;
     }
     case SCTRL_ASSERTSPECIAL:
-        assert_flag(p, sc, 0);
-        assert_flag(p, sc, 1);
-        assert_flag(p, sc, 2);
+        assert_flag_ctx(p, sc, 0, frame);
+        assert_flag_ctx(p, sc, 1, frame);
+        assert_flag_ctx(p, sc, 2, frame);
         return 0;
     case SCTRL_ZOOM:
         return run_zoom(p, sc);

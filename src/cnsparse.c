@@ -26,8 +26,8 @@
  *   instead of AA+AT+AP.
  * - GetHitVar_Get returns xveladd/yveladd and the others as ints read from
  *   the player; zoff is always 0.0 (accepted only for old characters).
- * - AssertSpecial_ParseFlag copies the name to a 64-byte buffer without a
- *   length check (stack overflow in both for longer names).
+ * - PORTABILITY FIX: AssertSpecial_ParseFlag rejects a missing or overlong
+ *   name before copying it into the original 64-byte buffer.
  */
 #include "mugen.h"
 
@@ -378,6 +378,11 @@ int AssertSpecial_ParseFlag(const char *name, int *kind, int *index)
     char buf[0x40];
     int i;
 
+    /* Portability fix: controller values are not bounded by this local buffer.
+     * Reject malformed input without changing the caller's output slots. */
+    if (name == NULL || strlen(name) >= sizeof(buf)) {
+        return 0;
+    }
     strcpy(buf, name);
     _strlwr(buf);
     for (i = 0; i < (int)(sizeof(assert_flags) / sizeof(assert_flags[0])); i++) {
