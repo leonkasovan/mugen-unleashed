@@ -1,6 +1,6 @@
 # ZSS compiler and runtime implementation plan
 
-Status: IMPLEMENTATION IN PROGRESS (experimental subset).
+Status: PINNED KFM PLAYABLE ON LINUX X86-64 (broader compatibility in progress).
 Sections 1-16 retain the original research/design baseline; section 17 records
 implemented increments, verification and remaining qualification gaps.
 Research date: 2026-11-16 (Asia/Jakarta).
@@ -11,10 +11,12 @@ functions/calls, result bindings and cross-file first-wins lookup are
 implemented, including numeric PlaySnd payloads, static F/S prefixes and
 PalFX/BGPalFX/AllPalFX local expressions. Numeric aiLevelF, static map lookups,
 MapSet/MapAdd/MapReset and numeric DEF defaults are implemented. AssertSpecial
-now supports the twenty existing MUGEN flags plus ZSS-only `nocrouch` through
-the shared runner and real input consumer. The unchanged upstream KFM stops on
-NotHitBy (kfm.zss:87:1). Broader controller payloads, block attributes and
-unsupported Ikemen extensions remain open.
+supports the existing MUGEN flags plus nocrouch/nojump/noairjump/nobrake/autoguard.
+The unchanged pinned KFM now loads and is playable in the tested Linux x86-64
+numeric/2D profile: keyboard movement/attacks/damage and two AI matchups reaching
+KO/round completion. The latest section records the qualification and explicit
+limits; broader Ikemen compatibility and cross-platform/device execution remain
+open.
 
 ## 1. Decision
 
@@ -1927,3 +1929,98 @@ unchanged corpus. Retain the bounded assertion sidecar for future separately
 qualified nojump/noairjump/nobrake/autoguard consumers; do not accept those names
 until their effects exist. Persistence/hitpause attributes and the remaining
 combat/effect controllers are still required before claiming full ZSS support.
+
+
+### Playable pinned KFM: combat/controller integration (2026-11-18)
+
+This increment crosses the previous NotHitBy blocker and runs the entire pinned
+KFM corpus without editing any of its 17 hash-verified files. It reuses the real
+MUGEN controllers and collision/damage pipeline rather than substituting test
+state outcomes.
+
+Implemented:
+
+- Explicit compile/evaluation contexts reach combat/effect payloads and their
+  nested helpers: HitBy/NotHitBy, HitDef/ReversalDef, HitOverride, AfterImage,
+  EnvShake, Explod, Pause/SuperPause, animation/state/physics controls, velocity,
+  target/bind/life/state controls, remapping and dust/common effects. Locals remain
+  runtime operands through calls. CNS wrappers continue to supply NULL contexts.
+- Structured hitpause attributes propagate through nested blocks without making
+  ordinary sibling leaves run during hitpause. Function bodies inherit the
+  reference function context. Positive-state persistence gates count executions
+  and only reset after a selected branch, with per-actor storage in existing
+  sctrl_wait bytes. State entry resets those counters, including self reentry;
+  no original struct layout or pointer encoding is changed.
+- ZSS negative states append in load order, preserving both human command and AI
+  state -1 bodies. Positive duplicate states resolve first-wins. Installation
+  builds replacement containers before publishing and transfers retained body
+  ownership on success. Mixed negative CNS/ZSS composition remains an error.
+- ZSS state -4 executes for active actors before regular updates, including
+  paused actors/helpers. Commands-only CMD files are allowed after ZSS states
+  have loaded; the ordinary CNS loader retains its original requirements.
+- New explicit-context expression support: sysvar/sysfvar assignments, intervals
+  within larger logical expressions, p2 redirection, jugglePoints(playerID),
+  mugenVersion(major/minor), and the 2D zero-depth pos z profile. Source token
+  limits count lexer punctuation separately from postfix/operator-stack limits.
+- Additional nojump/noairjump/nobrake/autoguard flags have real input consumers.
+  PrintToConsole uses validated existing text formatting. Empty reversal.attr /
+  HitOverride attr values disable those attributes as in the reference corpus.
+- Failed Explod, EnvShake, HitOverride and combat/pause payload construction now
+  releases partial ownership. Strict ZSS SuperPause honors an invalid Pause
+  prefix; the legacy CNS ignored-return quirk remains behind its wrapper.
+
+Qualification and reproduction:
+
+- `tools/test_zss_kfm.sh` builds a separate --wrap=Round_Tick executable and runs
+  `tools/test_zss_kfm.py` against disposable game copies. Keyboard SDL events
+  exercise walk/jump/crouch, state 200 punches and state 230 kicks with real
+  damage. AI-versus-CNS and AI-versus-ZSS runs must reach a real KO and round 4,
+  execute special/super states and terminate successfully; a frame timeout is
+  never reported as a completed AI match. Runtime CSV and screenshots permit
+  independent inspection. Production binaries contain no test hook.
+- Host regression tests parse new nested payloads with dynamic locals, verify
+  selected values and cleanup, inject recoverable parser allocation failures,
+  and test delayed persistence selection/hitpause nesting, system assignments,
+  interval expressions and target-specific juggle budgets. The allocator tracker
+  follows realloc movement and frees performed outside the included units.
+  Existing CNS, ZSS lexer/controller, loading/function/map/PalFX/sound and real
+  input tests remain required.
+
+Explicit profile/remaining work:
+
+1. Dialogue UI is disabled by the MUGEN motif profile, following the reference
+   runtime's disabled-dialogue early return. Text is validated; no enabled UI is
+   claimed. ForceFeedback follows the existing engine's disabled rumble policy.
+2. Depth gameplay is unsupported. Explod's third position may only be literal
+   zero or the pure zero-depth pos z read. Nonzero/effectful depth is rejected.
+3. Persistence is bounded to 0..255/500 blocks; persistent loop/switch attributes
+   and negative-state/function persistence remain rejected. Mixed CNS/ZSS
+   negative-state composition, complete current Ikemen triggers/controllers and
+   first-class strings need later work.
+4. Original dynamic expression clone/multiply allocation failures remain fatal;
+   recoverable parser-OOM tests do not claim to replace that legacy contract.
+5. Qualification is Linux x86-64, System offscreen, no sound. Cross-compilers for
+   Windows 32/64, NDK/Android and VitaSDK/device execution are unavailable here.
+   Audible output, hardware input and platform hardware remain OPEN.
+
+Final Linux x86-64 results (SDL2 System/offscreen, session seed 424242):
+
+| Scenario | Minimum P1/P2 life | Distinct P1/P2 states | Result |
+|---|---|---|---|
+| Human SDL keyboard -> ZSS KFM vs passive CNS KFM | 1000 / 461 | 11 / 4 | Walk/jump/crouch + punch/kick damage; clean frame-bounded exit |
+| AI ZSS KFM vs AI CNS KFM | 926 / 0 | 33 / 44 | Actual KO, round 4, clean exit |
+| AI ZSS KFM vs AI ZSS KFM | 0 / 278 | 39 / 40 | Actual KO, round 4, clean exit |
+
+The production native build is warning-free. All fourteen native loader/function/
+controller smoke scenarios, the CNS ABI suite, ZSS lexer suite and expanded
+ASan/UBSan/float-cast-overflow controller/loading/input harnesses pass. The
+negative-state append test injects failure at every installation allocation and
+requires the old collection/controller ownership to remain intact. Strict
+ANDROID_PORT host syntax checks pass for all changed production C units; this is
+not an Android link or device test. ASAN_OPTIONS=detect_leaks=0 is required in this
+host environment; explicit live-allocation trackers remain enabled.
+
+A test-adapter mutation removes all SDL key delivery while leaving character and
+engine code intact. The same native human gate rejects it with
+`keyboard movement/attacks/damage missing`; loading and a clean frame-bounded exit
+alone cannot pass. The tested positive executable is restored after the probe.

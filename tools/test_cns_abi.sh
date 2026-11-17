@@ -28,7 +28,7 @@ ZSS_SOURCES=""
 ZSS_LEAF=""
 if [ "${TEST_ZSS_CONTROLLER:-0}" = 1 ]; then
     FLAGS="$FLAGS -DTEST_ZSS_CONTROLLER"
-    LDFLAGS="${LDFLAGS:-} -Wl,--wrap=calloc -Wl,--wrap=free"
+    LDFLAGS="${LDFLAGS:-} -Wl,--wrap=calloc -Wl,--wrap=free -Wl,--wrap=realloc"
     ZSS_SOURCES="src/ini.c src/scriptparams.c src/zss_controller.c src/zss_lex.c src/zss_params.c src/zss_statedef.c src/zss_load.c"
     # Installed-function tests use expression statements; the game/AI leaf
     # adapter is an aborting boundary, not a link of every game subsystem.
@@ -49,8 +49,10 @@ $CC $FLAGS $SAN -DMem_Calloc=Test_UtilMem_Calloc -c src/util.c -o "$OUT/util.o"
 # shellcheck disable=SC2086
 $CC $FLAGS $SAN $ZSS_LEAF -c src/zss_program.c -o "$OUT/zss_program.o"
 # shellcheck disable=SC2086
-$CC $FLAGS $SAN tools/test_cns_abi.c $ZSS_SOURCES src/zss_assert.c src/zss_map.c src/cnsparse.c src/keyedarray.c src/compat_linux.c \
-    "$OUT/globals.o" "$OUT/util.o" "$OUT/zss_program.o" -Wl,--gc-sections ${LDFLAGS:-} -lm -o "$OUT/test_cns_abi"
+$CC $FLAGS $SAN -Dmain=Test_UnusedEngineMain -c src/main.c -o "$OUT/main.o"
+# shellcheck disable=SC2086
+$CC $FLAGS $SAN tools/test_cns_abi.c $ZSS_SOURCES src/zss_assert.c src/zss_map.c src/cnsparse.c src/keyedarray.c src/compat_linux.c src/anim.c \
+    "$OUT/globals.o" "$OUT/util.o" "$OUT/zss_program.o" "$OUT/main.o" -Wl,--gc-sections ${LDFLAGS:-} -lm -o "$OUT/test_cns_abi"
 # shellcheck disable=SC2086
 ${RUNNER:-} "$OUT/test_cns_abi"
 if [ "${TEST_ZSS_CONTROLLER:-0}" = 1 ]; then

@@ -10,6 +10,7 @@
  */
 #include "mugen.h"
 #include "zss_assert.h"
+#include "zss_binding.h"
 
 #define Rd_Sin(x) sin(x)
 
@@ -939,6 +940,9 @@ int Round_Tick(ScreenLoop *screen)
             ZssAssert_BeginTick(p,run[i]);
         }
     }
+    /* Port addition: ZSS -4 has no helper or pause/superpause restriction. */
+    for(i=g->players_first;i<=g->players_last;i++) if(g->players[i]!=NULL && g->players[i]->active)
+        Zss_RunGlobalState(g->players[i]);
     /* the players' updates: attackers first, then the rest; again while helpers get created */
     g->player_tick[64] = 0;
     for (i = g->players_first; i <= g->players_last; i++) {

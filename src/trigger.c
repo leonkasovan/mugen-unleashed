@@ -187,7 +187,7 @@ int Trigger_PopFloat(float *out)
 /* 0x004561B0: arguments a trigger pops from the evaluation stack. */
 int Trigger_ArgCount(int id)
 {
-    if ((unsigned int)(id - TRIGGER_SIN) <= 0x1F) {
+    if (id==TRIGGER_ZSS_JUGGLEPOINTS || (unsigned int)(id - TRIGGER_SIN) <= 0x1F) {
         return 1;
     }
     if (id == TRIGGER_LOG) {
@@ -536,7 +536,9 @@ int Trigger_ParseCtx(const char *s, CharData *owner, ExprValue *tokens, char *ty
 
     /* Redirection: "parent, ", "root, ", "helper(ID), "... */
     t.redirect = TRIGGER_REDIRECT_NONE;
-    if (_stricmp(name, "parent") == 0) {
+    if (ctx!=NULL && !_stricmp(name,"p2")) {
+        t.redirect=TRIGGER_REDIRECT_ENEMYNEAR;Expr_SetInt(&t.redirect_arg,0);
+    } else if (_stricmp(name, "parent") == 0) {
         t.redirect = TRIGGER_REDIRECT_PARENT;
     } else if (_stricmp(name, "root") == 0) {
         t.redirect = TRIGGER_REDIRECT_ROOT;
@@ -614,6 +616,8 @@ int Trigger_ParseCtx(const char *s, CharData *owner, ExprValue *tokens, char *ty
     if (id == -1 && ctx!=NULL) {
         if (!_stricmp(name,"ailevelf")) id=TRIGGER_ZSS_AILEVELF;
         else if (!_stricmp(name,"map")) id=TRIGGER_ZSS_MAP;
+        else if (!_stricmp(name,"jugglepoints")) id=TRIGGER_ZSS_JUGGLEPOINTS;
+        else if (!_stricmp(name,"mugenversion")) id=TRIGGER_ZSS_MUGENVERSION;
     }
     if (id == -1) {
         Error_Printf("Invalid trigger: %s\n", name);
@@ -663,6 +667,16 @@ int Trigger_ParseCtx(const char *s, CharData *owner, ExprValue *tokens, char *ty
         if (t.data==NULL) goto fail;
         strcpy(t.data,key);pos=(int)(e-s)+1;
     }
+    if (t.id==TRIGGER_ZSS_MUGENVERSION) {
+        if(s[pos++]!='(') goto fail;
+        while(is_blank(s[pos])) pos++;
+        pos=read_word(s,pos,word,sizeof(word),0,&len);if(pos<0) goto fail;
+        if(!_stricmp(word,"major")) t.value=0;
+        else if(!_stricmp(word,"minor")) t.value=1;
+        else goto fail;
+        while(is_blank(s[pos])) pos++;
+        if(s[pos++]!=')') goto fail;
+    }
     /* Function forms: ishelper(ID), numhelper(ID), numexplod(ID), numtarget(ID). */
     if (t.id == TRIGGER_ISHELPER || t.id == TRIGGER_NUMHELPER || t.id == TRIGGER_NUMEXPLOD ||
         t.id == TRIGGER_NUMTARGET) {
@@ -675,7 +689,7 @@ int Trigger_ParseCtx(const char *s, CharData *owner, ExprValue *tokens, char *ty
                                            : TRIGGER_NUMTARGET_ID;
         goto one_arg;
     }
-    if (t.id >= TRIGGER_SIN && t.id <= TRIGGER_CONST720P) {
+    if (t.id==TRIGGER_ZSS_JUGGLEPOINTS || (t.id >= TRIGGER_SIN && t.id <= TRIGGER_CONST720P)) {
     one_arg:
         if (s[pos] != '(') {
             goto fail;
@@ -906,7 +920,9 @@ int Trigger_ParseCtx(const char *s, CharData *owner, ExprValue *tokens, char *ty
             } else if (c == 'y') {
                 t.value = 1;
             } else if (c == 'z') {
-                if (owner->mugenversion >= g_game->compat_version[1]) {
+                if (ctx!=NULL && t.id==TRIGGER_POS) {
+                    t.id=TRIGGER_ZSS_POSZ; /* 2D stage profile: depth is zero */
+                } else if (owner->mugenversion >= g_game->compat_version[1]) {
                     goto fail;
                 }
                 t.value = 2;
@@ -1578,6 +1594,19 @@ static int Trigger_EvalZssNumeric(Player *target, const Trigger *t)
         value.f=Zss_AiLevelF(target);type=EXPR_FLOAT;
     } else if (t->id==TRIGGER_ZSS_MAP) {
         type=ZssMap_Read(target,(const char *)t->data,&value);
+    } else if (t->id==TRIGGER_ZSS_POSZ) {
+        value.f=0;type=EXPR_FLOAT;
+    } else if (t->id==TRIGGER_ZSS_MUGENVERSION) {
+        value.i=(target->data->mugenversion>>(t->value ? 16 : 24))&255;type=EXPR_INT;
+    } else if (t->id==TRIGGER_ZSS_JUGGLEPOINTS) {
+        Player *victim;
+        TargetEntry *entry;
+        int id;
+        if (Trigger_PopInt(target,&id)==3) {ExprStack_Push(0,EXPR_BOTTOM);return 1;}
+        victim=Player_FindById(id);
+        entry=victim!=NULL ? Targets_FindPlayer(target->targets,victim) : NULL;
+        value.i=entry!=NULL ? entry->juggle : target->consts.airjuggle;
+        type=EXPR_INT;
     } else return 0;
     ExprStack_Push(value.i,type);return 1;
 }

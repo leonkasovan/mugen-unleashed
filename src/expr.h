@@ -65,6 +65,10 @@
 #define EXPR_OP_LPAREN      28  /* ( (never output) */
 #define EXPR_OP_RPAREN      29  /* ) (never output) */
 
+/* Port addition: ZSS system-variable assignments; legacy CNS emits neither. */
+#define EXPR_OP_SYSASSIGN 30
+#define EXPR_OP_SYSFASSIGN 31
+
 /* Trigger ids the expression code knows about (Trigger.id). */
 #define TRIGGER_VAR         0x157
 #define TRIGGER_FVAR        0x158

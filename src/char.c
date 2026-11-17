@@ -263,18 +263,18 @@ void Player_UpdateInput(Player *p)
         if (p->input.keys[KEY_CROUCH] != 0 && !ZssAssert_Test(p,ZSS_ASSERT_NO_CROUCH)) {
             change = 11;
         }
-        if (p->input.keys[KEY_JUMP] != 0) {
+        if (p->input.keys[KEY_JUMP] != 0 && !ZssAssert_Test(p,ZSS_ASSERT_NO_JUMP)) {
             change = 7;
         }
     }
     if (p->statetype == STATETYPE_CROUCH && p->input.keys[KEY_CROUCH] != 0) {
         keep_crouch = 1;
     }
-    if (p->statetype == STATETYPE_AIR && key == 1) {
+    if (p->statetype == STATETYPE_AIR && key == 1 && !ZssAssert_Test(p,ZSS_ASSERT_NO_AIR_JUMP)) {
         change = 10;
     }
     p->in_guard_dist = 0;
-    if (g->game_type_m == 0 && p->input.keys[KEY_LEFT] != 0 &&
+    if (g->game_type_m == 0 && (p->input.keys[KEY_LEFT] != 0 || ZssAssert_Test(p,ZSS_ASSERT_AUTO_GUARD)) &&
         ((p->movetype == MOVETYPE_IDLE && (p->ctrl != 0 || p->state_no == 52)) || p->state_no == 151 ||
          p->state_no == 153 || p->state_no == 155) &&
         !(p->statetype == STATETYPE_STAND && p->nostandguard) &&
@@ -350,7 +350,7 @@ void Player_UpdateInput(Player *p)
         }
         break;
     default:
-        if (p->state_no == 20) {
+        if (p->state_no == 20 && !ZssAssert_Test(p,ZSS_ASSERT_NO_BRAKE)) {
             p->prev_state_no = 20;
             p->state_no = 0;
             p->state_time = 0;
@@ -847,7 +847,11 @@ CharData *Char_LoadDef(const char *dir, Stream *s)
         Stream_Close(zs);
         zs = NULL;
     }
-    if (!StateDefs_LoadMore(ini, c->states, c)) {
+    /* Port addition: ZSS command states can live in command.zss. A CMD
+     * containing only [Command]/[Remap] is valid for a ZSS character; ordinary
+     * CNS loading retains its original requirement for at least one state. */
+    if (!(has_zss && Ini_CountGroups(ini,"statedef ")==0) &&
+        !StateDefs_LoadMore(ini, c->states, c)) {
         Char_ReportError(buf, ini, debug);
         return NULL;
     }

@@ -18,6 +18,7 @@
 #include <pthread.h>
 
 #include "mugen.h"
+#include "zss_binding.h"
 
 /* The state list a player runs: the custom states of another player, or its own. */
 static StateDefs *Player_StateList(const Player *p)
@@ -45,6 +46,10 @@ int Player_ChangeState(int state, Player *p)
     p->prev_state_no = p->state_no;
     p->state_no = state;
     p->state_time = 0;
+    if(Player_StateList(p)!=NULL && Player_StateList(p)->list!=NULL) {
+        int slot=KeyedArray_Find(Player_StateList(p)->list,state,0);
+        if(slot>=0) Zss_PrepareStateCounters(p,(StateDef *)(Player_StateList(p)->list->data+Player_StateList(p)->list->elem_size*slot),1);
+    }
     if (!ok) {
         Player_Warnf(p, "changed to invalid state %i (from state %i)\n", state, p->prev_state_no);
     }

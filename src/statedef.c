@@ -460,6 +460,7 @@ int Player_RunState(Player *p)
             return 0;
         }
         p->state_exists = 1;
+        Zss_PrepareStateCounters(p,sd,0);
         if (p->state_time == 0) {
             /* entering the state */
             if (!Expr_EvalInt(p, &sd->hitcountpersist, 1)) {

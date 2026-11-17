@@ -77,7 +77,7 @@ int Expr_IntPow(int *out, int base, int exp)
 /* 0x004016F0: '~' is tested as the character, not EXPR_OP_BNOT (original bug). */
 int Expr_IsRightAssoc(int op)
 {
-    return op == EXPR_OP_ASSIGN || op == EXPR_OP_FASSIGN || op == EXPR_OP_NOT || op == '~' || op == EXPR_OP_NEG;
+    return op == EXPR_OP_ASSIGN || op == EXPR_OP_FASSIGN || op == EXPR_OP_SYSASSIGN || op == EXPR_OP_SYSFASSIGN || op == EXPR_OP_NOT || op == '~' || op == EXPR_OP_NEG;
 }
 
 /* 0x00401720 */
@@ -96,7 +96,9 @@ int Expr_Precedence(int op)
         return 5;
     case EXPR_OP_BAND:
         return 6;
+    case EXPR_OP_SYSASSIGN:
     case EXPR_OP_ASSIGN:
+    case EXPR_OP_SYSFASSIGN:
     case EXPR_OP_FASSIGN:
         return 7;
     case EXPR_OP_EQ:
@@ -153,6 +155,7 @@ int Expr_OpAcceptsMode(int op, int mode)
     case EXPR_OP_XOR:
     case EXPR_OP_POW:
     case EXPR_OP_NEG:
+    case EXPR_OP_SYSFASSIGN:
     case EXPR_OP_FASSIGN:
     case EXPR_OP_ADD:
     case EXPR_OP_SUB:
@@ -164,6 +167,7 @@ int Expr_OpAcceptsMode(int op, int mode)
     case EXPR_OP_BAND:
     case EXPR_OP_BOR:
     case EXPR_OP_BXOR:
+    case EXPR_OP_SYSASSIGN:
     case EXPR_OP_ASSIGN:
     case EXPR_OP_BNOT:
     case EXPR_OP_MOD:
@@ -331,7 +335,8 @@ static int Expr_ParseBody(const char *s, ExprValue *out_tokens, char *out_types,
                     goto fail;
                 }
                 trig = tokens[n - 1].trig;
-                if (trig->id != TRIGGER_FVAR && trig->id != TRIGGER_VAR) {
+                if (trig->id != TRIGGER_FVAR && trig->id != TRIGGER_VAR &&
+                    !(ctx!=NULL && (trig->id==TRIGGER_SYSVAR || trig->id==TRIGGER_SYSFVAR))) {
                     goto fail;
                 }
                 if (trig->redirect != 0) {
@@ -340,9 +345,11 @@ static int Expr_ParseBody(const char *s, ExprValue *out_tokens, char *out_types,
                 if (trig->id == TRIGGER_FVAR) {
                     op = EXPR_OP_FASSIGN;
                 }
+                if (trig->id==TRIGGER_SYSVAR) op=EXPR_OP_SYSASSIGN;
+                if (trig->id==TRIGGER_SYSFVAR) op=EXPR_OP_SYSFASSIGN;
                 if (Expr_Precedence((char)op) < top_prec) {
                     c = ops[top];
-                    if (c != EXPR_OP_LPAREN && c != EXPR_OP_ASSIGN && c != EXPR_OP_FASSIGN) {
+                    if (c != EXPR_OP_LPAREN && c != EXPR_OP_ASSIGN && c != EXPR_OP_FASSIGN && c != EXPR_OP_SYSASSIGN && c != EXPR_OP_SYSFASSIGN) {
                         goto fail;
                     }
                 }
@@ -409,6 +416,8 @@ static int Expr_ParseBody(const char *s, ExprValue *out_tokens, char *out_types,
             case EXPR_OP_OR:
             case EXPR_OP_XOR:
             case EXPR_OP_POW:
+            case EXPR_OP_SYSASSIGN:
+            case EXPR_OP_SYSFASSIGN:
             case EXPR_OP_ASSIGN:
             case EXPR_OP_FASSIGN:
                 cur += 2;
@@ -443,9 +452,10 @@ static int Expr_ParseBody(const char *s, ExprValue *out_tokens, char *out_types,
                 while (Char_IsSpace(*p) && *p != '\0') {
                     p++;
                 }
-                /* Port addition: a ZSS call argument may end at a comma after
-                 * an interval. Keep the original CNS restriction unchanged. */
-                if (*p != ')' && *p != '\0' && !(ctx != NULL && *p == ',')) {
+                /* Port addition: ZSS allows intervals within a larger infix
+                 * expression. The main parser checks the following operator;
+                 * keep the original CNS restriction unchanged. */
+                if (ctx == NULL && *p != ')' && *p != '\0') {
                     goto fail;
                 }
             }
@@ -487,7 +497,7 @@ static int Expr_ParseBody(const char *s, ExprValue *out_tokens, char *out_types,
                     while (Char_IsSpace(*p)) {
                         p++;
                     }
-                    if (*p != ')' && *p != '\0' && !(ctx != NULL && *p == ',')) {
+                    if (ctx == NULL && *p != ')' && *p != '\0') {
                         goto fail;
                     }
                 }
@@ -620,6 +630,8 @@ static int Expr_ParseBody(const char *s, ExprValue *out_tokens, char *out_types,
             case EXPR_OP_BAND:
             case EXPR_OP_BOR:
             case EXPR_OP_BXOR:
+            case EXPR_OP_SYSASSIGN:
+            case EXPR_OP_SYSFASSIGN:
             case EXPR_OP_ASSIGN:
             case EXPR_OP_FASSIGN:
             case EXPR_OP_ADD:
@@ -774,7 +786,8 @@ static int expr_verify_lazy(const ExprValue *code, const char *types, int n)
             if (d<need || !expr_flow_depth(depths,i+1,d-need+1)) return 0;
             break;
         case EXPR_OP:
-            if (code[i].i<EXPR_OP_EQ || code[i].i>EXPR_OP_MOD) return 0;
+            if ((code[i].i<EXPR_OP_EQ || code[i].i>EXPR_OP_MOD) &&
+                code[i].i!=EXPR_OP_SYSASSIGN && code[i].i!=EXPR_OP_SYSFASSIGN) return 0;
             need=expr_arity(code[i].i);
             if (need==3) width=2;
             if (d<need || !expr_flow_depth(depths,i+width,d-need+1)) return 0;
@@ -819,7 +832,7 @@ static int expr_pure(const Expr *e, unsigned depth)
     for (i=0;i<e->count;i++) {
         if (e->t.types[i]==EXPR_LOCAL) return 0;
         if (e->t.types[i]==EXPR_TRIGGER && !expr_pure_trigger(e->u.tokens[i].trig,depth+1)) return 0;
-        if (e->t.types[i]==EXPR_OP && (e->u.tokens[i].i==EXPR_OP_ASSIGN || e->u.tokens[i].i==EXPR_OP_FASSIGN)) return 0;
+        if (e->t.types[i]==EXPR_OP && (e->u.tokens[i].i==EXPR_OP_ASSIGN || e->u.tokens[i].i==EXPR_OP_FASSIGN || e->u.tokens[i].i==EXPR_OP_SYSASSIGN || e->u.tokens[i].i==EXPR_OP_SYSFASSIGN)) return 0;
     }
     return 1;
 }
@@ -838,7 +851,7 @@ static int expr_lower_lazy(ExprValue *tokens, char *types, int n, ExprValue *out
         else if (types[i]==EXPR_OP) {
             arity=expr_arity(tokens[i].i);
             if (arity==3) width=2;
-            if (tokens[i].i==EXPR_OP_ASSIGN || tokens[i].i==EXPR_OP_FASSIGN) pure=0;
+            if (tokens[i].i==EXPR_OP_ASSIGN || tokens[i].i==EXPR_OP_FASSIGN || tokens[i].i==EXPR_OP_SYSASSIGN || tokens[i].i==EXPR_OP_SYSFASSIGN) pure=0;
         } else if (types[i]!=EXPR_INT && types[i]!=EXPR_FLOAT && types[i]!=EXPR_LOCAL) return 0;
         if (arity>3 || top<arity || used>=EXPR_MAX_TOKENS || i+width>n) return 0;
         node=&nodes[used];node->at=i;node->width=width;node->arity=arity;
@@ -1402,6 +1415,21 @@ int Expr_EvalCtx(Player *p, const Expr *e, int *iout, float *fout, ExprEvalCtx *
             }
             ExprStack_Push(result.i, EXPR_FLOAT);
             break;
+        case EXPR_OP_SYSASSIGN:
+        case EXPR_OP_SYSFASSIGN:
+            idx=at==EXPR_FLOAT ? Ftol((double)fa) : a.i;
+            if (op==EXPR_OP_SYSASSIGN) {
+                result.i=bt==EXPR_INT ? b.i : Ftol((double)b.f);
+                if ((unsigned int)idx<5) p->sysvar[idx]=result.i;
+                else Player_Warn(p,"Assignment to illegal system variable ignored");
+                ExprStack_Push(result.i,EXPR_INT);
+            } else {
+                result.f=bt==EXPR_INT ? (float)b.i : b.f;
+                if ((unsigned int)idx<5) memcpy(&p->sysfvar[idx],&result.f,sizeof(result.f));
+                else Player_Warn(p,"Assignment to illegal system float variable ignored");
+                ExprStack_Push(result.i,EXPR_FLOAT);
+            }
+            break;
         case EXPR_OP_ASSIGN:
             /* Only reachable with int operands (or bottom ones, read as floats). */
             if (bt == EXPR_INT) {
@@ -1626,6 +1654,8 @@ int Expr_EvalCtx(Player *p, const Expr *e, int *iout, float *fout, ExprEvalCtx *
         case EXPR_OP_POW:
             Player_Warn(p, "Invalid exponentiation");
             break;
+        case EXPR_OP_SYSASSIGN:
+        case EXPR_OP_SYSFASSIGN:
         case EXPR_OP_ASSIGN:
         case EXPR_OP_FASSIGN:
             Player_Warn(p, "Short-circuited var assign ignored");

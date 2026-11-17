@@ -641,11 +641,17 @@ void Explods_DrawShadows(SysDrawList *list)
 void Explod_SetParams(Player *p, SysDrawItem *e, const ExplodParams *ep, StateRunCtx *ctx, int modify,
                       const StateCtrl *sc)
 {
+    Explod_SetParamsCtx(p, e, ep, ctx, modify, sc, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+void Explod_SetParamsCtx(Player *p, SysDrawItem *e, const ExplodParams *ep, StateRunCtx *ctx, int modify,
+                      const StateCtrl *sc, ExprEvalCtx *frame)
+{
     int v, r, gg, b;
     float f;
 
     if (!modify) {
-        e->id = Expr_EvalInt(p, &ep->id, 1);
+        e->id = Expr_EvalIntCtx(p, &ep->id, 1, frame);
         if (e->id < 0) {
             e->id = 0;
             Player_WarnAt(p, sc, "%s", "negative explod ID");
@@ -670,7 +676,7 @@ void Explod_SetParams(Player *p, SysDrawItem *e, const ExplodParams *ep, StateRu
             facing = 1;
         }
         e->postype = ep->postype;
-        face = Expr_EvalInt(p, &ep->facing, 1);
+        face = Expr_EvalIntCtx(p, &ep->facing, 1, frame);
         if (face != 1 && face != -1) {
             face = 1;
             Player_WarnAt(p, sc, "%s", "explod facing param must be 1 or -1");
@@ -678,26 +684,26 @@ void Explod_SetParams(Player *p, SysDrawItem *e, const ExplodParams *ep, StateRu
         if (face * facing == -1) {
             e->flip |= DRAW_FLIP_H;
         }
-        v = Expr_EvalInt(p, &ep->vfacing, 1);
+        v = Expr_EvalIntCtx(p, &ep->vfacing, 1, frame);
         if (v == -1) {
             e->flip |= DRAW_FLIP_V;
         } else if (v != 1) {
             Player_WarnAt(p, sc, "%s", "explod vfacing param must be 1 or -1");
         }
         dir = (double)facing;
-        e->offset_x = (float)(Player_FromLocalCoord(p, Expr_EvalFloat(p, &ep->pos[0])) * dir);
-        e->offset_y = (float)Player_FromLocalCoord(p, Expr_EvalFloat(p, &ep->pos[1]));
+        e->offset_x = (float)(Player_FromLocalCoord(p, Expr_EvalFloatCtx(p, &ep->pos[0], frame)) * dir);
+        e->offset_y = (float)Player_FromLocalCoord(p, Expr_EvalFloatCtx(p, &ep->pos[1], frame));
         e->offset_x = off_x + e->offset_x;
         e->offset_y = e->offset_y + off_y;
 
-        rnd = Expr_EvalInt(p, &ep->random[0], 1);
+        rnd = Expr_EvalIntCtx(p, &ep->random[0], 1, frame);
         if (rnd < 0) {
             rnd = 0;
             Player_WarnAt(p, sc, "%s", "negative explod random param");
         }
         v = Match_Random() % (rnd + 1) - ((rnd + 1) >> 1);
         e->offset_x = (float)(Player_FromLocalCoord(p, (double)v) + e->offset_x);
-        rnd = Expr_EvalInt(p, &ep->random[1], 1);
+        rnd = Expr_EvalIntCtx(p, &ep->random[1], 1, frame);
         if (rnd < 0) {
             rnd = 0;
             Player_WarnAt(p, sc, "%s", "negative explod random param");
@@ -707,37 +713,37 @@ void Explod_SetParams(Player *p, SysDrawItem *e, const ExplodParams *ep, StateRu
 
         e->pos.x = (double)x + e->offset_x;
         e->pos.y = (double)e->offset_y + y;
-        e->vel.x = Player_FromLocalCoord(p, Expr_EvalFloat(p, &ep->vel[0])) * dir;
-        e->vel.y = Player_FromLocalCoord(p, Expr_EvalFloat(p, &ep->vel[1]));
-        e->accel.x = Player_FromLocalCoord(p, Expr_EvalFloat(p, &ep->accel[0])) * dir;
-        e->accel.y = Player_FromLocalCoord(p, Expr_EvalFloat(p, &ep->accel[1]));
+        e->vel.x = Player_FromLocalCoord(p, Expr_EvalFloatCtx(p, &ep->vel[0], frame)) * dir;
+        e->vel.y = Player_FromLocalCoord(p, Expr_EvalFloatCtx(p, &ep->vel[1], frame));
+        e->accel.x = Player_FromLocalCoord(p, Expr_EvalFloatCtx(p, &ep->accel[0], frame)) * dir;
+        e->accel.y = Player_FromLocalCoord(p, Expr_EvalFloatCtx(p, &ep->accel[1], frame));
         if (modify && e->bindtime == 0) {
             e->bindtime = 1;
         }
     }
 
-    f = Expr_EvalFloat(p, &ep->scale[0]);
+    f = Expr_EvalFloatCtx(p, &ep->scale[0], frame);
     if (f != -FLT_MAX) {
         e->scale.x = Player_FromLocalCoord(p, f) * e->scale_mul;
     }
-    f = Expr_EvalFloat(p, &ep->scale[1]);
+    f = Expr_EvalFloatCtx(p, &ep->scale[1], frame);
     if (f != -FLT_MAX) {
         e->scale.y = Player_FromLocalCoord(p, f) * e->scale_mul;
     }
-    f = Expr_EvalFloat(p, &ep->angle);
+    f = Expr_EvalFloatCtx(p, &ep->angle, frame);
     if (f != -FLT_MAX) {
         e->angle = f;
     }
-    f = Expr_EvalFloat(p, &ep->yangle);
+    f = Expr_EvalFloatCtx(p, &ep->yangle, frame);
     if (f != -FLT_MAX) {
         e->yangle = f;
     }
-    f = Expr_EvalFloat(p, &ep->xangle);
+    f = Expr_EvalFloatCtx(p, &ep->xangle, frame);
     if (f != -FLT_MAX) {
         e->xangle = f;
     }
 
-    v = Expr_EvalInt(p, &ep->bindtime, 1);
+    v = Expr_EvalIntCtx(p, &ep->bindtime, 1, frame);
     if (v != INT_MIN) {
         if (v < -1) {
             v = -1;
@@ -745,7 +751,7 @@ void Explod_SetParams(Player *p, SysDrawItem *e, const ExplodParams *ep, StateRu
         }
         e->bindtime = v;
     }
-    v = Expr_EvalInt(p, &ep->bindid, 1);
+    v = Expr_EvalIntCtx(p, &ep->bindid, 1, frame);
     if (v != INT_MIN && v != -2) {
         if (e->space == 1) {
             Player_WarnAt(p, sc, "%s", "Explod in screen space cannot be bound to a player");
@@ -757,11 +763,11 @@ void Explod_SetParams(Player *p, SysDrawItem *e, const ExplodParams *ep, StateRu
             PlayerRef_Set(EX_BIND(e), p, 1);
         }
     }
-    v = Expr_EvalInt(p, &ep->ontop, 1);
+    v = Expr_EvalIntCtx(p, &ep->ontop, 1, frame);
     if (v != INT_MIN) {
         e->layer = v != 0 ? 2 : 0;
     }
-    v = Expr_EvalInt(p, &ep->removetime, 1);
+    v = Expr_EvalIntCtx(p, &ep->removetime, 1, frame);
     if (v != INT_MIN) {
         if (v < -2) {
             Player_WarnAt(p, sc, "%s", "Illegal removetime for explod");
@@ -774,9 +780,9 @@ void Explod_SetParams(Player *p, SysDrawItem *e, const ExplodParams *ep, StateRu
         }
     }
     /* supermovetime, or the removetime with supermove (only when supermovetime is 0 or not given) */
-    v = Expr_EvalInt(p, &ep->supermovetime, 1);
+    v = Expr_EvalIntCtx(p, &ep->supermovetime, 1, frame);
     if (v == 0 || v == INT_MIN) {
-        int sm = Expr_EvalInt(p, &ep->supermove, 1);
+        int sm = Expr_EvalIntCtx(p, &ep->supermove, 1, frame);
         if (sm != INT_MIN && sm != 0) {
             e->pause_movetime[1] = e->time;
         } else if (v != INT_MIN) {
@@ -785,12 +791,12 @@ void Explod_SetParams(Player *p, SysDrawItem *e, const ExplodParams *ep, StateRu
     } else {
         e->pause_movetime[1] = v == -2 ? e->time : v;
     }
-    v = Expr_EvalInt(p, &ep->pausemovetime, 1);
+    v = Expr_EvalIntCtx(p, &ep->pausemovetime, 1, frame);
     if (v != INT_MIN) {
         e->pause_movetime[0] = v == -2 ? e->time : v;
     }
     if (e->layer == 0) {
-        v = Expr_EvalInt(p, &ep->sprpriority, 1);
+        v = Expr_EvalIntCtx(p, &ep->sprpriority, 1, frame);
         if (v != INT_MIN) {
             e->anim->layer = v;
             e->anim->queue = g_game->sprite_layer1;
@@ -798,10 +804,10 @@ void Explod_SetParams(Player *p, SysDrawItem *e, const ExplodParams *ep, StateRu
     } else {
         e->anim->queue = NULL;
     }
-    r = Expr_EvalInt(p, &ep->shadow[0], 1);
+    r = Expr_EvalIntCtx(p, &ep->shadow[0], 1, frame);
     if (r != INT_MIN) {
-        gg = Expr_EvalInt(p, &ep->shadow[1], 1);
-        b = Expr_EvalInt(p, &ep->shadow[2], 1);
+        gg = Expr_EvalIntCtx(p, &ep->shadow[1], 1, frame);
+        b = Expr_EvalIntCtx(p, &ep->shadow[2], 1, frame);
         if (r < -1 || gg < -1 || b < -1 || r > 0xFF || gg > 0xFF || b > 0xFF) {
             Player_WarnAt(p, sc, "%s", "Illegal shadow color");
             e->shadow = -1;
@@ -811,18 +817,18 @@ void Explod_SetParams(Player *p, SysDrawItem *e, const ExplodParams *ep, StateRu
             e->shadow = (int)Video_MapRGB(r, gg, b);
         }
     }
-    v = Expr_EvalInt(p, &ep->removeongethit, 1);
+    v = Expr_EvalIntCtx(p, &ep->removeongethit, 1, frame);
     if (v != INT_MIN) {
         e->removeongethit = v;
     }
-    v = Expr_EvalInt(p, &ep->ignorehitpause, 1);
+    v = Expr_EvalIntCtx(p, &ep->ignorehitpause, 1, frame);
     if (v != INT_MIN) {
         e->ignorehitpause = v;
     }
     if (ep->trans != INT_MIN) {
         e->trans = ep->trans;
     }
-    v = Expr_EvalInt(p, &ep->alpha[0], 1);
+    v = Expr_EvalIntCtx(p, &ep->alpha[0], 1, frame);
     if (v != INT_MIN) {
         e->alpha_src = v;
     }
@@ -832,7 +838,7 @@ void Explod_SetParams(Player *p, SysDrawItem *e, const ExplodParams *ep, StateRu
     if (e->alpha_src > 0x100) {
         e->alpha_src = 0x100;
     }
-    v = Expr_EvalInt(p, &ep->alpha[1], 1);
+    v = Expr_EvalIntCtx(p, &ep->alpha[1], 1, frame);
     if (v != INT_MIN) {
         e->alpha_dst = v;
     }
@@ -851,11 +857,16 @@ void Explod_SetParams(Player *p, SysDrawItem *e, const ExplodParams *ep, StateRu
  */
 void Explod_Create(Player *p, ExplodParams *ep, StateRunCtx *ctx, StateCtrl *sc)
 {
+    Explod_CreateCtx(p, ep, ctx, sc, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+void Explod_CreateCtx(Player *p, ExplodParams *ep, StateRunCtx *ctx, StateCtrl *sc, ExprEvalCtx *frame)
+{
     GameVars *g = g_game;
     SysDrawItem *e;
     int action, idx, ownpal, rg, rn;
 
-    action = Expr_EvalInt(p, &ep->anim, 1);
+    action = Expr_EvalIntCtx(p, &ep->anim, 1, frame);
     if (action < 0) {
         action = 0;
         Player_WarnAt(p, sc, "%s", "illegal explod animno");
@@ -865,9 +876,9 @@ void Explod_Create(Player *p, ExplodParams *ep, StateRunCtx *ctx, StateCtrl *sc)
     } else {
         idx = Explods_Add(p->sprites, g_game->explods, action, p->data->anim);
     }
-    ownpal = Expr_EvalInt(p, &ep->ownpal, 1);
-    rg = Expr_EvalInt(p, &ep->remappal[0], 0);
-    rn = Expr_EvalInt(p, &ep->remappal[1], 0);
+    ownpal = Expr_EvalIntCtx(p, &ep->ownpal, 1, frame);
+    rg = Expr_EvalIntCtx(p, &ep->remappal[0], 0, frame);
+    rn = Expr_EvalIntCtx(p, &ep->remappal[1], 0, frame);
     if (idx == -1) {
         return;
     }
@@ -876,7 +887,7 @@ void Explod_Create(Player *p, ExplodParams *ep, StateRunCtx *ctx, StateCtrl *sc)
     if (ep->anim_fight) {
         e->scale_mul = (float)(Player_ToLocalCoord(p, g->fightfx_scale) * g_game->motif_scale);
     }
-    Explod_SetParams(p, e, ep, ctx, 0, sc);
+    Explod_SetParamsCtx(p, e, ep, ctx, 0, sc, frame);
     if (ownpal == 0) {
         e->palfx = p->palfx;
         if (ep->anim_fight) {
@@ -910,15 +921,20 @@ void Explod_Create(Player *p, ExplodParams *ep, StateRunCtx *ctx, StateCtrl *sc)
 /* 0x00410950: the ModifyExplod controller: the explods of the player with the ID (-1: all of them). */
 void Explod_Modify(Player *p, ExplodParams *ep, StateRunCtx *ctx, StateCtrl *sc)
 {
+    Explod_ModifyCtx(p, ep, ctx, sc, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+void Explod_ModifyCtx(Player *p, ExplodParams *ep, StateRunCtx *ctx, StateCtrl *sc, ExprEvalCtx *frame)
+{
     SysDrawList *list = g_game->explods;
-    int id = Expr_EvalInt(p, &ep->id, 1);
+    int id = Expr_EvalIntCtx(p, &ep->id, 1, frame);
     int owner = p->id;
     int i;
 
     for (i = 0; i < list->capacity; i++) {
         SysDrawItem *e = &list->items[i];
         if (e->used && (e->id == id || id == -1) && e->owner_id == owner) {
-            Explod_SetParams(p, e, ep, ctx, 1, sc);
+            Explod_SetParamsCtx(p, e, ep, ctx, 1, sc, frame);
         }
     }
 }

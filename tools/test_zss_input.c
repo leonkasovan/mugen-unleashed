@@ -12,7 +12,7 @@
 static GameVars game;
 static Player player, helper;
 static CharData owner;
-static int changes, last_state, command_reads, command_down;
+static int changes, last_state, command_reads, command_down, guard_distance;
 void SDL_AtomicLock(SDL_SpinLock *lock) {assert(*lock==0);*lock=1;}
 void SDL_AtomicUnlock(SDL_SpinLock *lock) {assert(*lock==1);*lock=0;}
 void Input_Clear(InputBuf *buf) {memset(buf,0,sizeof(*buf));}
@@ -26,7 +26,7 @@ int CmdState_Update(const CmdSet *set,unsigned char *active,CmdState *state,unsi
 {(void)set;(void)active;(void)state;(void)frame;(void)mask;return 0;}
 void Ai_UpdatePlayer(Player *p) {(void)p;}
 int Player_ChangeState(int state,Player *p) {changes++;last_state=state;p->state_no=state;return 1;}
-int Player_InGuardDist(Player *p,Player *other) {(void)p;(void)other;abort();}
+int Player_InGuardDist(Player *p,Player *other) {(void)p;(void)other;return guard_distance;}
 void Player_Turn(Player *p) {(void)p;abort();}
 void Player_ChangeAnimSelf(Player *p,int action) {(void)p;(void)action;abort();}
 static void reset(void)
@@ -64,6 +64,23 @@ int main(void)
     Player_UpdateInput(&player);assert(last_state==40 && command_down==1);
     reset();helper.id=player.id;helper.helper=1;assert(ZssAssert_Set(&helper,ZSS_ASSERT_NO_CROUCH));
     Player_UpdateInput(&player);assert(last_state==10 && !ZssAssert_Test(&player,ZSS_ASSERT_NO_CROUCH));
+    reset();player.input.keys[KEY_CROUCH]=0;player.input.keys[KEY_JUMP]=1;
+    assert(ZssAssert_Set(&player,ZSS_ASSERT_NO_JUMP));Player_UpdateInput(&player);assert(!changes);
+    ZssAssert_ClearPlayer(&player);Player_UpdateInput(&player);assert(last_state==40);
+    reset();player.input.keys[KEY_CROUCH]=0;player.statetype=STATETYPE_AIR;player.state_no=50;
+    player.pos.y=-100;player.air_jumps=1;player.input.ring[0]=1;player.input.write=1;
+    assert(ZssAssert_Set(&player,ZSS_ASSERT_NO_AIR_JUMP));Player_UpdateInput(&player);assert(!changes && player.air_jumps==1);
+    ZssAssert_ClearPlayer(&player);player.input.read=0;Player_UpdateInput(&player);assert(last_state==45 && !player.air_jumps);
+    reset();player.input.keys[KEY_CROUCH]=0;player.state_no=20;
+    assert(ZssAssert_Set(&player,ZSS_ASSERT_NO_BRAKE));Player_UpdateInput(&player);assert(player.state_no==20);
+    ZssAssert_ClearPlayer(&player);Player_UpdateInput(&player);assert(player.state_no==0);
+    reset();player.input.keys[KEY_CROUCH]=0;game.game_type_m=0;
+    player.team_side=1;player.movetype=MOVETYPE_IDLE;
+    helper.active=1;helper.team_side=2;helper.movetype=MOVETYPE_ATTACK;
+    game.players[1]=&player;game.players[2]=&helper;game.players_last=2;guard_distance=1;
+    Player_UpdateInput(&player);assert(!changes);
+    assert(ZssAssert_Set(&player,ZSS_ASSERT_AUTO_GUARD));Player_UpdateInput(&player);
+    assert(last_state==120 && player.in_guard_dist);
     ZssAssert_ClearPlayer(&player);ZssAssert_ClearPlayer(&helper);
     puts("ok: real nocrouch input consumer, raw command directions, crouch hold/release, run expiry and isolation");
     return 0;

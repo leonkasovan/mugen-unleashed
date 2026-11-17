@@ -55,6 +55,9 @@ static void check_no_allocs(void)
     for (i = 0; i < 512; i++) assert(!tracked[i]);
 }
 void Error_Printf(const char *fmt, ...) { (void)fmt; }
+#ifndef TEST_ZSS_CONTROLLER
+void Log_Printf(const char *fmt,...) {(void)fmt;}
+#endif
 void Error_Exit(void) { if (expect_exit) longjmp(exit_jump, 1); abort(); }
 void Error_Fatal(const char *fmt, ...) { (void)fmt; abort(); }
 void Error_OutOfMemory(void) { abort(); }
@@ -92,10 +95,17 @@ const char *Ini_NextGroup(Ini *ini) { (void)ini; return NULL; }
 int Ini_SourceLine(int line, Ini *ini) { (void)line; (void)ini; return 0; }
 #endif
 /* These parse branches are outside the cases exercised by this harness. */
-int Trans_Parse(const char *s, int *dst, int *src) { (void)s; (void)dst; (void)src; abort(); }
-float Units_From320(float v) { (void)v; abort(); }
+/* Use the production conversion/transparency parsers in payload tests. */
+
 int Ini_ReadString(Ini *ini, const char *key, unsigned int size, char *out)
 { (void)ini; (void)key; (void)size; (void)out; abort(); }
+/* Explicit boundaries for the optional console and target lookup. */
+static Player juggle_victim;
+static TargetEntry juggle_entry;
+Player *Player_FindById(int id) {return id==juggle_victim.id ? &juggle_victim : NULL;}
+TargetEntry *Targets_FindPlayer(KeyedArray *targets,Player *p)
+{(void)targets;return p==juggle_entry.player ? &juggle_entry : NULL;}
+void Console_Printf(const char *fmt,...) {(void)fmt;}
 static void test_trigger_eval(Player *p, const Trigger *t);
 static void test_trigger_eval_ctx(Player *p, const Trigger *t, ExprEvalCtx *ctx);
 
@@ -309,7 +319,21 @@ void __wrap_free(void *p)
 {
     int i;
     for(i=0;i<1024;i++)if(zss_allocs[i]==p){zss_allocs[i]=NULL;break;}
+    for(i=0;i<512;i++)if(tracked[i]==p){tracked[i]=NULL;break;}
     __real_free(p);
+}
+void *__real_realloc(void *p,size_t bytes);
+void *__wrap_realloc(void *p,size_t bytes)
+{
+    int mem=-1,zss=-1,i;void *next;
+    for(i=0;i<512;i++) if(tracked[i]==p && p!=NULL){mem=i;break;}
+    for(i=0;i<1024;i++) if(zss_allocs[i]==p && p!=NULL){zss=i;break;}
+    next=__real_realloc(p,bytes);
+    if(next!=NULL || bytes==0) {
+        if(mem>=0) tracked[mem]=next;
+        if(zss>=0) zss_allocs[zss]=next;
+    }
+    return next;
 }
 static void zss_no_allocs(void)
 {
@@ -345,7 +369,10 @@ static void test_zss_installation(void)
     slot=KeyedArray_Find(defs->list,65000,0);assert(slot>=0);
     sd=(StateDef *)(defs->list->data+defs->list->elem_size*slot);
     assert(Zss_IsBoundState(sd) && Expr_EvalInt(&player,&sd->anim,0)==5);
-    assert(!Zss_InstallProgram(program,defs,&error) && error && defs->list->count==2);
+    assert(Zss_InstallProgram(program,defs,&error) && defs->list->count==2);
+    slot=KeyedArray_Find(defs->list,-2,0);assert(slot>=0);
+    sd=(StateDef *)(defs->list->data+defs->list->elem_size*slot);
+    assert(Zss_IsBoundState(sd) && sd->ctrls->count==2);
     StateDefs_Free(defs);
     /* Caller reference still owns the program after a collection is destroyed. */
     assert(Zss_ProgramStateCount(program)==2);
@@ -368,7 +395,25 @@ static void test_zss_installation(void)
         slot=KeyedArray_Find(defs->list,42,0);assert(slot>=0);
         sd=(StateDef *)(defs->list->data+defs->list->elem_size*slot);
         assert(sd->ctrls==existing.ctrls && !Zss_IsBoundState(sd));
-        old=defs->list;assert(!Zss_InstallProgram(program,defs,&error) && defs->list==old);
+        old=defs->list;assert(Zss_InstallProgram(program,defs,&error) && defs->list!=old);
+        StateDefs_Free(defs);
+    }
+    /* Appending negative bodies publishes atomically too: each failed append
+     * must preserve the original collection, controller list and ownership. */
+    defs=calloc(1,sizeof(*defs));assert(defs);defs->list=KeyedArray_Create(1,sizeof(StateDef));assert(defs->list);
+    assert(Zss_InstallProgram(program,defs,&error));
+    zss_calloc_calls=0;assert(Zss_InstallProgram(program,defs,&error));calls=zss_calloc_calls;
+    StateDefs_Free(defs);
+    for(i=1;i<=calls;i++) {
+        KeyedArray *before,*controllers;
+        defs=calloc(1,sizeof(*defs));assert(defs);defs->list=KeyedArray_Create(1,sizeof(StateDef));assert(defs->list);
+        assert(Zss_InstallProgram(program,defs,&error));before=defs->list;
+        slot=KeyedArray_Find(before,-2,0);assert(slot>=0);
+        controllers=((StateDef *)(before->data+before->elem_size*slot))->ctrls;
+        zss_calloc_calls=0;zss_fail_call=i;
+        assert(!Zss_InstallProgram(program,defs,&error));zss_fail_call=0;
+        assert(defs->list==before && before->count==2 && controllers->count==1);
+        assert(((StateDef *)(before->data+before->elem_size*slot))->ctrls==controllers);
         StateDefs_Free(defs);
     }
     Zss_FreeProgram(program);zss_no_allocs();
@@ -1023,7 +1068,7 @@ static void test_zss_controller(void)
     Ini *ini=ScriptParams_ToIni(pairs,2,&error);
     const char *valid="VelSet { x: 2 + # comment\n 3; y: -0.5; }";
     const char *text="DisplayToClipboard { text: \"MiX;#[]{}\"; }";
-    const char *bad[]={"VelSet{x:1; X:2}","VelSet{x:1};","VelSet{x:$i}","VelSet{x:}","VelSet{x:(1+2}","VelSet{x:1e}","NoSuchController{}","VelSet{type:Null}","VelSet{x:1} Null{}","VelSet{unknown:1}","HitDef{}","Null{x:1}","ChangeState{}","ChangeState{value:2+3;ctrl:NoSuchTrigger}","DisplayToClipboard{text:\"%d\";params:1,2}"};
+    const char *bad[]={"VelSet{x:1; X:2}","VelSet{x:1};","VelSet{x:$i}","VelSet{x:}","VelSet{x:(1+2}","VelSet{x:1e}","NoSuchController{}","VelSet{type:Null}","VelSet{x:1} Null{}","VelSet{unknown:1}","Projectile{}","Null{x:1}","ChangeState{}","ChangeState{value:2+3;ctrl:NoSuchTrigger}","DisplayToClipboard{text:\"%d\";params:1,2}"};
     size_t i;
     assert(ini && !error);
     assert(!strcmp(Ini_GetValue(ini,"text"),pairs[1].value));
@@ -1072,6 +1117,7 @@ static void test_zss_controller(void)
 #include "test_zss_ai_map.inc"
 #include "test_zss_assertspecial.inc"
 #include "test_zss_nocrouch.inc"
+#include "test_zss_kfm.inc"
 #endif
 int main(void)
 {
@@ -1099,6 +1145,7 @@ int main(void)
     test_zss_ai_map();
     test_zss_assertspecial();
     test_zss_nocrouch();
+    test_zss_kfm();
 #else
     test_controller_parse(); test_variables(); test_clipboard();
     test_expr_allocs(); test_trigger_copy_math(); test_state_headers();

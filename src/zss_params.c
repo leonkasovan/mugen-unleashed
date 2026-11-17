@@ -60,7 +60,9 @@ int Zss_ReadParamsCtx(ZssLexer *lex, int close, const char *type,
             memcpy(write, lex->source + lex->token.offset, n); write += n;
             kind = ZssLex_Next(lex);
         }
-        if (tokens == 0 || parens != 0 || brackets != 0) { message = "Empty or unclosed parameter value"; goto done; }
+        if ((tokens==0 && !(type!=NULL &&
+             ((!_stricmp(type,"reversaldef") && !_stricmp(pairs[count].key,"reversal.attr")) ||
+              (!_stricmp(type,"hitoverride") && !_stricmp(pairs[count].key,"attr"))))) || parens != 0 || brackets != 0) { message = "Empty or unclosed parameter value"; goto done; }
         *write++ = 0; pairs[count++].value = start;
         if (kind == ';') kind = ZssLex_Next(lex);
     }

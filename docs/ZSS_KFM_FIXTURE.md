@@ -1,6 +1,7 @@
 # Upstream KFM ZSS compatibility fixture
 
-Status: **BLOCKED — not playable with the experimental compiler yet.**
+Status: **PLAYABLE in the qualified Linux x86-64 numeric/2D profile.**
+Windows, Android and Vita execution remain OPEN.
 
 The fixture preserves the upstream character and its assets byte for byte.
 Fetch/install it with Python 3 (use `python` instead of `python3` on Windows
@@ -49,34 +50,56 @@ its build directory. The character definition remains upstream's
 `chars/kfm_zss/kfm_zss.def`; tests must not silently replace its primary state
 file or remove unsupported controllers to report a pass.
 
-Observed on Linux x86-64, MUGEN_MODEL3D=0, an isolated offscreen System-renderer
-game copy, with no sound:
+Qualified on Linux x86-64 with MUGEN_MODEL3D=0, an offscreen SDL2 System
+renderer, copied game assets and sound disabled. The original primary/additional/
+common scripts and CMD all load. Keyboard events produce walking, jumping,
+crouching, standing punches and kicks, and actual opponent damage. AI KFM versus
+CNS KFM and AI KFM versus ZSS KFM both reach a real KO and round completion before
+normal shutdown. AI execution includes special/super states, guard/hitpause,
+fall/recovery, throws/custom states and the common function library. This is
+playability evidence for this pinned character, not complete Ikemen compatibility.
 
-```text
-Loading character chars/kfm_zss/kfm_zss.def...
-Loading cmd command set kfm.cmd...OK
-Loading cns kfm.const...
-Character kfm_zss.def failed to load
-ZSS kfm.zss:87:1: Controller not yet enabled in the ZSS bridge
+Run the reproducible native gate on a Linux development machine with the normal
+engine dependencies and complete game/fixture installation:
+
+```sh
+sh tools/test_zss_kfm.sh -j4
+# Optional normal Makefile dependency overrides can follow the script name.
 ```
 
-The latest probe (2026-11-18) exited **1**, rather than reaching gameplay.
-Primary `st`, additional `st0`..`st9` and `stcommon` dispatch explicit `.zss`
-suffixes through the ZSS compiler. Functions/calls and PlaySnd's numeric/local
-parameters and static F/S sound prefixes are implemented. PalFX, BGPalFX and
-AllPalFX now support the shared numeric payload and local frame. EndState,
-SysSnd, CSnd and EXFX compile. Numeric aiLevelF and static map lookup/mutation/
-reset/defaults are implemented; the walk-state conditions at line 41 now compile.
-AssertSpecial now supports all twenty existing MUGEN flags, so the line-63
-nowalk/noautoturn statement compiles. ZSS-only nocrouch now has bounded actor
-storage, tick expiry and a real input consumer, so line 67 also compiles. The
-first stop is `NotHitBy{value:SCA;time:1}` at line 87. This replaces nocrouch
-at line 67, the unsupported controller at line 63, aiLevelF at line 41,
-PalFX at line 34, PlaySnd at line 24, unsupported functions at line 16 and the earlier misleading CNS error
-at line 2559. No upstream script was edited to get past these failures.
-This remains a failed compatibility probe,
-not PASS/SKIP or a test of playable ZSS combat. The upstream character's additional
-and common files are not reached in this run.
+The gate links `test_zss_kfm_runtime.c` with `--wrap=Round_Tick` into a separate
+test executable. It observes real state IDs, animation IDs, positions, life and
+hitpause, injects SDL keyboard events, requests screenshots and supplies a frame
+deadline through the engine's existing exit mechanism. It does not force state
+changes, damage, power, control, or scripted results. Python rejects missing
+movement/attack states, missing damage, missing AI specials, a missing KO/round
+finish, errors and unclean exits. An ordinary production executable cannot pass
+this instrumented gate because it does not emit the required runtime CSV.
+Results/logs/screenshots stay under `build/tmp/zss-kfm-runtime/results/`.
+Production engine sources, installation dimensions and pinned fixture files
+remain unchanged by the gate. Only disposable copies select System/windowed,
+Precache=0 and explicit P1 bindings.
+
+The implemented profile has explicit limits:
+
+- The MUGEN motif has no enabled Ikemen dialogue subsystem. Validated literal
+  `Dialogue` text takes the reference's disabled-dialogue path; no dialogue UI
+  is claimed. `ForceFeedback` follows the existing engine's no-rumble policy.
+- Stages are 2D. ZSS `pos z` reads zero. An Explod third position component may
+  only be literal zero or that pure zero-depth read; nonzero/effectful depth
+  expressions are rejected. No depth gameplay is claimed.
+- Positive duplicate states resolve first-wins across ZSS files; negative ZSS
+  bodies append in file order. Duplicate states within a file are errors.
+  Mixed CNS/ZSS negative-state composition is still rejected explicitly.
+- Persistence currently accepts 0..255 with up to 500 positive-state block
+  counters; loop/switch persistence attributes, first-class strings and other
+  unsupported Ikemen facilities remain errors. Original fatal allocation
+  behavior in dynamic Expr_Clone/MulFloat defaults is still inherited.
+- Audible output, hardware controllers, Windows 32/64, Android and Vita builds/
+  device execution are not qualified by this Linux/no-sound combat test.
+
+Earlier sections of the implementation plan retain the historical failed probes;
+they are superseded by its latest playability qualification entry.
 
 Independent native loader fixtures cover primary, character-local common and
 File_Find-resolved common `.zss` files, plus malformed primary/common sources and
@@ -134,18 +157,16 @@ not the roster's ZIP-entry notation).
 
 | Work | Why it is needed |
 |---|---|
-| Primary and common-state ZSS loading | Implemented and covered by isolated fixtures; compiling this character's common file remains blocked by its earlier primary-source failure |
+| Primary and common-state ZSS loading | Implemented; all primary, additional and common files in this pinned corpus load |
 | Functions and calls | Numeric functions/calls, frames, result bindings and first-wins cross-file lookup implemented |
-| Block attributes | Sources use `persistent(0)` and `ignorehitpause` |
-| More controller payloads | PlaySnd, the three PalFX variants, twenty MUGEN AssertSpecial flags and ZSS nocrouch implemented; NotHitBy/combat/effect coverage remains incomplete |
+| Block attributes | Implemented for the corpus, with the profile bounds above |
+| More controller payloads | Implemented numeric combat/effect payloads used by this corpus; other controller schemas remain explicit errors |
 | Explicit Ikemen extensions | Numeric `aiLevelF`, static `map(...)`, self MapSet/MapAdd/MapReset and numeric defaults implemented; dynamic/indexed/string maps and other extensions remain rejected |
 
-The remaining unsupported rows are source-inspection requirements. NotHitBy is
-the first observed compiler blocker; later files have not compiled successfully.
-Keep the corpus unchanged as an integration target. Add small isolated regression
-fixtures for each missing semantic feature, then rerun this complete character.
-The successful switch/loop smoke fixture uses the original CNS KFM with added
-experimental states; it does not qualify this upstream ZSS character.
+Keep this corpus unchanged as an integration target. Continue adding isolated
+regression fixtures for new semantic features and rerun the complete combat gate.
+The earlier synthetic CNS-KFM switch/loop cases remain independent regression
+coverage rather than substitutes for this upstream character.
 
 Fetcher validation performed here: verified-cache installation, `--check`,
 idempotent installation, and refusal to overwrite a deliberately modified file

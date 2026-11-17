@@ -31,11 +31,11 @@ int ZssAssert_Set(Player *p, int index)
 {
     ScriptAssertions *slot;
     int ok=0;
-    if (p==NULL || index!=ZSS_ASSERT_NO_CROUCH) return 0;
+    if (p==NULL || (index<0 || index>=ZSS_ASSERT_COUNT)) return 0;
     SDL_AtomicLock(&assertion_lock);
     slot=assertion_slot(p,1);
     if (slot!=NULL) {
-        slot->player=p;slot->id=p->id;slot->flags|=UINT32_C(1);ok=1;
+        slot->player=p;slot->id=p->id;slot->flags|=UINT32_C(1)<<index;ok=1;
     }
     SDL_AtomicUnlock(&assertion_lock);return ok;
 }
@@ -43,10 +43,10 @@ int ZssAssert_Test(Player *p, int index)
 {
     ScriptAssertions *slot;
     int value=0;
-    if (p==NULL || index!=ZSS_ASSERT_NO_CROUCH) return 0;
+    if (p==NULL || (index<0 || index>=ZSS_ASSERT_COUNT)) return 0;
     SDL_AtomicLock(&assertion_lock);
     slot=assertion_slot(p,0);
-    if (slot!=NULL) value=(slot->flags&UINT32_C(1))!=0;
+    if (slot!=NULL) value=(slot->flags&(UINT32_C(1)<<index))!=0;
     SDL_AtomicUnlock(&assertion_lock);return value;
 }
 void ZssAssert_ClearPlayer(Player *p)

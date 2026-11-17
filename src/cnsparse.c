@@ -98,11 +98,17 @@ static int format_count(const char *fmt)
 /* 0x00458C30: e = def, then the key's value as an int expression if present. */
 int Cns_CompileInt(Ini *ini, const char *key, Expr *e, CharData *owner, int def)
 {
+    return Cns_CompileIntCtx(ini,key,e,owner,def,NULL);
+}
+int Cns_CompileIntCtx(Ini *ini, const char *key, Expr *e, CharData *owner, int def, ExprCompileCtx *ctx)
+{
     const char *value = Ini_GetValue(ini, key);
+    const char *end=NULL;
 
     Expr_SetInt(e, def);
     if (value != NULL) {
-        return Expr_Compile(value, e, owner, NULL, EXPR_WANT_INT);
+        return Expr_CompileCtx(value,e,owner,ctx!=NULL ? &end : NULL,EXPR_WANT_INT,ctx) &&
+               (ctx==NULL || (end!=NULL && *end==0));
     }
     return 1;
 }
@@ -110,11 +116,17 @@ int Cns_CompileInt(Ini *ini, const char *key, Expr *e, CharData *owner, int def)
 /* 0x00458C90: e = def, then the key's value as a float expression if present. */
 int Cns_CompileFloat(Ini *ini, const char *key, Expr *e, CharData *owner, float def)
 {
+    return Cns_CompileFloatCtx(ini,key,e,owner,def,NULL);
+}
+int Cns_CompileFloatCtx(Ini *ini, const char *key, Expr *e, CharData *owner, float def, ExprCompileCtx *ctx)
+{
     const char *value = Ini_GetValue(ini, key);
+    const char *end=NULL;
 
     Expr_SetFloat(e, def);
     if (value != NULL) {
-        return Expr_Compile(value, e, owner, NULL, EXPR_WANT_FLOAT);
+        return Expr_CompileCtx(value,e,owner,ctx!=NULL ? &end : NULL,EXPR_WANT_FLOAT,ctx) &&
+               (ctx==NULL || (end!=NULL && *end==0));
     }
     return 1;
 }
@@ -422,6 +434,20 @@ int Cns_ParseAnimRef(const char *s, int *fight, Expr *e, CharData *owner)
     return *end == '\0';
 }
 
+/* Port addition: strict animation reference with live script locals. */
+int Cns_ParseAnimRefCtx(const char *s, int *fight, Expr *e, CharData *owner, ExprCompileCtx *ctx)
+{
+    const char *end;
+    int c;
+    if (ctx==NULL) return Cns_ParseAnimRef(s,fight,e,owner);
+    if (s==NULL) return 1;
+    while (is_blank(*s)) s++;
+    c=lower(*s);
+    if ((c=='f' || c=='s') && (is_blank(s[1]) || s[1]=='$' || s[1]=='(' ||
+        s[1]=='+' || s[1]=='-' || Char_IsDigit(s[1]))) {*fight=c=='f';s++;}
+    return Cns_ParseValuesCtx(s,"i",owner,&end,ctx,e)==1 && *end==0;
+}
+
 /* 0x004598B0: "group, index" of a sound with an optional F/S prefix, as Cns_ParseAnimRef. */
 int Cns_ParseSoundRef(const char *s, int *fight, Expr *group, Expr *index, CharData *owner)
 {
@@ -479,6 +505,11 @@ int Cns_ParseSoundRefCtx(const char *s, int *fight, Expr *group, Expr *index,
  */
 int Cns_ParseVelocity(const char *s, Expr *x, Expr *y, CharData *owner)
 {
+    return Cns_ParseVelocityCtx(s,x,y,owner,NULL);
+}
+/* Port addition: local/function context reaches both velocity components. */
+int Cns_ParseVelocityCtx(const char *s, Expr *x, Expr *y, CharData *owner, ExprCompileCtx *ctx)
+{
     const char *e;
 
     if (s == NULL) {
@@ -487,7 +518,7 @@ int Cns_ParseVelocity(const char *s, Expr *x, Expr *y, CharData *owner)
     if (lower(*s) == 'n' && (is_blank(s[1]) || s[1] == ',' || s[1] == '\0')) {
         Expr_SetFloat(x, -FLT_MAX);
         e = s + 1;
-    } else if (!Expr_Compile(s, x, owner, &e, EXPR_WANT_FLOAT)) {
+    } else if (!Expr_CompileCtx(s, x, owner, &e, EXPR_WANT_FLOAT,ctx)) {
         return 0;
     }
     if (*e != ',') {
@@ -499,7 +530,7 @@ int Cns_ParseVelocity(const char *s, Expr *x, Expr *y, CharData *owner)
     if (lower(*e) == 'n' && (is_blank(e[1]) || e[1] == '\0')) {
         Expr_SetFloat(y, -FLT_MAX);
         e++;
-    } else if (!Expr_Compile(e, y, owner, &e, EXPR_WANT_FLOAT)) {
+    } else if (!Expr_CompileCtx(e, y, owner, &e, EXPR_WANT_FLOAT,ctx)) {
         return 0;
     }
     while (is_blank(*e)) {

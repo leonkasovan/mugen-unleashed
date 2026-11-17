@@ -1193,6 +1193,7 @@ void __cdecl ConsoleView_LoadFont(ConsoleView *v);
 /* 0x004592a0 */ int __cdecl AssertSpecial_ParseFlag(const char *name, int *kind, int *index);
 /* 0x00459830 */ int __cdecl Cns_ParseAnimRef(const char *s, int *fight, Expr *e, CharData *owner);
 /* 0x004598b0 */ int __cdecl Cns_ParseSoundRef(const char *s, int *fight, Expr *group, Expr *index, CharData *owner);
+/* Port addition */ int Cns_ParseVelocityCtx(const char *s,Expr *x,Expr *y,CharData *owner,ExprCompileCtx *ctx);
 /* 0x00459930 */ int __cdecl Cns_ParseVelocity(const char *s, Expr *x, Expr *y, CharData *owner);
 /* 0x00459ab0 */ int __cdecl HitDefAttr_Parse(const char *s, const char **end);
 /* 0x00459fd0 */ unsigned int __cdecl HitFlags_Parse(const char *s);
@@ -2096,5 +2097,30 @@ int PlaySnd_ParseParamsCtx(PlaySndParams *ps, Ini *ini, CharData *owner, ExprCom
 void PlaySnd_RunCtx(PlaySndParams *ps, Player *p, StateCtrl *sc, ExprEvalCtx *frame);
 int PalFx_ParseParamsCtx(PalFxParams *pf, Ini *ini, CharData *owner, int hitdef, ExprCompileCtx *ctx);
 int PalFx_ApplyCtx(PalFxDef *dst, PalFxParams *pf, Player *p, StateCtrl *sc, ExprEvalCtx *frame);
+
+
+
+/* Port additions: explicit controller payload compile/evaluation frames. */
+int AfterImage_ParseParamsCtx(AfterImageParams *ai, Ini *ini, CharData *owner, const char *prefix, ExprCompileCtx *ctx);
+int EnvShake_ParseParamsCtx(const char *prefix, EnvShakeParams *es, Ini *ini, CharData *owner, ExprCompileCtx *ctx);
+int Explod_ParseParamsCtx(ExplodParams *ep, Ini *ini, CharData *owner, int modify, ExprCompileCtx *ctx);
+int HitOverride_ParseParamsCtx(Ini *ini, CharData *owner, HitOverrideParams *ho, ExprCompileCtx *ctx);
+int HitDef_ParseParamsCtx(Ini *ini, HitDefParams *hd, CharData *owner, ExprCompileCtx *ctx);
+int Projectile_ParseParamsCtx(ProjectileParams *pp, CharData *owner, Ini *ini, ExprCompileCtx *ctx);
+int Helper_ParseParamsCtx(HelperParams *hp, Ini *ini, CharData *owner, ExprCompileCtx *ctx);
+int Pause_ParseParamsCtx(PauseParams *pp, Ini *ini, CharData *owner, ExprCompileCtx *ctx);
+int SuperPause_ParseParamsCtx(Ini *ini, CharData *owner, SuperPauseParams *sp, ExprCompileCtx *ctx);
+int AfterImage_ApplyCtx(Player *p, AfterImageParams *params, AfterImage *ai, AnimState *anim, StateCtrl *sc, ExprEvalCtx *frame);
+int EnvShake_ApplyCtx(EnvShake *out, EnvShakeParams *es, Player *p, StateCtrl *sc, ExprEvalCtx *frame);
+int HitOverride_ApplyCtx(HitOverride *ho, Player *p, HitOverrideParams *params, StateCtrl *sc, ExprEvalCtx *frame);
+int HitDef_SetFromParamsCtx(Player *p, HitDefParams *hp, HitDef *hd, StateCtrl *sc, ExprEvalCtx *frame);
+int Pause_ApplyCtx(int kind, Player *p, PauseParams *pp, StateCtrl *sc, ExprEvalCtx *frame);
+void Explod_SetParamsCtx(Player *p, SysDrawItem *e, const ExplodParams *ep, StateRunCtx *ctx, int modify,
+                      const StateCtrl *sc, ExprEvalCtx *frame);
+void Explod_CreateCtx(Player *p, ExplodParams *ep, StateRunCtx *ctx, StateCtrl *sc, ExprEvalCtx *frame);
+void Explod_ModifyCtx(Player *p, ExplodParams *ep, StateRunCtx *ctx, StateCtrl *sc, ExprEvalCtx *frame);
+int Cns_CompileIntCtx(Ini *,const char *,Expr *,CharData *,int,ExprCompileCtx *);
+int Cns_CompileFloatCtx(Ini *,const char *,Expr *,CharData *,float,ExprCompileCtx *);
+int Cns_ParseAnimRefCtx(const char *,int *,Expr *,CharData *,ExprCompileCtx *);
 
 #endif /* MUGEN_SYMBOLS_H */

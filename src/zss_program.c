@@ -18,6 +18,8 @@
 #define MAX_DEPTH 32u
 #define MAX_LOOP 2500u
 #define MAX_STEPS 100000u
+/* Source punctuation is not a postfix token or an operator-stack entry. */
+#define MAX_EXPR_SOURCE_TOKENS (4 * EXPR_MAX_TOKENS)
 enum {NODE_CONTROLLER, NODE_IF, NODE_WHILE, NODE_EXPRESSION, NODE_BREAK, NODE_CONTINUE, NODE_FOR, NODE_LET, NODE_CASE, NODE_CALL};
 
 typedef struct ZssCall {
@@ -29,6 +31,8 @@ typedef struct ZssCall {
 
 typedef struct ZssNode {
     int kind, local;
+    int persistence, persistent_slot;
+    unsigned ihp, has_ihp;
     uint32_t next, child, otherwise;
     Expr condition;
     Expr range[3];
@@ -68,6 +72,8 @@ typedef struct ZssParser {
     ZssToken locals[256];
     unsigned local_count;
     size_t switch_bytes;
+    unsigned ihp, in_function, persistence_count;
+    int state_number;
 } ZssParser;
 static int error(ZssParser *p, const char *message)
 {
@@ -156,6 +162,7 @@ static uint32_t node(ZssParser *p)
     s->nodes=nodes;
     index=s->node_count++;
     s->nodes[index].local=-1;
+    s->nodes[index].persistence=1;
     s->nodes[index].next=s->nodes[index].child=s->nodes[index].otherwise=NO_NODE;
     return index;
 }
@@ -198,7 +205,7 @@ static int branch(ZssParser *p, unsigned depth, unsigned loops, int loop, uint32
         if (kind<=0 || kind=='}') {
             free(expression);return error(p,"Invalid or unsupported if condition");
         }
-        if (++tokens>=EXPR_OP_STACK_SIZE) {free(expression);return error(p,"Condition token limit");}
+        if (++tokens>=MAX_EXPR_SOURCE_TOKENS) {free(expression);return error(p,"Condition token limit");}
         if (tokens>1 && !(write[-1]=='-' && (kind==ZSS_INT || kind==ZSS_FLOAT))) *write++=' ';
         memcpy(write,p->lex.source+p->lex.token.offset,p->lex.token.length);write+=p->lex.token.length;
     }
@@ -244,7 +251,7 @@ static int assignment(ZssParser *p, int local, uint32_t *id, uint32_t *end_line)
         if (kind<=0 || kind=='{' || kind=='}') {
             free(text);return error(p,"Assignment must end with ';'");
         }
-        if (++tokens>=EXPR_OP_STACK_SIZE) {free(text);return error(p,"Assignment token limit");}
+        if (++tokens>=MAX_EXPR_SOURCE_TOKENS) {free(text);return error(p,"Assignment token limit");}
         if (kind==ZSS_ASSIGN) has_assignment=1;
         if (tokens>1 && !(write[-1]=='-' && (kind==ZSS_INT || kind==ZSS_FLOAT))) *write++=' ';
         memcpy(write,p->lex.source+p->lex.token.offset,p->lex.token.length);write+=p->lex.token.length;
@@ -322,7 +329,7 @@ static int call_statement(ZssParser *p, const int *returns, unsigned count,
             free(text);return error(p,"Invalid call argument");
         }
         while (ZssLex_Next(&scan)>0) tokens++;
-        if (scan.error || tokens>=EXPR_OP_STACK_SIZE) {
+        if (scan.error || tokens>=MAX_EXPR_SOURCE_TOKENS) {
             free(text);return error(p,"Call argument token limit");
         }
         cursor=end;
@@ -362,7 +369,7 @@ static int range_loop(ZssParser *p, unsigned depth, unsigned loops, uint32_t *id
             if (kind<=0 || kind=='}') {
                 free(text);return error(p,"Invalid for range expression");
             }
-            if (++tokens>=EXPR_OP_STACK_SIZE) {free(text);return error(p,"For range token limit");}
+            if (++tokens>=MAX_EXPR_SOURCE_TOKENS) {free(text);return error(p,"For range token limit");}
             if (tokens>1 && !(write[-1]=='-' && (kind==ZSS_INT || kind==ZSS_FLOAT))) *write++=' ';
             memcpy(write,p->lex.source+p->lex.token.offset,p->lex.token.length);write+=p->lex.token.length;
             next(p);
@@ -405,7 +412,7 @@ static int switch_expression(ZssParser *p, int close1, int close2, char **out, u
             if (!depth) {p->lex=scan;return error(p,"Unmatched switch expression delimiter");}
             depth--;
         }
-        if (++count>=EXPR_OP_STACK_SIZE || depth>MAX_DEPTH) {
+        if (++count>=MAX_EXPR_SOURCE_TOKENS || depth>MAX_DEPTH) {
             p->lex=scan;return error(p,"Switch expression token/nesting limit");
         }
         bytes+=scan.token.length;
@@ -501,12 +508,27 @@ static int body(ZssParser *p, unsigned depth, unsigned loops, int labels, uint32
 {
     uint32_t last=NO_NODE, id, end_line;
     ZssToken start;
-    int kind;
+    int kind, persistent;
+    unsigned inherited, attr_ihp;
     *first=NO_NODE;
     for (;;) {
         kind=p->lex.token.kind;
         if (kind==ZSS_EOF || kind=='}' || kind=='[') return 1;
         if (labels && (ZssLex_Is(&p->lex,"case") || ZssLex_Is(&p->lex,"default"))) return 1;
+        inherited=p->ihp;attr_ihp=inherited;persistent=-1;
+        while (ZssLex_Is(&p->lex,"ignorehitpause") || ZssLex_Is(&p->lex,"persistent")) {
+            if (ZssLex_Is(&p->lex,"ignorehitpause")) {attr_ihp=1;next(p);}
+            else {
+                char value[32];
+                if (persistent!=-1 || p->in_function || p->state_number<0) return error(p,"Invalid persistent block scope");
+                if (next(p)!='(' || next(p)!=ZSS_INT || p->lex.token.length>=sizeof(value)) return error(p,"Expected persistent integer");
+                memcpy(value,p->lex.source+p->lex.token.offset,p->lex.token.length);value[p->lex.token.length]=0;
+                persistent=Expr_Atoi32(value);
+                if (persistent<0 || persistent>255 || next(p)!=')') return error(p,"Persistent count must be 0..255");
+                next(p);
+            }
+        }
+        p->ihp=attr_ihp;kind=p->lex.token.kind;
         if (kind=='{') {
             uint32_t child;
             if (depth>=MAX_DEPTH) return error(p,"ZSS block nesting limit");
@@ -550,8 +572,6 @@ static int body(ZssParser *p, unsigned depth, unsigned loops, int labels, uint32
             end_line=p->lex.token.line;next(p);
         } else {
             ZssLexer peek=p->lex;
-            if (ZssLex_Is(&p->lex,"persistent") || ZssLex_Is(&p->lex,"ignorehitpause"))
-                return error(p,"This ZSS statement is not implemented yet");
             if (kind!=ZSS_IDENT || ZssLex_Next(&peek)!='{') {
                 if (!assignment(p,-1,&id,&end_line)) return 0;
                 goto linked;
@@ -567,6 +587,24 @@ static int body(ZssParser *p, unsigned depth, unsigned loops, int labels, uint32
             end_line=p->lex.token.line;next(p);
         }
 linked:
+        p->program->nodes[id].ihp=attr_ihp;
+        if (persistent!=-1) {
+            if (p->program->nodes[id].kind!=NODE_IF) {
+                uint32_t wrapper;
+                /* Nonconditional leaves use the same persistence gate as an
+                 * always-true block. Loop attributes need separate semantics. */
+                if(p->program->nodes[id].kind==NODE_WHILE || p->program->nodes[id].kind==NODE_FOR ||
+                   p->program->nodes[id].kind==NODE_CASE) return error(p,"Persistent loop/switch attribute is not enabled");
+                wrapper=node(p);if(wrapper==NO_NODE) return 0;
+                p->program->nodes[wrapper].kind=NODE_IF;
+                Expr_SetInt(&p->program->nodes[wrapper].condition,1);
+                p->program->nodes[wrapper].child=id;p->program->nodes[wrapper].ihp=attr_ihp;id=wrapper;
+            }
+            if (p->persistence_count>=500) return error(p,"Persistent block limit (500)");
+            p->program->nodes[id].persistent_slot=++p->persistence_count;
+            p->program->nodes[id].persistence=persistent;
+        }
+        p->ihp=inherited;
         if (*first==NO_NODE) *first=id;
         if (last!=NO_NODE) p->program->nodes[last].next=id;
         last=id;
@@ -613,6 +651,16 @@ static int function_header(ZssParser *p, uint32_t *index)
     }
     return 1;
 }
+static unsigned sequence_ihp(ZssProgram *p, uint32_t at)
+{
+    unsigned any=0;
+    while (at!=NO_NODE) {
+        ZssNode *n=&p->nodes[at];
+        n->has_ihp=n->ihp | sequence_ihp(p,n->child) | sequence_ihp(p,n->otherwise);
+        any|=n->has_ihp;at=n->next;
+    }
+    return any;
+}
 int Zss_CompileProgram(const char *source, size_t size, CharData *owner,
                        ZssProgram **out, ZssDiagnostic *diagnostic)
 {
@@ -638,6 +686,7 @@ int Zss_CompileProgram(const char *source, size_t size, CharData *owner,
         if (start.kind!='[') {error(&p,"Expected StateDef header");goto fail;}
         ZssLex_Next(&peek);
         if (ZssLex_Is(&peek,"function")) {
+            p.in_function=1;p.ihp=1;p.persistence_count=0;
             if (!function_header(&p,&i)) goto fail;
             header_end=p.lex.token.line;next(&p);
             if (p.lex.token.kind!=ZSS_EOF && p.lex.token.line==header_end) {
@@ -665,11 +714,13 @@ int Zss_CompileProgram(const char *source, size_t size, CharData *owner,
         if (p.lex.token.kind!=ZSS_EOF && p.lex.token.line==header_end) {
             error(&p,"StateDef header must end on its own line");goto fail;
         }
-        p.local_count=0;
+        p.local_count=0;p.in_function=0;p.ihp=0;p.persistence_count=0;p.state_number=state.number;
         if (!body(&p,0,0,0,&first)) goto fail;
         p.program->states[i].first=first;p.program->states[i].locals=p.local_count;
     }
     if (!p.program->state_count && !p.program->function_count) {error(&p,"Program needs a StateDef or Function");goto fail;}
+    for(i=0;i<p.program->state_count;i++) sequence_ihp(p.program,p.program->states[i].first);
+    for(i=0;i<p.program->function_count;i++) sequence_ihp(p.program,p.program->functions[i].first);
     *out=p.program;return 1;
 fail:
     StateDef_FreeProperties(&state.properties);Zss_FreeProgram(p.program);return 0;
@@ -823,6 +874,12 @@ static int run_body(ZssProgram *p, size_t state, Player *player,
             frames[top++]=(struct Frame){n->child,0,0,0,0,0};continue;
         }
         frame->current=n->next;
+        if (player->hitpause_time>0 && !n->has_ihp) continue;
+        if (n->persistent_slot) {
+            unsigned char *timer=&player->sctrl_wait[n->persistent_slot];
+            if (n->persistence==0 && *timer) continue;
+            if (n->persistence>0 && *timer) {--*timer;if (*timer) continue;}
+        }
         switch (n->kind) {
         case NODE_CASE:
             type=Expr_EvalCtx(player,&n->condition,&i,&f,evalctx);
@@ -837,6 +894,7 @@ static int run_body(ZssProgram *p, size_t state, Player *player,
             if (type==0) goto cleanup;
             selected=type==1 ? i!=0 : type==2 ? (!_isnan(f) && f!=0) : 0;
             chosen=selected?n->child:n->otherwise;
+            if (selected && n->persistent_slot) player->sctrl_wait[n->persistent_slot]=(unsigned char)(n->persistence==0 ? 1 : n->persistence);
             if (chosen!=NO_NODE) {
                 if (top>=MAX_FRAMES) goto frame_limit;
                 frames[top++]=(struct Frame){chosen,0,0,0,0,0};
@@ -967,9 +1025,33 @@ int Zss_RunBoundBody(Player *p, void *binding, StateRunCtx *context)
 int Zss_IsBoundState(const StateDef *sd)
 {
     const StateCtrl *sc;
-    if (sd==NULL || sd->ctrls==NULL || sd->ctrls->count!=1) return 0;
-    sc=(const StateCtrl *)(sd->ctrls->data+sd->ctrls->elem_size*sd->ctrls->first);
-    return sc->type==SCTRL_ZSS_BODY && sc->params!=NULL;
+    int i;
+    if (sd==NULL || sd->ctrls==NULL || sd->ctrls->count<1) return 0;
+    for(i=0;i<sd->ctrls->capacity;i++) if(sd->ctrls->slots[i].used) {
+        sc=(const StateCtrl *)(sd->ctrls->data+sd->ctrls->elem_size*i);
+        if(sc->type!=SCTRL_ZSS_BODY || sc->params==NULL) return 0;
+    }
+    return 1;
+}
+void Zss_PrepareStateCounters(Player *p,const StateDef *sd,int force)
+{
+    int state=0,id=0;
+    if(!Zss_IsBoundState(sd)) return;
+    memcpy(&state,&p->sctrl_wait[504],sizeof(state));memcpy(&id,&p->sctrl_wait[508],sizeof(id));
+    if(force || state!=p->state_no || id!=p->id) {
+        memset(p->sctrl_wait,0,504);
+        memcpy(&p->sctrl_wait[504],&p->state_no,sizeof(p->state_no));memcpy(&p->sctrl_wait[508],&p->id,sizeof(p->id));
+    }
+}
+void Zss_RunGlobalState(Player *p)
+{
+    int slot;
+    StateDef *sd;
+    if(p==NULL || p->states==NULL || p->states->list==NULL) return;
+    slot=KeyedArray_Find(p->states->list,-4,0);
+    if(slot<0) return;
+    sd=(StateDef *)(p->states->list->data+p->states->list->elem_size*slot);
+    if(Zss_IsBoundState(sd)) Player_RunSpecialState(p,-4,RUNSTATE_OWN|RUNSTATE_ALWAYS|RUNSTATE_CUSTOM);
 }
 static void free_staged_state(StateDef *sd)
 {
@@ -993,7 +1075,7 @@ static int stage_binding(StateDef *sd, ZssProgram *p, size_t state, ZssLibrary *
     if (sc.triggers==NULL) goto fail;
     Expr_SetInt(&always,1);
     if (KeyedArray_Add(sc.triggers,&always,0,0)==-1) goto fail;
-    sc.type=SCTRL_ZSS_BODY;sc.trigger_groups=1;sc.persistent=1;
+    sc.type=SCTRL_ZSS_BODY;sc.trigger_groups=1;sc.persistent=1;sc.ignorehitpause=1;
     binding=calloc(1,sizeof(*binding));if (binding==NULL) goto fail;
     binding->program=p;binding->library=library;binding->state=state;
     trace=getenv("MUGEN_ZSS_TRACE");
@@ -1011,6 +1093,7 @@ int Zss_InstallProgram(ZssProgram *p, StateDefs *defs, const char **error)
     StateDef *staged=NULL;
     StateDef metadata={0};
     KeyedArray *merged=NULL, *old;
+    KeyedArray **combined=NULL, **retired=NULL;
     ZssLibrary *library=NULL;
     ZssProgram **modules=NULL;
     uint32_t i;
@@ -1021,9 +1104,6 @@ int Zss_InstallProgram(ZssProgram *p, StateDefs *defs, const char **error)
     old=defs->list;
     if (old->elem_size!=(int)sizeof(StateDef)) goto fail;
     if (old->count>INT_MAX-(int)p->state_count-1 || p->references>UINT_MAX-p->state_count-1) goto fail;
-    for (i=0;i<p->state_count;i++) if (KeyedArray_Find(old,p->states[i].number,0)!=-1) {
-        why="ZSS state collides with an already loaded state";goto fail;
-    }
     why="Out of memory installing ZSS states";
     /* Original state lookups always use key2=0. A single private key2=INT_MIN
      * entry anchors the library without growing StateDefs or a global sidecar.
@@ -1051,28 +1131,60 @@ int Zss_InstallProgram(ZssProgram *p, StateDefs *defs, const char **error)
     }
     if (p->state_count) {
         staged=calloc(p->state_count,sizeof(*staged));if (staged==NULL) goto fail;
+        combined=calloc(p->state_count,sizeof(*combined));retired=calloc(p->state_count,sizeof(*retired));
+        if (combined==NULL || retired==NULL) goto fail;
     }
     for (i=0;i<p->state_count;i++) {
         /* Immutable properties stay owned by the program, whose body binding
          * retains it. StateDefs_Free skips these borrowed expressions. */
+        int slot=KeyedArray_Find(old,p->states[i].number,0);
+        StateDef *previous=slot<0 ? NULL : (StateDef *)(old->data+old->elem_size*slot);
+        int j;
+        if (previous!=NULL && p->states[i].number>=0) continue; /* first positive definition wins */
         staged[i]=p->states[i].properties;
         if (!stage_binding(&staged[i],p,i,library)) goto fail;
+        if (previous!=NULL) {
+            if (!Zss_IsBoundState(previous)) {why="Mixed CNS/ZSS negative-state composition is not enabled";goto fail;}
+            combined[i]=KeyedArray_Create(previous->ctrls->count+1,sizeof(StateCtrl));
+            if(combined[i]==NULL) goto fail;
+            for(j=0;j<previous->ctrls->capacity;j++) if(previous->ctrls->slots[j].used &&
+                KeyedArray_Add(combined[i],previous->ctrls->data+previous->ctrls->elem_size*j,j,0)<0) goto fail;
+            if(KeyedArray_Add(combined[i],KeyedArray_First(staged[i].ctrls),previous->ctrls->capacity,0)<0) goto fail;
+            retired[i]=previous->ctrls;
+        }
     }
     extra=(int)p->state_count+add_metadata;
     merged=KeyedArray_Create(old->count+extra,sizeof(StateDef));
     if (merged==NULL) goto fail;
     for (k=0;k<old->capacity;k++) if (old->slots[k].used &&
         KeyedArray_Add(merged,old->data+old->elem_size*k,old->slots[k].key1,old->slots[k].key2)==-1) goto fail;
-    for (i=0;i<p->state_count;i++) if (KeyedArray_Add(merged,&staged[i],p->states[i].number,0)==-1) goto fail;
+    for (i=0;i<p->state_count;i++) {
+        int slot;
+        StateDef entry;
+        if (staged[i].ctrls==NULL) continue;
+        entry=staged[i];
+        if (combined[i]!=NULL) {
+            slot=KeyedArray_Find(old,p->states[i].number,0);
+            entry=*(StateDef *)(old->data+old->elem_size*slot);entry.ctrls=combined[i];
+        }
+        slot=KeyedArray_Find(merged,p->states[i].number,0);
+        if(slot>=0) *(StateDef *)(merged->data+merged->elem_size*slot)=entry;
+        else if(KeyedArray_Add(merged,&entry,p->states[i].number,0)<0) goto fail;
+    }
     if (add_metadata && KeyedArray_Add(merged,&metadata,0,INT_MIN)==-1) goto fail;
     /* Publish only after every allocation succeeds. Existing state bindings
      * share the stable library handle and see later function-only files. */
     if (modules!=NULL) {
         free(library->modules);library->modules=modules;library->count++;p->references++;
     }
-    defs->list=merged;KeyedArray_Free(old);free(staged);free_library(library);return 1;
+    for(i=0;i<p->state_count;i++) if(combined[i]!=NULL) {
+        KeyedArray_Free(staged[i].ctrls);KeyedArray_Free(retired[i]);
+    }
+    defs->list=merged;KeyedArray_Free(old);free(staged);free(combined);free(retired);free_library(library);return 1;
 fail:
     KeyedArray_Free(merged);
+    if(combined!=NULL) {for(i=0;i<p->state_count;i++) KeyedArray_Free(combined[i]);free(combined);}
+    free(retired);
     if (staged!=NULL) {for (i=0;i<p->state_count;i++) free_staged_state(&staged[i]);free(staged);}
     free_staged_state(&metadata);free(modules);free_library(library);
     if (error!=NULL) *error=why;

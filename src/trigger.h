@@ -141,6 +141,9 @@
 /* Port-private numeric ZSS triggers; not accepted by the legacy CNS parser. */
 #define TRIGGER_ZSS_AILEVELF        0x191
 #define TRIGGER_ZSS_MAP             0x192
+#define TRIGGER_ZSS_JUGGLEPOINTS    0x193
+#define TRIGGER_ZSS_MUGENVERSION    0x194
+#define TRIGGER_ZSS_POSZ            0x195
 
 /* Trigger.redirect */
 #define TRIGGER_REDIRECT_NONE       0

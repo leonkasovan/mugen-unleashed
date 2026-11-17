@@ -196,12 +196,43 @@ static const struct {const char *name;int type;} script_controllers[]={
     {"posset",SCTRL_POSSET},{"posadd",SCTRL_POSADD},
     {"ctrlset",SCTRL_CTRLSET},{"changestate",SCTRL_CHANGESTATE},
     {"changeanim",SCTRL_CHANGEANIM},{"turn",SCTRL_TURN},{"null",SCTRL_NULL},
-    {"displaytoclipboard",SCTRL_DISPLAYTOCLIPBOARD},
+    {"displaytoclipboard",SCTRL_DISPLAYTOCLIPBOARD},{"printtoconsole",SCTRL_ZSS_PRINT},
     {"appendtoclipboard",SCTRL_APPENDTOCLIPBOARD},{"clearclipboard",SCTRL_CLEARCLIPBOARD},
     {"playsnd",SCTRL_PLAYSND},{"palfx",SCTRL_PALFX},
     {"bgpalfx",SCTRL_PALFX},{"allpalfx",SCTRL_PALFX},
     {"mapset",SCTRL_ZSS_MAP},{"mapadd",SCTRL_ZSS_MAP},{"mapreset",SCTRL_ZSS_MAP},
-    {"assertspecial",SCTRL_ASSERTSPECIAL}
+    {"assertspecial",SCTRL_ASSERTSPECIAL},
+    {"afterimage",SCTRL_AFTERIMAGE},
+    {"afterimagetime",SCTRL_AFTERIMAGETIME},
+    {"changeanim2",SCTRL_CHANGEANIM2},
+    {"defencemulset",SCTRL_DEFENCEMULSET},
+    {"envshake",SCTRL_ENVSHAKE},
+    {"explod",SCTRL_EXPLOD},
+    {"gamemakeanim",SCTRL_GAMEMAKEANIM},
+    {"hitdef",SCTRL_HITDEF},
+    {"hitfallset",SCTRL_HITFALLSET},
+    {"hitoverride",SCTRL_HITOVERRIDE},
+    {"hitvelset",SCTRL_HITVELSET},
+    {"makedust",SCTRL_MAKEDUST},
+    {"nothitby",SCTRL_HITBY},
+    {"pause",SCTRL_PAUSE},
+    {"remappal",SCTRL_REMAPPAL},
+    {"reversaldef",SCTRL_REVERSALDEF},
+    {"screenbound",SCTRL_SCREENBOUND},
+    {"selfstate",SCTRL_SELFSTATE},
+    {"sprpriority",SCTRL_SPRPRIORITY},
+    {"statetypeset",SCTRL_STATETYPESET},
+    {"superpause",SCTRL_SUPERPAUSE},
+    {"targetbind",SCTRL_TARGETBIND},
+    {"targetfacing",SCTRL_TARGETFACING},
+    {"targetlifeadd",SCTRL_TARGETLIFEADD},
+    {"targetstate",SCTRL_TARGETSTATE},
+    {"varrangeset",SCTRL_VARRANGESET},
+    {"velmul",SCTRL_VELMUL},
+    {"width",SCTRL_WIDTH},
+    {"hitby",SCTRL_HITBY},{"forcefeedback",SCTRL_NULL},{"dialogue",SCTRL_ZSS_DIALOGUE},
+    {"posfreeze",SCTRL_POSFREEZE},{"fallenvshake",SCTRL_FALLENVSHAKE},
+    {"hitfalldamage",SCTRL_HITFALLDAMAGE},{"hitfallvel",SCTRL_HITFALLVEL},{"gravity",SCTRL_GRAVITY}
 };
 int StateCtrl_ScriptType(const char *name)
 {
@@ -218,6 +249,12 @@ static int script_frame_supported(int type)
         if (type==script_controllers[i].type) return 1;
     return 0;
 }
+static int parameter_compile_ctx(const char *s, Expr *e, CharData *owner, const char **end, int want, ExprCompileCtx *ctx)
+{
+    const char *tail=NULL;
+    int ok=Expr_CompileCtx(s,e,owner,end!=NULL ? end : ctx!=NULL ? &tail : NULL,want,ctx);
+    return ok && (ctx==NULL || s==NULL || end!=NULL || (tail!=NULL && *tail==0));
+}
 static int compile_expr_ctx(const char *s, Expr *e, CharData *owner, int want, ExprCompileCtx *ctx)
 {
     const char *end=NULL;
@@ -229,7 +266,7 @@ static int compile_key_ctx(Ini *ini, const char *key, Expr *e, CharData *owner, 
 {
     return compile_expr_ctx(Ini_GetValue(ini,key),e,owner,want,ctx);
 }
-static int compile_key(Ini *ini, const char *key, Expr *e, CharData *owner, int want)
+static __inline int compile_key(Ini *ini, const char *key, Expr *e, CharData *owner, int want)
 {
     return compile_key_ctx(ini,key,e,owner,want,NULL);
 }
@@ -239,7 +276,7 @@ static int compile_required_ctx(Ini *ini, const char *key, Expr *e, CharData *ow
     const char *s=Ini_GetValue(ini,key);
     return s!=NULL && compile_expr_ctx(s,e,owner,want,ctx);
 }
-static int compile_required(Ini *ini, const char *key, Expr *e, CharData *owner, int want)
+static __inline int compile_required(Ini *ini, const char *key, Expr *e, CharData *owner, int want)
 {
     return compile_required_ctx(ini,key,e,owner,want,NULL);
 }
@@ -251,7 +288,13 @@ static int compile_required(Ini *ini, const char *key, Expr *e, CharData *owner,
  * (arg[0]). The kind is taken from the case-sensitive first letters while the
  * names match in any case ("Var(1)" reads as a sysfvar).
  */
-static int parse_var_line(Ini *ini, StateCtrl *sc, CharData *owner, int sys)
+static int parse_var_lineCtx(Ini *ini, StateCtrl *sc, CharData *owner, int sys, ExprCompileCtx *ctx);
+static __inline int parse_var_line(Ini *ini, StateCtrl *sc, CharData *owner, int sys)
+{
+    return parse_var_lineCtx(ini, sc, owner, sys, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+static int parse_var_lineCtx(Ini *ini, StateCtrl *sc, CharData *owner, int sys, ExprCompileCtx *ctx)
 {
     const char *s = Ini_FirstLine(ini);
     const char *end;
@@ -286,7 +329,7 @@ static int parse_var_line(Ini *ini, StateCtrl *sc, CharData *owner, int sys)
     if (*s != '(') {
         return 0;
     }
-    if (!Expr_Compile(s + 1, &sc->arg[1], owner, &end, EXPR_WANT_INT)) {
+    if (!parameter_compile_ctx(s + 1, &sc->arg[1], owner, &end, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     if (*end != ')') {
@@ -304,7 +347,7 @@ static int parse_var_line(Ini *ini, StateCtrl *sc, CharData *owner, int sys)
     } else {
         want = (kind != SCTRL_VAR) + 1;
     }
-    return Expr_Compile(s + 1, &sc->arg[0], owner, NULL, want);
+    return parameter_compile_ctx(s + 1, &sc->arg[0], owner, NULL, want, ctx);
 }
 
 /*
@@ -312,24 +355,30 @@ static int parse_var_line(Ini *ini, StateCtrl *sc, CharData *owner, int sys)
  * float value with the index in fv (arg[2] set to 1). Neither v nor fv: the
  * value is not even compiled.
  */
-static int parse_var_value(Ini *ini, const char *value, StateCtrl *sc, CharData *owner)
+static int parse_var_valueCtx(Ini *ini, const char *value, StateCtrl *sc, CharData *owner, ExprCompileCtx *ctx);
+static __inline int parse_var_value(Ini *ini, const char *value, StateCtrl *sc, CharData *owner)
+{
+    return parse_var_valueCtx(ini, value, sc, owner, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+static int parse_var_valueCtx(Ini *ini, const char *value, StateCtrl *sc, CharData *owner, ExprCompileCtx *ctx)
 {
     const char *s = Ini_GetValue(ini, "v");
 
     if (s != NULL) {
-        if (!Expr_Compile(value, &sc->arg[0], owner, NULL, EXPR_WANT_INT)) {
+        if (!parameter_compile_ctx(value, &sc->arg[0], owner, NULL, EXPR_WANT_INT, ctx)) {
             return 0;
         }
-        return Expr_Compile(s, &sc->arg[1], owner, NULL, EXPR_WANT_INT);
+        return parameter_compile_ctx(s, &sc->arg[1], owner, NULL, EXPR_WANT_INT, ctx);
     }
     s = Ini_GetValue(ini, "fv");
     if (s == NULL) {
         return 1;
     }
-    if (!Expr_Compile(s, &sc->arg[1], owner, NULL, EXPR_WANT_INT)) {
+    if (!parameter_compile_ctx(s, &sc->arg[1], owner, NULL, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!Expr_Compile(value, &sc->arg[0], owner, NULL, EXPR_WANT_FLOAT)) {
+    if (!parameter_compile_ctx(value, &sc->arg[0], owner, NULL, EXPR_WANT_FLOAT, ctx)) {
         return 0;
     }
     Expr_SetInt(&sc->arg[2], SCTRL_FVAR);
@@ -337,17 +386,29 @@ static int parse_var_value(Ini *ini, const char *value, StateCtrl *sc, CharData 
 }
 
 /* "x, y" (ParseValues "ff") into two Exprs; a missing value is fine, trailing text is not. */
-static int parse_pair(Ini *ini, const char *key, const char *fmt, Expr *a, Expr *b, CharData *owner)
+static int parse_pairCtx(Ini *ini, const char *key, const char *fmt, Expr *a, Expr *b, CharData *owner, ExprCompileCtx *ctx);
+static __inline int parse_pair(Ini *ini, const char *key, const char *fmt, Expr *a, Expr *b, CharData *owner)
+{
+    return parse_pairCtx(ini, key, fmt, a, b, owner, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+static int parse_pairCtx(Ini *ini, const char *key, const char *fmt, Expr *a, Expr *b, CharData *owner, ExprCompileCtx *ctx)
 {
     const char *s = Ini_GetValue(ini, key);
     const char *end;
 
-    Cns_ParseValues(s, fmt, owner, &end, a, b);
+    Cns_ParseValuesCtx(s, fmt, owner, &end, ctx, a, b);
     return s == NULL || *end == '\0';
 }
 
 /* "x, y" into two Exprs: a missing value is fine; a value must give at least one Expr and end there. */
-static int parse_pair_checked(Ini *ini, const char *key, const char *fmt, Expr *a, Expr *b, CharData *owner)
+static int parse_pair_checkedCtx(Ini *ini, const char *key, const char *fmt, Expr *a, Expr *b, CharData *owner, ExprCompileCtx *ctx);
+static __inline int parse_pair_checked(Ini *ini, const char *key, const char *fmt, Expr *a, Expr *b, CharData *owner)
+{
+    return parse_pair_checkedCtx(ini, key, fmt, a, b, owner, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+static int parse_pair_checkedCtx(Ini *ini, const char *key, const char *fmt, Expr *a, Expr *b, CharData *owner, ExprCompileCtx *ctx)
 {
     const char *s = Ini_GetValue(ini, key);
     const char *end;
@@ -355,14 +416,20 @@ static int parse_pair_checked(Ini *ini, const char *key, const char *fmt, Expr *
     if (s == NULL) {
         return 1;
     }
-    if (!Cns_ParseValues(s, fmt, owner, &end, a, b)) {
+    if (!Cns_ParseValuesCtx(s, fmt, owner, &end, ctx, a, b)) {
         return 0;
     }
     return *end == '\0';
 }
 
 /* As parse_pair_checked, testing the end of the text before the count. */
-static int parse_pair_end_first(Ini *ini, const char *key, const char *fmt, Expr *a, Expr *b, CharData *owner)
+static int parse_pair_end_firstCtx(Ini *ini, const char *key, const char *fmt, Expr *a, Expr *b, CharData *owner, ExprCompileCtx *ctx);
+static __inline int parse_pair_end_first(Ini *ini, const char *key, const char *fmt, Expr *a, Expr *b, CharData *owner)
+{
+    return parse_pair_end_firstCtx(ini, key, fmt, a, b, owner, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+static int parse_pair_end_firstCtx(Ini *ini, const char *key, const char *fmt, Expr *a, Expr *b, CharData *owner, ExprCompileCtx *ctx)
 {
     const char *s = Ini_GetValue(ini, key);
     const char *end;
@@ -371,7 +438,7 @@ static int parse_pair_end_first(Ini *ini, const char *key, const char *fmt, Expr
     if (s == NULL) {
         return 1;
     }
-    n = Cns_ParseValues(s, fmt, owner, &end, a, b);
+    n = Cns_ParseValuesCtx(s, fmt, owner, &end, ctx, a, b);
     if (*end != '\0') {
         return 0;
     }
@@ -450,6 +517,25 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
         Expr_SetInt(&sc->arg[i], 0);
     }
 
+    /* The native MUGEN motif has no enabled Ikemen dialogue subsystem. Like
+     * the reference's motif.di.enabled=false path, validated dialogue has no
+     * runtime effect. Reject nonliteral text rather than silently evaluating
+     * unsupported first-class strings. This is an explicit capability profile. */
+    if (ctx!=NULL && !strcmp(name,"dialogue")) {
+        int line;
+        for(line=1;line<=32;line++) {
+            char key[24];CnsText *text;
+            snprintf(key,sizeof(key),"text%d",line);s=Ini_GetValue(ini,key);
+            if(s==NULL) continue;
+            text=CnsText_Parse(s);
+            if(text==NULL) return 0;
+            if(text->count!=0) {free(text);return 0;}
+            free(text);
+        }
+        sc->type=SCTRL_ZSS_DIALOGUE;
+        Log_Printf("ZSS capability: Dialogue UI disabled by the MUGEN motif profile\n");
+        return 1;
+    }
     if (ctx!=NULL && (!strcmp(name,"mapset") || !strcmp(name,"mapadd") || !strcmp(name,"mapreset"))) {
         char key[ZSS_MAP_KEY_MAX+1];
         sc->type=SCTRL_ZSS_MAP;
@@ -515,12 +601,12 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
             Error_Printf("Missing channel parameter\n");
             return 0;
         }
-        ok = Expr_Compile(s, &sc->arg[0], owner, NULL, EXPR_WANT_INT);
+        ok = parameter_compile_ctx(s, &sc->arg[0], owner, NULL, EXPR_WANT_INT, ctx);
         if (ok && sc->type == SCTRL_SNDPAN) {
             s = Ini_GetValue(ini, "abspan");
             if (s != NULL) {
                 Expr_SetInt(&sc->arg[2], 1);
-                if (!Expr_Compile(s, &sc->arg[1], owner, NULL, EXPR_WANT_INT)) {
+                if (!parameter_compile_ctx(s, &sc->arg[1], owner, NULL, EXPR_WANT_INT, ctx)) {
                     return 0;
                 }
             }
@@ -564,8 +650,8 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
             return 0;
         }
         sc->type = SCTRL_HITDEF;
-        if (!HitDef_ParseParams(ini, hd, owner)) {
-            free(hd);
+        if (!HitDef_ParseParamsCtx(ini, hd, owner, ctx)) {
+            HitDefParams_Free(hd);free(hd);
             Error_Printf("Error parsing Hitdef\n");
             return 0;
         }
@@ -580,15 +666,15 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
         s = Ini_GetValue(ini, "reversal.attr");
         if (s == NULL) {
             Error_Printf("Missing reversal.attr parameter\n");
-            return 0;
+            free(hd);return 0;
         }
         hd->reversal_attr = HitDefAttr_Parse(s, NULL);
         if (hd->reversal_attr == 0xFFFFFFFFu) {
             Error_Printf("Invalid reversal.attr: %s\n", s);
-            return 0;
+            free(hd);return 0;
         }
-        if (!HitDef_ParseParams(ini, hd, owner)) {
-            free(hd);
+        if (!HitDef_ParseParamsCtx(ini, hd, owner, ctx)) {
+            HitDefParams_Free(hd);free(hd);
             Error_Printf("Error parsing Reversaldef\n");
             return 0;
         }
@@ -614,22 +700,22 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
         }
         Expr_SetInt(&sc->arg[0], name[0] == 'h' ? attr : ~attr & 0xFFF);
         Expr_SetInt(&sc->arg[1], 1);
-        ok = compile_key(ini, "time", &sc->arg[1], owner, EXPR_WANT_INT);
+        ok = compile_key_ctx(ini, "time", &sc->arg[1], owner, EXPR_WANT_INT, ctx);
     } else if (strcmp(name, "hitvelset") == 0) {
         sc->type = SCTRL_HITVELSET;
-        if (!compile_key(ini, "x", &sc->arg[0], owner, EXPR_WANT_INT)) {
+        if (!compile_key_ctx(ini, "x", &sc->arg[0], owner, EXPR_WANT_INT, ctx)) {
             return 0;
         }
-        ok = compile_key(ini, "y", &sc->arg[1], owner, EXPR_WANT_INT);
+        ok = compile_key_ctx(ini, "y", &sc->arg[1], owner, EXPR_WANT_INT, ctx);
     } else if (strcmp(name, "hitfallset") == 0) {
         sc->type = SCTRL_HITFALLSET;
         Expr_SetInt(&sc->arg[0], -1);
         Expr_SetFloat(&sc->arg[3], -FLT_MAX);
         Expr_SetFloat(&sc->arg[4], -FLT_MAX);
-        if (!compile_key(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT)) {
+        if (!compile_key_ctx(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT, ctx)) {
             return 0;
         }
-        ok = parse_pair(ini, "velocity", "ff", &sc->arg[3], &sc->arg[4], owner);
+        ok = parse_pairCtx(ini, "velocity", "ff", &sc->arg[3], &sc->arg[4], owner, ctx);
     } else if (strcmp(name, "hitfalldamage") == 0) {
         sc->type = SCTRL_HITFALLDAMAGE;
         ok = 1;
@@ -638,10 +724,10 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
         ok = 1;
     } else if (strcmp(name, "hitadd") == 0) {
         sc->type = SCTRL_HITADD;
-        ok = compile_required(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT);
+        ok = compile_required_ctx(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT, ctx);
     } else if (strcmp(name, "attackmulset") == 0 || strcmp(name, "defencemulset") == 0) {
         sc->type = name[0] == 'a' ? SCTRL_ATTACKMULSET : SCTRL_DEFENCEMULSET;
-        ok = compile_required(ini, "value", &sc->arg[3], owner, EXPR_WANT_FLOAT);
+        ok = compile_required_ctx(ini, "value", &sc->arg[3], owner, EXPR_WANT_FLOAT, ctx);
     } else if (strcmp(name, "statetypeset") == 0) {
         sc->type = SCTRL_STATETYPESET;
         Expr_SetInt(&sc->arg[0], -1);
@@ -705,15 +791,15 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
             return 0;
         }
         sc->type = SCTRL_HITOVERRIDE;
-        if (!HitOverride_ParseParams(ini, owner, ho)) {
-            free(ho);
+        if (!HitOverride_ParseParamsCtx(ini, owner, ho, ctx)) {
+            Expr_Free(&ho->stateno);Expr_Free(&ho->time);Expr_Free(&ho->forceair);free(ho);
             Error_Printf("Error parsing HitOverride\n");
             return 0;
         }
-        if (!compile_key(ini, "slot", &sc->arg[0], owner, EXPR_WANT_INT)) {
+        sc->params=ho;
+        if (!compile_key_ctx(ini, "slot", &sc->arg[0], owner, EXPR_WANT_INT, ctx)) {
             return 0;
         }
-        sc->params = ho;
         ok = 1;
     } else if (strcmp(name, "movehitreset") == 0) {
         sc->type = SCTRL_MOVEHITRESET;
@@ -721,7 +807,7 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
     } else if (strcmp(name, "victoryquote") == 0) {
         sc->type = SCTRL_VICTORYQUOTE;
         Expr_SetInt(&sc->arg[0], -1);
-        ok = compile_key(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT);
+        ok = compile_key_ctx(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT, ctx);
     } else if (strcmp(name, "assertspecial") == 0) {
         static const char *const flag_keys[3] = { "flag", "flag2", "flag3" };
         sc->type = SCTRL_ASSERTSPECIAL;
@@ -739,8 +825,11 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
             }
             /* Port addition: ZSS-only flag metadata. Keep legacy CNS names and
              * its original global/player byte banks unchanged. */
-            if (ctx!=NULL && !_stricmp(s,"nocrouch")) {
-                kind=ZSS_ASSERT_KIND;index=ZSS_ASSERT_NO_CROUCH;
+            if (ctx!=NULL && (!_stricmp(s,"nocrouch") || !_stricmp(s,"nojump") || !_stricmp(s,"noairjump") ||
+                !_stricmp(s,"nobrake") || !_stricmp(s,"autoguard"))) {
+                kind=ZSS_ASSERT_KIND;index=!_stricmp(s,"nocrouch") ? ZSS_ASSERT_NO_CROUCH :
+                    !_stricmp(s,"nojump") ? ZSS_ASSERT_NO_JUMP : !_stricmp(s,"noairjump") ? ZSS_ASSERT_NO_AIR_JUMP :
+                    !_stricmp(s,"nobrake") ? ZSS_ASSERT_NO_BRAKE : ZSS_ASSERT_AUTO_GUARD;
             } else if (!AssertSpecial_ParseFlag(s, &kind, &index)) {
                 if (i == 0) {
                     Error_Printf("AssertSpecial flag \"%s\" not valid\n", s);
@@ -765,21 +854,21 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
         Expr_SetFloat(&sc->arg[1], 1.0f);
         Expr_SetFloat(&sc->arg[3], 1.0f);
         Expr_SetFloat(&sc->arg[4], 0.0f);
-        if (!parse_pair_checked(ini, "pos", "ff", &sc->arg[0], &sc->arg[1], owner)) {
+        if (!parse_pair_checkedCtx(ini, "pos", "ff", &sc->arg[0], &sc->arg[1], owner, ctx)) {
             return 0;
         }
-        if (!compile_key(ini, "scale", &sc->arg[3], owner, EXPR_WANT_FLOAT)) {
+        if (!compile_key_ctx(ini, "scale", &sc->arg[3], owner, EXPR_WANT_FLOAT, ctx)) {
             return 0;
         }
-        ok = compile_key(ini, "lag", &sc->arg[4], owner, EXPR_WANT_FLOAT);
+        ok = compile_key_ctx(ini, "lag", &sc->arg[4], owner, EXPR_WANT_FLOAT, ctx);
     } else if (strcmp(name, "projectile") == 0) {
         ProjectileParams *pp = Mem_Calloc(1, sizeof(ProjectileParams));
         if (pp == NULL) {
             return 0;
         }
         sc->type = SCTRL_PROJECTILE;
-        if (!Projectile_ParseParams(pp, owner, ini)) {
-            free(pp);
+        if (!Projectile_ParseParamsCtx(pp, owner, ini, ctx)) {
+            ProjectileParams_Free(pp);free(pp);
             Error_Printf("Error parsing Projectile\n");
             return 0;
         }
@@ -794,19 +883,19 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
         Expr_SetInt(&sc->arg[2], 0);
         s = Ini_GetValue(ini, "edge");
         given = s != NULL;
-        Cns_ParseValues(s, "ii", owner, &end, &sc->arg[0], &sc->arg[1]);
+        Cns_ParseValuesCtx(s, "ii", owner, &end, ctx, &sc->arg[0], &sc->arg[1]);
         if (s != NULL && *end != '\0') {
             return 0;
         }
         s = Ini_GetValue(ini, "player");
         given |= s != NULL;
-        Cns_ParseValues(s, "ii", owner, &end, &sc->arg[2], &sc->arg[3]);
+        Cns_ParseValuesCtx(s, "ii", owner, &end, ctx, &sc->arg[2], &sc->arg[3]);
         if (s != NULL && *end != '\0') {
             return 0;
         }
         if (!given) {
             s = Ini_GetValue(ini, "value");
-            if (!Cns_ParseValues(s, "ii", owner, &end, &sc->arg[0], &sc->arg[1])) {
+            if (!Cns_ParseValuesCtx(s, "ii", owner, &end, ctx, &sc->arg[0], &sc->arg[1])) {
                 return 0;
             }
             if (*end != '\0') {
@@ -818,18 +907,18 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
         ok = 1;
     } else if (strcmp(name, "sprpriority") == 0) {
         sc->type = SCTRL_SPRPRIORITY;
-        ok = compile_key(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT);
+        ok = compile_key_ctx(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT, ctx);
     } else if (strcmp(name, "angledraw") == 0) {
         sc->type = SCTRL_ANGLEDRAW;
         Expr_SetFloat(&sc->arg[4], 1.0f);
         Expr_SetFloat(&sc->arg[5], 1.0f);
-        if (!Cns_CompileFloat(ini, "value", &sc->arg[3], owner, -FLT_MAX)) {
+        if (!Cns_CompileFloatCtx(ini, "value", &sc->arg[3], owner, -FLT_MAX, ctx)) {
             return 0;
         }
-        ok = parse_pair(ini, "scale", "ff", &sc->arg[4], &sc->arg[5], owner);
+        ok = parse_pairCtx(ini, "scale", "ff", &sc->arg[4], &sc->arg[5], owner, ctx);
     } else if (strcmp(name, "angleset") == 0 || strcmp(name, "angleadd") == 0 || strcmp(name, "anglemul") == 0) {
         sc->type = name[5] == 's' ? SCTRL_ANGLESET : name[5] == 'a' ? SCTRL_ANGLEADD : SCTRL_ANGLEMUL;
-        ok = compile_key(ini, "value", &sc->arg[3], owner, EXPR_WANT_FLOAT);
+        ok = compile_key_ctx(ini, "value", &sc->arg[3], owner, EXPR_WANT_FLOAT, ctx);
     } else if (strcmp(name, "trans") == 0) {
         int alpha_dst, alpha_src, trans;
         sc->type = SCTRL_TRANS;
@@ -849,7 +938,7 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
         }
         s = Ini_GetValue(ini, "alpha");
         if (s != NULL) {
-            Cns_ParseValues(s, "ii", owner, &end, &sc->arg[1], &sc->arg[2]);
+            Cns_ParseValuesCtx(s, "ii", owner, &end, ctx, &sc->arg[1], &sc->arg[2]);
             if (*end != '\0') {
                 return 0;
             }
@@ -858,12 +947,12 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
     } else if (strcmp(name, "screenbound") == 0) {
         sc->type = SCTRL_SCREENBOUND;
         Expr_SetInt(&sc->arg[0], 0);
-        if (!compile_key(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT)) {
+        if (!compile_key_ctx(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT, ctx)) {
             return 0;
         }
         Expr_SetInt(&sc->arg[1], 0);
         Expr_SetInt(&sc->arg[2], 0);
-        ok = parse_pair(ini, "movecamera", "ii", &sc->arg[1], &sc->arg[2], owner);
+        ok = parse_pairCtx(ini, "movecamera", "ii", &sc->arg[1], &sc->arg[2], owner, ctx);
     } else if (strcmp(name, "targetbind") == 0) {
         sc->type = SCTRL_TARGETBIND;
         Expr_SetInt(&sc->arg[0], 1);
@@ -871,13 +960,13 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
         Expr_SetFloat(&sc->arg[3], 0.0f);
         Expr_SetFloat(&sc->arg[4], 0.0f);
         Expr_SetFloat(&sc->arg[5], 0.0f);
-        if (!compile_key(ini, "time", &sc->arg[0], owner, EXPR_WANT_INT)) {
+        if (!compile_key_ctx(ini, "time", &sc->arg[0], owner, EXPR_WANT_INT, ctx)) {
             return 0;
         }
-        if (!compile_key(ini, "id", &sc->arg[2], owner, EXPR_WANT_INT)) {
+        if (!compile_key_ctx(ini, "id", &sc->arg[2], owner, EXPR_WANT_INT, ctx)) {
             return 0;
         }
-        ok = parse_pair(ini, "pos", "ff", &sc->arg[3], &sc->arg[4], owner);
+        ok = parse_pairCtx(ini, "pos", "ff", &sc->arg[3], &sc->arg[4], owner, ctx);
     } else if (strcmp(name, "bindtotarget") == 0) {
         sc->type = SCTRL_BINDTOTARGET;
         Expr_SetInt(&sc->arg[0], 1);
@@ -886,15 +975,15 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
         Expr_SetFloat(&sc->arg[4], -FLT_MAX);
         Expr_SetFloat(&sc->arg[5], 0.0f);
         Expr_SetInt(&sc->arg[1], 0);
-        if (!compile_key(ini, "time", &sc->arg[0], owner, EXPR_WANT_INT)) {
+        if (!compile_key_ctx(ini, "time", &sc->arg[0], owner, EXPR_WANT_INT, ctx)) {
             return 0;
         }
-        if (!compile_key(ini, "id", &sc->arg[2], owner, EXPR_WANT_INT)) {
+        if (!compile_key_ctx(ini, "id", &sc->arg[2], owner, EXPR_WANT_INT, ctx)) {
             return 0;
         }
         s = Ini_GetValue(ini, "pos");
         if (s != NULL) {
-            n = Cns_ParseValues(s, "ff:,", owner, &end, &sc->arg[3], &sc->arg[4]);
+            n = Cns_ParseValuesCtx(s, "ff:,", owner, &end, ctx, &sc->arg[3], &sc->arg[4]);
             if (*end != '\0') {
                 if (*end != ',') {
                     return 0;
@@ -927,59 +1016,59 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
         ok = 1;
     } else if (strcmp(name, "targetstate") == 0 || strcmp(name, "targetpoweradd") == 0) {
         sc->type = name[6] == 's' ? SCTRL_TARGETSTATE : SCTRL_TARGETPOWERADD;
-        if (!compile_required(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT)) {
+        if (!compile_required_ctx(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT, ctx)) {
             return 0;
         }
-        ok = Cns_CompileInt(ini, "id", &sc->arg[2], owner, -1);
+        ok = Cns_CompileIntCtx(ini, "id", &sc->arg[2], owner, -1, ctx);
     } else if (strcmp(name, "targetlifeadd") == 0) {
         sc->type = SCTRL_TARGETLIFEADD;
-        if (!compile_required(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT)) {
+        if (!compile_required_ctx(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT, ctx)) {
             return 0;
         }
         Expr_SetInt(&sc->arg[1], 1);
-        if (!compile_key(ini, "kill", &sc->arg[1], owner, EXPR_WANT_INT)) {
+        if (!compile_key_ctx(ini, "kill", &sc->arg[1], owner, EXPR_WANT_INT, ctx)) {
             return 0;
         }
-        if (!compile_key(ini, "absolute", &sc->arg[2], owner, EXPR_WANT_INT)) {
+        if (!compile_key_ctx(ini, "absolute", &sc->arg[2], owner, EXPR_WANT_INT, ctx)) {
             return 0;
         }
-        ok = Cns_CompileInt(ini, "id", &sc->arg[5], owner, -1);
+        ok = Cns_CompileIntCtx(ini, "id", &sc->arg[5], owner, -1, ctx);
     } else if (strcmp(name, "targetvelset") == 0 || strcmp(name, "targetveladd") == 0) {
         sc->type = name[9] == 's' ? SCTRL_TARGETVELSET : SCTRL_TARGETVELADD;
-        if (!Cns_CompileFloat(ini, "x", &sc->arg[3], owner, -FLT_MAX)) {
+        if (!Cns_CompileFloatCtx(ini, "x", &sc->arg[3], owner, -FLT_MAX, ctx)) {
             return 0;
         }
-        if (!Cns_CompileFloat(ini, "y", &sc->arg[4], owner, -FLT_MAX)) {
+        if (!Cns_CompileFloatCtx(ini, "y", &sc->arg[4], owner, -FLT_MAX, ctx)) {
             return 0;
         }
-        if (!Cns_CompileFloat(ini, "z", &sc->arg[5], owner, -FLT_MAX)) {
+        if (!Cns_CompileFloatCtx(ini, "z", &sc->arg[5], owner, -FLT_MAX, ctx)) {
             return 0;
         }
-        ok = Cns_CompileInt(ini, "id", &sc->arg[2], owner, -1);
+        ok = Cns_CompileIntCtx(ini, "id", &sc->arg[2], owner, -1, ctx);
     } else if (strcmp(name, "targetfacing") == 0) {
         sc->type = SCTRL_TARGETFACING;
-        if (!compile_key(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT)) {
+        if (!compile_key_ctx(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT, ctx)) {
             return 0;
         }
-        ok = Cns_CompileInt(ini, "id", &sc->arg[2], owner, -1);
+        ok = Cns_CompileIntCtx(ini, "id", &sc->arg[2], owner, -1, ctx);
     } else if (strcmp(name, "targetdrop") == 0) {
         sc->type = SCTRL_TARGETDROP;
         Expr_SetInt(&sc->arg[0], -1);
         Expr_SetInt(&sc->arg[1], 1);
-        if (!compile_key(ini, "excludeID", &sc->arg[0], owner, EXPR_WANT_INT)) {
+        if (!compile_key_ctx(ini, "excludeID", &sc->arg[0], owner, EXPR_WANT_INT, ctx)) {
             return 0;
         }
-        ok = compile_key(ini, "keepone", &sc->arg[1], owner, EXPR_WANT_INT);
+        ok = compile_key_ctx(ini, "keepone", &sc->arg[1], owner, EXPR_WANT_INT, ctx);
     } else if (strcmp(name, "attackdist") == 0) {
         sc->type = SCTRL_ATTACKDIST;
-        ok = compile_required(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT);
+        ok = compile_required_ctx(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT, ctx);
     } else if (strcmp(name, "playerpush") == 0) {
         sc->type = SCTRL_PLAYERPUSH;
-        ok = compile_required(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT);
+        ok = compile_required_ctx(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT, ctx);
     } else if (strcmp(name, "varset") == 0 || strcmp(name, "varadd") == 0) {
         sc->type = strcmp(name, "varset") == 0 ? SCTRL_VARSET : SCTRL_VARADD;
         s = Ini_GetValue(ini, "value");
-        ok = s != NULL ? parse_var_value(ini, s, sc, owner) : parse_var_line(ini, sc, owner, 1);
+        ok = s != NULL ? parse_var_valueCtx(ini, s, sc, owner, ctx) : parse_var_lineCtx(ini, sc, owner, 1, ctx);
     } else if (strcmp(name, "varrangeset") == 0) {
         int isfloat;
         sc->type = SCTRL_VARRANGESET;
@@ -994,27 +1083,27 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
             }
             isfloat = 1;
         }
-        if (!Cns_CompileInt(ini, "first", &sc->arg[0], owner, 0)) {
+        if (!Cns_CompileIntCtx(ini, "first", &sc->arg[0], owner, 0, ctx)) {
             return 0;
         }
-        if (!Cns_CompileInt(ini, "last", &sc->arg[1], owner, isfloat ? PLAYER_FVAR_COUNT - 1 : PLAYER_VAR_COUNT - 1)) {
+        if (!Cns_CompileIntCtx(ini, "last", &sc->arg[1], owner, isfloat ? PLAYER_FVAR_COUNT - 1 : PLAYER_VAR_COUNT - 1, ctx)) {
             return 0;
         }
-        if (!Expr_Compile(s, &sc->arg[2], owner, NULL, isfloat + 1)) {
+        if (!parameter_compile_ctx(s, &sc->arg[2], owner, NULL, isfloat + 1, ctx)) {
             return 0;
         }
         Expr_SetInt(&sc->arg[3], isfloat);
         ok = 1;
     } else if (strcmp(name, "varrandom") == 0) {
         sc->type = SCTRL_VARRANDOM;
-        if (!compile_required(ini, "v", &sc->arg[1], owner, EXPR_WANT_INT)) {
+        if (!compile_required_ctx(ini, "v", &sc->arg[1], owner, EXPR_WANT_INT, ctx)) {
             return 0;
         }
         Expr_SetInt(&sc->arg[0], 0);
         Expr_SetInt(&sc->arg[2], 1000);
         s = Ini_GetValue(ini, "range");
         if (s != NULL) {
-            n = Cns_ParseValues(s, "ii", owner, &end, &sc->arg[0], &sc->arg[2]);
+            n = Cns_ParseValuesCtx(s, "ii", owner, &end, ctx, &sc->arg[0], &sc->arg[2]);
             if (*end != '\0') {
                 return 0;
             }
@@ -1041,8 +1130,8 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
         if (es == NULL) {
             return 0;
         }
-        if (!EnvShake_ParseParams("", es, ini, owner)) {
-            free(es);
+        if (!EnvShake_ParseParamsCtx("", es, ini, owner, ctx)) {
+            EnvShakeParams_Free(es);free(es);
             Error_Printf("Error parsing EnvShake\n");
             return 0;
         }
@@ -1058,7 +1147,7 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
         Expr_SetInt(&sc->arg[5], 0xFF);
         s = Ini_GetValue(ini, "value");
         if (s != NULL) {
-            n = Cns_ParseValues(s, "iii", owner, &end, &sc->arg[3], &sc->arg[4], &sc->arg[5]);
+            n = Cns_ParseValuesCtx(s, "iii", owner, &end, ctx, &sc->arg[3], &sc->arg[4], &sc->arg[5]);
             if (*end != '\0') {
                 return 0;
             }
@@ -1068,34 +1157,34 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
         }
         Expr_SetInt(&sc->arg[1], 1);
         Expr_SetInt(&sc->arg[2], 0);
-        if (!compile_key(ini, "time", &sc->arg[1], owner, EXPR_WANT_INT)) {
+        if (!compile_key_ctx(ini, "time", &sc->arg[1], owner, EXPR_WANT_INT, ctx)) {
             return 0;
         }
-        ok = compile_key(ini, "under", &sc->arg[2], owner, EXPR_WANT_INT);
+        ok = compile_key_ctx(ini, "under", &sc->arg[2], owner, EXPR_WANT_INT, ctx);
     } else if (strcmp(name, "gamemakeanim") == 0) {
         sc->type = SCTRL_GAMEMAKEANIM;
         Expr_SetInt(&sc->arg[0], 0);
         Expr_SetInt(&sc->arg[1], 0);
         Expr_SetFloat(&sc->arg[3], 0.0f);
         Expr_SetFloat(&sc->arg[4], 0.0f);
-        if (!compile_key(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT)) {
+        if (!compile_key_ctx(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT, ctx)) {
             return 0;
         }
-        if (!compile_key(ini, "under", &sc->arg[1], owner, EXPR_WANT_INT)) {
+        if (!compile_key_ctx(ini, "under", &sc->arg[1], owner, EXPR_WANT_INT, ctx)) {
             return 0;
         }
-        if (!parse_pair_end_first(ini, "pos", "ff", &sc->arg[3], &sc->arg[4], owner)) {
+        if (!parse_pair_end_firstCtx(ini, "pos", "ff", &sc->arg[3], &sc->arg[4], owner, ctx)) {
             return 0;
         }
-        ok = compile_key(ini, "random", &sc->arg[2], owner, EXPR_WANT_INT);
+        ok = compile_key_ctx(ini, "random", &sc->arg[2], owner, EXPR_WANT_INT, ctx);
     } else if (strcmp(name, "afterimage") == 0) {
         AfterImageParams *ai = Mem_Calloc(1, sizeof(AfterImageParams));
         if (ai == NULL) {
             return 0;
         }
         sc->type = SCTRL_AFTERIMAGE;
-        if (!AfterImage_ParseParams(ai, ini, owner, "")) {
-            free(ai);
+        if (!AfterImage_ParseParamsCtx(ai, ini, owner, "", ctx)) {
+            AfterImageParams_Free(ai);free(ai);
             Error_Printf("Error parsing AfterImage\n");
             return 0;
         }
@@ -1105,9 +1194,9 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
         sc->type = SCTRL_AFTERIMAGETIME;
         s = Ini_GetValue(ini, "time");
         if (s != NULL) {
-            ok = Expr_Compile(s, &sc->arg[0], owner, NULL, EXPR_WANT_INT);
+            ok = parameter_compile_ctx(s, &sc->arg[0], owner, NULL, EXPR_WANT_INT, ctx);
         } else {
-            ok = compile_key(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT);
+            ok = compile_key_ctx(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT, ctx);
         }
     } else if (strcmp(name, "pause") == 0) {
         PauseParams *pp = Mem_Calloc(1, sizeof(PauseParams));
@@ -1115,8 +1204,8 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
             return 0;
         }
         sc->type = SCTRL_PAUSE;
-        if (!Pause_ParseParams(pp, ini, owner)) {
-            free(pp);
+        if (!Pause_ParseParamsCtx(pp, ini, owner, ctx)) {
+            PauseParams_Free(pp);free(pp);
             Error_Printf("Error parsing Pause\n");
             return 0;
         }
@@ -1128,8 +1217,8 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
             return 0;
         }
         sc->type = SCTRL_SUPERPAUSE;
-        if (!SuperPause_ParseParams(ini, owner, sp)) {
-            free(sp);
+        if (!SuperPause_ParseParamsCtx(ini, owner, sp, ctx)) {
+            SuperPauseParams_Free(sp);free(sp);
             Error_Printf("Error parsing SuperPause\n");
             return 0;
         }
@@ -1138,12 +1227,12 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
     } else if (strcmp(name, "makedust") == 0) {
         sc->type = SCTRL_MAKEDUST;
         Expr_SetInt(&sc->arg[2], 3);
-        if (!parse_pair_end_first(ini, "pos", "ii", &sc->arg[0], &sc->arg[1], owner)) {
+        if (!parse_pair_end_firstCtx(ini, "pos", "ii", &sc->arg[0], &sc->arg[1], owner, ctx)) {
             return 0;
         }
         s = Ini_GetValue(ini, "pos2");
         if (s != NULL) {
-            n = Cns_ParseValues(s, "ff", owner, &end, &sc->arg[3], &sc->arg[4]);
+            n = Cns_ParseValuesCtx(s, "ff", owner, &end, ctx, &sc->arg[3], &sc->arg[4]);
             if (*end != '\0') {
                 return 0;
             }
@@ -1152,7 +1241,7 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
             }
             Expr_SetFloat(&sc->arg[5], 1.0f);
         }
-        ok = compile_key(ini, "spacing", &sc->arg[2], owner, EXPR_WANT_INT);
+        ok = compile_key_ctx(ini, "spacing", &sc->arg[2], owner, EXPR_WANT_INT, ctx);
     } else if (strcmp(name, "palfx") == 0 || strcmp(name, "bgpalfx") == 0 || strcmp(name, "allpalfx") == 0) {
         PalFxParams *pf;
         sc->type = SCTRL_PALFX;
@@ -1175,14 +1264,14 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
         Expr_SetInt(&sc->arg[1], 0);
         Expr_SetInt(&sc->arg[3], -1);
         Expr_SetInt(&sc->arg[4], 0);
-        if (!parse_pair(ini, "source", "ii", &sc->arg[0], &sc->arg[1], owner)) {
+        if (!parse_pairCtx(ini, "source", "ii", &sc->arg[0], &sc->arg[1], owner, ctx)) {
             return 0;
         }
         s = Ini_GetValue(ini, "dest");
         if (s == NULL) {
             return 0;
         }
-        Cns_ParseValues(s, "ii", owner, &end, &sc->arg[3], &sc->arg[4]);
+        Cns_ParseValuesCtx(s, "ii", owner, &end, ctx, &sc->arg[3], &sc->arg[4]);
         ok = *end == '\0';
     } else if (strcmp(name, "explod") == 0 || strcmp(name, "modifyexplod") == 0) {
         ExplodParams *ep = Mem_Calloc(1, sizeof(ExplodParams));
@@ -1190,27 +1279,28 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
             return 0;
         }
         sc->type = name[0] == 'e' ? SCTRL_EXPLOD : SCTRL_MODIFYEXPLOD;
-        if (!Explod_ParseParams(ep, ini, owner, name[0] != 'e')) {
-            return 0;   /* ep leaks */
+        if (!Explod_ParseParamsCtx(ep, ini, owner, name[0] != 'e', ctx)) {
+            /* Port fix: rejected construction owns its partial payload. */
+            ExplodParams_Free(ep);free(ep);return 0;
         }
         sc->params = ep;
         ok = 1;
     } else if (strcmp(name, "removeexplod") == 0) {
         sc->type = SCTRL_REMOVEEXPLOD;
         Expr_SetInt(&sc->arg[0], -1);
-        ok = compile_key(ini, "id", &sc->arg[0], owner, EXPR_WANT_INT);
+        ok = compile_key_ctx(ini, "id", &sc->arg[0], owner, EXPR_WANT_INT, ctx);
     } else if (strcmp(name, "explodbindtime") == 0) {
         sc->type = SCTRL_EXPLODBINDTIME;
         Expr_SetInt(&sc->arg[0], -1);
         Expr_SetInt(&sc->arg[1], 1);
-        if (!compile_key(ini, "id", &sc->arg[0], owner, EXPR_WANT_INT)) {
+        if (!compile_key_ctx(ini, "id", &sc->arg[0], owner, EXPR_WANT_INT, ctx)) {
             return 0;
         }
         s = Ini_GetValue(ini, "time");
         if (s == NULL) {
             s = Ini_GetValue(ini, "value");
         }
-        ok = Expr_Compile(s, &sc->arg[1], owner, NULL, EXPR_WANT_INT);
+        ok = parameter_compile_ctx(s, &sc->arg[1], owner, NULL, EXPR_WANT_INT, ctx);
     } else if (strcmp(name, "forcefeedback") == 0) {
         sc->type = SCTRL_NULL;
         ok = 1;
@@ -1221,7 +1311,7 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
         if (hp == NULL) {
             return 0;
         }
-        if (!Helper_ParseParams(hp, ini, owner)) {
+        if (!Helper_ParseParamsCtx(hp, ini, owner, ctx)) {
             free(hp);
             Error_Printf("Error parsing Helper\n");
             return 0;
@@ -1230,27 +1320,27 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
         ok = 1;
     } else if (strcmp(name, "destroyself") == 0) {
         sc->type = SCTRL_DESTROYSELF;
-        if (!Cns_CompileInt(ini, "recursive", &sc->arg[0], owner, 0)) {
+        if (!Cns_CompileIntCtx(ini, "recursive", &sc->arg[0], owner, 0, ctx)) {
             return 0;
         }
-        ok = Cns_CompileInt(ini, "removeexplods", &sc->arg[1], owner, 0);
+        ok = Cns_CompileIntCtx(ini, "removeexplods", &sc->arg[1], owner, 0, ctx);
     } else if (strcmp(name, "parentvarset") == 0 || strcmp(name, "parentvaradd") == 0) {
         sc->type = name[9] == 's' ? SCTRL_PARENTVARSET : SCTRL_PARENTVARADD;
         s = Ini_GetValue(ini, "value");
-        ok = s != NULL ? parse_var_value(ini, s, sc, owner) : parse_var_line(ini, sc, owner, 0);
+        ok = s != NULL ? parse_var_valueCtx(ini, s, sc, owner, ctx) : parse_var_lineCtx(ini, sc, owner, 0, ctx);
     } else if (strcmp(name, "bindtoparent") == 0 || strcmp(name, "bindtoroot") == 0) {
         sc->type = name[6] == 'p' ? SCTRL_BINDTOPARENT : SCTRL_BINDTOROOT;
         Expr_SetInt(&sc->arg[0], 1);
-        if (!compile_key(ini, "time", &sc->arg[0], owner, EXPR_WANT_INT)) {
+        if (!compile_key_ctx(ini, "time", &sc->arg[0], owner, EXPR_WANT_INT, ctx)) {
             return 0;
         }
-        if (!compile_key(ini, "facing", &sc->arg[1], owner, EXPR_WANT_INT)) {
+        if (!compile_key_ctx(ini, "facing", &sc->arg[1], owner, EXPR_WANT_INT, ctx)) {
             return 0;
         }
-        ok = parse_pair_checked(ini, "pos", "ff", &sc->arg[3], &sc->arg[4], owner);
-    } else if (strcmp(name, "displaytoclipboard") == 0 || strcmp(name, "appendtoclipboard") == 0) {
+        ok = parse_pair_checkedCtx(ini, "pos", "ff", &sc->arg[3], &sc->arg[4], owner, ctx);
+    } else if (strcmp(name, "displaytoclipboard") == 0 || strcmp(name, "appendtoclipboard") == 0 || (ctx!=NULL && strcmp(name,"printtoconsole")==0)) {
         CnsText *text;
-        sc->type = (name[0] != 'd') + SCTRL_DISPLAYTOCLIPBOARD;
+        sc->type = name[0]=='p' ? SCTRL_ZSS_PRINT : (name[0] != 'd') + SCTRL_DISPLAYTOCLIPBOARD;
         s = Ini_GetValue(ini, "text");
         if (s == NULL) {
             Error_Printf("Text not specified for %s.\n", name);
@@ -1462,10 +1552,16 @@ int StateCtrl_RunCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *fr
 
 /* VarSet / VarAdd (and the sys variants). Portability fix: integer additions
  * wrap modulo 2^32 like the reference machine, without C signed overflow. */
-static int run_var(Player *p, StateCtrl *sc, int add)
+static int run_varCtx(Player *p, StateCtrl *sc, int add, ExprEvalCtx *frame);
+static __inline int run_var(Player *p, StateCtrl *sc, int add)
 {
-    int kind = Expr_EvalInt(p, &sc->arg[2], 0);
-    int idx = Expr_EvalInt(p, &sc->arg[1], 1);
+    return run_varCtx(p, sc, add, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+static int run_varCtx(Player *p, StateCtrl *sc, int add, ExprEvalCtx *frame)
+{
+    int kind = Expr_EvalIntCtx(p, &sc->arg[2], 0, frame);
+    int idx = Expr_EvalIntCtx(p, &sc->arg[1], 1, frame);
     float *sysfvar = (float *)&p->sysfvar[0];
 
     if (kind <= 1) {
@@ -1481,31 +1577,31 @@ static int run_var(Player *p, StateCtrl *sc, int add)
     case SCTRL_VAR:
         if (add) {
             p->var[idx] = (int)((unsigned int)p->var[idx] +
-                                (unsigned int)Expr_EvalInt(p, &sc->arg[0], 1));
+                                (unsigned int)Expr_EvalIntCtx(p, &sc->arg[0], 1, frame));
         } else {
-            p->var[idx] = Expr_EvalInt(p, &sc->arg[0], 1);
+            p->var[idx] = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
         }
         break;
     case SCTRL_FVAR:
         if (add) {
-            p->fvar[idx] = Expr_EvalFloat(p, &sc->arg[0]) + p->fvar[idx];
+            p->fvar[idx] = Expr_EvalFloatCtx(p, &sc->arg[0], frame) + p->fvar[idx];
         } else {
-            p->fvar[idx] = Expr_EvalFloat(p, &sc->arg[0]);
+            p->fvar[idx] = Expr_EvalFloatCtx(p, &sc->arg[0], frame);
         }
         break;
     case SCTRL_SYSVAR:
         if (add) {
             p->sysvar[idx] = (int)((unsigned int)p->sysvar[idx] +
-                                   (unsigned int)Expr_EvalInt(p, &sc->arg[0], 1));
+                                   (unsigned int)Expr_EvalIntCtx(p, &sc->arg[0], 1, frame));
         } else {
-            p->sysvar[idx] = Expr_EvalInt(p, &sc->arg[0], 1);
+            p->sysvar[idx] = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
         }
         break;
     case SCTRL_SYSFVAR:
         if (add) {
-            sysfvar[idx] = Expr_EvalFloat(p, &sc->arg[0]) + sysfvar[idx];
+            sysfvar[idx] = Expr_EvalFloatCtx(p, &sc->arg[0], frame) + sysfvar[idx];
         } else {
-            sysfvar[idx] = Expr_EvalFloat(p, &sc->arg[0]);
+            sysfvar[idx] = Expr_EvalFloatCtx(p, &sc->arg[0], frame);
         }
         break;
     }
@@ -1521,7 +1617,13 @@ static int var_random_value(int lo, int hi, int random)
 }
 
 /* ParentVarSet / ParentVarAdd: as VarSet / VarAdd on the parent (no sysvars). */
-static int run_parent_var(Player *p, StateCtrl *sc, Player *parent, int add)
+static int run_parent_varCtx(Player *p, StateCtrl *sc, Player *parent, int add, ExprEvalCtx *frame);
+static __inline int run_parent_var(Player *p, StateCtrl *sc, Player *parent, int add)
+{
+    return run_parent_varCtx(p, sc, parent, add, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+static int run_parent_varCtx(Player *p, StateCtrl *sc, Player *parent, int add, ExprEvalCtx *frame)
 {
     int isf, idx;
 
@@ -1532,23 +1634,23 @@ static int run_parent_var(Player *p, StateCtrl *sc, Player *parent, int add)
         Player_WarnAt(p, sc, "%s", add ? "no parent for parentvaradd" : "no parent for parentvarset");
         return 0;
     }
-    isf = Expr_EvalInt(p, &sc->arg[2], 0);
-    idx = Expr_EvalInt(p, &sc->arg[1], 1);
+    isf = Expr_EvalIntCtx(p, &sc->arg[2], 0, frame);
+    idx = Expr_EvalIntCtx(p, &sc->arg[1], 1, frame);
     if (idx < 0 || idx > (isf != 0 ? PLAYER_FVAR_COUNT - 1 : PLAYER_VAR_COUNT - 1)) {
         Player_WarnAt(p, sc, "%s", "set parentvar out of range");
         return 0;
     }
     if (isf) {
         if (add) {
-            parent->fvar[idx] = Expr_EvalFloat(p, &sc->arg[0]) + parent->fvar[idx];
+            parent->fvar[idx] = Expr_EvalFloatCtx(p, &sc->arg[0], frame) + parent->fvar[idx];
         } else {
-            parent->fvar[idx] = Expr_EvalFloat(p, &sc->arg[0]);
+            parent->fvar[idx] = Expr_EvalFloatCtx(p, &sc->arg[0], frame);
         }
     } else if (add) {
         parent->var[idx] = (int)((unsigned int)parent->var[idx] +
-                                 (unsigned int)Expr_EvalInt(p, &sc->arg[0], 1));
+                                 (unsigned int)Expr_EvalIntCtx(p, &sc->arg[0], 1, frame));
     } else {
-        parent->var[idx] = Expr_EvalInt(p, &sc->arg[0], 1);
+        parent->var[idx] = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
     }
     return 0;
 }
@@ -1683,7 +1785,9 @@ static void run_clipboard(Player *p, StateCtrl *sc, ExprEvalCtx *frame)
         len += (size_t)n;
     }
     buf[sizeof(buf) - 1] = '\0';
-    if (sc->type == SCTRL_APPENDTOCLIPBOARD) {
+    if (sc->type == SCTRL_ZSS_PRINT) {
+        Console_Printf("%s\n",buf);
+    } else if (sc->type == SCTRL_APPENDTOCLIPBOARD) {
         TextRing_Printf(p->warnings, "%s", buf);
     } else {
         TextRing_SetPrintf(p->warnings, "%s", buf);
@@ -1691,7 +1795,13 @@ static void run_clipboard(Player *p, StateCtrl *sc, ExprEvalCtx *frame)
 }
 
 /* BindToParent / BindToRoot (helpers only). */
-static int run_bind(Player *p, StateCtrl *sc, Player *to)
+static int run_bindCtx(Player *p, StateCtrl *sc, Player *to, ExprEvalCtx *frame);
+static __inline int run_bind(Player *p, StateCtrl *sc, Player *to)
+{
+    return run_bindCtx(p, sc, to, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+static int run_bindCtx(Player *p, StateCtrl *sc, Player *to, ExprEvalCtx *frame)
 {
     if (p->helper != 1) {
         return 0;
@@ -1704,12 +1814,12 @@ static int run_bind(Player *p, StateCtrl *sc, Player *to)
         Player_WarnAt(p, sc, "%s", "Unable to set bind");
         return 0;
     }
-    p->bind_time = Expr_EvalInt(p, &sc->arg[0], 1);
+    p->bind_time = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
     if (p->bind_time < -1) {
         p->bind_time = 1;
         Player_WarnAt(p, sc, "%s", "illegal helper bindtime");
     }
-    p->bind_facing = Expr_EvalInt(p, &sc->arg[1], 1);
+    p->bind_facing = Expr_EvalIntCtx(p, &sc->arg[1], 1, frame);
     if (p->bind_facing < 0) {
         if (p->bind_facing != -1) {
             p->bind_facing = -1;
@@ -1719,13 +1829,19 @@ static int run_bind(Player *p, StateCtrl *sc, Player *to)
         p->bind_facing = 1;
         Player_WarnAt(p, sc, "%s", "bind's facing param not +/-1 or 0");
     }
-    p->bind_x = (float)Player_FromLocalCoord(p, Expr_EvalFloat(p, &sc->arg[3]));
-    p->bind_y = (float)Player_FromLocalCoord(p, Expr_EvalFloat(p, &sc->arg[4]));
+    p->bind_x = (float)Player_FromLocalCoord(p, Expr_EvalFloatCtx(p, &sc->arg[3], frame));
+    p->bind_y = (float)Player_FromLocalCoord(p, Expr_EvalFloatCtx(p, &sc->arg[4], frame));
     return 0;
 }
 
 /* SuperPause (Pause_Apply for the SuperPause kind, then darken, spark, p2defmul, poweradd, unhittable, sound). */
-static int run_superpause(Player *p, StateCtrl *sc, StateRunCtx *ctx)
+static int run_superpauseCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *frame);
+static __inline int run_superpause(Player *p, StateCtrl *sc, StateRunCtx *ctx)
+{
+    return run_superpauseCtx(p, sc, ctx, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+static int run_superpauseCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *frame)
 {
     GameVars *g = g_game;
     SuperPauseParams *sp = sc->params;
@@ -1734,8 +1850,8 @@ static int run_superpause(Player *p, StateCtrl *sc, StateRunCtx *ctx)
     float defmul;
     int anim, v, group, number;
 
-    Pause_Apply(1, p, &sp->pause, sc);
-    if (Expr_EvalInt(p, &sp->darken, 1)) {
+    Pause_ApplyCtx(1, p, &sp->pause, sc, frame);
+    if (Expr_EvalIntCtx(p, &sp->darken, 1, frame)) {
         g->pauses[1][0] = (int)p->pal_groups[0];
         g->pauses[1][1] = (int)~p->pal_groups[1];
         g->pauses[1][2] = (int)p->pal_groups[2];
@@ -1749,16 +1865,16 @@ static int run_superpause(Player *p, StateCtrl *sc, StateRunCtx *ctx)
         Player_WarnAt(p, sc, "%s", "set illegal supermovetime");
         p->pause_movetime[1] = 0;
     }
-    anim = Expr_EvalInt(p, &sp->anim, 1);
+    anim = Expr_EvalIntCtx(p, &sp->anim, 1, frame);
     if (anim < -1) {
         Player_WarnAt(p, sc, "%s", "negative spark animno ignored");
     } else if (anim != -1) {
-        int x = Ftol((Player_FromLocalCoord(p, Expr_EvalFloat(p, &sp->pos[0])) - p->draw_offset.x) * p->facing + p->pos.x);
-        int y = Ftol(Player_FromLocalCoord(p, Expr_EvalFloat(p, &sp->pos[1])) - p->draw_offset.y + p->pos.y);
+        int x = Ftol((Player_FromLocalCoord(p, Expr_EvalFloatCtx(p, &sp->pos[0], frame)) - p->draw_offset.x) * p->facing + p->pos.x);
+        int y = Ftol(Player_FromLocalCoord(p, Expr_EvalFloatCtx(p, &sp->pos[1], frame)) - p->draw_offset.y + p->pos.y);
 
         Spark_Create(anim, p, x, y, sp->anim_fight == 0, p->facing != 1, 0);
     }
-    defmul = Expr_EvalFloat(p, &sp->p2defmul);
+    defmul = Expr_EvalFloatCtx(p, &sp->p2defmul, frame);
     if (defmul < 0.0f) {
         Player_WarnAt(p, sc, "%s", "negative p2defmul for SuperPause");
         defmul = g->super_target_defence_mul;
@@ -1772,18 +1888,18 @@ static int run_superpause(Player *p, StateCtrl *sc, StateRunCtx *ctx)
             }
         }
     }
-    v = Expr_EvalInt(p, &sp->poweradd, 1);
+    v = Expr_EvalIntCtx(p, &sp->poweradd, 1, frame);
     leader = ctx->leader;
     Player_SetPower(leader, *leader->power_ref + v);
-    if (Expr_EvalInt(p, &sp->unhittable, 0)) {
+    if (Expr_EvalIntCtx(p, &sp->unhittable, 0, frame)) {
         int t = g->pauses[1][6] + 1;
 
         if (p->nohit_time < t) {
             p->nohit_time = t;
         }
     }
-    group = Expr_EvalInt(p, &sp->sound[0], 1);
-    number = Expr_EvalInt(p, &sp->sound[1], 1);
+    group = Expr_EvalIntCtx(p, &sp->sound[0], 1, frame);
+    number = Expr_EvalIntCtx(p, &sp->sound[1], 1, frame);
     if (!sp->sound_fight) {
         Sound_PlayPanned(p->data->snd, group, Ftol(p->draw.x), number, p->data->volumescale);
     } else {
@@ -1793,9 +1909,15 @@ static int run_superpause(Player *p, StateCtrl *sc, StateRunCtx *ctx)
 }
 
 /* MakeDust: a cloud at pos (ints) every spacing ticks of the round state, and one at pos2 (floats) unless its z is 0. */
-static int run_makedust(Player *p, StateCtrl *sc)
+static int run_makedustCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame);
+static __inline int run_makedust(Player *p, StateCtrl *sc)
 {
-    int spacing = Expr_EvalInt(p, &sc->arg[2], 1);
+    return run_makedustCtx(p, sc, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+static int run_makedustCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame)
+{
+    int spacing = Expr_EvalIntCtx(p, &sc->arg[2], 1, frame);
     double t;
     int x, y;
 
@@ -1807,24 +1929,30 @@ static int run_makedust(Player *p, StateCtrl *sc)
         return 0;
     }
     Player_UpdateDrawParams(p, 0);
-    t = Player_FromLocalCoord(p, Expr_EvalInt(p, &sc->arg[0], 1)) * p->facing + p->pos.x;
+    t = Player_FromLocalCoord(p, Expr_EvalIntCtx(p, &sc->arg[0], 1, frame)) * p->facing + p->pos.x;
     x = Ftol(Match_Random() % 3 + t - 1.0);
-    t = Player_FromLocalCoord(p, Expr_EvalInt(p, &sc->arg[1], 1)) + p->pos.y;
+    t = Player_FromLocalCoord(p, Expr_EvalIntCtx(p, &sc->arg[1], 1, frame)) + p->pos.y;
     y = Ftol(Match_Random() % 3 + t - 1.0);
     make_dust(x, y);
-    if (Expr_EvalFloat(p, &sc->arg[5]) == 0.0f) {
+    if (Expr_EvalFloatCtx(p, &sc->arg[5], frame) == 0.0f) {
         return 0;
     }
-    t = Player_FromLocalCoord(p, Expr_EvalFloat(p, &sc->arg[3])) * p->facing + p->pos.x;
+    t = Player_FromLocalCoord(p, Expr_EvalFloatCtx(p, &sc->arg[3], frame)) * p->facing + p->pos.x;
     x = Ftol(Match_Random() % 3 + t - 1.0);
-    t = Player_FromLocalCoord(p, Expr_EvalFloat(p, &sc->arg[4])) + p->pos.y;
+    t = Player_FromLocalCoord(p, Expr_EvalFloatCtx(p, &sc->arg[4], frame)) + p->pos.y;
     y = Ftol(Match_Random() % 3 + t - 1.0);
     make_dust(x, y);
     return 0;
 }
 
 /* GameMakeAnim: a fightfx animation at pos (from the draw position) with a random offset. */
-static int run_gamemakeanim(Player *p, StateCtrl *sc)
+static int run_gamemakeanimCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame);
+static __inline int run_gamemakeanim(Player *p, StateCtrl *sc)
+{
+    return run_gamemakeanimCtx(p, sc, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+static int run_gamemakeanimCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame)
 {
     GameVars *g = g_game;
     KeyedArray *list;
@@ -1834,16 +1962,16 @@ static int run_gamemakeanim(Player *p, StateCtrl *sc)
     int anim, x, y, rnd, idx, under;
 
     Player_UpdateDrawParams(p, 0);
-    anim = Expr_EvalInt(p, &sc->arg[0], 1);
+    anim = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
     if (anim < 0) {
         anim = 0;
         Player_WarnAt(p, sc, "%s", "made negative gameanim");
     }
-    t = Player_FromLocalCoord(p, Expr_EvalFloat(p, &sc->arg[3])) * p->facing + p->draw.x;
+    t = Player_FromLocalCoord(p, Expr_EvalFloatCtx(p, &sc->arg[3], frame)) * p->facing + p->draw.x;
     x = Ftol(Camera_GetRawX() + t);
-    t = Player_FromLocalCoord(p, Expr_EvalFloat(p, &sc->arg[4])) + p->draw.y;
+    t = Player_FromLocalCoord(p, Expr_EvalFloatCtx(p, &sc->arg[4], frame)) + p->draw.y;
     y = Ftol(Camera_GetRawY() + t);
-    rnd = Expr_EvalInt(p, &sc->arg[2], 1);
+    rnd = Expr_EvalIntCtx(p, &sc->arg[2], 1, frame);
     if (rnd > 0) {
         int half = rnd >> 1;
 
@@ -1853,7 +1981,7 @@ static int run_gamemakeanim(Player *p, StateCtrl *sc)
         Player_WarnAt(p, sc, "%s", "negative random param for GameMakeAnim");
     }
     idx = AnimSet_Add(x, y, p->facing != 1, g->anims, g->fightfx_anim, g->fightfx_sff, anim);
-    under = Expr_EvalInt(p, &sc->arg[1], 0);
+    under = Expr_EvalIntCtx(p, &sc->arg[1], 0, frame);
     if (idx == -1) {
         return 0;
     }
@@ -1870,14 +1998,20 @@ static int run_gamemakeanim(Player *p, StateCtrl *sc)
 }
 
 /* RemapPal: source -1 clears every remap (the entry is still added, with source -1,0). */
-static int run_remappal(Player *p, StateCtrl *sc)
+static int run_remappalCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame);
+static __inline int run_remappal(Player *p, StateCtrl *sc)
+{
+    return run_remappalCtx(p, sc, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+static int run_remappalCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame)
 {
     PalRemapEntry entry;
 
-    entry.src_group = Expr_EvalInt(p, &sc->arg[0], 1);
-    entry.src_index = Expr_EvalInt(p, &sc->arg[1], 1);
-    entry.dst_group = Expr_EvalInt(p, &sc->arg[3], 1);
-    entry.dst_index = Expr_EvalInt(p, &sc->arg[4], 1);
+    entry.src_group = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
+    entry.src_index = Expr_EvalIntCtx(p, &sc->arg[1], 1, frame);
+    entry.dst_group = Expr_EvalIntCtx(p, &sc->arg[3], 1, frame);
+    entry.dst_index = Expr_EvalIntCtx(p, &sc->arg[4], 1, frame);
     if (entry.src_group == -1) {
         memset(p->remap, 0, sizeof(PalRemap));
         entry.src_index = 0;
@@ -1920,16 +2054,22 @@ static int assert_flag_ctx(Player *p, StateCtrl *sc, int i, ExprEvalCtx *frame)
 }
 
 /* Zoom (mugenversion 1.1). */
-static int run_zoom(Player *p, StateCtrl *sc)
+static int run_zoomCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame);
+static __inline int run_zoom(Player *p, StateCtrl *sc)
+{
+    return run_zoomCtx(p, sc, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+static int run_zoomCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame)
 {
     GameVars *g = g_game;
-    float x = Expr_EvalFloat(p, &sc->arg[0]);
-    float y = Expr_EvalFloat(p, &sc->arg[1]);
-    float scale = Expr_EvalFloat(p, &sc->arg[3]);
+    float x = Expr_EvalFloatCtx(p, &sc->arg[0], frame);
+    float y = Expr_EvalFloatCtx(p, &sc->arg[1], frame);
+    float scale = Expr_EvalFloatCtx(p, &sc->arg[3], frame);
     float lag;
 
     scale = StateCtrl_Clamp("scale", p, sc, scale, 1.0f, FLT_MAX);
-    lag = Expr_EvalFloat(p, &sc->arg[4]);
+    lag = Expr_EvalFloatCtx(p, &sc->arg[4], frame);
     lag = StateCtrl_Clamp("lag", p, sc, lag, 0.0f, 1.0f);
     g->zoom_active = 1.0f;
     g->zoom_scale = scale;
@@ -1940,10 +2080,16 @@ static int run_zoom(Player *p, StateCtrl *sc)
 }
 
 /* BindToTarget: to the first target matching the ID, at its foot (0), mid (1) or head (2) position plus pos. */
-static int run_bindtotarget(Player *p, StateCtrl *sc)
+static int run_bindtotargetCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame);
+static __inline int run_bindtotarget(Player *p, StateCtrl *sc)
+{
+    return run_bindtotargetCtx(p, sc, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+static int run_bindtotargetCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame)
 {
     TargetEntry *e = KeyedArray_First(p->targets);
-    int id = Expr_EvalInt(p, &sc->arg[2], 1);
+    int id = Expr_EvalIntCtx(p, &sc->arg[2], 1, frame);
     Player *t;
     int ox, oy;
     float x, y;
@@ -1960,29 +2106,29 @@ static int run_bindtotarget(Player *p, StateCtrl *sc)
     t = e->player;
     ox = 0;
     oy = 0;
-    if (Expr_EvalInt(p, &sc->arg[1], 0) == 1) {
+    if (Expr_EvalIntCtx(p, &sc->arg[1], 0, frame) == 1) {
         double r = g_gameCoord[0] / t->data->localcoord[0];
 
         ox = Ftol(t->consts.mid_pos[0] * r);
         oy = Ftol(r * t->consts.mid_pos[1]);
-    } else if (Expr_EvalInt(p, &sc->arg[1], 0) == 2) {
+    } else if (Expr_EvalIntCtx(p, &sc->arg[1], 0, frame) == 2) {
         double r = g_gameCoord[0] / t->data->localcoord[0];
 
         ox = Ftol(t->consts.head_pos[0] * r);
         oy = Ftol(r * t->consts.head_pos[1]);
     }
-    e->bind_time = Expr_EvalInt(p, &sc->arg[0], 1);
+    e->bind_time = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
     if (e->bind_time < -1) {
         Player_WarnAt(p, sc, "%s", "set illegal target bindtime");
         e->bind_time = 1;
     }
-    x = Expr_EvalFloat(p, &sc->arg[3]);
+    x = Expr_EvalFloatCtx(p, &sc->arg[3], frame);
     if (x != -FLT_MAX) {
         off = ox;
         p->pos.x = (Player_FromLocalCoord(p, x) + off) * t->facing + t->pos.x;
         e->bind_x = Ftol(-((Player_FromLocalCoord(p, x) + off) * t->facing * p->facing));
     }
-    y = Expr_EvalFloat(p, &sc->arg[4]);
+    y = Expr_EvalFloatCtx(p, &sc->arg[4], frame);
     if (y == -FLT_MAX) {
         return 0;
     }
@@ -1993,7 +2139,13 @@ static int run_bindtotarget(Player *p, StateCtrl *sc)
 }
 
 /* The Target* controllers that act on every target matching the ID (TargetBind ... TargetDrop). */
-static int run_targets(Player *p, StateCtrl *sc)
+static int run_targetsCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame);
+static __inline int run_targets(Player *p, StateCtrl *sc)
+{
+    return run_targetsCtx(p, sc, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+static int run_targetsCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame)
 {
     TargetEntry *e;
     int kept = 0;
@@ -2005,32 +2157,32 @@ static int run_targets(Player *p, StateCtrl *sc)
 
         switch (sc->type) {
         case SCTRL_TARGETBIND:
-            id = Expr_EvalInt(p, &sc->arg[2], 1);
+            id = Expr_EvalIntCtx(p, &sc->arg[2], 1, frame);
             if (!target_matches(e, id)) {
                 break;
             }
-            e->bind_time = Expr_EvalInt(p, &sc->arg[0], 1);
+            e->bind_time = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
             if (e->bind_time < -1) {
                 Player_WarnAt(p, sc, "%s", "set illegal target bindtime");
                 e->bind_time = 1;
             }
-            x = Expr_EvalFloat(p, &sc->arg[3]);
+            x = Expr_EvalFloatCtx(p, &sc->arg[3], frame);
             if (x != -FLT_MAX) {
                 e->bind_x = Ftol(Player_FromLocalCoord(p, x));
             }
-            y = Expr_EvalFloat(p, &sc->arg[4]);
+            y = Expr_EvalFloatCtx(p, &sc->arg[4], frame);
             if (y != -FLT_MAX) {
                 e->bind_y = Ftol(Player_FromLocalCoord(p, y));
             }
             break;
         case SCTRL_TARGETSTATE:
-            id = Expr_EvalInt(p, &sc->arg[2], 1);
+            id = Expr_EvalIntCtx(p, &sc->arg[2], 1, frame);
             if (target_matches(e, id)) {
                 CustomStateInfo info;
 
                 Player_GetCustomState(p, &info);
                 Player_SetCustomState(t, &info);
-                v = Expr_EvalInt(p, &sc->arg[0], 1);
+                v = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
                 if (v < 0) {
                     Player_WarnAt(p, sc, "%s", "attempted targetstate to negative");
                     v = 0;
@@ -2039,29 +2191,29 @@ static int run_targets(Player *p, StateCtrl *sc)
             }
             break;
         case SCTRL_TARGETPOWERADD:
-            v = Expr_EvalInt(p, &sc->arg[0], 1);
-            id = Expr_EvalInt(p, &sc->arg[2], 1);
+            v = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
+            id = Expr_EvalIntCtx(p, &sc->arg[2], 1, frame);
             if (target_matches(e, id)) {
                 Player_SetPower(t, *t->power_ref + v);
             }
             break;
         case SCTRL_TARGETLIFEADD:
-            id = Expr_EvalInt(p, &sc->arg[5], 1);
+            id = Expr_EvalIntCtx(p, &sc->arg[5], 1, frame);
             if (target_matches(e, id)) {
-                int absolute = Expr_EvalInt(p, &sc->arg[2], 0);
-                int kill = Expr_EvalInt(p, &sc->arg[1], 0);
+                int absolute = Expr_EvalIntCtx(p, &sc->arg[2], 0, frame);
+                int kill = Expr_EvalIntCtx(p, &sc->arg[1], 0, frame);
 
-                v = Expr_EvalInt(p, &sc->arg[0], 1);
+                v = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
                 Player_ApplyDamage(t, -v, kill, absolute);
             }
             break;
         case SCTRL_TARGETVELSET:
         case SCTRL_TARGETVELADD:
-            id = Expr_EvalInt(p, &sc->arg[2], 1);
+            id = Expr_EvalIntCtx(p, &sc->arg[2], 1, frame);
             if (!target_matches(e, id)) {
                 break;
             }
-            x = Expr_EvalFloat(p, &sc->arg[3]);
+            x = Expr_EvalFloatCtx(p, &sc->arg[3], frame);
             if (x != -FLT_MAX) {
                 if (sc->type == SCTRL_TARGETVELSET) {
                     t->vel.x = Player_FromLocalCoord(p, (double)x * t->facing);
@@ -2069,7 +2221,7 @@ static int run_targets(Player *p, StateCtrl *sc)
                     t->vel.x = Player_FromLocalCoord(p, (double)x * t->facing) + t->vel.x;
                 }
             }
-            y = Expr_EvalFloat(p, &sc->arg[4]);
+            y = Expr_EvalFloatCtx(p, &sc->arg[4], frame);
             if (y != -FLT_MAX) {
                 if (sc->type == SCTRL_TARGETVELSET) {
                     t->vel.y = Player_FromLocalCoord(p, y);
@@ -2079,7 +2231,7 @@ static int run_targets(Player *p, StateCtrl *sc)
             }
             break;
         case SCTRL_TARGETFACING:
-            v = Expr_EvalInt(p, &sc->arg[0], 1);
+            v = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
             if (v > 0) {
                 if (p->facing != t->facing) {
                     Player_Turn(t);
@@ -2089,8 +2241,8 @@ static int run_targets(Player *p, StateCtrl *sc)
             }
             break;
         case SCTRL_TARGETDROP: {
-            int exclude = Expr_EvalInt(p, &sc->arg[0], 1);
-            int keepone = Expr_EvalInt(p, &sc->arg[1], 1);
+            int exclude = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
+            int keepone = Expr_EvalIntCtx(p, &sc->arg[1], 1, frame);
 
             if (exclude == t->gethit_id && kept != 1) {
                 if (keepone) {
@@ -2107,18 +2259,24 @@ static int run_targets(Player *p, StateCtrl *sc)
 }
 
 /* ChangeState of the partner (an unused tag-in type, 551): state arg[0] for p, arg[1] for the partner. */
-static int run_tagin(Player *p, StateCtrl *sc, Player *partner)
+static int run_taginCtx(Player *p, StateCtrl *sc, Player *partner, ExprEvalCtx *frame);
+static __inline int run_tagin(Player *p, StateCtrl *sc, Player *partner)
+{
+    return run_taginCtx(p, sc, partner, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+static int run_taginCtx(Player *p, StateCtrl *sc, Player *partner, ExprEvalCtx *frame)
 {
     int v;
 
     if (partner == NULL) {
         return 5;
     }
-    v = Expr_EvalInt(p, &sc->arg[0], 1);
+    v = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
     if (v >= 0) {
         Player_ChangeState(v, p);
     }
-    v = Expr_EvalInt(p, &sc->arg[1], 1);
+    v = Expr_EvalIntCtx(p, &sc->arg[1], 1, frame);
     if (partner->facing != p->facing) {
         Player_Turn(partner);
     }
@@ -2155,6 +2313,8 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
     }
 
     switch (sc->type) {
+    case SCTRL_ZSS_DIALOGUE:
+        return 0; /* explicit disabled-motif behavior, as documented above */
     case SCTRL_ZSS_MAP:
         return ZssMap_Apply(p,sc,frame);
     case SCTRL_NULL:
@@ -2175,7 +2335,7 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
         return 5;
     case SCTRL_SELFSTATE:
         Player_ClearCustomState(p);
-        v = Expr_EvalInt(p, &sc->arg[0], 1);
+        v = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
         if (v < 0) {
             Player_WarnAt(p, sc, "%s", "attempted to selfstate to negative state");
             v = 0;
@@ -2187,19 +2347,19 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
         Player_Turn(p);
         return 0;
     case SCTRL_VARSET:
-        return run_var(p, sc, 0);
+        return run_varCtx(p, sc, 0, frame);
     case SCTRL_VARADD:
-        return run_var(p, sc, 1);
+        return run_varCtx(p, sc, 1, frame);
     case SCTRL_VARRANDOM: {
-        int idx = Expr_EvalInt(p, &sc->arg[1], 1);
+        int idx = Expr_EvalIntCtx(p, &sc->arg[1], 1, frame);
         int lo, hi;
 
         if ((unsigned int)idx > PLAYER_VAR_COUNT - 1) {
             Player_WarnAt(p, sc, "randomized var out of range (%i)", idx);
             return 0;
         }
-        lo = Expr_EvalInt(p, &sc->arg[0], 1);
-        hi = Expr_EvalInt(p, &sc->arg[2], 1);
+        lo = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
+        hi = Expr_EvalIntCtx(p, &sc->arg[2], 1, frame);
         if (hi < lo) {
             int swap = lo;
 
@@ -2210,9 +2370,9 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
         return 0;
     }
     case SCTRL_VARRANGESET: {
-        int isf = Expr_EvalInt(p, &sc->arg[3], 0);
-        int first = Expr_EvalInt(p, &sc->arg[0], 1);
-        int last = Expr_EvalInt(p, &sc->arg[1], 1);
+        int isf = Expr_EvalIntCtx(p, &sc->arg[3], 0, frame);
+        int first = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
+        int last = Expr_EvalIntCtx(p, &sc->arg[1], 1, frame);
         int i;
 
         if (first < 0 || last > (isf != 0 ? PLAYER_FVAR_COUNT - 1 : PLAYER_VAR_COUNT - 1) || first > last) {
@@ -2220,7 +2380,7 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
             return 0;
         }
         if (isf) {
-            float f = Expr_EvalFloat(p, &sc->arg[2]);
+            float f = Expr_EvalFloatCtx(p, &sc->arg[2], frame);
 
             if (f == 0.0f) {
                 memset(&p->fvar[first], 0, (last - first) * 4 + 4);
@@ -2230,7 +2390,7 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
                 }
             }
         } else {
-            v = Expr_EvalInt(p, &sc->arg[2], 1);
+            v = Expr_EvalIntCtx(p, &sc->arg[2], 1, frame);
             if (v == 0) {
                 memset(&p->var[first], 0, (last - first) * 4 + 4);
             } else {
@@ -2242,24 +2402,24 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
         return 0;
     }
     case SCTRL_LIFESET:
-        Player_SetLife(p, Expr_EvalInt(p, &sc->arg[0], 1));
+        Player_SetLife(p, Expr_EvalIntCtx(p, &sc->arg[0], 1, frame));
         return 0;
     case SCTRL_LIFEADD: {
-        int absolute = Expr_EvalInt(p, &sc->arg[2], 0);
-        int kill = Expr_EvalInt(p, &sc->arg[1], 0);
+        int absolute = Expr_EvalIntCtx(p, &sc->arg[2], 0, frame);
+        int kill = Expr_EvalIntCtx(p, &sc->arg[1], 0, frame);
 
-        v = Expr_EvalInt(p, &sc->arg[0], 1);
+        v = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
         Player_ApplyDamage(p, -v, kill, absolute);
         return 0;
     }
     case SCTRL_POWERSET:
-        v = Expr_EvalInt(p, &sc->arg[0], 1);
+        v = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
         Player_SetPower(ctx->leader, v);
         return 0;
     case SCTRL_POWERADD: {
         Player *leader;
 
-        v = Expr_EvalInt(p, &sc->arg[0], 1);
+        v = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
         leader = ctx->leader;
         Player_SetPower(leader, *leader->power_ref + v);
         return 0;
@@ -2288,7 +2448,7 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
         }
         return 0;
     case SCTRL_POSFREEZE:
-        p->pos_freeze = Expr_EvalInt(p, &sc->arg[0], 1) != 0;
+        p->pos_freeze = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame) != 0;
         return 0;
     case SCTRL_VELSET:
         if (Expr_EvalIntCtx(p, &sc->arg[0], 0, frame)) {
@@ -2311,31 +2471,31 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
         }
         return 0;
     case SCTRL_VELMUL:
-        if (Expr_EvalInt(p, &sc->arg[0], 0)) {
-            p->vel.x = Expr_EvalFloat(p, &sc->arg[3]) * p->vel.x;
+        if (Expr_EvalIntCtx(p, &sc->arg[0], 0, frame)) {
+            p->vel.x = Expr_EvalFloatCtx(p, &sc->arg[3], frame) * p->vel.x;
         }
-        if (Expr_EvalInt(p, &sc->arg[1], 0)) {
-            p->vel.y = Expr_EvalFloat(p, &sc->arg[4]) * p->vel.y;
+        if (Expr_EvalIntCtx(p, &sc->arg[1], 0, frame)) {
+            p->vel.y = Expr_EvalFloatCtx(p, &sc->arg[4], frame) * p->vel.y;
         }
         return 0;
     case SCTRL_GRAVITY:
         p->vel.y = g_gameCoord[0] / p->data->localcoord[0] * p->consts.yaccel + p->vel.y;
         return 0;
     case SCTRL_OFFSET:
-        if (Expr_EvalInt(p, &sc->arg[0], 0)) {
-            p->draw_offset.x = Player_FromLocalCoord(p, Expr_EvalFloat(p, &sc->arg[3]));
+        if (Expr_EvalIntCtx(p, &sc->arg[0], 0, frame)) {
+            p->draw_offset.x = Player_FromLocalCoord(p, Expr_EvalFloatCtx(p, &sc->arg[3], frame));
         }
-        if (Expr_EvalInt(p, &sc->arg[1], 0)) {
-            p->draw_offset.y = Player_FromLocalCoord(p, Expr_EvalFloat(p, &sc->arg[4]));
+        if (Expr_EvalIntCtx(p, &sc->arg[1], 0, frame)) {
+            p->draw_offset.y = Player_FromLocalCoord(p, Expr_EvalFloatCtx(p, &sc->arg[4], frame));
         }
         return 0;
     case SCTRL_HITBY:
-        if (Expr_EvalInt(p, &sc->arg[2], 0) == 0) {
-            p->hitby_attr = Expr_EvalInt(p, &sc->arg[0], 0);
-            p->hitby_time = Expr_EvalInt(p, &sc->arg[1], 0);
+        if (Expr_EvalIntCtx(p, &sc->arg[2], 0, frame) == 0) {
+            p->hitby_attr = Expr_EvalIntCtx(p, &sc->arg[0], 0, frame);
+            p->hitby_time = Expr_EvalIntCtx(p, &sc->arg[1], 0, frame);
         } else {
-            p->nothitby_attr = Expr_EvalInt(p, &sc->arg[0], 0);
-            p->nothitby_time = Expr_EvalInt(p, &sc->arg[1], 0);
+            p->nothitby_attr = Expr_EvalIntCtx(p, &sc->arg[0], 0, frame);
+            p->nothitby_time = Expr_EvalIntCtx(p, &sc->arg[1], 0, frame);
         }
         return 0;
     case SCTRL_CHANGEANIM:
@@ -2348,7 +2508,7 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
         PlaySnd_RunCtx(sc->params, p, sc, frame);
         return 0;
     case SCTRL_STOPSND:
-        v = Expr_EvalInt(p, &sc->arg[0], 1);
+        v = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
         if ((unsigned int)(v + 1) > 0x20) {
             Player_WarnAt(p, sc, "stopped illegal channel number %i", v);
             return 0;
@@ -2358,7 +2518,7 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
     case SCTRL_SNDPAN: {
         int slot, x;
 
-        v = Expr_EvalInt(p, &sc->arg[0], 1);
+        v = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
         if ((unsigned int)v > 0x1F) {
             Player_WarnAt(p, sc, "attemted to pan illegal channel number %i", v);
             return 0;
@@ -2371,8 +2531,8 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
         if (slot == -1) {
             return 0;
         }
-        x = Ftol(Player_FromLocalCoord(p, Expr_EvalInt(p, &sc->arg[1], 1)) * p->facing);
-        if (!Expr_EvalInt(p, &sc->arg[2], 1)) {
+        x = Ftol(Player_FromLocalCoord(p, Expr_EvalIntCtx(p, &sc->arg[1], 1, frame)) * p->facing);
+        if (!Expr_EvalIntCtx(p, &sc->arg[2], 1, frame)) {
             x = Ftol(p->pos.x - g->camera_offset_x + x);
         }
         Sound_SetSlotPan(slot, Sound_Pan(x));
@@ -2383,7 +2543,7 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
         int dist = hd->guard_dist;
         int juggle = hd->juggle;
 
-        HitDef_SetFromParams(p, sc->params, hd, sc);
+        HitDef_SetFromParamsCtx(p, sc->params, hd, sc, frame);
         hd->active = 1;
         if (sc->type == SCTRL_REVERSALDEF) {
             hd->hitonce_used = 0;
@@ -2417,44 +2577,44 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
         return 0;
     }
     case SCTRL_WIDTH:
-        p->width_edge_front = Expr_EvalInt(p, &sc->arg[0], 1);
-        p->width_edge_back = Expr_EvalInt(p, &sc->arg[1], 1);
-        p->width_player_front = Expr_EvalInt(p, &sc->arg[2], 1);
-        p->width_player_back = Expr_EvalInt(p, &sc->arg[3], 1);
+        p->width_edge_front = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
+        p->width_edge_back = Expr_EvalIntCtx(p, &sc->arg[1], 1, frame);
+        p->width_player_front = Expr_EvalIntCtx(p, &sc->arg[2], 1, frame);
+        p->width_player_back = Expr_EvalIntCtx(p, &sc->arg[3], 1, frame);
         return 0;
     case SCTRL_SCREENBOUND:
-        p->screenbound = Expr_EvalInt(p, &sc->arg[0], 1) != 0;
-        p->movecamera_x = Expr_EvalInt(p, &sc->arg[1], 1) != 0;
-        p->movecamera_y = Expr_EvalInt(p, &sc->arg[2], 1) != 0;
+        p->screenbound = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame) != 0;
+        p->movecamera_x = Expr_EvalIntCtx(p, &sc->arg[1], 1, frame) != 0;
+        p->movecamera_y = Expr_EvalIntCtx(p, &sc->arg[2], 1, frame) != 0;
         return 0;
     case SCTRL_SPRPRIORITY:
-        p->sprpriority = Expr_EvalInt(p, &sc->arg[0], 1);
+        p->sprpriority = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
         return 0;
     case SCTRL_ANGLEDRAW: {
         float a;
 
         p->draw2.flags |= DRAW_SCALE | DRAW_ANGLE;
-        a = Expr_EvalFloat(p, &sc->arg[3]);
+        a = Expr_EvalFloatCtx(p, &sc->arg[3], frame);
         if (a != -FLT_MAX) {
             p->draw2.angle = a;
         }
-        p->draw2.scale_x = Expr_EvalFloat(p, &sc->arg[4]) * p->draw2.scale_x;
-        p->draw2.scale_y = Expr_EvalFloat(p, &sc->arg[5]) * p->draw2.scale_y;
+        p->draw2.scale_x = Expr_EvalFloatCtx(p, &sc->arg[4], frame) * p->draw2.scale_x;
+        p->draw2.scale_y = Expr_EvalFloatCtx(p, &sc->arg[5], frame) * p->draw2.scale_y;
         return 0;
     }
     case SCTRL_ANGLESET:
-        p->draw2.angle = Expr_EvalFloat(p, &sc->arg[3]);
+        p->draw2.angle = Expr_EvalFloatCtx(p, &sc->arg[3], frame);
         return 0;
     case SCTRL_ANGLEADD:
-        p->draw2.angle = Expr_EvalFloat(p, &sc->arg[3]) + p->draw2.angle;
+        p->draw2.angle = Expr_EvalFloatCtx(p, &sc->arg[3], frame) + p->draw2.angle;
         return 0;
     case SCTRL_ANGLEMUL:
-        p->draw2.angle = Expr_EvalFloat(p, &sc->arg[3]) * p->draw2.angle;
+        p->draw2.angle = Expr_EvalFloatCtx(p, &sc->arg[3], frame) * p->draw2.angle;
         return 0;
     case SCTRL_TRANS: {
-        int mode = Expr_EvalInt(p, &sc->arg[0], 1);
-        int src = Expr_EvalInt(p, &sc->arg[1], 1);
-        int dst = Expr_EvalInt(p, &sc->arg[2], 1);
+        int mode = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
+        int src = Expr_EvalIntCtx(p, &sc->arg[1], 1, frame);
+        int dst = Expr_EvalIntCtx(p, &sc->arg[2], 1, frame);
 
         if (src < 0) {
             src = 0;
@@ -2470,7 +2630,7 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
         return 0;
     }
     case SCTRL_BINDTOTARGET:
-        return run_bindtotarget(p, sc);
+        return run_bindtotargetCtx(p, sc, frame);
     case SCTRL_TARGETBIND:
     case SCTRL_TARGETSTATE:
     case SCTRL_TARGETPOWERADD:
@@ -2479,36 +2639,36 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
     case SCTRL_TARGETVELADD:
     case SCTRL_TARGETFACING:
     case SCTRL_TARGETDROP:
-        return run_targets(p, sc);
+        return run_targetsCtx(p, sc, frame);
     case SCTRL_ATTACKDIST:
-        hd->guard_dist = Expr_EvalInt(p, &sc->arg[0], 1);
+        hd->guard_dist = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
         return 0;
     case SCTRL_PLAYERPUSH:
-        p->playerpush = Expr_EvalInt(p, &sc->arg[0], 1) != 0;
+        p->playerpush = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame) != 0;
         return 0;
     case SCTRL_HITFALLSET: {
         float f;
 
-        v = Expr_EvalInt(p, &sc->arg[0], 0);
+        v = Expr_EvalIntCtx(p, &sc->arg[0], 0, frame);
         if (v != -1) {
             p->gethit_fall = v;
         }
-        f = Expr_EvalFloat(p, &sc->arg[3]);
+        f = Expr_EvalFloatCtx(p, &sc->arg[3], frame);
         if (f != -FLT_MAX) {
             p->gethit_fall_xvel = f;
         }
         /* the original reads xvel again for yvel */
-        f = Expr_EvalFloat(p, &sc->arg[3]);
+        f = Expr_EvalFloatCtx(p, &sc->arg[3], frame);
         if (f != -FLT_MAX) {
             p->gethit_fall_yvel = f;
         }
         return 0;
     }
     case SCTRL_HITVELSET:
-        if (Expr_EvalInt(p, &sc->arg[0], 0)) {
+        if (Expr_EvalIntCtx(p, &sc->arg[0], 0, frame)) {
             p->vel.x = p->gethit_xveladd + p->gethit_vel_x;
         }
-        if (Expr_EvalInt(p, &sc->arg[1], 0)) {
+        if (Expr_EvalIntCtx(p, &sc->arg[1], 0, frame)) {
             p->vel.y = p->gethit_yveladd + p->gethit_vel_y;
         }
         return 0;
@@ -2525,39 +2685,39 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
         }
         return 0;
     case SCTRL_HITADD:
-        v = Expr_EvalInt(p, &sc->arg[0], 1);
+        v = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
         p->combo_hits += v;
         p->hitcount += v;
         p->uniqhitcount += v;
         Combo_AddHits(p->team_side, v);
         return 0;
     case SCTRL_ATTACKMULSET:
-        p->attack_mul = (float)(Expr_EvalFloat(p, &sc->arg[3]) * p->consts.attack / 100.0);
+        p->attack_mul = (float)(Expr_EvalFloatCtx(p, &sc->arg[3], frame) * p->consts.attack / 100.0);
         return 0;
     case SCTRL_DEFENCEMULSET:
-        p->defence_mul = (float)(Expr_EvalFloat(p, &sc->arg[3]) * 100.0 / p->consts.defence);
+        p->defence_mul = (float)(Expr_EvalFloatCtx(p, &sc->arg[3], frame) * 100.0 / p->consts.defence);
         return 0;
     case SCTRL_STATETYPESET:
-        v = Expr_EvalInt(p, &sc->arg[0], 0);
+        v = Expr_EvalIntCtx(p, &sc->arg[0], 0, frame);
         if (v != -1) {
             p->statetype = v;
         }
-        v = Expr_EvalInt(p, &sc->arg[1], 0);
+        v = Expr_EvalIntCtx(p, &sc->arg[1], 0, frame);
         if (v != -1) {
             p->movetype = v;
         }
-        v = Expr_EvalInt(p, &sc->arg[2], 0);
+        v = Expr_EvalIntCtx(p, &sc->arg[2], 0, frame);
         if (v != -1) {
             p->physics = v;
         }
         return 0;
     case SCTRL_HITOVERRIDE:
-        v = Expr_EvalInt(p, &sc->arg[0], 1);
+        v = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
         if (v < 0 || v > 7) {
             Player_WarnAt(p, sc, "%s", "illegal override slot: 0 assumed");
             v = 0;
         }
-        HitOverride_Apply(&p->hit_override[v], p, sc->params, sc);
+        HitOverride_ApplyCtx(&p->hit_override[v], p, sc->params, sc, frame);
         return 0;
     case SCTRL_MOVEHITRESET:
         p->move_contact = 0;
@@ -2567,7 +2727,7 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
         if (p->helper != 0) {
             return 0;
         }
-        v = Expr_EvalInt(p, &sc->arg[0], 0);
+        v = Expr_EvalIntCtx(p, &sc->arg[0], 0, frame);
         g->teams[p->team_index].member_data[p->team_member][p->team_slot].victory_quote = v;
         return 0;
     }
@@ -2577,9 +2737,9 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
             assert_flag_ctx(p, sc, 2, frame)<0) return STATECTRL_STOP;
         return 0;
     case SCTRL_ZOOM:
-        return run_zoom(p, sc);
+        return run_zoomCtx(p, sc, frame);
     case SCTRL_ENVSHAKE:
-        EnvShake_Apply((EnvShake *)g->envshake, sc->params, p, sc);
+        EnvShake_ApplyCtx((EnvShake *)g->envshake, sc->params, p, sc, frame);
         return 0;
     case SCTRL_FALLENVSHAKE:
         if (p->gethit_fall_envshake_time > 0) {
@@ -2588,12 +2748,12 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
         }
         return 0;
     case SCTRL_ENVCOLOR: {
-        int r = Expr_EvalInt(p, &sc->arg[3], 1);
-        int gr = Expr_EvalInt(p, &sc->arg[4], 1);
-        int b = Expr_EvalInt(p, &sc->arg[5], 1);
+        int r = Expr_EvalIntCtx(p, &sc->arg[3], 1, frame);
+        int gr = Expr_EvalIntCtx(p, &sc->arg[4], 1, frame);
+        int b = Expr_EvalIntCtx(p, &sc->arg[5], 1, frame);
 
         g->envcolor_color = Video_MapRGB(r, gr, b);
-        v = Expr_EvalInt(p, &sc->arg[1], 1);
+        v = Expr_EvalIntCtx(p, &sc->arg[1], 1, frame);
         g->envcolor_time = v;
         if (v != -1) {
             g->envcolor_time = v + 1;
@@ -2602,11 +2762,11 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
             Player_WarnAt(p, sc, "%s", "set illegal envcolortime");
             g->envcolor_time = 1;
         }
-        g->envcolor_under = Expr_EvalInt(p, &sc->arg[2], 1) != 0;
+        g->envcolor_under = Expr_EvalIntCtx(p, &sc->arg[2], 1, frame) != 0;
         return 0;
     }
     case SCTRL_GAMEMAKEANIM:
-        return run_gamemakeanim(p, sc);
+        return run_gamemakeanimCtx(p, sc, frame);
     case SCTRL_AFTERIMAGE: {
         AfterImage *ai;
 
@@ -2617,7 +2777,7 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
         if (ai == NULL) {
             return 0;
         }
-        AfterImage_Apply(p, sc->params, ai, p->anim, sc);
+        AfterImage_ApplyCtx(p, sc->params, ai, p->anim, sc, frame);
         return 0;
     }
     case SCTRL_AFTERIMAGETIME: {
@@ -2627,7 +2787,7 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
             return 0;
         }
         ai->ticks = 0;
-        ai->settings.time = Expr_EvalInt(p, &sc->arg[0], 1);
+        ai->settings.time = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
         if (ai->settings.time < -1) {
             Player_WarnAt(p, sc, "%s", "set illegal afterimagetime");
             ai->settings.time = 1;
@@ -2635,25 +2795,25 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
         return 0;
     }
     case SCTRL_PAUSE:
-        Pause_Apply(0, p, sc->params, sc);
+        Pause_ApplyCtx(0, p, sc->params, sc, frame);
         return 0;
     case SCTRL_SUPERPAUSE:
-        return run_superpause(p, sc, ctx);
+        return run_superpauseCtx(p, sc, ctx, frame);
     case SCTRL_MAKEDUST:
-        return run_makedust(p, sc);
+        return run_makedustCtx(p, sc, frame);
     case SCTRL_PALFX:
         PalFx_ApplyCtx(&p->palfx_def, sc->params, p, sc, frame);
         return 0;
     case SCTRL_REMAPPAL:
-        return run_remappal(p, sc);
+        return run_remappalCtx(p, sc, frame);
     case SCTRL_EXPLOD:
-        Explod_Create(p, sc->params, ctx, sc);
+        Explod_CreateCtx(p, sc->params, ctx, sc, frame);
         return 0;
     case SCTRL_MODIFYEXPLOD:
-        Explod_Modify(p, sc->params, ctx, sc);
+        Explod_ModifyCtx(p, sc->params, ctx, sc, frame);
         return 0;
     case SCTRL_REMOVEEXPLOD:
-        v = Expr_EvalInt(p, &sc->arg[0], 1);
+        v = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
         if (v < -1) {
             Player_WarnAt(p, sc, "%s", "removal of illegal explod ID");
             v = -1;
@@ -2663,8 +2823,8 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
     case SCTRL_EXPLODBINDTIME: {
         int time;
 
-        v = Expr_EvalInt(p, &sc->arg[0], 1);
-        time = Expr_EvalInt(p, &sc->arg[1], 1);
+        v = Expr_EvalIntCtx(p, &sc->arg[0], 1, frame);
+        time = Expr_EvalIntCtx(p, &sc->arg[1], 1, frame);
         if (v < -1) {
             Player_WarnAt(p, sc, "%s", "illegal ID to explodbindtime");
             v = -1;
@@ -2680,8 +2840,8 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
         Helper_Create(p, sc->params, ctx, sc);
         return 0;
     case SCTRL_DESTROYSELF: {
-        int recursive = Expr_EvalInt(p, &sc->arg[0], 0);
-        int remove_explods = Expr_EvalInt(p, &sc->arg[1], 0);
+        int recursive = Expr_EvalIntCtx(p, &sc->arg[0], 0, frame);
+        int remove_explods = Expr_EvalIntCtx(p, &sc->arg[1], 0, frame);
 
         if (p->helper == 1) {
             Helper_Remove(p, recursive, remove_explods);
@@ -2691,9 +2851,10 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
         return 0;
     }
     case SCTRL_PARENTVARSET:
-        return run_parent_var(p, sc, parent, 0);
+        return run_parent_varCtx(p, sc, parent, 0, frame);
     case SCTRL_PARENTVARADD:
-        return run_parent_var(p, sc, parent, 1);
+        return run_parent_varCtx(p, sc, parent, 1, frame);
+    case SCTRL_ZSS_PRINT:
     case SCTRL_DISPLAYTOCLIPBOARD:
     case SCTRL_APPENDTOCLIPBOARD:
         run_clipboard(p, sc, frame);
@@ -2707,11 +2868,11 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
         return 0;
     }
     case SCTRL_BINDTOPARENT:
-        return run_bind(p, sc, parent);
+        return run_bindCtx(p, sc, parent, frame);
     case SCTRL_BINDTOROOT:
-        return run_bind(p, sc, root);
+        return run_bindCtx(p, sc, root, frame);
     case SCTRL_TAGIN:
-        return run_tagin(p, sc, partner);
+        return run_taginCtx(p, sc, partner, frame);
     case SCTRL_TAGOUT:
         p->standby = 1;
         return 5;
@@ -2762,6 +2923,11 @@ char *Ini_GetValuePrefixed(const char *key, const char *prefix, Ini *ini)
  */
 int AfterImage_ParseParams(AfterImageParams *ai, Ini *ini, CharData *owner, const char *prefix)
 {
+    return AfterImage_ParseParamsCtx(ai, ini, owner, prefix, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+int AfterImage_ParseParamsCtx(AfterImageParams *ai, Ini *ini, CharData *owner, const char *prefix, ExprCompileCtx *ctx)
+{
     char key[0x40];
     const char *s;
     const char *end;
@@ -2791,29 +2957,29 @@ int AfterImage_ParseParams(AfterImageParams *ai, Ini *ini, CharData *owner, cons
     ai->trans = 0;
 
     sprintf(key, "%s%s", prefix, "time");
-    if (!Expr_Compile(Ini_GetValue(ini, key), &ai->time, owner, NULL, EXPR_WANT_INT)) {
+    if (!parameter_compile_ctx(Ini_GetValue(ini, key), &ai->time, owner, NULL, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     sprintf(key, "%s%s", prefix, "length");
-    if (!Expr_Compile(Ini_GetValue(ini, key), &ai->length, owner, NULL, EXPR_WANT_INT)) {
+    if (!parameter_compile_ctx(Ini_GetValue(ini, key), &ai->length, owner, NULL, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     sprintf(key, "%s%s", prefix, "palcolor");
     s = Ini_GetValue(ini, key);
     Expr_SetInt(&ai->palcolor, 0x100);
-    if (s != NULL && !Expr_Compile(s, &ai->palcolor, owner, NULL, EXPR_WANT_INT)) {
+    if (s != NULL && !parameter_compile_ctx(s, &ai->palcolor, owner, NULL, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     sprintf(key, "%s%s", prefix, "palinvertall");
     s = Ini_GetValue(ini, key);
     Expr_SetInt(&ai->palinvertall, 0);
-    if (s != NULL && !Expr_Compile(s, &ai->palinvertall, owner, NULL, EXPR_WANT_INT)) {
+    if (s != NULL && !parameter_compile_ctx(s, &ai->palinvertall, owner, NULL, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     s = Ini_GetValuePrefixed("palbright", prefix, ini);
     if (s != NULL) {
         /* original bug: the first two values both go to palbright[1] */
-        if (!Cns_ParseValues(s, "iii", owner, &end, &ai->palbright[1], &ai->palbright[1], &ai->palbright[2])) {
+        if (!Cns_ParseValuesCtx(s, "iii", owner, &end, ctx, &ai->palbright[1], &ai->palbright[1], &ai->palbright[2])) {
             return 0;
         }
         if (*end != '\0') {
@@ -2822,7 +2988,7 @@ int AfterImage_ParseParams(AfterImageParams *ai, Ini *ini, CharData *owner, cons
     }
     s = Ini_GetValuePrefixed("palcontrast", prefix, ini);
     if (s != NULL) {
-        if (!Cns_ParseValues(s, "iii", owner, &end, &ai->palcontrast[0], &ai->palcontrast[1], &ai->palcontrast[2])) {
+        if (!Cns_ParseValuesCtx(s, "iii", owner, &end, ctx, &ai->palcontrast[0], &ai->palcontrast[1], &ai->palcontrast[2])) {
             return 0;
         }
         if (*end != '\0') {
@@ -2831,8 +2997,7 @@ int AfterImage_ParseParams(AfterImageParams *ai, Ini *ini, CharData *owner, cons
     }
     s = Ini_GetValuePrefixed("palpostbright", prefix, ini);
     if (s != NULL) {
-        if (!Cns_ParseValues(s, "iii", owner, &end, &ai->palpostbright[0], &ai->palpostbright[1],
-                             &ai->palpostbright[2])) {
+        if (!Cns_ParseValuesCtx(s, "iii", owner, &end, ctx, &ai->palpostbright[0], &ai->palpostbright[1], &ai->palpostbright[2])) {
             return 0;
         }
         if (*end != '\0') {
@@ -2841,7 +3006,7 @@ int AfterImage_ParseParams(AfterImageParams *ai, Ini *ini, CharData *owner, cons
     }
     s = Ini_GetValuePrefixed("paladd", prefix, ini);
     if (s != NULL) {
-        if (!Cns_ParseValues(s, "iii", owner, &end, &ai->paladd[0], &ai->paladd[1], &ai->paladd[2])) {
+        if (!Cns_ParseValuesCtx(s, "iii", owner, &end, ctx, &ai->paladd[0], &ai->paladd[1], &ai->paladd[2])) {
             return 0;
         }
         if (*end != '\0') {
@@ -2850,17 +3015,17 @@ int AfterImage_ParseParams(AfterImageParams *ai, Ini *ini, CharData *owner, cons
     }
     s = Ini_GetValuePrefixed("palmul", prefix, ini);
     if (s != NULL) {
-        if (!Cns_ParseValues(s, "fff", owner, &end, &ai->palmul[0], &ai->palmul[1], &ai->palmul[2])) {
+        if (!Cns_ParseValuesCtx(s, "fff", owner, &end, ctx, &ai->palmul[0], &ai->palmul[1], &ai->palmul[2])) {
             return 0;
         }
         if (*end != '\0') {
             return 0;
         }
     }
-    if (!Expr_Compile(Ini_GetValuePrefixed("timegap", prefix, ini), &ai->timegap, owner, NULL, EXPR_WANT_INT)) {
+    if (!parameter_compile_ctx(Ini_GetValuePrefixed("timegap", prefix, ini), &ai->timegap, owner, NULL, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!Expr_Compile(Ini_GetValuePrefixed("framegap", prefix, ini), &ai->framegap, owner, NULL, EXPR_WANT_INT)) {
+    if (!parameter_compile_ctx(Ini_GetValuePrefixed("framegap", prefix, ini), &ai->framegap, owner, NULL, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     ai->trans = 0;
@@ -2878,7 +3043,7 @@ int AfterImage_ParseParams(AfterImageParams *ai, Ini *ini, CharData *owner, cons
     if (s == NULL) {
         return 1;
     }
-    if (!Cns_ParseValues(s, "ii", owner, &end, &ai->alpha[0], &ai->alpha[1])) {
+    if (!Cns_ParseValuesCtx(s, "ii", owner, &end, ctx, &ai->alpha[0], &ai->alpha[1])) {
         return 0;
     }
     return *end == '\0';
@@ -2891,16 +3056,21 @@ int AfterImage_ParseParams(AfterImageParams *ai, Ini *ini, CharData *owner, cons
  */
 int AfterImage_Apply(Player *p, AfterImageParams *params, AfterImage *ai, AnimState *anim, StateCtrl *sc)
 {
+    return AfterImage_ApplyCtx(p, params, ai, anim, sc, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+int AfterImage_ApplyCtx(Player *p, AfterImageParams *params, AfterImage *ai, AnimState *anim, StateCtrl *sc, ExprEvalCtx *frame)
+{
     AfterImageSettings s;
     int i;
 
     memset(&s, 0, sizeof(s));
-    s.time = Expr_EvalInt(p, &params->time, 1);
+    s.time = Expr_EvalIntCtx(p, &params->time, 1, frame);
     if (s.time < -1) {
         s.time = 1;
         Player_WarnAt(p, sc, "%s", "illegal time for afterimage");
     }
-    s.length = Expr_EvalInt(p, &params->length, 1);
+    s.length = Expr_EvalIntCtx(p, &params->length, 1, frame);
     if (s.length <= 0) {
         s.length = 20;
         Player_WarnAt(p, sc, "%s", "illegal length for afterimage");
@@ -2908,36 +3078,36 @@ int AfterImage_Apply(Player *p, AfterImageParams *params, AfterImage *ai, AnimSt
         s.length = ai->max_length;
         Player_WarnAt(p, sc, "length for afterimage exceeds maximum of %i", ai->max_length);
     }
-    s.timegap = Expr_EvalInt(p, &params->timegap, 1);
+    s.timegap = Expr_EvalIntCtx(p, &params->timegap, 1, frame);
     if (s.timegap < 1) {
         s.timegap = 1;
         Player_WarnAt(p, sc, "%s", "illegal timegap for afterimage");
     }
-    s.framegap = Expr_EvalInt(p, &params->framegap, 1);
+    s.framegap = Expr_EvalIntCtx(p, &params->framegap, 1, frame);
     if (s.framegap < 1) {
         s.framegap = 4;
         Player_WarnAt(p, sc, "%s", "illegal framegap for afterimage");
     }
-    s.palcolor = Expr_EvalInt(p, &params->palcolor, 1);
-    s.palinvertall = Expr_EvalInt(p, &params->palinvertall, 1);
+    s.palcolor = Expr_EvalIntCtx(p, &params->palcolor, 1, frame);
+    s.palinvertall = Expr_EvalIntCtx(p, &params->palinvertall, 1, frame);
     for (i = 0; i < 3; i++) {
-        s.palbright[i] = Expr_EvalInt(p, &params->palbright[i], 1);
+        s.palbright[i] = Expr_EvalIntCtx(p, &params->palbright[i], 1, frame);
     }
     for (i = 0; i < 3; i++) {
-        s.palcontrast[i] = Expr_EvalInt(p, &params->palcontrast[i], 1);
+        s.palcontrast[i] = Expr_EvalIntCtx(p, &params->palcontrast[i], 1, frame);
     }
     for (i = 0; i < 3; i++) {
-        s.palpostbright[i] = Expr_EvalInt(p, &params->palpostbright[i], 1);
+        s.palpostbright[i] = Expr_EvalIntCtx(p, &params->palpostbright[i], 1, frame);
     }
     for (i = 0; i < 3; i++) {
-        s.paladd[i] = Expr_EvalInt(p, &params->paladd[i], 1);
+        s.paladd[i] = Expr_EvalIntCtx(p, &params->paladd[i], 1, frame);
     }
     for (i = 0; i < 3; i++) {
-        s.palmul[i] = Expr_EvalFloat(p, &params->palmul[i]);
+        s.palmul[i] = Expr_EvalFloatCtx(p, &params->palmul[i], frame);
     }
     s.trans = params->trans;
-    s.alpha[0] = Expr_EvalInt(p, &params->alpha[0], 1);
-    s.alpha[1] = Expr_EvalInt(p, &params->alpha[1], 1);
+    s.alpha[0] = Expr_EvalIntCtx(p, &params->alpha[0], 1, frame);
+    s.alpha[1] = Expr_EvalIntCtx(p, &params->alpha[1], 1, frame);
     ai->settings = s;
     ai->next = 0;
     ai->oldest = 0;
@@ -2950,6 +3120,7 @@ int AfterImage_Apply(Player *p, AfterImageParams *params, AfterImage *ai, AnimSt
 /* 0x0044D0C0 */
 void AfterImageParams_Free(AfterImageParams *ai)
 {
+    if (ai==NULL) return;
     int i;
 
     Expr_Free(&ai->time);
@@ -2984,37 +3155,42 @@ void AfterImageParams_Free(AfterImageParams *ai)
  */
 int EnvShake_ParseParams(const char *prefix, EnvShakeParams *es, Ini *ini, CharData *owner)
 {
+    return EnvShake_ParseParamsCtx(prefix, es, ini, owner, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+int EnvShake_ParseParamsCtx(const char *prefix, EnvShakeParams *es, Ini *ini, CharData *owner, ExprCompileCtx *ctx)
+{
     char key[0x40];
     const char *s;
 
     sprintf(key, "%stime", prefix);
     s = Ini_GetValue(ini, key);
     Expr_SetInt(&es->time, 0);
-    if (s != NULL && !Expr_Compile(s, &es->time, owner, NULL, EXPR_WANT_INT)) {
+    if (s != NULL && !parameter_compile_ctx(s, &es->time, owner, NULL, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     sprintf(key, "%sdir", prefix);
     s = Ini_GetValue(ini, key);
     Expr_SetInt(&es->dir, 0);
-    if (s != NULL && !Expr_Compile(s, &es->dir, owner, NULL, EXPR_WANT_INT)) {
+    if (s != NULL && !parameter_compile_ctx(s, &es->dir, owner, NULL, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     sprintf(key, "%sampl", prefix);
     s = Ini_GetValue(ini, key);
     Expr_SetInt(&es->ampl, -4);
-    if (s != NULL && !Expr_Compile(s, &es->ampl, owner, NULL, EXPR_WANT_INT)) {
+    if (s != NULL && !parameter_compile_ctx(s, &es->ampl, owner, NULL, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     sprintf(key, "%sfreq", prefix);
     s = Ini_GetValue(ini, key);
     Expr_SetFloat(&es->freq, 60.0f);
-    if (s != NULL && !Expr_Compile(s, &es->freq, owner, NULL, EXPR_WANT_FLOAT)) {
+    if (s != NULL && !parameter_compile_ctx(s, &es->freq, owner, NULL, EXPR_WANT_FLOAT, ctx)) {
         return 0;
     }
     sprintf(key, "%sphase", prefix);
     s = Ini_GetValue(ini, key);
     Expr_SetFloat(&es->phase, 0.0f);
-    if (s != NULL && !Expr_Compile(s, &es->phase, owner, NULL, EXPR_WANT_FLOAT)) {
+    if (s != NULL && !parameter_compile_ctx(s, &es->phase, owner, NULL, EXPR_WANT_FLOAT, ctx)) {
         return 0;
     }
     es->no_phase = Ini_GetValue(ini, key) == NULL;
@@ -3029,14 +3205,19 @@ int EnvShake_ParseParams(const char *prefix, EnvShakeParams *es, Ini *ini, CharD
  */
 int EnvShake_Apply(EnvShake *out, EnvShakeParams *es, Player *p, StateCtrl *sc)
 {
+    return EnvShake_ApplyCtx(out, es, p, sc, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+int EnvShake_ApplyCtx(EnvShake *out, EnvShakeParams *es, Player *p, StateCtrl *sc, ExprEvalCtx *frame)
+{
     float ampl, freq;
 
     memset(out, 0, sizeof(*out));
-    out->time = Expr_EvalInt(p, &es->time, 1);
-    ampl = Expr_EvalFloat(p, &es->ampl);
+    out->time = Expr_EvalIntCtx(p, &es->time, 1, frame);
+    ampl = Expr_EvalFloatCtx(p, &es->ampl, frame);
     out->ampl = (float)(ampl * states_scale(p));
-    out->phase = Expr_EvalFloat(p, &es->phase);
-    freq = Expr_EvalFloat(p, &es->freq);
+    out->phase = Expr_EvalFloatCtx(p, &es->phase, frame);
+    freq = Expr_EvalFloatCtx(p, &es->freq, frame);
     if (freq == 0.0f) {
         freq = 0.001f;
     } else if (freq < 0.0f) {
@@ -3054,6 +3235,7 @@ int EnvShake_Apply(EnvShake *out, EnvShakeParams *es, Player *p, StateCtrl *sc)
 /* 0x0044D540 */
 void EnvShakeParams_Free(EnvShakeParams *es)
 {
+    if (es==NULL) return;
     Expr_Free(&es->time);
     Expr_Free(&es->dir);
     Expr_Free(&es->freq);
@@ -3066,6 +3248,11 @@ void EnvShakeParams_Free(EnvShakeParams *es)
  * ModifyExplod leaves INT_MIN / -FLT_MAX in the values that are not given.
  */
 int Explod_ParseParams(ExplodParams *ep, Ini *ini, CharData *owner, int modify)
+{
+    return Explod_ParseParamsCtx(ep, ini, owner, modify, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+int Explod_ParseParamsCtx(ExplodParams *ep, Ini *ini, CharData *owner, int modify, ExprCompileCtx *ctx)
 {
     const char *s;
     const char *end;
@@ -3082,17 +3269,17 @@ int Explod_ParseParams(ExplodParams *ep, Ini *ini, CharData *owner, int modify)
     Expr_SetFloat(&ep->scale[1], modify ? -FLT_MAX : 1.0f);
     s = Ini_GetValue(ini, "id");
     Expr_SetInt(&ep->id, modify ? -1 : 0);
-    if (s != NULL && !Expr_Compile(s, &ep->id, owner, NULL, EXPR_WANT_INT)) {
+    if (s != NULL && !parameter_compile_ctx(s, &ep->id, owner, NULL, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     s = Ini_GetValue(ini, "anim");
     if (s != NULL) {
         if (s[0] == 'f' || s[0] == 'F') {
-            if (!Expr_Compile(s + 1, &ep->anim, owner, NULL, EXPR_WANT_INT)) {
+            if (!parameter_compile_ctx(s + 1, &ep->anim, owner, NULL, EXPR_WANT_INT, ctx)) {
                 return 0;
             }
             ep->anim_fight = 1;
-        } else if (!Expr_Compile(s, &ep->anim, owner, NULL, EXPR_WANT_INT)) {
+        } else if (!parameter_compile_ctx(s, &ep->anim, owner, NULL, EXPR_WANT_INT, ctx)) {
             return 0;
         }
     }
@@ -3108,7 +3295,22 @@ int Explod_ParseParams(ExplodParams *ep, Ini *ini, CharData *owner, int modify)
             ep->space = -1;
         }
     }
-    if (!parse_pair_checked(ini, "pos", "ff", &ep->pos[0], &ep->pos[1], owner)) {
+    s=Ini_GetValue(ini,"pos");
+    if(ctx!=NULL && s!=NULL) {
+        Expr z={0};int valid;
+        if(Cns_ParseValuesCtx(s,"ff",owner,&end,ctx,&ep->pos[0],&ep->pos[1])<1) return 0;
+        if(*end==',') {
+            /* Explicit 2D profile: accept only literal zero or the pure pos z
+             * read. Never discard an arbitrary depth expression's effects. */
+            const char *tail=end+1;
+            valid=parameter_compile_ctx(tail,&z,owner,NULL,EXPR_WANT_ANY,ctx);
+            if(valid) valid=(z.count==EXPR_CONST &&
+                (z.t.type==EXPR_INT ? z.u.value.i==0 : z.u.value.f==0)) ||
+                (z.count==1 && z.t.types[0]==EXPR_TRIGGER &&
+                 z.u.tokens[0].trig->id==TRIGGER_ZSS_POSZ && z.u.tokens[0].trig->redirect==TRIGGER_REDIRECT_NONE);
+            Expr_Free(&z);if(!valid) return 0;
+        } else if(*end) return 0;
+    } else if (!parse_pair_checkedCtx(ini, "pos", "ff", &ep->pos[0], &ep->pos[1], owner, ctx)) {
         return 0;
     }
     s = Ini_GetValue(ini, "vel");
@@ -3116,36 +3318,36 @@ int Explod_ParseParams(ExplodParams *ep, Ini *ini, CharData *owner, int modify)
         s = Ini_GetValue(ini, "velocity");
     }
     if (s != NULL) {
-        if (!Cns_ParseValues(s, "ff", owner, &end, &ep->vel[0], &ep->vel[1])) {
+        if (!Cns_ParseValuesCtx(s, "ff", owner, &end, ctx, &ep->vel[0], &ep->vel[1])) {
             return 0;
         }
         if (*end != '\0') {
             return 0;
         }
     }
-    if (!parse_pair_checked(ini, "accel", "ff", &ep->accel[0], &ep->accel[1], owner)) {
+    if (!parse_pair_checkedCtx(ini, "accel", "ff", &ep->accel[0], &ep->accel[1], owner, ctx)) {
         return 0;
     }
-    if (!parse_pair_checked(ini, "random", "ii", &ep->random[0], &ep->random[1], owner)) {
+    if (!parse_pair_checkedCtx(ini, "random", "ii", &ep->random[0], &ep->random[1], owner, ctx)) {
         return 0;
     }
     s = Ini_GetValue(ini, "supermove");
     unset_def = modify ? INT_MIN : 0;
     Expr_SetInt(&ep->supermove, unset_def);
-    if (s != NULL && !Expr_Compile(s, &ep->supermove, owner, NULL, EXPR_WANT_INT)) {
+    if (s != NULL && !parameter_compile_ctx(s, &ep->supermove, owner, NULL, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!Cns_CompileInt(ini, "supermovetime", &ep->supermovetime, owner, unset_def)) {
+    if (!Cns_CompileIntCtx(ini, "supermovetime", &ep->supermovetime, owner, unset_def, ctx)) {
         return 0;
     }
-    if (!Cns_CompileInt(ini, "pausemovetime", &ep->pausemovetime, owner, unset_def)) {
+    if (!Cns_CompileIntCtx(ini, "pausemovetime", &ep->pausemovetime, owner, unset_def, ctx)) {
         return 0;
     }
     removetime_def = modify ? INT_MIN : -2;
-    if (!Cns_CompileInt(ini, "removetime", &ep->removetime, owner, removetime_def)) {
+    if (!Cns_CompileIntCtx(ini, "removetime", &ep->removetime, owner, removetime_def, ctx)) {
         return 0;
     }
-    if (!parse_pair_checked(ini, "scale", "ff", &ep->scale[0], &ep->scale[1], owner)) {
+    if (!parse_pair_checkedCtx(ini, "scale", "ff", &ep->scale[0], &ep->scale[1], owner, ctx)) {
         return 0;
     }
     s = Ini_GetValue(ini, "postype");
@@ -3157,35 +3359,35 @@ int Explod_ParseParams(ExplodParams *ep, Ini *ini, CharData *owner, int modify)
         }
     }
     fdef = modify ? -FLT_MAX : 0.0f;
-    if (!Cns_CompileFloat(ini, "angle", &ep->angle, owner, fdef)) {
+    if (!Cns_CompileFloatCtx(ini, "angle", &ep->angle, owner, fdef, ctx)) {
         return 0;
     }
     fdef = modify ? -FLT_MAX : 0.0f;
-    if (!Cns_CompileFloat(ini, "yangle", &ep->yangle, owner, fdef)) {
+    if (!Cns_CompileFloatCtx(ini, "yangle", &ep->yangle, owner, fdef, ctx)) {
         return 0;
     }
     fdef = modify ? -FLT_MAX : 0.0f;
-    if (!Cns_CompileFloat(ini, "xangle", &ep->xangle, owner, fdef)) {
+    if (!Cns_CompileFloatCtx(ini, "xangle", &ep->xangle, owner, fdef, ctx)) {
         return 0;
     }
     /* the default of bindid is the one of removetime (-2) */
-    if (!Cns_CompileInt(ini, "bindid", &ep->bindid, owner, removetime_def)) {
+    if (!Cns_CompileIntCtx(ini, "bindid", &ep->bindid, owner, removetime_def, ctx)) {
         return 0;
     }
     bindtime_def = modify ? INT_MIN : 1;
-    if (!Cns_CompileInt(ini, "bindtime", &ep->bindtime, owner, bindtime_def)) {
+    if (!Cns_CompileIntCtx(ini, "bindtime", &ep->bindtime, owner, bindtime_def, ctx)) {
         return 0;
     }
-    if (!Cns_CompileInt(ini, "sprpriority", &ep->sprpriority, owner, unset_def)) {
+    if (!Cns_CompileIntCtx(ini, "sprpriority", &ep->sprpriority, owner, unset_def, ctx)) {
         return 0;
     }
-    if (!Cns_CompileInt(ini, "ontop", &ep->ontop, owner, unset_def)) {
+    if (!Cns_CompileIntCtx(ini, "ontop", &ep->ontop, owner, unset_def, ctx)) {
         return 0;
     }
-    if (!Cns_CompileInt(ini, "facing", &ep->facing, owner, 1)) {
+    if (!Cns_CompileIntCtx(ini, "facing", &ep->facing, owner, 1, ctx)) {
         return 0;
     }
-    if (!Cns_CompileInt(ini, "vfacing", &ep->vfacing, owner, 1)) {
+    if (!Cns_CompileIntCtx(ini, "vfacing", &ep->vfacing, owner, 1, ctx)) {
         return 0;
     }
     if (modify) {
@@ -3193,24 +3395,24 @@ int Explod_ParseParams(ExplodParams *ep, Ini *ini, CharData *owner, int modify)
     }
     s = Ini_GetValue(ini, "shadow");
     if (s != NULL) {
-        if (!Cns_ParseValues(s, "iii", owner, &end, &ep->shadow[0], &ep->shadow[1], &ep->shadow[2])) {
+        if (!Cns_ParseValuesCtx(s, "iii", owner, &end, ctx, &ep->shadow[0], &ep->shadow[1], &ep->shadow[2])) {
             return 0;
         }
         if (*end != '\0') {
             return 0;
         }
     }
-    if (!Cns_CompileInt(ini, "ownpal", &ep->ownpal, owner, modify ? INT_MIN : ep->anim_fight != 0)) {
+    if (!Cns_CompileIntCtx(ini, "ownpal", &ep->ownpal, owner, modify ? INT_MIN : ep->anim_fight != 0, ctx)) {
         return 0;
     }
     Expr_SetInt(&ep->remappal[0], space_def);
-    if (!parse_pair_checked(ini, "remappal", "ii", &ep->remappal[0], &ep->remappal[1], owner)) {
+    if (!parse_pair_checkedCtx(ini, "remappal", "ii", &ep->remappal[0], &ep->remappal[1], owner, ctx)) {
         return 0;
     }
-    if (!Cns_CompileInt(ini, "removeongethit", &ep->removeongethit, owner, unset_def)) {
+    if (!Cns_CompileIntCtx(ini, "removeongethit", &ep->removeongethit, owner, unset_def, ctx)) {
         return 0;
     }
-    if (!Cns_CompileInt(ini, "ignorehitpause", &ep->ignorehitpause, owner, bindtime_def)) {
+    if (!Cns_CompileIntCtx(ini, "ignorehitpause", &ep->ignorehitpause, owner, bindtime_def, ctx)) {
         return 0;
     }
     ep->trans = space_def;
@@ -3228,7 +3430,7 @@ int Explod_ParseParams(ExplodParams *ep, Ini *ini, CharData *owner, int modify)
     if (s == NULL) {
         return 1;
     }
-    if (!Cns_ParseValues(s, "ii", owner, &end, &ep->alpha[0], &ep->alpha[1])) {
+    if (!Cns_ParseValuesCtx(s, "ii", owner, &end, ctx, &ep->alpha[0], &ep->alpha[1])) {
         return 0;
     }
     return *end == '\0';
@@ -3237,6 +3439,7 @@ int Explod_ParseParams(ExplodParams *ep, Ini *ini, CharData *owner, int modify)
 /* 0x0044DD70 */
 void ExplodParams_Free(ExplodParams *ep)
 {
+    if (ep==NULL) return;
     Expr_Free(&ep->id);
     Expr_Free(&ep->anim);
     Expr_Free(&ep->pos[0]);
@@ -3554,6 +3757,11 @@ void PlaySndParams_Free(PlaySndParams *ps)
 /* 0x0044E8F0: HitOverride parameters (attr stays 0 when not given). */
 int HitOverride_ParseParams(Ini *ini, CharData *owner, HitOverrideParams *ho)
 {
+    return HitOverride_ParseParamsCtx(ini, owner, ho, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+int HitOverride_ParseParamsCtx(Ini *ini, CharData *owner, HitOverrideParams *ho, ExprCompileCtx *ctx)
+{
     const char *s;
 
     Expr_SetInt(&ho->time, 1);
@@ -3566,15 +3774,15 @@ int HitOverride_ParseParams(Ini *ini, CharData *owner, HitOverrideParams *ho)
             return 0;
         }
     }
-    if (!compile_key(ini, "stateno", &ho->stateno, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "stateno", &ho->stateno, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!compile_key(ini, "time", &ho->time, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "time", &ho->time, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     s = Ini_GetValue(ini, "forceair");
     Expr_SetInt(&ho->forceair, 0);
-    if (s != NULL && !Expr_Compile(s, &ho->forceair, owner, NULL, EXPR_WANT_INT)) {
+    if (s != NULL && !parameter_compile_ctx(s, &ho->forceair, owner, NULL, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     return 1;
@@ -3583,23 +3791,28 @@ int HitOverride_ParseParams(Ini *ini, CharData *owner, HitOverrideParams *ho)
 /* 0x0044EA20: sets HitOverride slot ho (stateno below -1: -1; time below -1: 1). */
 int HitOverride_Apply(HitOverride *ho, Player *p, HitOverrideParams *params, StateCtrl *sc)
 {
+    return HitOverride_ApplyCtx(ho, p, params, sc, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+int HitOverride_ApplyCtx(HitOverride *ho, Player *p, HitOverrideParams *params, StateCtrl *sc, ExprEvalCtx *frame)
+{
     int v;
 
     ho->active = 1;
     ho->attr = params->attr;
-    v = Expr_EvalInt(p, &params->stateno, 1);
+    v = Expr_EvalIntCtx(p, &params->stateno, 1, frame);
     if (v < -1) {
         Player_WarnAt(p, sc, "%s", "Illegal hitoverride stateno.");
         v = -1;
     }
     ho->stateno = v;
-    v = Expr_EvalInt(p, &params->time, 1);
+    v = Expr_EvalIntCtx(p, &params->time, 1, frame);
     if (v < -1) {
         Player_WarnAt(p, sc, "%s", "Illegal hitoverride time.");
         v = 1;
     }
     ho->time = v;
-    ho->forceair = Expr_EvalInt(p, &params->forceair, 1);
+    ho->forceair = Expr_EvalIntCtx(p, &params->forceair, 1, frame);
     return 1;
 }
 
@@ -3642,7 +3855,13 @@ static int hittype_of(int c)
 }
 
 /* A spark number with an optional S prefix (the character's own sprites). */
-static int parse_spark(Ini *ini, const char *key, Expr *e, int *own, CharData *owner)
+static int parse_sparkCtx(Ini *ini, const char *key, Expr *e, int *own, CharData *owner, ExprCompileCtx *ctx);
+static __inline int parse_spark(Ini *ini, const char *key, Expr *e, int *own, CharData *owner)
+{
+    return parse_sparkCtx(ini, key, e, own, owner, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+static int parse_sparkCtx(Ini *ini, const char *key, Expr *e, int *own, CharData *owner, ExprCompileCtx *ctx)
 {
     const char *s = Ini_GetValue(ini, key);
 
@@ -3650,22 +3869,28 @@ static int parse_spark(Ini *ini, const char *key, Expr *e, int *own, CharData *o
         return 1;
     }
     if ((unsigned int)(*s - 1) <= 0x7E ? tolower(*s) == 's' : *s == 's') {
-        if (!Expr_Compile(s + 1, e, owner, NULL, EXPR_WANT_INT)) {
+        if (!parameter_compile_ctx(s + 1, e, owner, NULL, EXPR_WANT_INT, ctx)) {
             return 0;
         }
         *own = 1;
         return 1;
     }
-    return Expr_Compile(s, e, owner, NULL, EXPR_WANT_INT);
+    return parameter_compile_ctx(s, e, owner, NULL, EXPR_WANT_INT, ctx);
 }
 
 /* Compiles key into e if given, else e becomes a copy of def. */
-static int compile_or_clone(Ini *ini, const char *key, Expr *e, const Expr *def, CharData *owner, int want)
+static int compile_or_cloneCtx(Ini *ini, const char *key, Expr *e, const Expr *def, CharData *owner, int want, ExprCompileCtx *ctx);
+static __inline int compile_or_clone(Ini *ini, const char *key, Expr *e, const Expr *def, CharData *owner, int want)
+{
+    return compile_or_cloneCtx(ini, key, e, def, owner, want, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+static int compile_or_cloneCtx(Ini *ini, const char *key, Expr *e, const Expr *def, CharData *owner, int want, ExprCompileCtx *ctx)
 {
     const char *s = Ini_GetValue(ini, key);
 
     if (s != NULL) {
-        return Expr_Compile(s, e, owner, NULL, want);
+        return parameter_compile_ctx(s, e, owner, NULL, want, ctx);
     }
     Expr_Clone(e, def);
     return 1;
@@ -3677,6 +3902,11 @@ static int compile_or_clone(Ini *ini, const char *key, Expr *e, const Expr *def,
  * invalid attr fails without a message.
  */
 int HitDef_ParseParams(Ini *ini, HitDefParams *hd, CharData *owner)
+{
+    return HitDef_ParseParamsCtx(ini, hd, owner, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+int HitDef_ParseParamsCtx(Ini *ini, HitDefParams *hd, CharData *owner, ExprCompileCtx *ctx)
 {
     const char *s;
     const char *end;
@@ -3716,32 +3946,32 @@ int HitDef_ParseParams(Ini *ini, HitDefParams *hd, CharData *owner)
     Expr_SetInt(&hd->numhits, 1);
     Expr_SetInt(&hd->forcestand, 0);
     Expr_SetInt(&hd->forcenofall, 0);
-    if (!compile_key(ini, "id", &hd->id, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "id", &hd->id, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!compile_key(ini, "chainid", &hd->chainid, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "chainid", &hd->chainid, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!parse_pair_checked(ini, "nochainid", "ii", &hd->nochainid[0], &hd->nochainid[1], owner)) {
+    if (!parse_pair_checkedCtx(ini, "nochainid", "ii", &hd->nochainid[0], &hd->nochainid[1], owner, ctx)) {
         return 0;
     }
     Expr_SetInt(&hd->sparkno, -2);
-    if (!parse_spark(ini, "sparkno", &hd->sparkno, &hd->spark_own, owner)) {
+    if (!parse_sparkCtx(ini, "sparkno", &hd->sparkno, &hd->spark_own, owner, ctx)) {
         return 0;
     }
     Expr_SetInt(&hd->guard_sparkno, -2);
-    if (!parse_spark(ini, "guard.sparkno", &hd->guard_sparkno, &hd->guard_spark_own, owner)) {
+    if (!parse_sparkCtx(ini, "guard.sparkno", &hd->guard_sparkno, &hd->guard_spark_own, owner, ctx)) {
         return 0;
     }
-    if (!parse_pair_checked(ini, "sparkxy", "ii", &hd->sparkxy[0], &hd->sparkxy[1], owner)) {
+    if (!parse_pair_checkedCtx(ini, "sparkxy", "ii", &hd->sparkxy[0], &hd->sparkxy[1], owner, ctx)) {
         return 0;
     }
-    if (!parse_pair_checked(ini, "pausetime", "ii", &hd->p1_pausetime, &hd->p2_pausetime, owner)) {
+    if (!parse_pair_checkedCtx(ini, "pausetime", "ii", &hd->p1_pausetime, &hd->p2_pausetime, owner, ctx)) {
         return 0;
     }
     s = Ini_GetValue(ini, "guard.pausetime");
     if (s != NULL) {
-        n = Cns_ParseValues(s, "ii", owner, &end, &hd->guard_p1_pausetime, &hd->guard_p2_pausetime);
+        n = Cns_ParseValuesCtx(s, "ii", owner, &end, ctx, &hd->guard_p1_pausetime, &hd->guard_p2_pausetime);
         if (n == 0 || *end != '\0') {
             return 0;
         }
@@ -3752,27 +3982,27 @@ int HitDef_ParseParams(Ini *ini, HitDefParams *hd, CharData *owner)
         Expr_Clone(&hd->guard_p1_pausetime, &hd->p1_pausetime);
         Expr_Clone(&hd->guard_p2_pausetime, &hd->p2_pausetime);
     }
-    if (!Cns_CompileInt(ini, "kill", &hd->kill, owner, 1)) {
+    if (!Cns_CompileIntCtx(ini, "kill", &hd->kill, owner, 1, ctx)) {
         return 0;
     }
-    if (!Cns_CompileInt(ini, "guard.kill", &hd->guard_kill, owner, 1)) {
+    if (!Cns_CompileIntCtx(ini, "guard.kill", &hd->guard_kill, owner, 1, ctx)) {
         return 0;
     }
-    if (!Cns_CompileInt(ini, "fall.kill", &hd->fall_kill, owner, 1)) {
+    if (!Cns_CompileIntCtx(ini, "fall.kill", &hd->fall_kill, owner, 1, ctx)) {
         return 0;
     }
-    if (!Cns_CompileInt(ini, "hitonce", &hd->hitonce, owner, (hd->attr & HITATTR_THROWS) != 0)) {
+    if (!Cns_CompileIntCtx(ini, "hitonce", &hd->hitonce, owner, (hd->attr & HITATTR_THROWS) != 0, ctx)) {
         return 0;
     }
-    if (!compile_key(ini, "numhits", &hd->numhits, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "numhits", &hd->numhits, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!parse_pair_checked(ini, "damage", "ii", &hd->damage[0], &hd->damage[1], owner)) {
+    if (!parse_pair_checkedCtx(ini, "damage", "ii", &hd->damage[0], &hd->damage[1], owner, ctx)) {
         return 0;
     }
     s = Ini_GetValue(ini, "getpower");
     if (s != NULL) {
-        n = Cns_ParseValues(s, "ii", owner, &end, &hd->getpower[0], &hd->getpower[1]);
+        n = Cns_ParseValuesCtx(s, "ii", owner, &end, ctx, &hd->getpower[0], &hd->getpower[1]);
         if (n == 0 || *end != '\0') {
             return 0;
         }
@@ -3788,7 +4018,7 @@ int HitDef_ParseParams(Ini *ini, HitDefParams *hd, CharData *owner)
     }
     s = Ini_GetValue(ini, "givepower");
     if (s != NULL) {
-        n = Cns_ParseValues(s, "ii", owner, &end, &hd->givepower[0], &hd->givepower[1]);
+        n = Cns_ParseValuesCtx(s, "ii", owner, &end, ctx, &hd->givepower[0], &hd->givepower[1]);
         if (n == 0 || *end != '\0') {
             return 0;
         }
@@ -3806,7 +4036,7 @@ int HitDef_ParseParams(Ini *ini, HitDefParams *hd, CharData *owner)
     hd->priority_type = 0;
     s = Ini_GetValue(ini, "priority");
     if (s != NULL) {
-        if (!Cns_ParseValues(s, "i:,", owner, &end, &hd->priority)) {
+        if (!Cns_ParseValuesCtx(s, "i:,", owner, &end, ctx, &hd->priority)) {
             return 0;
         }
         if (*end != '\0') {
@@ -3829,32 +4059,32 @@ int HitDef_ParseParams(Ini *ini, HitDefParams *hd, CharData *owner)
             }
         }
     }
-    if (!Cns_ParseSoundRef(Ini_GetValue(ini, "hitsound"), &hd->hitsound_fight, &hd->hitsound[0], &hd->hitsound[1],
-                           owner)) {
+    if (!Cns_ParseSoundRefCtx(Ini_GetValue(ini, "hitsound"), &hd->hitsound_fight, &hd->hitsound[0], &hd->hitsound[1],
+                           owner, ctx)) {
         return 0;
     }
-    if (!Cns_ParseSoundRef(Ini_GetValue(ini, "guardsound"), &hd->guardsound_fight, &hd->guardsound[0],
-                           &hd->guardsound[1], owner)) {
+    if (!Cns_ParseSoundRefCtx(Ini_GetValue(ini, "guardsound"), &hd->guardsound_fight, &hd->guardsound[0],
+                           &hd->guardsound[1], owner, ctx)) {
         return 0;
     }
-    if (!compile_key(ini, "ground.slidetime", &hd->ground_slidetime, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "ground.slidetime", &hd->ground_slidetime, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!compile_key(ini, "ground.hittime", &hd->ground_hittime, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "ground.hittime", &hd->ground_hittime, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!Cns_ParseVelocity(Ini_GetValue(ini, "ground.velocity"), &hd->ground_velocity[0], &hd->ground_velocity[1],
-                           owner)) {
+    if (!Cns_ParseVelocityCtx(Ini_GetValue(ini, "ground.velocity"), &hd->ground_velocity[0], &hd->ground_velocity[1],
+                           owner,ctx)) {
         return 0;
     }
-    if (!Cns_ParseVelocity(Ini_GetValue(ini, "air.velocity"), &hd->air_velocity[0], &hd->air_velocity[1], owner)) {
+    if (!Cns_ParseVelocityCtx(Ini_GetValue(ini, "air.velocity"), &hd->air_velocity[0], &hd->air_velocity[1], owner,ctx)) {
         return 0;
     }
-    if (!compile_key(ini, "air.juggle", &hd->air_juggle, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "air.juggle", &hd->air_juggle, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     Expr_SetInt(&hd->air_hittime, 20);
-    if (!compile_key(ini, "air.hittime", &hd->air_hittime, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "air.hittime", &hd->air_hittime, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     Expr_SetInt(&hd->mindist[0], -1025);
@@ -3865,9 +4095,9 @@ int HitDef_ParseParams(Ini *ini, HitDefParams *hd, CharData *owner)
     if (s != NULL) {
         /* before mugenversion 1.0 snap had a z value */
         if (owner->mugenversion < g_game->compat_version[1]) {
-            n = Cns_ParseValues(s, "iiii", owner, &end, &hd->mindist[0], &hd->mindist[1], NULL, &hd->snap_time);
+            n = Cns_ParseValuesCtx(s, "iiii", owner, &end, ctx, &hd->mindist[0], &hd->mindist[1], NULL, &hd->snap_time);
         } else {
-            n = Cns_ParseValues(s, "iii", owner, &end, &hd->mindist[0], &hd->mindist[1], &hd->snap_time);
+            n = Cns_ParseValuesCtx(s, "iii", owner, &end, ctx, &hd->mindist[0], &hd->mindist[1], &hd->snap_time);
         }
         if (n == 0 || *end != '\0') {
             return 0;
@@ -3878,9 +4108,9 @@ int HitDef_ParseParams(Ini *ini, HitDefParams *hd, CharData *owner)
         s = Ini_GetValue(ini, "mindist");
         if (s != NULL) {
             if (owner->mugenversion < g_game->compat_version[1]) {
-                n = Cns_ParseValues(s, "iii", owner, &end, &hd->mindist[0], &hd->mindist[1], NULL);
+                n = Cns_ParseValuesCtx(s, "iii", owner, &end, ctx, &hd->mindist[0], &hd->mindist[1], NULL);
             } else {
-                n = Cns_ParseValues(s, "ii", owner, &end, &hd->mindist[0], &hd->mindist[1]);
+                n = Cns_ParseValuesCtx(s, "ii", owner, &end, ctx, &hd->mindist[0], &hd->mindist[1]);
             }
             if (n == 0 || *end != '\0') {
                 return 0;
@@ -3889,9 +4119,9 @@ int HitDef_ParseParams(Ini *ini, HitDefParams *hd, CharData *owner)
         s = Ini_GetValue(ini, "maxdist");
         if (s != NULL) {
             if (owner->mugenversion < g_game->compat_version[1]) {
-                n = Cns_ParseValues(s, "iii", owner, &end, &hd->maxdist[0], &hd->maxdist[1], NULL);
+                n = Cns_ParseValuesCtx(s, "iii", owner, &end, ctx, &hd->maxdist[0], &hd->maxdist[1], NULL);
             } else {
-                n = Cns_ParseValues(s, "ii", owner, &end, &hd->maxdist[0], &hd->maxdist[1]);
+                n = Cns_ParseValuesCtx(s, "ii", owner, &end, ctx, &hd->maxdist[0], &hd->maxdist[1]);
             }
             if (n == 0 || *end != '\0') {
                 return 0;
@@ -3903,46 +4133,46 @@ int HitDef_ParseParams(Ini *ini, HitDefParams *hd, CharData *owner)
     if (s == NULL) {
         s = Ini_GetValue(ini, "sprpriority");
     }
-    if (!Expr_Compile(s, &hd->p1sprpriority, owner, NULL, EXPR_WANT_INT)) {
+    if (!parameter_compile_ctx(s, &hd->p1sprpriority, owner, NULL, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!Cns_CompileInt(ini, "p2sprpriority", &hd->p2sprpriority, owner, 0)) {
+    if (!Cns_CompileIntCtx(ini, "p2sprpriority", &hd->p2sprpriority, owner, 0, ctx)) {
         return 0;
     }
     Expr_SetInt(&hd->p1facing, 0);
-    if (!compile_key(ini, "p1facing", &hd->p1facing, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "p1facing", &hd->p1facing, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!compile_key(ini, "p1getp2facing", &hd->p1getp2facing, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "p1getp2facing", &hd->p1getp2facing, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!compile_key(ini, "p2facing", &hd->p2facing, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "p2facing", &hd->p2facing, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     Expr_SetInt(&hd->p1stateno, -1);
     Expr_SetInt(&hd->p2stateno, -1);
     Expr_SetInt(&hd->p2getp1state, 0);
-    if (!compile_key(ini, "p1stateno", &hd->p1stateno, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "p1stateno", &hd->p1stateno, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     s = Ini_GetValue(ini, "p2stateno");
     if (s != NULL) {
         Expr_SetInt(&hd->p2getp1state, 1);
-        if (!Expr_Compile(s, &hd->p2stateno, owner, NULL, EXPR_WANT_INT)) {
+        if (!parameter_compile_ctx(s, &hd->p2stateno, owner, NULL, EXPR_WANT_INT, ctx)) {
             return 0;
         }
     }
-    if (!compile_key(ini, "p2getp1state", &hd->p2getp1state, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "p2getp1state", &hd->p2getp1state, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     s = Ini_GetValue(ini, "forcestand");
     if (s != NULL) {
         hd->forcestand_given = 1;
-        if (!Expr_Compile(s, &hd->forcestand, owner, NULL, EXPR_WANT_INT)) {
+        if (!parameter_compile_ctx(s, &hd->forcestand, owner, NULL, EXPR_WANT_INT, ctx)) {
             return 0;
         }
     }
-    if (!compile_key(ini, "forcenofall", &hd->forcenofall, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "forcenofall", &hd->forcenofall, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     Expr_SetInt(&hd->fall_damage, 0);
@@ -3953,30 +4183,30 @@ int HitDef_ParseParams(Ini *ini, HitDefParams *hd, CharData *owner)
     }
     Expr_SetInt(&hd->fall_recover, 1);
     Expr_SetInt(&hd->fall_recovertime, 4);
-    if (!compile_key(ini, "fall.damage", &hd->fall_damage, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "fall.damage", &hd->fall_damage, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!compile_key(ini, "fall.xvelocity", &hd->fall_xvelocity, owner, EXPR_WANT_FLOAT)) {
+    if (!compile_key_ctx(ini, "fall.xvelocity", &hd->fall_xvelocity, owner, EXPR_WANT_FLOAT, ctx)) {
         return 0;
     }
-    if (!compile_key(ini, "fall.yvelocity", &hd->fall_yvelocity, owner, EXPR_WANT_FLOAT)) {
+    if (!compile_key_ctx(ini, "fall.yvelocity", &hd->fall_yvelocity, owner, EXPR_WANT_FLOAT, ctx)) {
         return 0;
     }
-    if (!compile_key(ini, "fall.recover", &hd->fall_recover, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "fall.recover", &hd->fall_recover, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!compile_key(ini, "fall.recovertime", &hd->fall_recovertime, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "fall.recovertime", &hd->fall_recovertime, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     Expr_SetFloat(&hd->yaccel, -FLT_MAX);
-    if (!compile_key(ini, "yaccel", &hd->yaccel, owner, EXPR_WANT_FLOAT)) {
+    if (!compile_key_ctx(ini, "yaccel", &hd->yaccel, owner, EXPR_WANT_FLOAT, ctx)) {
         return 0;
     }
     Expr_SetInt(&hd->down_bounce, 0);
     Expr_SetInt(&hd->down_hittime, 20);
     s = Ini_GetValue(ini, "down.velocity");
     if (s != NULL) {
-        n = Cns_ParseValues(s, "ff", owner, &end, &hd->down_velocity[0], &hd->down_velocity[1]);
+        n = Cns_ParseValuesCtx(s, "ff", owner, &end, ctx, &hd->down_velocity[0], &hd->down_velocity[1]);
         if (n == 0 || *end != '\0') {
             return 0;
         }
@@ -3987,31 +4217,31 @@ int HitDef_ParseParams(Ini *ini, HitDefParams *hd, CharData *owner)
         Expr_Clone(&hd->down_velocity[0], &hd->air_velocity[0]);
         Expr_Clone(&hd->down_velocity[1], &hd->air_velocity[1]);
     }
-    if (!compile_key(ini, "down.bounce", &hd->down_bounce, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "down.bounce", &hd->down_bounce, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!compile_key(ini, "down.hittime", &hd->down_hittime, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "down.hittime", &hd->down_hittime, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!compile_or_clone(ini, "guard.slidetime", &hd->guard_slidetime, &hd->ground_slidetime, owner, EXPR_WANT_INT)) {
+    if (!compile_or_cloneCtx(ini, "guard.slidetime", &hd->guard_slidetime, &hd->ground_slidetime, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!compile_or_clone(ini, "guard.hittime", &hd->guard_hittime, &hd->ground_hittime, owner, EXPR_WANT_INT)) {
+    if (!compile_or_cloneCtx(ini, "guard.hittime", &hd->guard_hittime, &hd->ground_hittime, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!compile_or_clone(ini, "guard.velocity", &hd->guard_velocity, &hd->ground_velocity[0], owner,
-                          EXPR_WANT_FLOAT)) {
+    if (!compile_or_cloneCtx(ini, "guard.velocity", &hd->guard_velocity, &hd->ground_velocity[0], owner,
+                          EXPR_WANT_FLOAT, ctx)) {
         return 0;
     }
-    if (!compile_or_clone(ini, "guard.ctrltime", &hd->guard_ctrltime, &hd->guard_slidetime, owner, EXPR_WANT_INT)) {
+    if (!compile_or_cloneCtx(ini, "guard.ctrltime", &hd->guard_ctrltime, &hd->guard_slidetime, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!compile_key(ini, "guard.dist", &hd->guard_dist, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "guard.dist", &hd->guard_dist, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     s = Ini_GetValue(ini, "ground.cornerpush.veloff");
     if (s != NULL) {
-        if (!Expr_Compile(s, &hd->ground_cornerpush, owner, NULL, EXPR_WANT_FLOAT)) {
+        if (!parameter_compile_ctx(s, &hd->ground_cornerpush, owner, NULL, EXPR_WANT_FLOAT, ctx)) {
             return 0;
         }
     } else if (hd->attr & HITATTR_AIR) {
@@ -4020,25 +4250,25 @@ int HitDef_ParseParams(Ini *ini, HitDefParams *hd, CharData *owner)
         Expr_Clone(&hd->ground_cornerpush, &hd->guard_velocity);
         Expr_MulFloat(&hd->ground_cornerpush, 1.3f);
     }
-    if (!compile_or_clone(ini, "air.cornerpush.veloff", &hd->air_cornerpush, &hd->ground_cornerpush, owner,
-                          EXPR_WANT_FLOAT)) {
+    if (!compile_or_cloneCtx(ini, "air.cornerpush.veloff", &hd->air_cornerpush, &hd->ground_cornerpush, owner,
+                          EXPR_WANT_FLOAT, ctx)) {
         return 0;
     }
-    if (!compile_or_clone(ini, "down.cornerpush.veloff", &hd->down_cornerpush, &hd->ground_cornerpush, owner,
-                          EXPR_WANT_FLOAT)) {
+    if (!compile_or_cloneCtx(ini, "down.cornerpush.veloff", &hd->down_cornerpush, &hd->ground_cornerpush, owner,
+                          EXPR_WANT_FLOAT, ctx)) {
         return 0;
     }
-    if (!compile_or_clone(ini, "guard.cornerpush.veloff", &hd->guard_cornerpush, &hd->ground_cornerpush, owner,
-                          EXPR_WANT_FLOAT)) {
+    if (!compile_or_cloneCtx(ini, "guard.cornerpush.veloff", &hd->guard_cornerpush, &hd->ground_cornerpush, owner,
+                          EXPR_WANT_FLOAT, ctx)) {
         return 0;
     }
-    if (!compile_or_clone(ini, "airguard.cornerpush.veloff", &hd->airguard_cornerpush, &hd->guard_cornerpush, owner,
-                          EXPR_WANT_FLOAT)) {
+    if (!compile_or_cloneCtx(ini, "airguard.cornerpush.veloff", &hd->airguard_cornerpush, &hd->guard_cornerpush, owner,
+                          EXPR_WANT_FLOAT, ctx)) {
         return 0;
     }
     s = Ini_GetValue(ini, "airguard.velocity");
     if (s != NULL) {
-        n = Cns_ParseValues(s, "ff", owner, &end, &hd->airguard_velocity[0], &hd->airguard_velocity[1]);
+        n = Cns_ParseValuesCtx(s, "ff", owner, &end, ctx, &hd->airguard_velocity[0], &hd->airguard_velocity[1]);
         if (n == 0 || *end != '\0') {
             return 0;
         }
@@ -4052,14 +4282,14 @@ int HitDef_ParseParams(Ini *ini, HitDefParams *hd, CharData *owner)
         Expr_Clone(&hd->airguard_velocity[1], &hd->air_velocity[1]);
         Expr_MulFloat(&hd->airguard_velocity[1], 0.5f);
     }
-    if (!compile_or_clone(ini, "airguard.ctrltime", &hd->airguard_ctrltime, &hd->guard_ctrltime, owner,
-                          EXPR_WANT_INT)) {
+    if (!compile_or_cloneCtx(ini, "airguard.ctrltime", &hd->airguard_ctrltime, &hd->guard_ctrltime, owner,
+                          EXPR_WANT_INT, ctx)) {
         return 0;
     }
     Expr_SetInt(&hd->air_fall, 0);
     s = Ini_GetValue(ini, "fall");
     if (s != NULL) {
-        if (!Expr_Compile(s, &hd->fall, owner, NULL, EXPR_WANT_INT)) {
+        if (!parameter_compile_ctx(s, &hd->fall, owner, NULL, EXPR_WANT_INT, ctx)) {
             return 0;
         }
         Expr_Clone(&hd->air_fall, &hd->fall);
@@ -4067,7 +4297,7 @@ int HitDef_ParseParams(Ini *ini, HitDefParams *hd, CharData *owner)
     s = Ini_GetValue(ini, "air.fall");
     if (s != NULL) {
         Expr_Free(&hd->air_fall);
-        if (!Expr_Compile(s, &hd->air_fall, owner, NULL, EXPR_WANT_INT)) {
+        if (!parameter_compile_ctx(s, &hd->air_fall, owner, NULL, EXPR_WANT_INT, ctx)) {
             return 0;
         }
     }
@@ -4137,20 +4367,26 @@ int HitDef_ParseParams(Ini *ini, HitDefParams *hd, CharData *owner)
         }
         hd->air_type = n;
     }
-    if (!PalFx_ParseParams(&hd->palfx, ini, owner, 1)) {
+    if (!PalFx_ParseParamsCtx(&hd->palfx, ini, owner, 1, ctx)) {
         return 0;
     }
     hd->palfx.kind = PALFX_PLAYER;
-    if (!EnvShake_ParseParams("envshake.", &hd->envshake, ini, owner)) {
+    if (!EnvShake_ParseParamsCtx("envshake.", &hd->envshake, ini, owner, ctx)) {
         return 0;
     }
-    return EnvShake_ParseParams("fall.envshake.", &hd->fall_envshake, ini, owner) != 0;
+    return EnvShake_ParseParamsCtx("fall.envshake.", &hd->fall_envshake, ini, owner, ctx) != 0;
 }
 
 /* An int parameter of a HitDef: below min it becomes repl, with the warning msg. */
-static int hd_eval(Player *p, StateCtrl *sc, const Expr *e, int min, int repl, const char *msg)
+static int hd_evalCtx(Player *p, StateCtrl *sc, const Expr *e, int min, int repl, const char *msg, ExprEvalCtx *frame);
+static __inline int hd_eval(Player *p, StateCtrl *sc, const Expr *e, int min, int repl, const char *msg)
 {
-    int v = Expr_EvalInt(p, e, 1);
+    return hd_evalCtx(p, sc, e, min, repl, msg, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+static int hd_evalCtx(Player *p, StateCtrl *sc, const Expr *e, int min, int repl, const char *msg, ExprEvalCtx *frame)
+{
+    int v = Expr_EvalIntCtx(p, e, 1, frame);
 
     if (v < min) {
         v = repl;
@@ -4168,77 +4404,82 @@ static int hd_eval(Player *p, StateCtrl *sc, const Expr *e, int min, int repl, c
  */
 int HitDef_SetFromParams(Player *p, HitDefParams *hp, HitDef *hd, StateCtrl *sc)
 {
+    return HitDef_SetFromParamsCtx(p, hp, hd, sc, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+int HitDef_SetFromParamsCtx(Player *p, HitDefParams *hp, HitDef *hd, StateCtrl *sc, ExprEvalCtx *frame)
+{
     float vy;
     int v;
 
     hd->affectteam = hp->affectteam;
     hd->attr = hp->attr;
     hd->reversal_attr = hp->reversal_attr;
-    hd->id = hd_eval(p, sc, &hp->id, 0, 0, "assigned negative hitID");
-    hd->chainid = hd_eval(p, sc, &hp->chainid, -1, -1, "specified negative chainID");
-    hd->nochainid[0] = hd_eval(p, sc, &hp->nochainid[0], -1, -1, "specified negative nochainID");
-    hd->nochainid[1] = hd_eval(p, sc, &hp->nochainid[1], -1, -1, "specified negative nochainID2");
+    hd->id = hd_evalCtx(p, sc, &hp->id, 0, 0, "assigned negative hitID", frame);
+    hd->chainid = hd_evalCtx(p, sc, &hp->chainid, -1, -1, "specified negative chainID", frame);
+    hd->nochainid[0] = hd_evalCtx(p, sc, &hp->nochainid[0], -1, -1, "specified negative nochainID", frame);
+    hd->nochainid[1] = hd_evalCtx(p, sc, &hp->nochainid[1], -1, -1, "specified negative nochainID2", frame);
     if ((hd->chainid == hd->nochainid[0] || hd->chainid == hd->nochainid[1]) && hd->chainid != -1) {
         hd->nochainid[1] = -1;
         hd->nochainid[0] = -1;
         hd->chainid = -1;
     }
-    hd->kill = Expr_EvalInt(p, &hp->kill, 1) != 0;
-    hd->guard_kill = Expr_EvalInt(p, &hp->guard_kill, 1) != 0;
-    hd->fall_kill = Expr_EvalInt(p, &hp->fall_kill, 1) != 0;
-    hd->hitonce = Expr_EvalInt(p, &hp->hitonce, 1) != 0;
-    hd->juggle = hd_eval(p, sc, &hp->air_juggle, -1, -1, "illegal juggle points");
-    hd->damage = Expr_EvalInt(p, &hp->damage[0], 1);
-    hd->guard_damage = Expr_EvalInt(p, &hp->damage[1], 1);
-    hd->getpower = Expr_EvalInt(p, &hp->getpower[0], 0);
-    hd->guard_getpower = Expr_EvalInt(p, &hp->getpower[1], 0);
-    hd->givepower = Expr_EvalInt(p, &hp->givepower[0], 0);
-    hd->guard_givepower = Expr_EvalInt(p, &hp->givepower[1], 0);
-    hd->p2_pausetime = hd_eval(p, sc, &hp->p2_pausetime, 0, 0, "specified negative p2shaketime");
-    hd->p1_pausetime = hd_eval(p, sc, &hp->p1_pausetime, 0, 0, "specified negative pausetime");
+    hd->kill = Expr_EvalIntCtx(p, &hp->kill, 1, frame) != 0;
+    hd->guard_kill = Expr_EvalIntCtx(p, &hp->guard_kill, 1, frame) != 0;
+    hd->fall_kill = Expr_EvalIntCtx(p, &hp->fall_kill, 1, frame) != 0;
+    hd->hitonce = Expr_EvalIntCtx(p, &hp->hitonce, 1, frame) != 0;
+    hd->juggle = hd_evalCtx(p, sc, &hp->air_juggle, -1, -1, "illegal juggle points", frame);
+    hd->damage = Expr_EvalIntCtx(p, &hp->damage[0], 1, frame);
+    hd->guard_damage = Expr_EvalIntCtx(p, &hp->damage[1], 1, frame);
+    hd->getpower = Expr_EvalIntCtx(p, &hp->getpower[0], 0, frame);
+    hd->guard_getpower = Expr_EvalIntCtx(p, &hp->getpower[1], 0, frame);
+    hd->givepower = Expr_EvalIntCtx(p, &hp->givepower[0], 0, frame);
+    hd->guard_givepower = Expr_EvalIntCtx(p, &hp->givepower[1], 0, frame);
+    hd->p2_pausetime = hd_evalCtx(p, sc, &hp->p2_pausetime, 0, 0, "specified negative p2shaketime", frame);
+    hd->p1_pausetime = hd_evalCtx(p, sc, &hp->p1_pausetime, 0, 0, "specified negative pausetime", frame);
     if (p->data->mugenversion < g_game->compat_version[1] && hd->p1_pausetime > 0 && hd->reversal_attr == 0) {
         hd->p1_pausetime--;
     }
-    hd->numhits = Expr_EvalInt(p, &hp->numhits, 1);
-    hd->hitsound[0] = hd_eval(p, sc, &hp->hitsound[0], -1, -1, "specified illegal sound group");
-    hd->hitsound[1] = hd_eval(p, sc, &hp->hitsound[1], -1, -1, "specified illegal sound no");
+    hd->numhits = Expr_EvalIntCtx(p, &hp->numhits, 1, frame);
+    hd->hitsound[0] = hd_evalCtx(p, sc, &hp->hitsound[0], -1, -1, "specified illegal sound group", frame);
+    hd->hitsound[1] = hd_evalCtx(p, sc, &hp->hitsound[1], -1, -1, "specified illegal sound no", frame);
     hd->hitsound[2] = hp->hitsound_fight;
-    hd->guardsound[0] = hd_eval(p, sc, &hp->guardsound[0], -1, -1, "specified illegal gsound group");
-    hd->guardsound[1] = hd_eval(p, sc, &hp->guardsound[1], -1, -1, "specified illegal gsound no");
+    hd->guardsound[0] = hd_evalCtx(p, sc, &hp->guardsound[0], -1, -1, "specified illegal gsound group", frame);
+    hd->guardsound[1] = hd_evalCtx(p, sc, &hp->guardsound[1], -1, -1, "specified illegal gsound no", frame);
     hd->guardsound[2] = hp->guardsound_fight;
     hd->guardflag = hp->guardflag;
     hd->hitflag = hp->hitflag;
-    hd->priority = hd_eval(p, sc, &hp->priority, 0, 0, "specified negative hit priority");
+    hd->priority = hd_evalCtx(p, sc, &hp->priority, 0, 0, "specified negative hit priority", frame);
     hd->priority_type = hp->priority_type;
-    hd->p1stateno = hd_eval(p, sc, &hp->p1stateno, -1, -1, "specified negative p1stateno");
-    hd->p2stateno = hd_eval(p, sc, &hp->p2stateno, -1, -1, "specified negative p2stateno");
-    hd->p2getp1state = Expr_EvalInt(p, &hp->p2getp1state, 1) != 0;
+    hd->p1stateno = hd_evalCtx(p, sc, &hp->p1stateno, -1, -1, "specified negative p1stateno", frame);
+    hd->p2stateno = hd_evalCtx(p, sc, &hp->p2stateno, -1, -1, "specified negative p2stateno", frame);
+    hd->p2getp1state = Expr_EvalIntCtx(p, &hp->p2getp1state, 1, frame) != 0;
     if (hd->p2getp1state) {
         Player_GetCustomState(p, &hd->custom);
     }
-    hd->snap_time = hd_eval(p, sc, &hp->snap_time, -1, 1, "specified illegal p2bindtime");
-    hd->p1sprpriority = Expr_EvalInt(p, &hp->p1sprpriority, 1);
-    hd->p2sprpriority = Expr_EvalInt(p, &hp->p2sprpriority, 1);
+    hd->snap_time = hd_evalCtx(p, sc, &hp->snap_time, -1, 1, "specified illegal p2bindtime", frame);
+    hd->p1sprpriority = Expr_EvalIntCtx(p, &hp->p1sprpriority, 1, frame);
+    hd->p2sprpriority = Expr_EvalIntCtx(p, &hp->p2sprpriority, 1, frame);
     hd->animtype = hp->animtype;
-    hd->forcestand = Expr_EvalInt(p, &hp->forcestand, 1) != 0;
-    hd->forcenofall = Expr_EvalInt(p, &hp->forcenofall, 1) != 0;
-    if (Expr_EvalInt(p, &hp->fall, 1)) {
+    hd->forcestand = Expr_EvalIntCtx(p, &hp->forcestand, 1, frame) != 0;
+    hd->forcenofall = Expr_EvalIntCtx(p, &hp->forcenofall, 1, frame) != 0;
+    if (Expr_EvalIntCtx(p, &hp->fall, 1, frame)) {
         hd->hitflag |= 1;
     }
-    hd->fall_damage = Expr_EvalInt(p, &hp->fall_damage, 1);
+    hd->fall_damage = Expr_EvalIntCtx(p, &hp->fall_damage, 1, frame);
     hd->fall_animtype = hp->fall_animtype;
-    hd->fall_xvel = Expr_EvalFloat(p, &hp->fall_xvelocity);
-    hd->fall_yvel = Expr_EvalFloat(p, &hp->fall_yvelocity);
-    hd->fall_recover = Expr_EvalInt(p, &hp->fall_recover, 1) != 0;
-    hd->fall_recovertime = hd_eval(p, sc, &hp->fall_recovertime, 0, 4, "specified negative recovertime");
+    hd->fall_xvel = Expr_EvalFloatCtx(p, &hp->fall_xvelocity, frame);
+    hd->fall_yvel = Expr_EvalFloatCtx(p, &hp->fall_yvelocity, frame);
+    hd->fall_recover = Expr_EvalIntCtx(p, &hp->fall_recover, 1, frame) != 0;
+    hd->fall_recovertime = hd_evalCtx(p, sc, &hp->fall_recovertime, 0, 4, "specified negative recovertime", frame);
     hd->spark_own = hp->spark_own;
-    hd->sparkno = hd_eval(p, sc, &hp->sparkno, -2, -2, "illegal spark no");
+    hd->sparkno = hd_evalCtx(p, sc, &hp->sparkno, -2, -2, "illegal spark no", frame);
     hd->guard_spark_own = hp->guard_spark_own;
-    hd->guard_sparkno = hd_eval(p, sc, &hp->guard_sparkno, -2, -2, "illegal gspark no");
-    hd->sparkxy[0] = Expr_EvalInt(p, &hp->sparkxy[0], 1);
-    hd->sparkxy[1] = Expr_EvalInt(p, &hp->sparkxy[1], 1);
-    hd->p1facing = Expr_EvalInt(p, &hp->p1facing, 1) < 0;
-    v = Expr_EvalInt(p, &hp->p1getp2facing, 1);
+    hd->guard_sparkno = hd_evalCtx(p, sc, &hp->guard_sparkno, -2, -2, "illegal gspark no", frame);
+    hd->sparkxy[0] = Expr_EvalIntCtx(p, &hp->sparkxy[0], 1, frame);
+    hd->sparkxy[1] = Expr_EvalIntCtx(p, &hp->sparkxy[1], 1, frame);
+    hd->p1facing = Expr_EvalIntCtx(p, &hp->p1facing, 1, frame) < 0;
+    v = Expr_EvalIntCtx(p, &hp->p1getp2facing, 1, frame);
     if (v < 0) {
         v = -1;
         hd->p1facing = 0;
@@ -4247,62 +4488,63 @@ int HitDef_SetFromParams(Player *p, HitDefParams *hp, HitDef *hd, StateCtrl *sc)
         hd->p1facing = 0;
     }
     hd->p1getp2facing = v;
-    hd->mindist[0] = Expr_EvalInt(p, &hp->mindist[0], 1);
-    hd->mindist[1] = Expr_EvalInt(p, &hp->mindist[1], 1);
-    hd->maxdist[0] = Expr_EvalInt(p, &hp->maxdist[0], 1);
-    hd->maxdist[1] = Expr_EvalInt(p, &hp->maxdist[1], 1);
-    hd->p2facing = Expr_EvalInt(p, &hp->p2facing, 1);
+    hd->mindist[0] = Expr_EvalIntCtx(p, &hp->mindist[0], 1, frame);
+    hd->mindist[1] = Expr_EvalIntCtx(p, &hp->mindist[1], 1, frame);
+    hd->maxdist[0] = Expr_EvalIntCtx(p, &hp->maxdist[0], 1, frame);
+    hd->maxdist[1] = Expr_EvalIntCtx(p, &hp->maxdist[1], 1, frame);
+    hd->p2facing = Expr_EvalIntCtx(p, &hp->p2facing, 1, frame);
     if (hd->p2facing < -1 || hd->p2facing > 1) {
         hd->p2facing = 0;
         Player_WarnAt(p, sc, "%s", "Illegal p2facing parameter");
     }
     hd->ground_type = hp->ground_type;
-    hd->ground_hittime = hd_eval(p, sc, &hp->ground_hittime, 0, 0, "negative ground.p2hittime");
-    hd->ground_slidetime = hd_eval(p, sc, &hp->ground_slidetime, 0, 0, "negative ground.p2slidetime");
-    hd->ground_velocity[0] = Expr_EvalFloat(p, &hp->ground_velocity[0]);
-    vy = Expr_EvalFloat(p, &hp->ground_velocity[1]);
+    hd->ground_hittime = hd_evalCtx(p, sc, &hp->ground_hittime, 0, 0, "negative ground.p2hittime", frame);
+    hd->ground_slidetime = hd_evalCtx(p, sc, &hp->ground_slidetime, 0, 0, "negative ground.p2slidetime", frame);
+    hd->ground_velocity[0] = Expr_EvalFloatCtx(p, &hp->ground_velocity[0], frame);
+    vy = Expr_EvalFloatCtx(p, &hp->ground_velocity[1], frame);
     hd->ground_velocity[1] = vy;
     if (vy != 0.0f && !hp->forcestand_given) {
         hd->forcestand = 1;
     }
-    hd->ground_cornerpush = Expr_EvalFloat(p, &hp->ground_cornerpush);
+    hd->ground_cornerpush = Expr_EvalFloatCtx(p, &hp->ground_cornerpush, frame);
     hd->air_type = hp->air_type;
     hd->air_animtype = hp->air_animtype;
-    hd->air_hittime = hd_eval(p, sc, &hp->air_hittime, 0, 0, "negative air.p2hittime");
-    hd->air_fall = Ftol(Expr_EvalFloat(p, &hp->air_fall));
-    hd->air_velocity[0] = Expr_EvalFloat(p, &hp->air_velocity[0]);
-    hd->air_velocity[1] = Expr_EvalFloat(p, &hp->air_velocity[1]);
-    hd->air_cornerpush = Expr_EvalFloat(p, &hp->air_cornerpush);
-    hd->down_bounce = Expr_EvalInt(p, &hp->down_bounce, 1) != 0;
-    hd->down_hittime = hd_eval(p, sc, &hp->down_hittime, 0, 0, "negative down.p2hittime");
-    hd->down_velocity[0] = Expr_EvalFloat(p, &hp->down_velocity[0]);
-    hd->down_velocity[1] = Expr_EvalFloat(p, &hp->down_velocity[1]);
-    hd->down_cornerpush = Expr_EvalFloat(p, &hp->down_cornerpush);
-    hd->guard_velocity = Expr_EvalFloat(p, &hp->guard_velocity);
-    hd->guard_hittime = hd_eval(p, sc, &hp->guard_hittime, 0, 0, "negative guard.p2hittime");
-    hd->guard_slidetime = hd_eval(p, sc, &hp->guard_slidetime, 0, 0, "negative guard.p2slidetime");
-    hd->guard_ctrltime = hd_eval(p, sc, &hp->guard_ctrltime, 0, 0, "negative guard.p2ctrltime");
-    hd->guard_dist = Expr_EvalInt(p, &hp->guard_dist, 1);
-    hd->guard_p2_pausetime = hd_eval(p, sc, &hp->guard_p2_pausetime, 0, 0, "negative guard.p2shaketime");
-    hd->guard_p1_pausetime = hd_eval(p, sc, &hp->guard_p1_pausetime, 0, 0, "negative guard.p1pausetime");
+    hd->air_hittime = hd_evalCtx(p, sc, &hp->air_hittime, 0, 0, "negative air.p2hittime", frame);
+    hd->air_fall = Ftol(Expr_EvalFloatCtx(p, &hp->air_fall, frame));
+    hd->air_velocity[0] = Expr_EvalFloatCtx(p, &hp->air_velocity[0], frame);
+    hd->air_velocity[1] = Expr_EvalFloatCtx(p, &hp->air_velocity[1], frame);
+    hd->air_cornerpush = Expr_EvalFloatCtx(p, &hp->air_cornerpush, frame);
+    hd->down_bounce = Expr_EvalIntCtx(p, &hp->down_bounce, 1, frame) != 0;
+    hd->down_hittime = hd_evalCtx(p, sc, &hp->down_hittime, 0, 0, "negative down.p2hittime", frame);
+    hd->down_velocity[0] = Expr_EvalFloatCtx(p, &hp->down_velocity[0], frame);
+    hd->down_velocity[1] = Expr_EvalFloatCtx(p, &hp->down_velocity[1], frame);
+    hd->down_cornerpush = Expr_EvalFloatCtx(p, &hp->down_cornerpush, frame);
+    hd->guard_velocity = Expr_EvalFloatCtx(p, &hp->guard_velocity, frame);
+    hd->guard_hittime = hd_evalCtx(p, sc, &hp->guard_hittime, 0, 0, "negative guard.p2hittime", frame);
+    hd->guard_slidetime = hd_evalCtx(p, sc, &hp->guard_slidetime, 0, 0, "negative guard.p2slidetime", frame);
+    hd->guard_ctrltime = hd_evalCtx(p, sc, &hp->guard_ctrltime, 0, 0, "negative guard.p2ctrltime", frame);
+    hd->guard_dist = Expr_EvalIntCtx(p, &hp->guard_dist, 1, frame);
+    hd->guard_p2_pausetime = hd_evalCtx(p, sc, &hp->guard_p2_pausetime, 0, 0, "negative guard.p2shaketime", frame);
+    hd->guard_p1_pausetime = hd_evalCtx(p, sc, &hp->guard_p1_pausetime, 0, 0, "negative guard.p1pausetime", frame);
     if (p->data->mugenversion < g_game->compat_version[1] && hd->guard_p1_pausetime > 0) {
         hd->guard_p1_pausetime--;
     }
-    hd->guard_cornerpush = Expr_EvalFloat(p, &hp->guard_cornerpush);
-    hd->airguard_velocity[0] = Expr_EvalFloat(p, &hp->airguard_velocity[0]);
-    hd->airguard_velocity[1] = Expr_EvalFloat(p, &hp->airguard_velocity[1]);
-    hd->airguard_ctrltime = hd_eval(p, sc, &hp->airguard_ctrltime, 0, 0, "negative airguard.p2ctrltime");
-    hd->airguard_cornerpush = Expr_EvalFloat(p, &hp->airguard_cornerpush);
-    hd->yaccel = Expr_EvalFloat(p, &hp->yaccel);
-    PalFx_Apply((PalFxDef *)hd->palfx, &hp->palfx, p, sc);
-    EnvShake_Apply((EnvShake *)hd->envshake, &hp->envshake, p, sc);
-    EnvShake_Apply((EnvShake *)hd->fall_envshake, &hp->fall_envshake, p, sc);
+    hd->guard_cornerpush = Expr_EvalFloatCtx(p, &hp->guard_cornerpush, frame);
+    hd->airguard_velocity[0] = Expr_EvalFloatCtx(p, &hp->airguard_velocity[0], frame);
+    hd->airguard_velocity[1] = Expr_EvalFloatCtx(p, &hp->airguard_velocity[1], frame);
+    hd->airguard_ctrltime = hd_evalCtx(p, sc, &hp->airguard_ctrltime, 0, 0, "negative airguard.p2ctrltime", frame);
+    hd->airguard_cornerpush = Expr_EvalFloatCtx(p, &hp->airguard_cornerpush, frame);
+    hd->yaccel = Expr_EvalFloatCtx(p, &hp->yaccel, frame);
+    PalFx_ApplyCtx((PalFxDef *)hd->palfx, &hp->palfx, p, sc, frame);
+    EnvShake_ApplyCtx((EnvShake *)hd->envshake, &hp->envshake, p, sc, frame);
+    EnvShake_ApplyCtx((EnvShake *)hd->fall_envshake, &hp->fall_envshake, p, sc, frame);
     return 1;
 }
 
 /* 0x00450F70 */
 void HitDefParams_Free(HitDefParams *hd)
 {
+    if (hd==NULL) return;
     Expr_Free(&hd->id);
     Expr_Free(&hd->chainid);
     Expr_Free(&hd->nochainid[0]);
@@ -4385,12 +4627,18 @@ void HitDefParams_Free(HitDefParams *hd)
 }
 
 /* A parameter with a single value: present means one value and nothing after it. */
-static int parse_one(Ini *ini, const char *key, const char *fmt, Expr *e, CharData *owner)
+static int parse_oneCtx(Ini *ini, const char *key, const char *fmt, Expr *e, CharData *owner, ExprCompileCtx *ctx);
+static __inline int parse_one(Ini *ini, const char *key, const char *fmt, Expr *e, CharData *owner)
+{
+    return parse_oneCtx(ini, key, fmt, e, owner, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+static int parse_oneCtx(Ini *ini, const char *key, const char *fmt, Expr *e, CharData *owner, ExprCompileCtx *ctx)
 {
     const char *s = Ini_GetValue(ini, key);
     const char *end;
 
-    Cns_ParseValues(s, fmt, owner, &end, e);
+    Cns_ParseValuesCtx(s, fmt, owner, &end, ctx, e);
     return s == NULL || *end == '\0';
 }
 
@@ -4405,6 +4653,11 @@ static int proj_bound(double value320, CharData *owner, int scaled)
 
 /* 0x00451370: Projectile parameters, with its HitDef and optional afterimage. */
 int Projectile_ParseParams(ProjectileParams *pp, CharData *owner, Ini *ini)
+{
+    return Projectile_ParseParamsCtx(pp, owner, ini, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+int Projectile_ParseParamsCtx(ProjectileParams *pp, CharData *owner, Ini *ini, ExprCompileCtx *ctx)
 {
     const char *s;
     int v;
@@ -4434,13 +4687,13 @@ int Projectile_ParseParams(ProjectileParams *pp, CharData *owner, Ini *ini)
     Expr_SetInt(&pp->projheightbound[1], v);
     Expr_SetInt(&pp->projsprpriority, 3);
 
-    if (!compile_key(ini, "projid", &pp->projid, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "projid", &pp->projid, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!compile_key(ini, "projanim", &pp->projanim, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "projanim", &pp->projanim, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!parse_pair(ini, "offset", "ii", &pp->offset[0], &pp->offset[1], owner)) {
+    if (!parse_pairCtx(ini, "offset", "ii", &pp->offset[0], &pp->offset[1], owner, ctx)) {
         return 0;
     }
     s = Ini_GetValue(ini, "postype");
@@ -4451,78 +4704,77 @@ int Projectile_ParseParams(ProjectileParams *pp, CharData *owner, Ini *ini)
             return 0;
         }
     }
-    if (!compile_key(ini, "projhitanim", &pp->projhitanim, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "projhitanim", &pp->projhitanim, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!compile_or_clone(ini, "projremanim", &pp->projremanim, &pp->projhitanim, owner, EXPR_WANT_INT)) {
+    if (!compile_or_cloneCtx(ini, "projremanim", &pp->projremanim, &pp->projhitanim, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!compile_or_clone(ini, "projcancelanim", &pp->projcancelanim, &pp->projremanim, owner, EXPR_WANT_INT)) {
+    if (!compile_or_cloneCtx(ini, "projcancelanim", &pp->projcancelanim, &pp->projremanim, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!compile_key(ini, "projsprpriority", &pp->projsprpriority, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "projsprpriority", &pp->projsprpriority, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!compile_key(ini, "projedgebound", &pp->projedgebound, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "projedgebound", &pp->projedgebound, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!compile_key(ini, "projstagebound", &pp->projstagebound, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "projstagebound", &pp->projstagebound, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!parse_pair(ini, "projheightbound", "ii", &pp->projheightbound[0], &pp->projheightbound[1], owner)) {
+    if (!parse_pairCtx(ini, "projheightbound", "ii", &pp->projheightbound[0], &pp->projheightbound[1], owner, ctx)) {
         return 0;
     }
-    if (!parse_pair(ini, "velocity", "ff", &pp->velocity[0], &pp->velocity[1], owner)) {
+    if (!parse_pairCtx(ini, "velocity", "ff", &pp->velocity[0], &pp->velocity[1], owner, ctx)) {
         return 0;
     }
-    if (!parse_pair(ini, "remvelocity", "ff", &pp->remvelocity[0], &pp->remvelocity[1], owner)) {
+    if (!parse_pairCtx(ini, "remvelocity", "ff", &pp->remvelocity[0], &pp->remvelocity[1], owner, ctx)) {
         return 0;
     }
-    if (!parse_pair(ini, "velmul", "ff", &pp->velmul[0], &pp->velmul[1], owner)) {
+    if (!parse_pairCtx(ini, "velmul", "ff", &pp->velmul[0], &pp->velmul[1], owner, ctx)) {
         return 0;
     }
-    if (!parse_pair(ini, "accel", "ff", &pp->accel[0], &pp->accel[1], owner)) {
+    if (!parse_pairCtx(ini, "accel", "ff", &pp->accel[0], &pp->accel[1], owner, ctx)) {
         return 0;
     }
-    if (!parse_pair(ini, "projscale", "ff", &pp->projscale[0], &pp->projscale[1], owner)) {
+    if (!parse_pairCtx(ini, "projscale", "ff", &pp->projscale[0], &pp->projscale[1], owner, ctx)) {
         return 0;
     }
-    if (!parse_one(ini, "projhits", "i", &pp->projhits, owner)) {
+    if (!parse_oneCtx(ini, "projhits", "i", &pp->projhits, owner, ctx)) {
         return 0;
     }
-    if (!parse_one(ini, "projpriority", "i", &pp->projpriority, owner)) {
+    if (!parse_oneCtx(ini, "projpriority", "i", &pp->projpriority, owner, ctx)) {
         return 0;
     }
-    if (!parse_one(ini, "projremove", "i", &pp->projremove, owner)) {
+    if (!parse_oneCtx(ini, "projremove", "i", &pp->projremove, owner, ctx)) {
         return 0;
     }
-    if (!parse_one(ini, "projremovetime", "i", &pp->projremovetime, owner)) {
+    if (!parse_oneCtx(ini, "projremovetime", "i", &pp->projremovetime, owner, ctx)) {
         return 0;
     }
-    if (!parse_one(ini, "projmisstime", "i", &pp->projmisstime, owner)) {
+    if (!parse_oneCtx(ini, "projmisstime", "i", &pp->projmisstime, owner, ctx)) {
         return 0;
     }
     {
         const char *end;
         /* not checked at all */
-        Cns_ParseValues(Ini_GetValue(ini, "projshadow"), "iii", owner, &end, &pp->projshadow[0], &pp->projshadow[1],
-                        &pp->projshadow[2]);
+        Cns_ParseValuesCtx(Ini_GetValue(ini, "projshadow"), "iii", owner, &end, ctx, &pp->projshadow[0], &pp->projshadow[1], &pp->projshadow[2]);
     }
-    if (!Cns_CompileInt(ini, "pausemovetime", &pp->pausemovetime, owner, 0)) {
+    if (!Cns_CompileIntCtx(ini, "pausemovetime", &pp->pausemovetime, owner, 0, ctx)) {
         return 0;
     }
-    if (!Cns_CompileInt(ini, "supermovetime", &pp->supermovetime, owner, 0)) {
+    if (!Cns_CompileIntCtx(ini, "supermovetime", &pp->supermovetime, owner, 0, ctx)) {
         return 0;
     }
-    if (!HitDef_ParseParams(ini, &pp->hitdef, owner)) {
+    if (!HitDef_ParseParamsCtx(ini, &pp->hitdef, owner, ctx)) {
         Error_Printf("Error parsing Hitdef of projectile\n");
         return 0;
     }
-    if (!Cns_CompileInt(ini, "ownpal", &pp->ownpal, owner, 0)) {
+    if (!Cns_CompileIntCtx(ini, "ownpal", &pp->ownpal, owner, 0, ctx)) {
         return 0;
     }
     Expr_SetInt(&pp->remappal[0], -1);
-    if (!parse_pair_checked(ini, "remappal", "ii", &pp->remappal[0], &pp->remappal[1], owner)) {
+    if (!parse_pair_checkedCtx(ini, "remappal", "ii", &pp->remappal[0], &pp->remappal[1], owner, ctx)) {
         return 0;
     }
     if (Ini_GetValue(ini, "afterimage.time") != NULL) {
@@ -4530,7 +4782,7 @@ int Projectile_ParseParams(ProjectileParams *pp, CharData *owner, Ini *ini)
         if (pp->afterimage == NULL) {
             return 0;
         }
-        if (!AfterImage_ParseParams(pp->afterimage, ini, owner, "afterimage.")) {
+        if (!AfterImage_ParseParamsCtx(pp->afterimage, ini, owner, "afterimage.", ctx)) {
             Error_Printf("Error parsing Afterimage of projectile\n");
             return 0;
         }
@@ -4797,6 +5049,11 @@ void ProjectileParams_Free(ProjectileParams *pp)
 /* 0x00452C70: Helper parameters; the size.* values not given stay INT_MIN / -FLT_MAX. */
 int Helper_ParseParams(HelperParams *hp, Ini *ini, CharData *owner)
 {
+    return Helper_ParseParamsCtx(hp, ini, owner, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+int Helper_ParseParamsCtx(HelperParams *hp, Ini *ini, CharData *owner, ExprCompileCtx *ctx)
+{
     const char *s;
 
     s = Ini_GetValue(ini, "helpertype");
@@ -4815,10 +5072,10 @@ int Helper_ParseParams(HelperParams *hp, Ini *ini, CharData *owner)
     if (Ini_GetValue(ini, "name") != NULL && !Ini_ReadString(ini, "name", sizeof(hp->name) - 1, hp->name)) {
         return 0;
     }
-    if (!compile_key(ini, "id", &hp->id, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "id", &hp->id, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!parse_pair_checked(ini, "pos", "ff", &hp->pos[0], &hp->pos[1], owner)) {
+    if (!parse_pair_checkedCtx(ini, "pos", "ff", &hp->pos[0], &hp->pos[1], owner, ctx)) {
         return 0;
     }
     s = Ini_GetValue(ini, "postype");
@@ -4831,65 +5088,65 @@ int Helper_ParseParams(HelperParams *hp, Ini *ini, CharData *owner)
     }
     s = Ini_GetValue(ini, "facing");
     Expr_SetInt(&hp->facing, 1);
-    if (s != NULL && !Expr_Compile(s, &hp->facing, owner, NULL, EXPR_WANT_INT)) {
+    if (s != NULL && !parameter_compile_ctx(s, &hp->facing, owner, NULL, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     s = Ini_GetValue(ini, "stateno");
     Expr_SetInt(&hp->stateno, 0);
-    if (s != NULL && !Expr_Compile(s, &hp->stateno, owner, NULL, EXPR_WANT_INT)) {
+    if (s != NULL && !parameter_compile_ctx(s, &hp->stateno, owner, NULL, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!Cns_CompileInt(ini, "keyctrl", &hp->keyctrl, owner, 0)) {
+    if (!Cns_CompileIntCtx(ini, "keyctrl", &hp->keyctrl, owner, 0, ctx)) {
         return 0;
     }
-    if (!Cns_CompileInt(ini, "ownpal", &hp->ownpal, owner, 0)) {
+    if (!Cns_CompileIntCtx(ini, "ownpal", &hp->ownpal, owner, 0, ctx)) {
         return 0;
     }
     Expr_SetInt(&hp->remappal[0], -1);
-    if (!parse_pair_checked(ini, "remappal", "ii", &hp->remappal[0], &hp->remappal[1], owner)) {
+    if (!parse_pair_checkedCtx(ini, "remappal", "ii", &hp->remappal[0], &hp->remappal[1], owner, ctx)) {
         return 0;
     }
-    if (!Cns_CompileInt(ini, "pausemovetime", &hp->pausemovetime, owner, 0)) {
+    if (!Cns_CompileIntCtx(ini, "pausemovetime", &hp->pausemovetime, owner, 0, ctx)) {
         return 0;
     }
-    if (!Cns_CompileInt(ini, "supermovetime", &hp->supermovetime, owner, 0)) {
+    if (!Cns_CompileIntCtx(ini, "supermovetime", &hp->supermovetime, owner, 0, ctx)) {
         return 0;
     }
-    if (!Cns_CompileFloat(ini, "size.xscale", &hp->xscale, owner, -FLT_MAX)) {
+    if (!Cns_CompileFloatCtx(ini, "size.xscale", &hp->xscale, owner, -FLT_MAX, ctx)) {
         return 0;
     }
-    if (!Cns_CompileFloat(ini, "size.yscale", &hp->yscale, owner, -FLT_MAX)) {
+    if (!Cns_CompileFloatCtx(ini, "size.yscale", &hp->yscale, owner, -FLT_MAX, ctx)) {
         return 0;
     }
-    if (!Cns_CompileInt(ini, "size.ground.back", &hp->ground_back, owner, INT_MIN)) {
+    if (!Cns_CompileIntCtx(ini, "size.ground.back", &hp->ground_back, owner, INT_MIN, ctx)) {
         return 0;
     }
-    if (!Cns_CompileInt(ini, "size.ground.front", &hp->ground_front, owner, INT_MIN)) {
+    if (!Cns_CompileIntCtx(ini, "size.ground.front", &hp->ground_front, owner, INT_MIN, ctx)) {
         return 0;
     }
-    if (!Cns_CompileInt(ini, "size.air.back", &hp->air_back, owner, INT_MIN)) {
+    if (!Cns_CompileIntCtx(ini, "size.air.back", &hp->air_back, owner, INT_MIN, ctx)) {
         return 0;
     }
-    if (!Cns_CompileInt(ini, "size.air.front", &hp->air_front, owner, INT_MIN)) {
+    if (!Cns_CompileIntCtx(ini, "size.air.front", &hp->air_front, owner, INT_MIN, ctx)) {
         return 0;
     }
-    if (!Cns_CompileInt(ini, "size.height", &hp->height, owner, INT_MIN)) {
+    if (!Cns_CompileIntCtx(ini, "size.height", &hp->height, owner, INT_MIN, ctx)) {
         return 0;
     }
-    if (!Cns_CompileInt(ini, "size.proj.doscale", &hp->proj_doscale, owner, INT_MIN)) {
+    if (!Cns_CompileIntCtx(ini, "size.proj.doscale", &hp->proj_doscale, owner, INT_MIN, ctx)) {
         return 0;
     }
     Expr_SetInt(&hp->head_pos[0], INT_MIN);
     Expr_SetInt(&hp->head_pos[1], INT_MIN);
     Expr_SetInt(&hp->mid_pos[0], INT_MIN);
     Expr_SetInt(&hp->mid_pos[1], INT_MIN);
-    if (!parse_pair_checked(ini, "size.head.pos", "ii", &hp->head_pos[0], &hp->head_pos[1], owner)) {
+    if (!parse_pair_checkedCtx(ini, "size.head.pos", "ii", &hp->head_pos[0], &hp->head_pos[1], owner, ctx)) {
         return 0;
     }
-    if (!parse_pair_checked(ini, "size.mid.pos", "ii", &hp->mid_pos[0], &hp->mid_pos[1], owner)) {
+    if (!parse_pair_checkedCtx(ini, "size.mid.pos", "ii", &hp->mid_pos[0], &hp->mid_pos[1], owner, ctx)) {
         return 0;
     }
-    return Cns_CompileInt(ini, "size.shadowoffset", &hp->shadowoffset, owner, INT_MIN) != 0;
+    return Cns_CompileIntCtx(ini, "size.shadowoffset", &hp->shadowoffset, owner, INT_MIN, ctx) != 0;
 }
 
 /* 0x00453170 */
@@ -4924,26 +5181,31 @@ void HelperParams_Free(HelperParams *hp)
 /* 0x00453290: Pause parameters. */
 int Pause_ParseParams(PauseParams *pp, Ini *ini, CharData *owner)
 {
+    return Pause_ParseParamsCtx(pp, ini, owner, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+int Pause_ParseParamsCtx(PauseParams *pp, Ini *ini, CharData *owner, ExprCompileCtx *ctx)
+{
     const char *s;
 
     s = Ini_GetValue(ini, "time");
     Expr_SetInt(&pp->time, 0);
-    if (s != NULL && !Expr_Compile(s, &pp->time, owner, NULL, EXPR_WANT_INT)) {
+    if (s != NULL && !parameter_compile_ctx(s, &pp->time, owner, NULL, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     s = Ini_GetValue(ini, "movetime");
     Expr_SetInt(&pp->movetime, 0);
-    if (s != NULL && !Expr_Compile(s, &pp->movetime, owner, NULL, EXPR_WANT_INT)) {
+    if (s != NULL && !parameter_compile_ctx(s, &pp->movetime, owner, NULL, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     s = Ini_GetValue(ini, "endcmdbuftime");
     Expr_SetInt(&pp->endcmdbuftime, 0);
-    if (s != NULL && !Expr_Compile(s, &pp->endcmdbuftime, owner, NULL, EXPR_WANT_INT)) {
+    if (s != NULL && !parameter_compile_ctx(s, &pp->endcmdbuftime, owner, NULL, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     s = Ini_GetValue(ini, "pausebg");
     Expr_SetInt(&pp->pausebg, 1);
-    if (s != NULL && !Expr_Compile(s, &pp->pausebg, owner, NULL, EXPR_WANT_INT)) {
+    if (s != NULL && !parameter_compile_ctx(s, &pp->pausebg, owner, NULL, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     return 1;
@@ -4956,20 +5218,25 @@ int Pause_ParseParams(PauseParams *pp, Ini *ini, CharData *owner)
  */
 int Pause_Apply(int kind, Player *p, PauseParams *pp, StateCtrl *sc)
 {
+    return Pause_ApplyCtx(kind, p, pp, sc, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+int Pause_ApplyCtx(int kind, Player *p, PauseParams *pp, StateCtrl *sc, ExprEvalCtx *frame)
+{
     int *t = g_game->pauses[kind];
 
-    t[6] = Expr_EvalInt(p, &pp->time, 1);
+    t[6] = Expr_EvalIntCtx(p, &pp->time, 1, frame);
     if (t[6] < 0) {
         Player_WarnAt(p, sc, "%s", "set illegal pausetime");
         t[6] = 0;
     }
-    p->pause_movetime[kind] = Expr_EvalInt(p, &pp->movetime, 1);
+    p->pause_movetime[kind] = Expr_EvalIntCtx(p, &pp->movetime, 1, frame);
     if (p->pause_movetime[kind] < 0 || p->pause_movetime[kind] > t[6]) {
         Player_WarnAt(p, sc, "%s", "set illegal pausemovetime");
         p->pause_movetime[kind] = 0;
     }
-    t[7] = Expr_EvalInt(p, &pp->pausebg, 1);
-    t[8] = Expr_EvalInt(p, &pp->endcmdbuftime, 1);
+    t[7] = Expr_EvalIntCtx(p, &pp->pausebg, 1, frame);
+    t[8] = Expr_EvalIntCtx(p, &pp->endcmdbuftime, 1, frame);
     if (t[8] < 0 || t[8] > t[6]) {
         Player_WarnAt(p, sc, "%s", "set illegal endcmdbuftime");
         t[8] = 0;
@@ -4980,6 +5247,7 @@ int Pause_Apply(int kind, Player *p, PauseParams *pp, StateCtrl *sc)
 /* 0x00453520 */
 void PauseParams_Free(PauseParams *pp)
 {
+    if (pp==NULL) return;
     Expr_Free(&pp->time);
     Expr_Free(&pp->movetime);
     Expr_Free(&pp->endcmdbuftime);
@@ -4989,46 +5257,53 @@ void PauseParams_Free(PauseParams *pp)
 /* 0x00453550: SuperPause parameters (the Pause ones first, whatever their result). */
 int SuperPause_ParseParams(Ini *ini, CharData *owner, SuperPauseParams *sp)
 {
+    return SuperPause_ParseParamsCtx(ini, owner, sp, NULL);
+}
+/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+int SuperPause_ParseParamsCtx(Ini *ini, CharData *owner, SuperPauseParams *sp, ExprCompileCtx *ctx)
+{
     const char *s;
 
-    Pause_ParseParams(&sp->pause, ini, owner);
+    /* ZSS is strict; preserve the original CNS ignored return. */
+    if (!Pause_ParseParamsCtx(&sp->pause, ini, owner, ctx) && ctx!=NULL) return 0;
     s = Ini_GetValue(ini, "time");
     Expr_SetInt(&sp->pause.time, 30);
-    if (s != NULL && !Expr_Compile(s, &sp->pause.time, owner, NULL, EXPR_WANT_INT)) {
+    if (s != NULL && !parameter_compile_ctx(s, &sp->pause.time, owner, NULL, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     Expr_SetInt(&sp->anim, 100);
     sp->anim_fight = 1;
-    if (!Cns_ParseAnimRef(Ini_GetValue(ini, "anim"), &sp->anim_fight, &sp->anim, owner)) {
+    if (!Cns_ParseAnimRefCtx(Ini_GetValue(ini, "anim"), &sp->anim_fight, &sp->anim, owner, ctx)) {
         return 0;
     }
-    if (!parse_pair_end_first(ini, "pos", "ff", &sp->pos[0], &sp->pos[1], owner)) {
+    if (!parse_pair_end_firstCtx(ini, "pos", "ff", &sp->pos[0], &sp->pos[1], owner, ctx)) {
         return 0;
     }
     s = Ini_GetValue(ini, "darken");
     Expr_SetInt(&sp->darken, 1);
-    if (s != NULL && !Expr_Compile(s, &sp->darken, owner, NULL, EXPR_WANT_INT)) {
+    if (s != NULL && !parameter_compile_ctx(s, &sp->darken, owner, NULL, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     s = Ini_GetValue(ini, "p2defmul");
     Expr_SetFloat(&sp->p2defmul, 0.0f);
-    if (s != NULL && !Expr_Compile(s, &sp->p2defmul, owner, NULL, EXPR_WANT_FLOAT)) {
+    if (s != NULL && !parameter_compile_ctx(s, &sp->p2defmul, owner, NULL, EXPR_WANT_FLOAT, ctx)) {
         return 0;
     }
-    if (!Cns_CompileInt(ini, "poweradd", &sp->poweradd, owner, 0)) {
+    if (!Cns_CompileIntCtx(ini, "poweradd", &sp->poweradd, owner, 0, ctx)) {
         return 0;
     }
-    if (!Cns_CompileInt(ini, "unhittable", &sp->unhittable, owner, 1)) {
+    if (!Cns_CompileIntCtx(ini, "unhittable", &sp->unhittable, owner, 1, ctx)) {
         return 0;
     }
     Expr_SetInt(&sp->sound[0], -1);
     sp->sound_fight = 1;
-    return Cns_ParseSoundRef(Ini_GetValue(ini, "sound"), &sp->sound_fight, &sp->sound[0], &sp->sound[1], owner) != 0;
+    return Cns_ParseSoundRefCtx(Ini_GetValue(ini, "sound"), &sp->sound_fight, &sp->sound[0], &sp->sound[1], owner, ctx) != 0;
 }
 
 /* 0x00453790 */
 void SuperPauseParams_Free(SuperPauseParams *sp)
 {
+    if (sp==NULL) return;
     Expr_Free(&sp->pause.time);
     Expr_Free(&sp->pause.movetime);
     Expr_Free(&sp->pause.endcmdbuftime);
@@ -5069,6 +5344,7 @@ void StateCtrl_Free(StateCtrl *sc)
         break;
     case SCTRL_HITOVERRIDE: {
         HitOverrideParams *ho = sc->params;
+        if (ho==NULL) break;
         Expr_Free(&ho->stateno);
         Expr_Free(&ho->time);
         Expr_Free(&ho->forceair);
