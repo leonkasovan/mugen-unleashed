@@ -9,10 +9,11 @@ Current loader coverage (2026-11-17): explicit `.zss` primary `st`, additional
 `st0`..`st9`, and `stcommon`. Constants and CMD remain on the CNS path. Numeric
 functions/calls, result bindings and cross-file first-wins lookup are
 implemented, including numeric PlaySnd payloads, static F/S prefixes and
-PalFX/BGPalFX/AllPalFX local expressions. The unchanged upstream KFM now compiles
-its first four functions and stops at the unsupported aiLevelF trigger in the
-walk-state condition (kfm.zss:41:66). Broader controller
-payloads, block attributes and Ikemen-specific extensions remain open.
+PalFX/BGPalFX/AllPalFX local expressions. Numeric aiLevelF, static map lookups,
+MapSet/MapAdd/MapReset and numeric DEF defaults are implemented. The unchanged
+upstream KFM now passes its first walk state and stops at AssertSpecial
+(kfm.zss:63:1). Broader controller payloads, block attributes and unsupported
+Ikemen extensions remain open.
 
 ## 1. Decision
 
@@ -32,7 +33,7 @@ profile**: ZSS control flow, numeric locals and functions over the engine's
 implemented MUGEN triggers/controllers. This is not complete current Ikemen GO
 character compatibility. Publish a feature manifest and fail explicitly for
 unsupported facilities, including first-class strings, wide integer features,
-Ikemen-only maps, triggers and controllers. Full Ikemen compatibility is a
+unsupported map forms, triggers and controllers. Full Ikemen compatibility is a
 separate, larger engine project.
 
 ## 2. Pinned evidence and scope
@@ -1615,3 +1616,110 @@ the pinned reference, then implement only an explicitly defined compatible
 subset. Do not alias a floating AI trigger to a convenient integer setting or
 fake map lookups as zero to advance the corpus. Keep the original KFM sources
 unchanged and retain isolated behavioral fixtures for each added facility.
+
+
+### Float AI level and bounded numeric maps (2026-11-17)
+
+The explicit ZSS expression context now enables `aiLevelF`, `map(name)` and
+`map("literal")`. The audited controller bridge enables `MapSet`, `MapAdd` and
+parameterless `MapReset`. These are native engine facilities, not constant-zero
+compatibility shims. Legacy CNS parsing still rejects the new trigger/controller
+names; CNS-only character definitions continue to ignore `[Map]`.
+
+Reference behavior was checked at the pinned Ikemen GO commit
+[b55af1a13c128c16b4d4331f8f1fe67dcd4f06df](https://github.com/ikemen-engine/Ikemen-GO/tree/b55af1a13c128c16b4d4331f8f1fe67dcd4f06df):
+
+- [char.go](https://github.com/ikemen-engine/Ikemen-GO/blob/b55af1a13c128c16b4d4331f8f1fe67dcd4f06df/src/char.go):
+  getAILevel, mapSetValue, mapReset, DEF defaults and newHelper initialization.
+- [bytecode.go](https://github.com/ikemen-engine/Ikemen-GO/blob/b55af1a13c128c16b4d4331f8f1fe67dcd4f06df/src/bytecode.go):
+  aiLevelF dispatch, typed unset-map reads and controller execution.
+- [compiler_functions.go](https://github.com/ikemen-engine/Ikemen-GO/blob/b55af1a13c128c16b4d4331f8f1fe67dcd4f06df/src/compiler_functions.go):
+  map controller parameter forms. Only the subset below is enabled here.
+- [system.go](https://github.com/ikemen-engine/Ikemen-GO/blob/b55af1a13c128c16b4d4331f8f1fe67dcd4f06df/src/system.go):
+  next-round preparation clears regular variables according to persistence
+  indices but leaves maps intact. Ordinary `Player_Reset` must not clear maps.
+
+Supported numeric profile:
+
+| Facility | Implemented rule |
+|---|---|
+| aiLevelF | Float result of the executing/redirected actor's actual ramped AI level; human/cooperative training reads 0; AI training uses its actual level |
+| Helper AI level | MUGEN 1.x helper reads float 0; a pre-1.0 helper uses its root's actual controlled AI level |
+| Keys | Static ASCII literal, 1..63 bytes; ASCII case folded; quoted keys may contain spaces; escape syntax and indexed suffixes rejected |
+| Missing key | Integer 0, without allocating a player record or vector |
+| Values | int32, float32 or bottom; runtime tag retained when the same key changes type |
+| MapSet / MapAdd | Required `map` static key and `value` numeric expression, evaluated once against the live state/function local frame |
+| Numeric addition | int32 wrap; mixed numeric operands promote to float32; bottom propagates |
+| MapReset{} | Discard the actor's overrides and restore its numeric DEF defaults; helper defaults are empty |
+| DEF [Map] | Optional constant numeric expressions for explicitly ZSS-enabled characters only; reject dynamic/string values and duplicate normalized keys |
+| Actor ownership | Values belong to the executing actor, including custom states and trigger redirection; players sharing CharData remain isolated |
+| Lifecycle | Main-player maps survive ordinary round resets; explicit MapReset, helper reuse and player destruction clear overrides; character destruction releases defaults |
+
+Example:
+
+```text
+[Function remember(amount)]
+MapSet{map:"WalkWeight";value:$amount}
+MapAdd{map:"walkweight";value:0.5}
+
+[StateDef 65000]
+call remember(2);
+if map(WalkWeight)=2.5 && !aiLevelF {CtrlSet{value:1}}
+MapReset{}
+```
+
+`zss_map.c` stores bounded sidecars keyed by native `Player *` plus generation
+ID, and defaults keyed by native `CharData *`. No original structure, size or
+offset assertion changes. Entry allocation/copy uses actual `sizeof` values;
+no pointer is encoded in an integer slot. There are 64 actor slots (the engine
+allows four players plus at most 56 helpers), 256 visible keys per actor, and
+128 nonempty character-default banks with at most 256 keys each. Defaults load
+before a character is exposed to players and remain immutable during play.
+Reads allocate nothing; initial writes/growth allocate a complete vector before
+publication. A failed write leaves existing contents unchanged and stops the
+current ZSS body with a warning. Storage operations use an SDL2 spinlock, while
+expression evaluation/default parsing happens outside that lock. Helper reuse
+also explicitly discards the prior generation; a defensive ID check prevents
+stale map reuse through an address recycled without that hook.
+
+Explicitly unsupported: dynamic/string-valued/indexed maps, `map(k):=v`,
+parent/root/team mutation controllers, redirectid, selective reset exclusions,
+helper `extendsmap`/map initializer extensions, first-class strings/int64,
+fractional AI configuration, AILevelSet and NoAILevel assertions. The native AI
+field is integral; returning a float does not implement Ikemen's fractional AI
+configuration. These restrictions remain compile failures, not silent aliases.
+
+Validation on Linux x86-64:
+
+- ASan/UBSan/float-cast-overflow ZSS bridge and loader suites pass. Explicit
+  allocation trackers are empty after map/controller/trigger teardown. Cases
+  cover missing reads, dynamic value types, int32 wrap, bottom propagation,
+  cloned owned keys/redirection arguments, unknown forms, 63/64-byte boundaries,
+  actor isolation, helper default isolation, generation reuse, key/actor budgets,
+  failed first-write/growth, atomic failed defaults loading, and injected calloc
+  failures during controller construction. The SDL lock is a checked
+  single-threaded host boundary; concurrent precache is not qualified.
+- Native MUGEN_MODEL3D=0 build and all twelve copied-game smoke scenarios pass.
+  Human and CPU cases call map controllers with function locals, verify defaults,
+  case-folded reads, side-effect-once evaluation, redirected opponent isolation,
+  full reset and state-change propagation through the real controller runner.
+  An invalid-map-default case requires exit 1 and a defaults diagnostic. The
+  legacy CNS fixture includes intentionally nonnumeric `[Map]` data and must
+  still load. Existing functions, sound/PalFX, source-routing and malformed
+  primary/common fixtures continue to pass. `--case` can select named scenarios.
+- CNS and lexer suites pass. The changed production units pass strict host
+  ANDROID_PORT syntax checks. No dependency or original layout change was made.
+  Windows 32/64-bit execution, NDK/APK, Vita/device execution, real helper
+  creation/reuse, full-round persistence and concurrent precache remain open.
+  ASan leak detection is disabled in this environment; tracked ownership checks
+  are active.
+- The unchanged 17-file KFM corpus is hash verified and exits 1 at
+  `ZSS kfm.zss:63:1: Controller not yet enabled in the ZSS bridge`, the
+  `AssertSpecial{flag:nowalk;flag2:noautoturn}` statement. The line-41 walk-state
+  aiLevelF/map conditions now compile. Later combat and common sources remain
+  unqualified; this is still a failed compatibility probe, not playable KFM.
+
+Next priority: audit AssertSpecial flag parsing/application with local-frame
+support and strict unsupported-flag rejection, then persistence/hitpause block
+attributes and remaining combat/effect payloads. Keep the pinned corpus intact
+and continue adding small behavioral regressions before enabling each facility.

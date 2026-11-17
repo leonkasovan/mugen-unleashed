@@ -13,6 +13,7 @@
  */
 #include "mugen.h"
 #include "zss_binding.h"
+#include "zss_map.h"
 #include "soundcache.h"
 
 #define LUA_REGISTRYINDEX   (-10000)
@@ -629,7 +630,7 @@ CharData *Char_LoadDef(const char *dir, Stream *s)
     Palette pal;
     unsigned char colors[0x400];
     long tell;
-    int debug, mode, is_zip;
+    int debug, mode, is_zip, has_zss=0;
     Stream *zs;
     Ini *def, *ini;
     CharData *c;
@@ -754,6 +755,7 @@ CharData *Char_LoadDef(const char *dir, Stream *s)
                 Char_Free(c);
                 return NULL;
             }
+            has_zss=1;
         } else if (strcmp(st, buf) != 0) {
             Ini_Free(ini);
             strcpy(buf, st);
@@ -796,6 +798,7 @@ CharData *Char_LoadDef(const char *dir, Stream *s)
                 Char_Free(c);
                 return NULL;
             }
+            has_zss=1;
             Log_Printf("OK\n");
             continue;
         }
@@ -858,6 +861,7 @@ CharData *Char_LoadDef(const char *dir, Stream *s)
                 Char_Free(c);
                 return NULL;
             }
+            has_zss=1;
         } else {
             if (is_zip) {
                 Stream_ZipUnload(zs);
@@ -1078,6 +1082,15 @@ CharData *Char_LoadDef(const char *dir, Stream *s)
         }
         strncpy(c->ai_file, buf, sizeof(c->ai_file) - 1);
         Log_Printf("OK\n");
+    }
+    /* Port addition: [Map] has meaning only for an explicitly ZSS-enabled
+     * character; legacy CNS-only DEF files retain their original behavior. */
+    if (has_zss) {
+        const char *map_error=NULL;
+        if (!ZssMap_LoadDefaults(def,c,&map_error)) {
+            Error_Printf("ZSS character defaults: %s\n",map_error);
+            Ini_Free(def);Char_Free(c);return NULL;
+        }
     }
     Ini_Free(def);
     Stream_Seek(s, tell, SEEK_SET);
@@ -2013,6 +2026,7 @@ void Char_Free(CharData *c)
     if (c == NULL) {
         return;
     }
+    ZssMap_FreeDefaults(c);
     Log_Printf("Freeing player RC %s...", c->name);
     Ai_Free(&c->ai);
     Log_Printf("CMD...");
@@ -2202,6 +2216,7 @@ void Player_Free(Player *p)
     if (p == NULL) {
         return;
     }
+    ZssMap_ResetPlayer(p);
     if (p->ai_learn) {
         Ai_Merge(&p->data->ai, &p->ai_data);
     }

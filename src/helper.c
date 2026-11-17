@@ -8,6 +8,7 @@
  * sprites and (unless ownpal) the PalFX and palette remapping of its parent.
  */
 #include "mugen.h"
+#include "zss_map.h"
 
 /*
  * 0x00419A50: the Helper controller. Returns the new helper, or NULL when
@@ -101,6 +102,9 @@ Player *Helper_Create(Player *p, HelperParams *hp, StateRunCtx *ctx, StateCtrl *
         snprintf(h->name, sizeof(h->name), "%.*s's helper",
                  (int)sizeof(h->name) - 10, p->name);
     }
+    /* Port addition: a recycled helper is a new map owner. Round reset of a
+     * real player deliberately preserves its maps, matching the ZSS reference. */
+    ZssMap_ResetPlayer(h);
     h->id = g_game->player_id_next++;
     h->consts = p->consts;
 

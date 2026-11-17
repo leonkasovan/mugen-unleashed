@@ -35,6 +35,7 @@
  *   (stack buffers of 0x100 bytes, as in the original; the layout differs).
  */
 #include "mugen.h"
+#include "zss_map.h"
 
 /* Triggers that compare by themselves (Trigger.op/value), see Trigger_Eval. */
 static int Trigger_SelfCompares(const Trigger *t)
@@ -610,6 +611,10 @@ int Trigger_ParseCtx(const char *s, CharData *owner, ExprValue *tokens, char *ty
             break;
         }
     }
+    if (id == -1 && ctx!=NULL) {
+        if (!_stricmp(name,"ailevelf")) id=TRIGGER_ZSS_AILEVELF;
+        else if (!_stricmp(name,"map")) id=TRIGGER_ZSS_MAP;
+    }
     if (id == -1) {
         Error_Printf("Invalid trigger: %s\n", name);
         goto fail;
@@ -649,6 +654,15 @@ int Trigger_ParseCtx(const char *s, CharData *owner, ExprValue *tokens, char *ty
         pos++;
     }
 
+    /* Port addition: map keys are owned literal names, never local values or
+     * arbitrary expression text. Clone/free use the shared string classifier. */
+    if (t.id==TRIGGER_ZSS_MAP) {
+        char key[ZSS_MAP_KEY_MAX+1];
+        if (s[pos]!='(' || !ZssMap_ParseKey(s+pos+1,key,&e) || *e!=')') goto fail;
+        t.data=Mem_Calloc(strlen(key)+1,1);
+        if (t.data==NULL) goto fail;
+        strcpy(t.data,key);pos=(int)(e-s)+1;
+    }
     /* Function forms: ishelper(ID), numhelper(ID), numexplod(ID), numtarget(ID). */
     if (t.id == TRIGGER_ISHELPER || t.id == TRIGGER_NUMHELPER || t.id == TRIGGER_NUMEXPLOD ||
         t.id == TRIGGER_NUMTARGET) {
@@ -850,6 +864,7 @@ int Trigger_ParseCtx(const char *s, CharData *owner, ExprValue *tokens, char *ty
     /* Result type and the parameters some triggers read before the end of the call. */
     if (t.id > TRIGGER_E) {
         switch (t.id) {
+        case TRIGGER_ZSS_AILEVELF:
         case TRIGGER_LOG:
         case TRIGGER_SIN:
         case TRIGGER_COS:
@@ -1240,7 +1255,7 @@ static int Trigger_DataKind(const Trigger *t)
     if (t->data == NULL) {
         return TRIGGER_DATA_NONE;
     }
-    if ((t->id >= TRIGGER_P1NAME && t->id <= TRIGGER_AUTHORNAME) || Trigger_IsStageVarString(t)) {
+    if (t->id==TRIGGER_ZSS_MAP || (t->id >= TRIGGER_P1NAME && t->id <= TRIGGER_AUTHORNAME) || Trigger_IsStageVarString(t)) {
         return TRIGGER_DATA_STRING;
     }
     if (t->id == TRIGGER_COND) {
@@ -1553,6 +1568,20 @@ static void Trigger_EvalCondCtx(Player *target, const Trigger *t, ExprEvalCtx *c
     return;
 }
 
+/* Port addition: called after ordinary trigger redirection. Runtime tags come
+ * from map storage, not Trigger.is_float (one key may change numeric type). */
+static int Trigger_EvalZssNumeric(Player *target, const Trigger *t)
+{
+    ExprValue value={0};
+    int type;
+    if (t->id==TRIGGER_ZSS_AILEVELF) {
+        value.f=Zss_AiLevelF(target);type=EXPR_FLOAT;
+    } else if (t->id==TRIGGER_ZSS_MAP) {
+        type=ZssMap_Read(target,(const char *)t->data,&value);
+    } else return 0;
+    ExprStack_Push(value.i,type);return 1;
+}
+
 /*
  * 0x00456350: evaluates trigger t for player p (after redirection) and pushes
  * the value on the evaluation stack (its arguments, when it has some, are
@@ -1689,6 +1718,8 @@ void Trigger_EvalCtx(Player *p, const Trigger *t, ExprEvalCtx *ctx)
         target = p;
         break;
     }
+
+    if (Trigger_EvalZssNumeric(target,t)) return;
 
     /* The players other triggers refer to, seen from the target. */
     helper = target->helper;

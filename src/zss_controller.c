@@ -14,6 +14,8 @@ static int allowed_key(const char *type, const char *key)
     if (!_stricmp(type,"velset") || !_stricmp(type,"veladd") ||
         !_stricmp(type,"posset") || !_stricmp(type,"posadd"))
         return !_stricmp(key,"x") || !_stricmp(key,"y") || !_stricmp(key,"z");
+    if (!_stricmp(type,"mapset") || !_stricmp(type,"mapadd"))
+        return !_stricmp(key,"map") || !_stricmp(key,"value");
     if (!_stricmp(type,"ctrlset")) return !_stricmp(key,"value");
     if (!_stricmp(type,"changestate"))
         return !_stricmp(key,"value") || !_stricmp(key,"ctrl") || !_stricmp(key,"anim");

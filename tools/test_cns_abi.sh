@@ -1,6 +1,6 @@
 #!/bin/sh
 # Pure host CNS/controller tests. No SDL library or window is needed: the
-# vendored SDL1 declarations supply only the engine headers' types.
+# SDL2 declarations supply types; the harness supplies explicit lock/mixer stubs.
 # CC/CFLAGS/LDFLAGS select a native or cross compiler; RUNNER can run a cross
 # binary (for example qemu-i386-static). SANITIZE=1 enables ASan/UBSan.
 set -eu
@@ -49,7 +49,7 @@ $CC $FLAGS $SAN -DMem_Calloc=Test_UtilMem_Calloc -c src/util.c -o "$OUT/util.o"
 # shellcheck disable=SC2086
 $CC $FLAGS $SAN $ZSS_LEAF -c src/zss_program.c -o "$OUT/zss_program.o"
 # shellcheck disable=SC2086
-$CC $FLAGS $SAN tools/test_cns_abi.c $ZSS_SOURCES src/cnsparse.c src/keyedarray.c src/compat_linux.c \
+$CC $FLAGS $SAN tools/test_cns_abi.c $ZSS_SOURCES src/zss_map.c src/cnsparse.c src/keyedarray.c src/compat_linux.c \
     "$OUT/globals.o" "$OUT/util.o" "$OUT/zss_program.o" -Wl,--gc-sections ${LDFLAGS:-} -lm -o "$OUT/test_cns_abi"
 # shellcheck disable=SC2086
 ${RUNNER:-} "$OUT/test_cns_abi"

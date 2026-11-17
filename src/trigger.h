@@ -138,6 +138,9 @@
 #define TRIGGER_CONST480P           0x15E
 #define TRIGGER_CONST720P           0x15F
 #define TRIGGER_COND                0x190   /* 3 Exprs in data */
+/* Port-private numeric ZSS triggers; not accepted by the legacy CNS parser. */
+#define TRIGGER_ZSS_AILEVELF        0x191
+#define TRIGGER_ZSS_MAP             0x192
 
 /* Trigger.redirect */
 #define TRIGGER_REDIRECT_NONE       0

@@ -61,6 +61,20 @@ PALFX_PROBE = (
     "BGPalFX{time:var(57):=var(57)+$r}\n"
     "AllPalFX{time:var(57):=var(57)+$b}\n"
 )
+MAP_PROBE = (
+    "[StateDef -2]\n"
+    "if var(58)=0 {var(58):=1;\n"
+    "if map(seed)!=44 || map(ratio)!=1.5 || map(missing)!=0 || !(AI_EXPECT) {ChangeState{value:65002}}\n"
+    "call write(6); MapAdd{map:owned;value:0.5}\n"
+    "MapSet{map:once;value:var(57):=var(57)+1}\n"
+    "if map(OWNED)!=6.5 || map(once)!=1 || var(57)!=1 || (enemynear,map(owned))!=0 {ChangeState{value:65002}}\n"
+    "MapSet{map:seed;value:99}\nMapReset{}\n"
+    "if map(seed)=44 && map(ratio)=1.5 && map(owned)=0 && map(once)=0 {ChangeState{value:65001}}\n"
+    "else {ChangeState{value:65002}}\n}\n"
+    "[StateDef 65001;type:S;movetype:I;physics:N;]\nCtrlSet{value:1}\n"
+    "[StateDef 65002;type:S;movetype:I;physics:N;]\nCtrlSet{value:0}\n"
+    "[Function write(value)]\nMapSet{map:\"OwNeD\";value:$value}\n"
+)
 
 
 def sound_bank():
@@ -96,12 +110,16 @@ def main():
     parser.add_argument("--binary", required=True)
     parser.add_argument("--game-dir", required=True, help="complete source game tree; never modified")
     parser.add_argument("--out", default="build/tmp/zss-native-loading")
+    parser.add_argument("--case", action="append", help="run only the named scenario; repeat to select several")
     args = parser.parse_args()
     binary, assets, out = (Path(p).resolve() for p in (args.binary, args.game_dir, args.out))
     if ROOT not in out.parents or assets == out or assets in out.parents:
         parser.error("output must be inside the repository and outside the source game tree")
     out.mkdir(parents=True, exist_ok=True)
     cases = [
+        ("numeric-maps-human", "maps", False),
+        ("numeric-maps-ai", "maps", False),
+        ("invalid-map-default", "maps", True),
         ("palfx", "palfx", False),
         ("sounds", "sounds", False),
         ("functions", "functions", False),
@@ -112,6 +130,11 @@ def main():
         ("invalid-primary", "primary", True),
         ("invalid-common", "fallback", True),
     ]
+    if args.case:
+        unknown = set(args.case) - {case[0] for case in cases}
+        if unknown:
+            parser.error("unknown scenario: " + ", ".join(sorted(unknown)))
+        cases = [case for case in cases if case[0] in args.case]
     env = dict(os.environ, SDL_VIDEODRIVER="offscreen", SDL_AUDIODRIVER="dummy", MUGEN_ZSS_TRACE="1")
     for name, route, invalid in cases:
         with tempfile.TemporaryDirectory(prefix=name + "-", dir=out) as temporary:
@@ -138,9 +161,12 @@ def main():
             definition = (char / "kfm.def").read_text()
             (char / "kfm.def").unlink()
             probe = "[StateDef -2]\nUnknown{}\n" if invalid else PROBE
-            if route in ("sounds", "palfx"):
-                probe = SOUND_PROBE if route == "sounds" else PALFX_PROBE
+            if route in ("sounds", "palfx", "maps"):
+                probe = {"sounds": SOUND_PROBE, "palfx": PALFX_PROBE, "maps": MAP_PROBE}[route]
                 definition = re.sub(r"(?m)^st\s*=.*$", "st = probe.ZsS\nst9 = kfm.cns", definition)
+                if route == "maps":
+                    probe = probe.replace("AI_EXPECT", "aiLevelF>0 && aiLevelF=aiLevel" if name.endswith("-ai") else "aiLevelF=0")
+                    definition += "\n[Map]\nseed = " + ("var(1)" if invalid else "44") + "\nratio = 1.5\n"
                 if route == "sounds":
                     definition = re.sub(r"(?m)^sound\s*=.*$", "sound = probe.snd", definition)
                     (char / "probe.snd").write_bytes(sound_bank())
@@ -158,9 +184,14 @@ def main():
             target = game / "data/probe.ZsS" if route == "fallback" else char / "probe.ZsS"
             if route != "cns":
                 target.write_text(probe)
+            else:
+                # CNS-only characters must keep ignoring this extension group.
+                definition += '\n[Map]\nlegacy = "unparsed extension data"\n'
             (char / "probe.def").write_text(definition)
             command = [str(binary)] + ([] if route == "sounds" else ["-nosound"]) + [
                 "-p1", "probe", "-p2", "kfm", "-sessionseed", "424242"]
+            if name == "numeric-maps-ai":
+                command += ["-p1.ai", "1"]
             with (out / (name + "-stdout.log")).open("w") as stdout:
                 process = subprocess.Popen(command, cwd=game, env=env, stdout=stdout, stderr=subprocess.STDOUT)
                 timed_out = False
@@ -180,7 +211,8 @@ def main():
             stdout = (out / (name + "-stdout.log")).read_text(errors="replace")
             combined = log + stdout
             if invalid:
-                if code != 1 or timed_out or "ZSS probe.ZsS:2:" not in combined:
+                expected = "ZSS character defaults: Invalid numeric [Map] defaults" if route == "maps" else "ZSS probe.ZsS:2:"
+                if code != 1 or timed_out or expected not in combined:
                     raise RuntimeError(name + ": expected a located compile failure; inspect " + str(out))
             elif (not timed_out or code not in (0, -signal.SIGTERM)
                   or "Log file successfully closed." not in log
@@ -188,7 +220,7 @@ def main():
                   or (route != "cns" and "ZSS state -2 body result 0" not in log)
                   or (route == "cns" and "ZSS state" in log)):
                 raise RuntimeError(name + ": expected a loaded/running ZSS body; inspect " + str(out))
-            if route in ("functions", "sounds", "palfx") and (
+            if not invalid and route in ("functions", "sounds", "palfx", "maps") and (
                 "ZSS state -2 body result 5" not in log or "ZSS state 65001 body result 0" not in log
                 or "ZSS state 65002 body result" in log
             ):

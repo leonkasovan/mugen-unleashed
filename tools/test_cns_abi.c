@@ -22,6 +22,8 @@ static jmp_buf exit_jump;
 static const char *key_names[8], *key_values[8];
 static int key_count, ini_reads;
 static char clipboard[8192];
+void SDL_AtomicLock(SDL_SpinLock *lock) {assert(*lock==0);*lock=1;}
+void SDL_AtomicUnlock(SDL_SpinLock *lock) {assert(*lock==1);*lock=0;}
 static GameVars game;
 static Player player;
 static CharData owner;
@@ -121,6 +123,7 @@ static void test_trigger_eval(Player *p, const Trigger *t)
 }
 static void test_trigger_eval_ctx(Player *p, const Trigger *t, ExprEvalCtx *ctx)
 {
+    if (t->redirect==TRIGGER_REDIRECT_NONE && Trigger_EvalZssNumeric(p,t)) return;
     if (t->id==TRIGGER_RANDOM && t->redirect==TRIGGER_REDIRECT_NONE) {
         random_reads++;ExprStack_Push(123,EXPR_INT);return;
     }
@@ -1066,6 +1069,7 @@ static void test_zss_controller(void)
 #include "test_zss_functions.inc"
 #include "test_zss_playsnd.inc"
 #include "test_zss_palfx.inc"
+#include "test_zss_ai_map.inc"
 #endif
 int main(void)
 {
@@ -1090,6 +1094,7 @@ int main(void)
     test_zss_function_limits();
     test_zss_playsnd();
     test_zss_palfx();
+    test_zss_ai_map();
 #else
     test_controller_parse(); test_variables(); test_clipboard();
     test_expr_allocs(); test_trigger_copy_math(); test_state_headers();

@@ -37,6 +37,7 @@
  *   name every parameter "zoom.<name>".
  */
 #include "mugen.h"
+#include "zss_map.h"
 #include "zss_binding.h"
 #include <limits.h>
 
@@ -197,7 +198,8 @@ static const struct {const char *name;int type;} script_controllers[]={
     {"displaytoclipboard",SCTRL_DISPLAYTOCLIPBOARD},
     {"appendtoclipboard",SCTRL_APPENDTOCLIPBOARD},{"clearclipboard",SCTRL_CLEARCLIPBOARD},
     {"playsnd",SCTRL_PLAYSND},{"palfx",SCTRL_PALFX},
-    {"bgpalfx",SCTRL_PALFX},{"allpalfx",SCTRL_PALFX}
+    {"bgpalfx",SCTRL_PALFX},{"allpalfx",SCTRL_PALFX},
+    {"mapset",SCTRL_ZSS_MAP},{"mapadd",SCTRL_ZSS_MAP},{"mapreset",SCTRL_ZSS_MAP}
 };
 int StateCtrl_ScriptType(const char *name)
 {
@@ -446,6 +448,18 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
         Expr_SetInt(&sc->arg[i], 0);
     }
 
+    if (ctx!=NULL && (!strcmp(name,"mapset") || !strcmp(name,"mapadd") || !strcmp(name,"mapreset"))) {
+        char key[ZSS_MAP_KEY_MAX+1];
+        sc->type=SCTRL_ZSS_MAP;
+        Expr_SetInt(&sc->arg[1],!strcmp(name,"mapreset") ? 2 : !strcmp(name,"mapadd"));
+        if (sc->arg[1].u.value.i==2) return 1;
+        s=Ini_GetValue(ini,"map");
+        if (!ZssMap_ParseKey(s,key,&end) || *end!=0) return 0;
+        sc->params=Mem_Calloc(strlen(key)+1,1);
+        if (sc->params==NULL) return 0;
+        strcpy(sc->params,key);
+        return compile_required_ctx(ini,"value",&sc->arg[0],owner,EXPR_WANT_ANY,ctx);
+    }
     if (strcmp(name, "changestate") == 0 || strcmp(name, "selfstate") == 0) {
         sc->type = name[0] == 'c' ? SCTRL_CHANGESTATE : SCTRL_SELFSTATE;
         if (!compile_required_ctx(ini, "value", &sc->arg[0], owner, EXPR_WANT_INT, ctx)) {
@@ -2126,6 +2140,8 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
     }
 
     switch (sc->type) {
+    case SCTRL_ZSS_MAP:
+        return ZssMap_Apply(p,sc,frame);
     case SCTRL_NULL:
         return 0;
     case SCTRL_CHANGESTATE:
