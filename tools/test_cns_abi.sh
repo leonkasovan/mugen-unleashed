@@ -47,3 +47,10 @@ $CC $FLAGS $SAN tools/test_cns_abi.c $ZSS_SOURCES src/cnsparse.c src/keyedarray.
     "$OUT/globals.o" "$OUT/util.o" -Wl,--gc-sections ${LDFLAGS:-} -lm -o "$OUT/test_cns_abi"
 # shellcheck disable=SC2086
 ${RUNNER:-} "$OUT/test_cns_abi"
+if [ "${TEST_ZSS_CONTROLLER:-0}" = 1 ]; then
+    # The isolated resource-boundary harness does not use allocator wrappers.
+    # shellcheck disable=SC2086
+    $CC $FLAGS $SAN tools/test_zss_loading.c -Wl,--gc-sections -lm -o "$OUT/test_zss_loading"
+    # shellcheck disable=SC2086
+    ${RUNNER:-} "$OUT/test_zss_loading"
+fi

@@ -373,6 +373,27 @@ static void test_zss_installation(void)
     stream.type=STREAM_MEMORY;stream.begin=stream.pos=(void *)source;stream.end=stream.begin+strlen(source);
     assert(Zss_LoadStateStream(&stream,defs,&owner,&d));
     assert(defs->list->count==2);StateDefs_Free(defs);zss_no_allocs();
+    /* Primary ZSS creates a collection without a dummy CNS StateDef. Every
+     * allocation failure must return no collection and release partial work. */
+    stream.pos=stream.begin;zss_calloc_calls=0;
+    defs=Zss_LoadStateStreamNew(&stream,&owner,&d);calls=zss_calloc_calls;
+    assert(defs && defs->list->count==2 && stream.pos==stream.end);
+    StateDefs_Free(defs);zss_no_allocs();
+    for(i=1;i<=calls;i++) {
+        stream.pos=stream.begin;zss_calloc_calls=0;zss_fail_call=i;
+        assert(!Zss_LoadStateStreamNew(&stream,&owner,&d));
+        if (!d.message || !d.line || !d.column)
+            fprintf(stderr,"ZSS allocation failure %d: %u:%u %s\n",i,
+                    (unsigned)d.line,(unsigned)d.column,d.message ? d.message : "(no diagnostic)");
+        assert(d.message && d.line>=1 && d.column>=1);
+        zss_fail_call=0;zss_no_allocs();
+    }
+    source="[StateDef 9]\nUnknown{}\n";
+    stream.begin=stream.pos=(void *)source;stream.end=stream.begin+strlen(source);
+    assert(!Zss_LoadStateStreamNew(&stream,&owner,&d) && d.line==2);
+    zss_no_allocs();
+    assert(!Zss_LoadStateStreamNew(NULL,&owner,&d) && d.message);
+    zss_no_allocs();
     puts("ok: atomic ZSS state installation, retained ownership and Stream loading");
 }
 static int visited[16], visits, stop_visit;

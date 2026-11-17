@@ -57,30 +57,45 @@ Loading character chars/kfm_zss/kfm_zss.def...
 Loading cmd command set kfm.cmd...OK
 Loading cns kfm.const...
 Character kfm_zss.def failed to load
-Need at least one state controller
-Error in [StateDef -2]
-Error in kfm.zss:2559
+ZSS kfm.zss:16:2: Expected '[StateDef number; ...]'
 ```
 
-The process exited **1**, rather than reaching gameplay. Inspection of
-`Char_Load` confirms that primary `st` still enters `Ini_Parse` /
-`StateDefs_Load`; only explicit additional `st0`..`st9` currently dispatch
-through the ZSS compiler. The CNS diagnostic at the empty negative state is
-therefore not a trustworthy ZSS compiler location. This is a failed compatibility
-probe, not PASS/SKIP and not a test of playable ZSS combat.
+The latest probe (2026-11-17) exited **1**, rather than reaching gameplay.
+Primary `st`, additional `st0`..`st9` and `stcommon` now dispatch explicit `.zss`
+suffixes through the ZSS compiler. The diagnostic points to the first
+`[Function EndState(type)]`: functions/calls are not implemented yet. This
+replaces the previous, misleading CNS error at line 2559. No upstream script was
+edited to get past either failure. This remains a failed compatibility probe,
+not PASS/SKIP or a test of playable ZSS combat. The upstream character's additional
+and common files are not reached in this run.
+
+Independent native loader fixtures cover primary, character-local common and
+File_Find-resolved common `.zss` files, plus malformed primary/common sources and
+the unchanged CNS route. Run those bounded Linux smoke tests against a built
+binary and a complete source game tree:
+
+```sh
+python3 tools/test_zss_native_loading.py \
+  --binary build/linux-x64-sdl2/mugen-linux-x64 --game-dir install
+```
+
+The runner changes only disposable copies of the game and preserves display
+dimensions. ZIP stream lookup/ownership is checked at the host harness boundary;
+an end-to-end zipped character run remains open (QuickVS accepts loose DEF paths,
+not the roster's ZIP-entry notation).
 
 ## Dependencies exposed by this corpus
 
 | Work | Why it is needed |
 |---|---|
-| Primary and common-state ZSS loading | DEF uses `st = kfm.zss` and `stcommon = common1.cns.zss` |
+| Primary and common-state ZSS loading | Implemented and covered by isolated fixtures; compiling this character's common file remains blocked by its earlier primary-source failure |
 | Functions and calls | Main source begins with `[Function EndState(type)]`; sound/effect helpers use calls |
 | Block attributes | Sources use `persistent(0)` and `ignorehitpause` |
 | More controller payloads | PlaySnd, HitDef, AssertSpecial and effects exceed the audited subset |
 | Explicit Ikemen extensions | `aiLevelF`, `map(...)` and map controllers are not ordinary MUGEN expressions/controllers |
 
-These are source-inspection requirements after the first observed loader
-failure. They are not the results of successfully compiling later files.
+The remaining rows are source-inspection requirements after the first observed
+unsupported function. They are not results of successfully compiling later files.
 Keep the corpus unchanged as an integration target. Add small isolated regression
 fixtures for each missing semantic feature, then rerun this complete character.
 The successful switch/loop smoke fixture uses the original CNS KFM with added

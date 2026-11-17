@@ -1,8 +1,25 @@
-/* Port addition: explicit stN=.zss loading through the existing Stream API.
+/* Port addition: explicit st/stN/stcommon=.zss loading through the Stream API.
  * Constants, commands and ordinary CNS files retain their original loaders. */
 #include "mugen.h"
 #include "zss_params.h"
 #include "zss_binding.h"
+StateDefs *Zss_LoadStateStreamNew(Stream *stream, CharData *owner, ZssDiagnostic *d)
+{
+    StateDefs *defs=calloc(1,sizeof(*defs));
+    if (defs!=NULL) {
+        defs->list=KeyedArray_Create(1,sizeof(StateDef));
+        if (defs->list!=NULL) {
+            if (Zss_LoadStateStream(stream,defs,owner,d)) return defs;
+            StateDefs_Free(defs);return NULL;
+        }
+        free(defs);
+    }
+    if (d!=NULL) {
+        memset(d,0,sizeof(*d));d->line=d->column=1;
+        d->message="Out of memory creating ZSS state collection";
+    }
+    return NULL;
+}
 int Zss_LoadStateStream(Stream *stream, StateDefs *defs, CharData *owner, ZssDiagnostic *d)
 {
     char *source=NULL, *grown, extra;
@@ -38,5 +55,11 @@ int Zss_LoadStateStream(Stream *stream, StateDefs *defs, CharData *owner, ZssDia
 done:
     if (d!=NULL) d->message=message;
 cleanup:
+    if (!ok && d!=NULL) {
+        /* Early compiler OOM and post-compile installation errors can lack a
+         * token location. Report file start rather than an invalid line zero. */
+        if (!d->line) d->line=1;
+        if (!d->column) d->column=1;
+    }
     Zss_FreeProgram(program);free(source);return ok;
 }

@@ -10,4 +10,7 @@ int Zss_RunBoundBody(Player *p, void *binding, StateRunCtx *context);
 void Zss_FreeBoundBody(void *binding);
 /* Reads the current Stream position to EOF without taking Stream ownership. */
 int Zss_LoadStateStream(Stream *stream, StateDefs *defs, CharData *owner, ZssDiagnostic *diagnostic);
+/* Primary source: create a collection, or release all partial state on failure.
+ * The caller retains Stream ownership on both paths. */
+StateDefs *Zss_LoadStateStreamNew(Stream *stream, CharData *owner, ZssDiagnostic *diagnostic);
 #endif

@@ -5,6 +5,11 @@ Sections 1-16 retain the original research/design baseline; section 17 records
 implemented increments, verification and remaining qualification gaps.
 Research date: 2026-11-16 (Asia/Jakarta).
 
+Current loader coverage (2026-11-17): explicit `.zss` primary `st`, additional
+`st0`..`st9`, and `stcommon`. Constants and CMD remain on the CNS path. The
+unchanged upstream KFM character now reaches the ZSS compiler but stops at its
+first Function header; functions/calls and broader dialect support remain open.
+
 ## 1. Decision
 
 Implement a native C ZSS front-end and a small structured statement executor.
@@ -1204,11 +1209,77 @@ hash-verifying fetcher and manifest. See [ZSS_KFM_FIXTURE.md](ZSS_KFM_FIXTURE.md
 for source revisions, commands, asset provenance and the current blocked result.
 All 17 character/common dependency files (637958 bytes) were downloaded and
 installed without rewriting the upstream scripts or DEF. The installed fixture
-passes its hash check, but the unmodified character exits 1 during loading:
-primary `st = kfm.zss` still enters the CNS route. This is recorded as a failed
-compatibility probe, not a pass for the new switch implementation.
+passed its hash check, but at that increment the unmodified character exited 1
+because primary `st = kfm.zss` still entered the CNS route. The next increment
+below replaces that routing failure with a located unsupported-function error.
+Both runs are failed compatibility probes, not passes for playable upstream KFM.
 
 This corpus makes the next integration priorities concrete: primary/common ZSS
 routing, functions/call, block attributes, more controller payloads, and explicit
 Ikemen AI/map extensions. Windows/32-bit, Android NDK and Vita/device qualification
 remain open. Multi-name bindings and local := are also still outside the profile.
+
+### Primary and common ZSS source routing (2026-11-17)
+
+The character loader now recognizes an explicit, case-insensitive `.zss` suffix
+for `st`, `st0`..`st9` and `stcommon` before invoking any CNS state parser.
+Constants (`cns`) and command definitions/state sections (`cmd`) retain their
+existing paths, including reuse of the constants INI when an ordinary CNS `st`
+names the same file. Automatic appended `.cns.zss` fallback is not implemented.
+
+`Zss_LoadStateStreamNew` creates an empty, correctly sized StateDefs collection
+for a primary source, without a synthetic CNS header/controller. A failed read,
+compile, install or allocation frees the partial collection and returns NULL.
+Existing transactional installation and collision rules also apply to primary
+and common sources. Every loaded program keeps its existing reference-counted
+ownership; no structure layout or global program registry was added. Loader
+errors without a token location (early OOM / installation failure) report line
+and column 1 instead of zero.
+
+All explicit ZSS resource paths share a lookup helper. Common states first try
+the character directory or archive, then File_Find's existing search order.
+The helper closes only a file it opened. A ZIP stream is borrowed from Char_Load
+and remains open on success and failure, including when common states come from
+an external loose file. This also fixes the old stN ZSS failure path that closed
+the archive before Char_Load closed it a second time. Missing ZIP entries are
+rejected before invoking the parser; they cannot feed a stale entry buffer into
+the ZSS reader. The original all-CNS loading order and duplicate behavior stay
+unchanged.
+
+Validation on Linux x86-64:
+
+- The ZSS host suite passes under ASan/UBSan, including every injected calloc
+  failure in primary collection creation/compile/install and malformed-source
+  cleanup. Explicit allocation trackers are empty after each attempt; sanitizer
+  leak detection is disabled in this environment.
+- The resource-boundary harness tests new versus existing collections, primary
+  versus common lookup, case-insensitive suffixes, missing local/ZIP entries,
+  File_Find fallback, compiler rejection, and exact close behavior. Stream and
+  compiler calls are stub boundaries in that harness; the companion suite uses
+  the real compiler/installer. A disposable mutant that closes the borrowed
+  archive is rejected by the ownership assertion.
+- The full native engine links with MUGEN_MODEL3D=0. The opt-in
+  `tools/test_zss_native_loading.py` runs six isolated offscreen scenarios: plain
+  CNS, primary ZSS, character-local common ZSS, common ZSS through File_Find,
+  invalid primary ZSS and invalid fallback common ZSS. Successful ZSS cases
+  execute the negative-state body; rejected files exit 1 with line-2 diagnostics.
+  Successful runs are bounded to five seconds and terminate through SIGTERM;
+  this is loader/runtime smoke coverage, not complete-match determinism proof.
+- Existing CNS and lexer host suites pass. Changed production units pass host
+  ANDROID_PORT syntax checks with the project's unused-parameter/type-limits
+  warning suppressions; no Android NDK link/APK or device test is implied.
+- The unchanged, 17-hash-verified upstream KFM fixture now fails at
+  `ZSS kfm.zss:16:2: Expected '[StateDef number; ...]'`. The line is its first
+  Function header. Its later state/common files remain uncompiled in this run.
+
+End-to-end ZIP character execution remains open: the native smoke runner uses
+QuickVS, whose existing path resolver does not accept the roster's ZIP-entry
+notation. ZIP lookup/ownership has focused host coverage, not full-game ZIP
+qualification. Windows/32-bit, Android NDK, Vita/device and parallel precache
+qualification also remain open.
+
+Next implementation priority: function declarations, argument/return local
+frames, call resolution and bounded recursion/execution, with explicit ownership
+and arity-mismatch behavior. Then block attributes and the audited controller
+payload expansion needed by the unchanged KFM corpus. Do not remove unsupported
+upstream statements or treat its current load failure as a passing fixture.

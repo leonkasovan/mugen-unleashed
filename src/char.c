@@ -550,6 +550,52 @@ static Stream *Char_OpenFile(int is_zip, Stream *zs, const char *dir, const char
     return Stream_OpenFile(path, mode);
 }
 
+/* Port addition: explicit suffix dispatch only; constants and CMD stay CNS.
+ * Do not close the borrowed archive: Char_Load owns it even on failure. */
+static int Char_IsZssSource(const char *name)
+{
+    size_t size = strlen(name);
+    return size >= 4 && _stricmp(name + size - 4, ".zss") == 0;
+}
+
+static int Char_LoadZssStates(int is_zip, Stream *archive, const char *dir,
+                            const char *name, int common, CharData *c)
+{
+    char path[0x200];
+    Stream *source = NULL;
+    ZssDiagnostic diagnostic;
+    int owned = !is_zip, ok;
+
+    if (is_zip) {
+        Stream_ZipUnload(archive);
+        if (Stream_ZipLoad(archive, name) == 1) source = archive;
+    } else {
+        Path_Join(name, dir, path);
+        source = Stream_OpenFile(path, "rt");
+    }
+    /* Common states keep the existing character-first, File_Find fallback. */
+    if (source == NULL && common && File_Find(name, path, NULL, NULL)) {
+        source = Stream_OpenFile(path, "rt");
+        owned = 1;
+    }
+    if (source == NULL) {
+        Error_Printf("\nCould not open ZSS file: %s\n", name);
+        return 0;
+    }
+    if (c->states == NULL) {
+        c->states = Zss_LoadStateStreamNew(source, c, &diagnostic);
+        ok = c->states != NULL;
+    } else {
+        ok = Zss_LoadStateStream(source, c->states, c, &diagnostic);
+    }
+    if (owned) Stream_Close(source);
+    if (!ok) {
+        Error_Printf("ZSS %s:%u:%u: %s\n", name, (unsigned)diagnostic.line,
+                     (unsigned)diagnostic.column, diagnostic.message);
+    }
+    return ok;
+}
+
 /* "Error in <file>[:<line>]\n" after a parse error in ini. */
 static void Char_ReportError(const char *file, Ini *ini, int debug)
 {
@@ -700,7 +746,15 @@ CharData *Char_LoadDef(const char *dir, Stream *s)
         if (st == NULL) {
             return NULL;
         }
-        if (strcmp(st, buf) != 0) {
+        if (Char_IsZssSource(st)) {
+            Ini_Free(ini);
+            ini = NULL;
+            if (!Char_LoadZssStates(is_zip, zs, dir, st, 0, c)) {
+                Ini_Free(def);
+                Char_Free(c);
+                return NULL;
+            }
+        } else if (strcmp(st, buf) != 0) {
             Ini_Free(ini);
             strcpy(buf, st);
             zs = Char_OpenFile(is_zip, zs, dir, buf, path, "rt");
@@ -719,14 +773,16 @@ CharData *Char_LoadDef(const char *dir, Stream *s)
             }
         }
     }
-    c->states = StateDefs_Load(ini, c);
-    if (c->states == NULL) {
-        Char_ReportError(buf, ini, debug);
-        Char_ReportVersion(c);
-        Char_Free(c);
-        return NULL;
+    if (ini != NULL) {
+        c->states = StateDefs_Load(ini, c);
+        if (c->states == NULL) {
+            Char_ReportError(buf, ini, debug);
+            Char_ReportVersion(c);
+            Char_Free(c);
+            return NULL;
+        }
+        Ini_Free(ini);
     }
-    Ini_Free(ini);
     Log_Printf("OK\n");
     for (i = 0; i <= 9; i++) {
         sprintf(key, "st%i", i);
@@ -734,23 +790,19 @@ CharData *Char_LoadDef(const char *dir, Stream *s)
             continue;
         }
         Log_Printf("  Loading cns %s...", buf);
+        if (Char_IsZssSource(buf)) {
+            if (!Char_LoadZssStates(is_zip, zs, dir, buf, 0, c)) {
+                Ini_Free(def);
+                Char_Free(c);
+                return NULL;
+            }
+            Log_Printf("OK\n");
+            continue;
+        }
         zs = Char_OpenFile(is_zip, zs, dir, buf, path, "rt");
         if (zs == NULL) {
             Error_Printf("\nCould not open file: %s\n", buf);
             return NULL;
-        }
-        /* Port addition: explicit additional ZSS states. Keep cns/cmd and the
-         * primary state source on their legacy paths in this prototype. */
-        if (strlen(buf)>=4 && _stricmp(buf+strlen(buf)-4,".zss")==0) {
-            ZssDiagnostic diagnostic;
-            if (!Zss_LoadStateStream(zs,c->states,c,&diagnostic)) {
-                Error_Printf("ZSS %s:%u:%u: %s\n",buf,(unsigned)diagnostic.line,
-                             (unsigned)diagnostic.column,diagnostic.message);
-                Stream_Close(zs);zs=NULL;
-                Ini_Free(def);Char_Free(c);return NULL;
-            }
-            if (!is_zip) {Stream_Close(zs);zs=NULL;}
-            Log_Printf("OK\n");continue;
         }
         ini = Ini_Parse(zs, mode);
         if (ini == NULL) {
@@ -800,44 +852,52 @@ CharData *Char_LoadDef(const char *dir, Stream *s)
     if (Ini_GetString(def, "stcommon", buf, sizeof(buf)) == 1 && buf[0] != '\0') {
         int opened;
         Log_Printf("  Loading common states %s...", buf);
-        if (is_zip) {
-            Stream_ZipUnload(zs);
-            opened = Stream_ZipLoad(zs, buf);
-        } else {
-            Path_Join(buf, dir, path);
-            zs = Stream_OpenFile(path, "rt");
-            opened = zs != NULL;
-        }
-        if (opened == 1) {
-            ini = Ini_Parse(zs, mode);
-            if (ini == NULL) {
-                Error_Printf("Error reading %s\n", buf);
-                return NULL;
-            }
-            /* the message names path, which a zip character never set (stack garbage in the original) */
-            if (!StateDefs_LoadMore(ini, c->states, c)) {
-                Char_ReportError(path, ini, debug);
+        if (Char_IsZssSource(buf)) {
+            if (!Char_LoadZssStates(is_zip, zs, dir, buf, 1, c)) {
+                Ini_Free(def);
+                Char_Free(c);
                 return NULL;
             }
         } else {
-            if (!File_Find(buf, path, NULL, NULL)) {
-                return NULL;
+            if (is_zip) {
+                Stream_ZipUnload(zs);
+                opened = Stream_ZipLoad(zs, buf);
+            } else {
+                Path_Join(buf, dir, path);
+                zs = Stream_OpenFile(path, "rt");
+                opened = zs != NULL;
             }
-            ini = Ini_OpenMode(path, mode);
-            if (ini == NULL) {
-                Error_Printf("Error reading %s\n", path);
-                return NULL;
+            if (opened == 1) {
+                ini = Ini_Parse(zs, mode);
+                if (ini == NULL) {
+                    Error_Printf("Error reading %s\n", buf);
+                    return NULL;
+                }
+                /* the message names path, which a zip character never set (stack garbage in the original) */
+                if (!StateDefs_LoadMore(ini, c->states, c)) {
+                    Char_ReportError(path, ini, debug);
+                    return NULL;
+                }
+            } else {
+                if (!File_Find(buf, path, NULL, NULL)) {
+                    return NULL;
+                }
+                ini = Ini_OpenMode(path, mode);
+                if (ini == NULL) {
+                    Error_Printf("Error reading %s\n", path);
+                    return NULL;
+                }
+                if (!StateDefs_LoadMore(ini, c->states, c)) {
+                    Char_ReportError(path, ini, debug);
+                    return NULL;
+                }
             }
-            if (!StateDefs_LoadMore(ini, c->states, c)) {
-                Char_ReportError(path, ini, debug);
-                return NULL;
+            if (!is_zip) {
+                Stream_Close(zs);       /* NULL after the File_Find fallback */
+                zs = NULL;
             }
+            Ini_Free(ini);
         }
-        if (!is_zip) {
-            Stream_Close(zs);       /* NULL after the File_Find fallback */
-            zs = NULL;
-        }
-        Ini_Free(ini);
         Log_Printf("OK\n");
     }
 
