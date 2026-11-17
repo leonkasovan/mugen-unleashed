@@ -75,6 +75,15 @@ static int declare_local(ZssParser *p)
     ZssToken t=p->lex.token;
     int slot;
     if (t.kind!=ZSS_IDENT) {error(p,"Expected a local variable name");return -1;}
+    /* Port fix: generic identifiers permit dots for controller parameters,
+     * but a local must use the same spelling accepted by expression reads. */
+    for (size_t i=0;i<t.length;i++) {
+        unsigned char c=(unsigned char)p->lex.source[t.offset+i];
+        if (!((c>='a' && c<='z') || (c>='A' && c<='Z') || c=='_' ||
+              (i>0 && c>='0' && c<='9'))) {
+            error(p,"Invalid local variable name");return -1;
+        }
+    }
     if (t.length==1 && p->lex.source[t.offset]=='_') return -2;
     slot=resolve_local(p,p->lex.source+t.offset,t.length);
     if (slot>=0) return slot;

@@ -264,6 +264,16 @@ static int Expr_ParseBody(const char *s, ExprValue *out_tokens, char *out_types,
         if (end != NULL && *cur == ',') {
             break;
         }
+        /* Port fix: ZSS requires infix operators between operands. A valid
+         * postfix stack alone cannot reject e.g. "$a $b +". Keep the legacy
+         * CNS acceptance rules behind the NULL-context entry point. */
+        if (ctx != NULL && last != PARSE_LAST_NONE && last != PARSE_LAST_OP &&
+            last != PARSE_LAST_UNUSED &&
+            (*cur == '$' || isalnum((unsigned char)*cur) || *cur == '_' ||
+             *cur == '(' || *cur == '[' || (*cur == '.' && Char_IsDigit(cur[1])))) {
+            snprintf(g_libraryErrorText, sizeof(g_libraryErrorText), "Expected an operator between operands");
+            goto fail;
+        }
         if (*cur == '$') {
             const char *name = ++cur;
             int slot;

@@ -724,7 +724,15 @@ static void test_zss_locals(void)
     const char *mutate="[StateDef 0]\nvar(0):=0;\nfor i=0;4 {var(0):=var(0)+1;let i=$i+1;}\nvar(1):=$i;\n";
     const char *lifetime="[StateDef 0]\nvar(0):=0;\nif var(2)=0 {let x=9;}\nif $x {var(0):=9;}\n";
     const char *nested="[StateDef 0]\nvar(0):=0;\nfor i=1;3 {for j=1;3 {if $j=2 {continue;} if $i=3 {break;} var(0):=var(0)+$i*$j;}}\n";
-    const char *bad[]={"let a=;", "let a=1", "let a,b=1,2;", "let $a=1;", "let a=1;\n$a:=2;", "var(0):=$unknown;", "let a=$unknown;", "let a=1;\nCtrlSet{value:$unknown}", "let a=1;\n[StateDef 1]\nvar(0):=$a;", "for i=0;3; {}"};
+    const char *bad[]={"let a=;", "let a=1", "let a,b=1,2;", "let $a=1;", "let a=1;\n$a:=2;", "var(0):=$unknown;", "let a=$unknown;", "let a=1;\nCtrlSet{value:$unknown}", "let a=1;\n[StateDef 1]\nvar(0):=$a;", "for i=0;3; {}",
+        "let a=2;\nlet b=3;\nvar(0):=$a $b +;",
+        "let a=2;\nlet b=3;\nCtrlSet{value:$a $b +}",
+        "let a=2;\nvar(0):=1 $a +;",
+        "let a=2;\nvar(0):=(1) $a +;",
+        "let a=2;\nvar(0):=var(1) $a +;",
+        "let a=2;\nvar(0):=$a var(1) +;",
+        "let a=2;\nvar(0):=$a (1) +;",
+        "let foo.bar=1;", "for foo.bar=0;2 {Null{}}"};
     ZssProgram *program=NULL, *failed=NULL;
     ZssDiagnostic d;
     char text[16384];
@@ -752,6 +760,10 @@ static void test_zss_locals(void)
     assert(Zss_CompileProgram(text,strlen(text),&owner,&program,&d));
     assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
     assert(player.var[0]==7 && player.var[1]==7);Zss_FreeProgram(program);zss_no_allocs();
+    strcpy(text,"[StateDef 0]\nlet _a1=2;\nfor _i2=0;2 {let _a1=$_a1+$_i2;}\nvar(0):=$_a1;\n");
+    assert(Zss_CompileProgram(text,strlen(text),&owner,&program,&d));
+    assert(Zss_RunBody(program,0,&player,record_zss_controller,&owner,&result));
+    assert(!result && player.var[0]==5);Zss_FreeProgram(program);zss_no_allocs();
     /* Every slot, including 255, is scalar and bounded on either pointer width. */
     used=(size_t)snprintf(text,sizeof(text),"[StateDef 0]\n");
     for(j=0;j<256;j++) used+=(size_t)snprintf(text+used,sizeof(text)-used,"let x%zu=%zu;\n",j,j);
