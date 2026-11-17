@@ -6,9 +6,11 @@ implemented increments, verification and remaining qualification gaps.
 Research date: 2026-11-16 (Asia/Jakarta).
 
 Current loader coverage (2026-11-17): explicit `.zss` primary `st`, additional
-`st0`..`st9`, and `stcommon`. Constants and CMD remain on the CNS path. The
-unchanged upstream KFM character now reaches the ZSS compiler but stops at its
-first Function header; functions/calls and broader dialect support remain open.
+`st0`..`st9`, and `stcommon`. Constants and CMD remain on the CNS path. Numeric
+functions/calls, result bindings and cross-file first-wins lookup are
+implemented. The unchanged upstream KFM now compiles its first function and
+stops at SysSnd's unsupported PlaySnd payload (kfm.zss:24:1). Broader controller
+payloads, block attributes and Ikemen-specific extensions remain open.
 
 ## 1. Decision
 
@@ -1283,3 +1285,127 @@ frames, call resolution and bounded recursion/execution, with explicit ownership
 and arity-mismatch behavior. Then block attributes and the audited controller
 payload expansion needed by the unchanged KFM corpus. Do not remove unsupported
 upstream statements or treat its current load failure as a passing fixture.
+
+### Numeric functions and calls (2026-11-17)
+
+The recursive-descent front-end now accepts Function headers alongside StateDef
+headers. Arguments occupy the first local slots, named returns the next slots,
+and ordinary let/loop temporaries follow. Bodies use the same structured nodes,
+shared numeric expression compiler and enabled controller adapter as states.
+Function headers, like StateDef headers in this prototype, must end on their own
+line. Return values are assigned by name with let; no separate return keyword
+was introduced.
+
+```text
+[Function pair(x,y) sum,difference]
+let sum=$x+$y;
+let difference=$x-$y;
+
+[StateDef 65000]
+let a,b=call pair(2.5,1);
+let _,difference=call pair(4,2);
+call pair(3,1);
+```
+
+Single/multiple call-result bindings and `_` result discards are supported.
+Calling without result bindings discards all returns. Multiple ordinary numeric
+let initializers (`let a,b=1,2`) remain unsupported and fail explicitly. Names
+are ASCII case-insensitive. Duplicate function names in one file, duplicate
+non-discard arguments, argument/return collisions, duplicate let destination
+names and `_` return names are errors. Repeated `_` argument placeholders are
+accepted and consume physical argument slots. Compilation checks later duplicate
+function bodies too, even though an earlier file's definition will win.
+
+Call operands are compiled with the existing expression parser rather than
+being split blindly at every comma: trigger arguments, intervals and player
+redirect expressions can own commas. Per-operand token limits still apply.
+The explicit ZSS expression context now permits a comma immediately after an
+interval argument; the original CNS delimiter restriction remains unchanged.
+There is no new string, wide-integer or arithmetic value model.
+
+Undefined functions, argument-count mismatches and nonempty result-count
+mismatches warn and no-op before evaluating arguments. Successful calls evaluate
+arguments left to right into a fresh frame, preserving int32/float32/bottom tags.
+Unassigned return slots stay bottom; ordinary if/while/logical guards retain
+their existing truth rules. In particular, the shared MUGEN cond trigger still
+propagates a bottom condition, rather than silently becoming an if statement.
+Result values copy back only after normal completion. A controller stop/state
+change unwinds the complete old state invocation, including nested functions and
+loops, without publishing results or executing following caller statements.
+
+Execution is iterative, using explicit activation/block stacks; function calls
+do not recurse on the C stack. Per-call local storage uses one checked calloc
+for the actual number of slots and is freed on every exit. Zero-local calls need
+no allocation, and a state invocation without calls retains its previous
+allocation-free locals. A future frame arena may reduce allocator traffic after
+profiling; this increment makes no performance improvement claim.
+
+Safety limits are explicit engine extensions: 32 simultaneous function calls,
+256 total execution frames, and the existing 100000-step budget shared by the
+entire state invocation, including every call. The 2500-iteration per-loop limit
+also remains active. Call diagnostics are capped at four per invocation; frame,
+loop and total-step guard messages have their existing separate reporting.
+Function names are limited to 63 ASCII characters, each source to 64 functions,
+and an installed collection to 64 function-bearing modules. Counts can represent
+256; valid local indices are 0..255. Function arguments and named returns share
+the same 256-slot budget as temporaries.
+
+Function libraries belong to the owning StateDefs collection, not the executing
+player or one source file. They retain modules in deterministic load order and
+look up the first definition. A stable reference-counted library handle lets
+already-installed bodies see later function-only files. The handle is owned by
+a single private keyed entry `(0, INT_MIN)` and by installed ZSS bindings. The
+entry carries no playable state: original engine lookups use key2=0. Original
+StateDefs/StateDef/Player sizes and 32-bit layout assertions are unchanged; there
+is no global pointer registry. Programs do not point back to libraries, so
+module retention creates no reference cycle. Function-only primary/additional/
+common sources can load successfully without manufacturing a CNS state.
+
+Installation stages the new module list, optional private entry, state bindings
+and replacement keyed array before publishing. A failure leaves the old state
+array and function lookup unchanged. Freeing the collection releases all module
+and binding references, including function-only files. Custom-state execution
+keeps the originating binding's library across redirects and nested state
+changes. Standalone Zss_RunBody, used by host tests, resolves only its own file;
+installed bindings use the collection library.
+
+Validation completed on Linux x86-64:
+
+- ASan/UBSan host suites pass with explicit allocation trackers and injected
+  failures in function parsing, call operand compilation, runtime local frames,
+  initial library installation and later module append. Every tracked allocation
+  is released. Sanitizer leak detection remains disabled in this environment.
+- Fixtures cover forward calls, self-recursion, nested numeric returns, floats,
+  bottom/NaN arguments, fresh return slots, left-to-right side effects, discarded
+  returns, malformed headers/calls, wrong arity, undefined calls, warning bounds,
+  function-local loops, stop propagation and unchanged expression-stack depth.
+- Boundary fixtures cover 256 call arguments, 256 result slots (including index
+  255), combined argument/return overflow, 64/65 functions/modules, shared fuel,
+  recursion depth and combined frame limits. Failed library publication is
+  checked for unchanged state-array identity and unchanged function lookup.
+- Installed-library tests use real compilation/installation/execution with an
+  aborting game-controller adapter boundary; their statements perform expression
+  assignments. The custom-owner probe deliberately points the player at a
+  different collection while executing the original bound body. Native tests
+  separately exercise the real StateCtrl_RunCtx controller adapter.
+- The full native Linux engine links with MUGEN_MODEL3D=0. All seven isolated
+  `test_zss_native_loading.py` scenarios pass. The function fixture loads a primary
+  body plus two function-only additional files, checks recursive results and
+  first-wins resolution, then calls ChangeState inside a function. Only correct
+  value/type/freshness/stop behavior reaches state 65001; state 65002 is never
+  visited. The log records negative state -2 result 5 and state 65001 result 0.
+  Five-second successful runs end through SIGTERM with orderly log closure;
+  these remain bounded smoke tests, not full-match determinism qualification.
+- Existing CNS and lexer host suites pass. Host ANDROID_PORT syntax checks pass
+  for changed production units. The unchanged 17-hash-verified KFM corpus now
+  exits 1 at `kfm.zss:24:1`, SysSnd's PlaySnd controller. Its EndState function
+  compiles, but later source/common files are still not qualified.
+
+Still open: PlaySnd and other unaudited controller payloads, persistence/hitpause
+block attributes and their function-call permissions, multiple ordinary numeric
+let values, header-local contexts, and Ikemen AI/map extensions. Windows/32-bit,
+Android NDK, Vita/device, complete ZIP-character and concurrent precache
+qualification remain open. Next, audit the shared PlaySnd parameter compiler and
+runtime context propagation, including F/S sound prefixes and ownership, before
+enabling it in the bridge; then continue the unchanged KFM probe to the next
+explicit blocker.

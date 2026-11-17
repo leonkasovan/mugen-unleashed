@@ -11,6 +11,26 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 PROBE = "[StateDef -2]\nCtrlSet{value:1}\n"
+FUNCTION_PROBE = (
+    "[StateDef -2]\n"
+    "if var(58)=0 {\n"
+    "let x,y=call pair(1.5,7); let total=call sum(5);\n"
+    "let min=call identity(-2147483648); let empty=call blank();\n"
+    "let fresh=1; if $empty {let fresh=0;} var(58):=1;\n"
+    "if $x=7 && $y=1.5 && $total=15 && $min=-2147483648 && $fresh {call finish(65001);}\n"
+    "else {call finish(65002);}\nvar(59):=99;\n}\n"
+    "[StateDef 65001;type:S;movetype:I;physics:N;]\n"
+    "if var(59)!=0 {ChangeState{value:65002}}\ncall mark(1);\n"
+    "[StateDef 65002;type:S;movetype:I;physics:N;]\nCtrlSet{value:0}\n"
+)
+FUNCTIONS = (
+    "[Function pair(x,y) a,b]\nlet a=$y;\nlet b=$x;\n"
+    "[Function sum(n) r]\nif $n>0 {let prev=call sum($n-1); let r=$n+$prev;} else {let r=0;}\n"
+    "[Function identity(x) r]\nlet r=999;\n"
+    "[Function blank() r]\n"
+    "[Function finish(target)]\nChangeState{value:$target;ctrl:0}\n"
+    "[Function mark(value)]\nCtrlSet{value:$value}\n"
+)
 
 
 def main():
@@ -24,6 +44,7 @@ def main():
         parser.error("output must be inside the repository and outside the source game tree")
     out.mkdir(parents=True, exist_ok=True)
     cases = [
+        ("functions", "functions", False),
         ("legacy-cns", "cns", False),
         ("primary", "primary", False),
         ("common-local", "local", False),
@@ -47,7 +68,13 @@ def main():
             definition = (char / "kfm.def").read_text()
             (char / "kfm.def").unlink()
             probe = "[StateDef -2]\nUnknown{}\n" if invalid else PROBE
-            if route == "primary":
+            if route == "functions":
+                probe = FUNCTION_PROBE
+                definition = re.sub(r"(?m)^st\s*=.*$",
+                                    "st = probe.ZsS\nst7 = first.zss\nst8 = functions.zss\nst9 = kfm.cns", definition)
+                (char / "first.zss").write_text("[Function identity(x) r]\nlet r=$x;\n")
+                (char / "functions.zss").write_text(FUNCTIONS)
+            elif route == "primary":
                 definition = re.sub(r"(?m)^st\s*=.*$", "st = probe.ZsS\nst9 = kfm.cns", definition)
             elif route != "cns":
                 definition = re.sub(r"(?m)^stcommon\s*=.*$", "stcommon = probe.ZsS\nst9 = common-base.cns", definition)
@@ -84,6 +111,11 @@ def main():
                   or (route != "cns" and "ZSS state -2 body result 0" not in log)
                   or (route == "cns" and "ZSS state" in log)):
                 raise RuntimeError(name + ": expected a loaded/running ZSS body; inspect " + str(out))
+            if route == "functions" and (
+                "ZSS state -2 body result 5" not in log or "ZSS state 65001 body result 0" not in log
+                or "ZSS state 65002 body result" in log
+            ):
+                raise RuntimeError(name + ": function value/frame/stop checks did not reach success state")
             print("ok: " + name, flush=True)
     print("ok: native primary/common ZSS loading (bounded smoke, not full-match qualification)")
 

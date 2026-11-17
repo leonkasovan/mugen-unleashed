@@ -57,21 +57,26 @@ Loading character chars/kfm_zss/kfm_zss.def...
 Loading cmd command set kfm.cmd...OK
 Loading cns kfm.const...
 Character kfm_zss.def failed to load
-ZSS kfm.zss:16:2: Expected '[StateDef number; ...]'
+ZSS kfm.zss:24:1: Controller not yet enabled in the ZSS bridge
 ```
 
 The latest probe (2026-11-17) exited **1**, rather than reaching gameplay.
-Primary `st`, additional `st0`..`st9` and `stcommon` now dispatch explicit `.zss`
-suffixes through the ZSS compiler. The diagnostic points to the first
-`[Function EndState(type)]`: functions/calls are not implemented yet. This
-replaces the previous, misleading CNS error at line 2559. No upstream script was
-edited to get past either failure. This remains a failed compatibility probe,
+Primary `st`, additional `st0`..`st9` and `stcommon` dispatch explicit `.zss`
+suffixes through the ZSS compiler. Functions/calls are now implemented; the first
+EndState function compiles. The diagnostic points to SysSnd's `playSnd` at line
+24: that controller and its sound-prefix payload are not enabled in the bridge.
+This replaces the prior unsupported-function error at line 16 and the earlier,
+misleading CNS error at line 2559. No upstream script was edited to get past
+these failures. This remains a failed compatibility probe,
 not PASS/SKIP or a test of playable ZSS combat. The upstream character's additional
 and common files are not reached in this run.
 
 Independent native loader fixtures cover primary, character-local common and
 File_Find-resolved common `.zss` files, plus malformed primary/common sources and
-the unchanged CNS route. Run those bounded Linux smoke tests against a built
+the unchanged CNS route. A seventh native fixture covers functions, recursive
+numeric calls, result binding, first-wins cross-file resolution, function-only
+additional files and controller/state-change dispatch inside functions. Run
+those bounded Linux smoke tests against a built
 binary and a complete source game tree:
 
 ```sh
@@ -89,13 +94,13 @@ not the roster's ZIP-entry notation).
 | Work | Why it is needed |
 |---|---|
 | Primary and common-state ZSS loading | Implemented and covered by isolated fixtures; compiling this character's common file remains blocked by its earlier primary-source failure |
-| Functions and calls | Main source begins with `[Function EndState(type)]`; sound/effect helpers use calls |
+| Functions and calls | Numeric functions/calls, frames, result bindings and first-wins cross-file lookup implemented; full KFM compilation still blocked by the PlaySnd payload |
 | Block attributes | Sources use `persistent(0)` and `ignorehitpause` |
 | More controller payloads | PlaySnd, HitDef, AssertSpecial and effects exceed the audited subset |
 | Explicit Ikemen extensions | `aiLevelF`, `map(...)` and map controllers are not ordinary MUGEN expressions/controllers |
 
-The remaining rows are source-inspection requirements after the first observed
-unsupported function. They are not results of successfully compiling later files.
+The remaining unsupported rows are source-inspection requirements. PlaySnd is
+the first observed compiler blocker; later files have not compiled successfully.
 Keep the corpus unchanged as an integration target. Add small isolated regression
 fixtures for each missing semantic feature, then rerun this complete character.
 The successful switch/loop smoke fixture uses the original CNS KFM with added

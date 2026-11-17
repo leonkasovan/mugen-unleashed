@@ -1063,6 +1063,7 @@ static void test_zss_controller(void)
     pairs[1].key="bad=key";assert(!ScriptParams_ToIni(pairs,2,&error));
     check_no_allocs();puts("ok: ZSS controller parsing uses real INI and MUGEN parameter/expression compilers");
 }
+#include "test_zss_functions.inc"
 #endif
 int main(void)
 {
@@ -1082,6 +1083,9 @@ int main(void)
     test_zss_controller_contexts();
     test_zss_switch();
     test_zss_installation();
+    test_zss_functions();
+    test_zss_function_library();
+    test_zss_function_limits();
 #else
     test_controller_parse(); test_variables(); test_clipboard();
     test_expr_allocs(); test_trigger_copy_math(); test_state_headers();

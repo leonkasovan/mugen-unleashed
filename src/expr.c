@@ -443,7 +443,9 @@ static int Expr_ParseBody(const char *s, ExprValue *out_tokens, char *out_types,
                 while (Char_IsSpace(*p) && *p != '\0') {
                     p++;
                 }
-                if (*p != ')' && *p != '\0') {
+                /* Port addition: a ZSS call argument may end at a comma after
+                 * an interval. Keep the original CNS restriction unchanged. */
+                if (*p != ')' && *p != '\0' && !(ctx != NULL && *p == ',')) {
                     goto fail;
                 }
             }
@@ -485,7 +487,7 @@ static int Expr_ParseBody(const char *s, ExprValue *out_tokens, char *out_types,
                     while (Char_IsSpace(*p)) {
                         p++;
                     }
-                    if (*p != ')' && *p != '\0') {
+                    if (*p != ')' && *p != '\0' && !(ctx != NULL && *p == ',')) {
                         goto fail;
                     }
                 }

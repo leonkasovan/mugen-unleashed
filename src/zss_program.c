@@ -11,10 +11,21 @@
 #define NO_NODE UINT32_MAX
 #define MAX_NODES 1024u
 #define MAX_STATES 64u
+#define MAX_FUNCTIONS 64u
+#define MAX_MODULES 64u
+#define MAX_CALL_DEPTH 32u
+#define MAX_FRAMES 256u
 #define MAX_DEPTH 32u
 #define MAX_LOOP 2500u
 #define MAX_STEPS 100000u
-enum {NODE_CONTROLLER, NODE_IF, NODE_WHILE, NODE_EXPRESSION, NODE_BREAK, NODE_CONTINUE, NODE_FOR, NODE_LET, NODE_CASE};
+enum {NODE_CONTROLLER, NODE_IF, NODE_WHILE, NODE_EXPRESSION, NODE_BREAK, NODE_CONTINUE, NODE_FOR, NODE_LET, NODE_CASE, NODE_CALL};
+
+typedef struct ZssCall {
+    char name[64];
+    Expr *arguments;
+    int *returns;
+    uint32_t argument_count, return_count;
+} ZssCall;
 
 typedef struct ZssNode {
     int kind, local;
@@ -22,18 +33,32 @@ typedef struct ZssNode {
     Expr condition;
     Expr range[3];
     StateCtrl controller;
+    ZssCall *call;
 } ZssNode;
 typedef struct ZssState {
     int number;
     uint32_t first, locals;
     StateDef properties;
 } ZssState;
+typedef struct ZssFunction {
+    char name[64];
+    uint32_t first, locals, arguments, returns;
+} ZssFunction;
 struct ZssProgram {
     unsigned references;
     ZssNode *nodes;
     ZssState *states;
+    ZssFunction *functions;
     uint32_t node_count, node_capacity, state_count, state_capacity;
+    uint32_t function_count, function_capacity, call_count;
 };
+/* Collection-owned, stable library handle; modules are kept in load order.
+ * Programs never point back here, so retained modules cannot form a cycle. */
+typedef struct ZssLibrary {
+    unsigned references;
+    uint32_t count;
+    ZssProgram **modules;
+} ZssLibrary;
 typedef struct ZssParser {
     ZssLexer lex;
     ZssProgram *program;
@@ -59,7 +84,8 @@ static int resolve_local(void *user, const char *name, size_t length)
     ZssParser *p=user;
     unsigned i;
     size_t j;
-    for (i=0;i<p->local_count;i++) {
+    for (i=p->local_count;i>0;) {
+        --i;
         const ZssToken *t=&p->locals[i];
         if (t->length!=length) continue;
         for (j=0;j<length;j++) if (tolower((unsigned char)name[j]) !=
@@ -67,6 +93,26 @@ static int resolve_local(void *user, const char *name, size_t length)
         if (j==length) return (int)i;
     }
     return -1;
+}
+static int valid_name(ZssParser *p, const ZssToken *t)
+{
+    size_t i;
+    if (t->kind!=ZSS_IDENT) return error(p,"Expected an identifier");
+    for (i=0;i<t->length;i++) {
+        unsigned char c=(unsigned char)p->lex.source[t->offset+i];
+        if (!((c>='a' && c<='z') || (c>='A' && c<='Z') || c=='_' ||
+              (i>0 && c>='0' && c<='9'))) return error(p,"Invalid local or function name");
+    }
+    return 1;
+}
+static int copy_name(ZssParser *p, char name[64])
+{
+    size_t i;
+    if (!valid_name(p,&p->lex.token)) return 0;
+    if (p->lex.token.length>=64) return error(p,"ZSS function name limit (63 characters)");
+    for (i=0;i<p->lex.token.length;i++)
+        name[i]=(char)tolower((unsigned char)p->lex.source[p->lex.token.offset+i]);
+    name[i]=0;return 1;
 }
 /* '_' discards a binding without consuming a slot. Names enter scope before
  * the initializer is compiled, matching uninitialized self-read as bottom. */
@@ -77,13 +123,7 @@ static int declare_local(ZssParser *p)
     if (t.kind!=ZSS_IDENT) {error(p,"Expected a local variable name");return -1;}
     /* Port fix: generic identifiers permit dots for controller parameters,
      * but a local must use the same spelling accepted by expression reads. */
-    for (size_t i=0;i<t.length;i++) {
-        unsigned char c=(unsigned char)p->lex.source[t.offset+i];
-        if (!((c>='a' && c<='z') || (c>='A' && c<='Z') || c=='_' ||
-              (i>0 && c>='0' && c<='9'))) {
-            error(p,"Invalid local variable name");return -1;
-        }
-    }
+    if (!valid_name(p,&t)) return -1;
     if (t.length==1 && p->lex.source[t.offset]=='_') return -2;
     slot=resolve_local(p,p->lex.source+t.offset,t.length);
     if (slot>=0) return slot;
@@ -220,6 +260,81 @@ static int assignment(ZssParser *p, int local, uint32_t *id, uint32_t *end_line)
         free(text);return error(p,"Assignment rejected by MUGEN compiler");
     }
     free(text);*id=index;*end_line=p->lex.token.line;next(p);return 1;
+}
+/* Parse call arguments as shared expressions, rather than splitting on every
+ * comma: MUGEN redirects, intervals and nested trigger arguments own commas. */
+static int call_statement(ZssParser *p, const int *returns, unsigned count,
+                          uint32_t *id, uint32_t *end_line)
+{
+    uint32_t index=node(p), capacity=0;
+    ZssCall *call;
+    Expr *arguments;
+    char *text, *write;
+    const char *cursor, *end;
+    unsigned depth=1, tokens;
+    int kind;
+    ZssLexer scan;
+    if (index==NO_NODE) return 0;
+    p->program->nodes[index].kind=NODE_CALL;
+    call=calloc(1,sizeof(*call));
+    if (call==NULL) return error(p,"Out of memory compiling call");
+    p->program->nodes[index].call=call;p->program->call_count++;
+    next(p);
+    if (!copy_name(p,call->name)) return 0;
+    if (count) {
+        call->returns=calloc(count,sizeof(*call->returns));
+        if (call->returns==NULL) return error(p,"Out of memory compiling call results");
+        memcpy(call->returns,returns,count*sizeof(*returns));call->return_count=count;
+    }
+    if (next(p)!='(') return error(p,"Expected '(' after function name");
+    text=calloc(1,p->lex.size*2+1);
+    if (text==NULL) return error(p,"Out of memory compiling call arguments");
+    write=text;next(p);
+    while (depth) {
+        kind=p->lex.token.kind;
+        if (kind<=0 || kind==';' || kind=='{' || kind=='}') {
+            free(text);return error(p,"Unclosed function argument list");
+        }
+        if (kind=='(' || kind=='[') depth++;
+        if (kind==')' || kind==']') {
+            if (--depth==0) {
+                if (kind!=')') {free(text);return error(p,"Expected ')' after call arguments");}
+                break;
+            }
+        }
+        if (write!=text && !(write[-1]=='-' && (kind==ZSS_INT || kind==ZSS_FLOAT))) *write++=' ';
+        memcpy(write,p->lex.source+p->lex.token.offset,p->lex.token.length);write+=p->lex.token.length;
+        next(p);
+    }
+    cursor=text;
+    while (*cursor) {
+        arguments=grow(call->arguments,&capacity,call->argument_count,sizeof(*arguments),256);
+        if (arguments==NULL) {free(text);return error(p,"Call argument limit (256) or allocation failure");}
+        call->arguments=arguments;
+        end=cursor;
+        if (!Expr_CompileCtx(cursor,&arguments[call->argument_count++],p->owner,&end,EXPR_WANT_ANY,&p->context) ||
+            end==cursor || (*end && *end!=',')) {
+            free(text);return error(p,"Call argument rejected by MUGEN expression compiler");
+        }
+        /* Keep the same per-expression lexical bound as other ZSS statements. */
+        tokens=0;
+        if (!ZssLex_Init(&scan,cursor,(size_t)(end-cursor),65536)) {
+            free(text);return error(p,"Invalid call argument");
+        }
+        while (ZssLex_Next(&scan)>0) tokens++;
+        if (scan.error || tokens>=EXPR_OP_STACK_SIZE) {
+            free(text);return error(p,"Call argument token limit");
+        }
+        cursor=end;
+        if (*cursor==',') {
+            cursor++;
+            while (Char_IsSpace(*cursor)) cursor++;
+            if (!*cursor) {free(text);return error(p,"Missing call argument after ','");}
+        }
+    }
+    free(text);
+    if (next(p)!=';') return error(p,"Expected ';' after function call");
+    *id=index;*end_line=p->lex.token.line;next(p);return 1;
 }
 /* Port addition: inclusive integer ranges, optionally bound to a lexical local. */
 static int range_loop(ZssParser *p, unsigned depth, unsigned loops, uint32_t *id, uint32_t *end_line)
@@ -406,11 +521,25 @@ static int body(ZssParser *p, unsigned depth, unsigned loops, int labels, uint32
         } else if (ZssLex_Is(&p->lex,"if") || ZssLex_Is(&p->lex,"while")) {
             if (!branch(p,depth,loops,ZssLex_Is(&p->lex,"while"),&id,&end_line)) return 0;
         } else if (ZssLex_Is(&p->lex,"let")) {
-            int local;
-            next(p);local=declare_local(p);if (local==-1) return 0;
-            if (next(p)!='=') return error(p,"Expected '=' after one let name; multiple bindings are not enabled");
+            int locals[256], local;
+            unsigned count=0, k;
+            do {
+                next(p);local=declare_local(p);if (local==-1) return 0;
+                if (count==256) return error(p,"Call result limit (256)");
+                for (k=0;k<count;k++) if (local>=0 && locals[k]==local)
+                    return error(p,"Duplicate let binding");
+                locals[count++]=local;
+            } while (next(p)==',');
+            if (p->lex.token.kind!='=') return error(p,"Expected '=' after let names");
             next(p);
-            if (!assignment(p,local,&id,&end_line)) return 0;
+            if (ZssLex_Is(&p->lex,"call")) {
+                if (!call_statement(p,locals,count,&id,&end_line)) return 0;
+            } else {
+                if (count!=1) return error(p,"Multiple numeric let values are not enabled; bind call results instead");
+                if (!assignment(p,locals[0],&id,&end_line)) return 0;
+            }
+        } else if (ZssLex_Is(&p->lex,"call")) {
+            if (!call_statement(p,NULL,0,&id,&end_line)) return 0;
         } else if (ZssLex_Is(&p->lex,"for")) {
             if (!range_loop(p,depth,loops,&id,&end_line)) return 0;
         } else if (ZssLex_Is(&p->lex,"break") || ZssLex_Is(&p->lex,"continue")) {
@@ -421,8 +550,7 @@ static int body(ZssParser *p, unsigned depth, unsigned loops, int labels, uint32
             end_line=p->lex.token.line;next(p);
         } else {
             ZssLexer peek=p->lex;
-            if (ZssLex_Is(&p->lex,"call") ||
-                ZssLex_Is(&p->lex,"persistent") || ZssLex_Is(&p->lex,"ignorehitpause"))
+            if (ZssLex_Is(&p->lex,"persistent") || ZssLex_Is(&p->lex,"ignorehitpause"))
                 return error(p,"This ZSS statement is not implemented yet");
             if (kind!=ZSS_IDENT || ZssLex_Next(&peek)!='{') {
                 if (!assignment(p,-1,&id,&end_line)) return 0;
@@ -446,6 +574,45 @@ linked:
             return error(p,"A root statement must end on its own line");
     }
 }
+static int function_header(ZssParser *p, uint32_t *index)
+{
+    ZssFunction *functions, *function;
+    char name[64];
+    uint32_t i;
+    unsigned part;
+    ZssToken token;
+    next(p); /* Function */
+    next(p); /* name */
+    if (!copy_name(p,name)) return 0;
+    for (i=0;i<p->program->function_count;i++) if (!strcmp(name,p->program->functions[i].name))
+        return error(p,"Duplicate ZSS function in the same file");
+    functions=grow(p->program->functions,&p->program->function_capacity,p->program->function_count,
+                   sizeof(*functions),MAX_FUNCTIONS);
+    if (functions==NULL) return error(p,"ZSS function limit (64) or allocation failure");
+    p->program->functions=functions;*index=p->program->function_count++;
+    function=&functions[*index];strcpy(function->name,name);function->first=NO_NODE;
+    if (next(p)!='(') return error(p,"Expected '(' after function name");
+    p->local_count=0;next(p);
+    for (part=0;part<2;part++) {
+        while (p->lex.token.kind!=(part ? ']' : ')')) {
+            token=p->lex.token;
+            if (!valid_name(p,&token)) return 0;
+            if (part && token.length==1 && p->lex.source[token.offset]=='_')
+                return error(p,"Function return name cannot be '_'");
+            if (!(token.length==1 && p->lex.source[token.offset]=='_') &&
+                resolve_local(p,p->lex.source+token.offset,token.length)>=0)
+                return error(p,"Duplicate function argument/return name");
+            if (p->local_count>=256) return error(p,"ZSS local variable limit (256)");
+            p->locals[p->local_count++]=token;
+            if (part) function->returns++;else function->arguments++;
+            if (next(p)!=',') break;
+            if (next(p)==(part ? ']' : ')')) return error(p,"Missing function parameter after ','");
+        }
+        if (p->lex.token.kind!=(part ? ']' : ')')) return error(p,"Invalid function argument/return list");
+        if (!part) next(p);
+    }
+    return 1;
+}
 int Zss_CompileProgram(const char *source, size_t size, CharData *owner,
                        ZssProgram **out, ZssDiagnostic *diagnostic)
 {
@@ -466,8 +633,20 @@ int Zss_CompileProgram(const char *source, size_t size, CharData *owner,
     p.program->references=1;
     next(&p);
     while (p.lex.token.kind!=ZSS_EOF) {
+        ZssLexer peek=p.lex;
         start=p.lex.token;
         if (start.kind!='[') {error(&p,"Expected StateDef header");goto fail;}
+        ZssLex_Next(&peek);
+        if (ZssLex_Is(&peek,"function")) {
+            if (!function_header(&p,&i)) goto fail;
+            header_end=p.lex.token.line;next(&p);
+            if (p.lex.token.kind!=ZSS_EOF && p.lex.token.line==header_end) {
+                error(&p,"Function header must end on its own line");goto fail;
+            }
+            if (!body(&p,0,0,0,&first)) goto fail;
+            p.program->functions[i].first=first;p.program->functions[i].locals=p.local_count;
+            continue;
+        }
         if (!enclosed(&p,1)) goto fail;
         if (!Zss_CompileStateHeader(source+start.offset,p.lex.pos-start.offset,owner,
                                     &state.number,&state.properties,diagnostic)) {
@@ -490,7 +669,7 @@ int Zss_CompileProgram(const char *source, size_t size, CharData *owner,
         if (!body(&p,0,0,0,&first)) goto fail;
         p.program->states[i].first=first;p.program->states[i].locals=p.local_count;
     }
-    if (!p.program->state_count) {error(&p,"Program needs a StateDef");goto fail;}
+    if (!p.program->state_count && !p.program->function_count) {error(&p,"Program needs a StateDef or Function");goto fail;}
     *out=p.program;return 1;
 fail:
     StateDef_FreeProperties(&state.properties);Zss_FreeProgram(p.program);return 0;
@@ -504,9 +683,14 @@ void Zss_FreeProgram(ZssProgram *p)
         Expr_Free(&p->nodes[i].condition);
         for (j=0;j<3;j++) Expr_Free(&p->nodes[i].range[j]);
         StateCtrl_Free(&p->nodes[i].controller);
+        if (p->nodes[i].call!=NULL) {
+            ZssCall *call=p->nodes[i].call;
+            for (j=0;j<call->argument_count;j++) Expr_Free(&call->arguments[j]);
+            free(call->arguments);free(call->returns);free(call);
+        }
     }
     for (i=0;i<p->state_count;i++) StateDef_FreeProperties(&p->states[i].properties);
-    free(p->nodes);free(p->states);free(p);
+    free(p->nodes);free(p->states);free(p->functions);free(p);
 }
 size_t Zss_ProgramStateCount(const ZssProgram *p) {return p!=NULL?p->state_count:0;}
 const StateDef *Zss_ProgramState(const ZssProgram *p, size_t index, int *number)
@@ -537,29 +721,72 @@ static int eval_value(Player *player, const Expr *e, ExprEvalCtx *ctx, int local
     if (value!=NULL) *value=type==1 ? i : type==2 ? Ftol((double)f) : 0;
     return 1;
 }
-int Zss_RunBody(ZssProgram *p, size_t state, Player *player,
-                ZssControllerRun run, void *context, int *result)
+static const ZssFunction *find_function(ZssProgram *p, const ZssLibrary *library,
+                                       const char *name, ZssProgram **module)
+{
+    uint32_t i, j, count=library!=NULL ? library->count : 1;
+    for (i=0;i<count;i++) {
+        ZssProgram *candidate=library!=NULL ? library->modules[i] : p;
+        for (j=0;j<candidate->function_count;j++) if (!strcmp(name,candidate->functions[j].name)) {
+            *module=candidate;return &candidate->functions[j];
+        }
+    }
+    return NULL;
+}
+static void call_warning(Player *player, unsigned *warnings, const char *name, const char *reason)
+{
+    char message[192];
+    if ((*warnings)++>=4) return;
+    snprintf(message,sizeof(message),"ZSS function %s: %s",name,reason);Player_Warn(player,message);
+}
+static int run_body(ZssProgram *p, size_t state, Player *player,
+                    ZssControllerRun run, void *context, int *result, const ZssLibrary *library)
 {
     /* A sequence frame resumes after a child block. Loop frames own iteration
      * counts, so shared programs and reentrant runs never share loop cursors. */
-    struct Frame {uint32_t current, iterations;int loop;int32_t value, end, increment;} frames[MAX_DEPTH*2+2];
+    struct Frame {uint32_t current, iterations;int loop;int32_t value, end, increment;} frames[MAX_FRAMES];
+    struct Activation {
+        ZssProgram *program;
+        ExprEvalCtx locals;
+        const ZssCall *destination;
+        uint32_t base, arguments;
+        void *storage;
+    } activations[MAX_CALL_DEPTH+1];
     uint32_t top=1, steps=0, count, chosen;
-    int bits=0, i=0, type, selected, warned=0;
+    uint32_t active_count=1;
+    unsigned call_warnings=0;
+    int bits=0, i=0, type, selected, warned=0, ok=0;
     float f=0;
     ZssNode *n;
     ExprValue local_values[256]={{0}};
     char local_types[256];
-    ExprEvalCtx evalctx={local_values,local_types,0};
+    ExprEvalCtx rootctx={local_values,local_types,0}, *evalctx;
     if (p==NULL || state>=p->state_count || player==NULL || run==NULL || result==NULL) return 0;
-    evalctx.count=p->states[state].locals;
+    rootctx.count=p->states[state].locals;
     memset(local_types,EXPR_BOTTOM,sizeof(local_types));
+    activations[0]=(struct Activation){p,rootctx,NULL,0,0,NULL};
     frames[0]=(struct Frame){p->states[state].first,0,0,0,0,0};
-    while (top) {
-        struct Frame *frame=&frames[top-1];
+    while (active_count) {
+        struct Activation *active=&activations[active_count-1];
+        struct Frame *frame;
+        p=active->program;evalctx=&active->locals;
         if (++steps>MAX_STEPS) {
             Player_Warn(player,"ZSS execution stopped at total step budget");
-            *result=bits|STATECTRL_STOP;return 1;
+            bits|=STATECTRL_STOP;ok=1;goto cleanup;
         }
+        if (top==active->base) {
+            if (active_count==1) {active_count=0;break;}
+            for (count=0;count<active->destination->return_count;count++) {
+                int slot=active->destination->returns[count];
+                ExprEvalCtx *caller=&activations[active_count-2].locals;
+                if (slot>=0) {
+                    caller->values[slot]=evalctx->values[active->arguments+count];
+                    caller->types[slot]=evalctx->types[active->arguments+count];
+                }
+            }
+            free(active->storage);active_count--;continue;
+        }
+        frame=&frames[top-1];
         if (frame->current==NO_NODE) {top--;continue;}
         n=&p->nodes[frame->current];
         if (frame->loop) {
@@ -567,7 +794,7 @@ int Zss_RunBody(ZssProgram *p, size_t state, Player *player,
                 if (frame->iterations) {
                     /* Go int32 range arithmetic wraps. Do it in int64 first,
                      * avoiding signed-overflow UB and implementation-defined casts. */
-                    int64_t value=(int64_t)(n->local>=0 ? local_integer(&evalctx,n->local) : frame->value)+frame->increment;
+                    int64_t value=(int64_t)(n->local>=0 ? local_integer(evalctx,n->local) : frame->value)+frame->increment;
                     if (value>INT32_MAX) value-=INT64_C(4294967296);
                     if (value<INT32_MIN) value+=INT64_C(4294967296);
                     frame->value=(int32_t)value;
@@ -579,85 +806,143 @@ int Zss_RunBody(ZssProgram *p, size_t state, Player *player,
                     if (!warned++) Player_Warn(player,"ZSS loop stopped after 2500 iterations");
                     top--;continue;
                 }
-                type=Expr_EvalCtx(player,&n->condition,&i,&f,&evalctx);
-                if (type==0) return 0;
+                type=Expr_EvalCtx(player,&n->condition,&i,&f,evalctx);
+                if (type==0) goto cleanup;
                 selected=type==1 ? i!=0 : type==2 ? (!_isnan(f) && f!=0) : 0;
             }
             if (!selected) {top--;continue;}
             if (n->kind==NODE_FOR && n->local>=0 && frame->iterations) {
-                local_values[n->local].i=frame->value;local_types[n->local]=EXPR_INT;
+                evalctx->values[n->local].i=frame->value;evalctx->types[n->local]=EXPR_INT;
             }
             if (frame->iterations>=MAX_LOOP) {
                 if (!warned++) Player_Warn(player,"ZSS loop stopped after 2500 iterations");
                 top--;continue;
             }
             frame->iterations++;
-            if (top>=MAX_DEPTH*2+2) return 0;
+            if (top>=MAX_FRAMES) goto frame_limit;
             frames[top++]=(struct Frame){n->child,0,0,0,0,0};continue;
         }
         frame->current=n->next;
         switch (n->kind) {
         case NODE_CASE:
-            type=Expr_EvalCtx(player,&n->condition,&i,&f,&evalctx);
-            if (!type) return 0;
+            type=Expr_EvalCtx(player,&n->condition,&i,&f,evalctx);
+            if (!type) goto cleanup;
             selected=type==1 ? i!=0 : type==2 ? (!_isnan(f) && f!=0) : 0;
             /* A case chain tail-dispatches without stacking one empty frame
              * per failed label. A match (even empty) never falls through. */
             frame->current=selected ? n->child : n->otherwise;
             break;
         case NODE_IF:
-            type=Expr_EvalCtx(player,&n->condition,&i,&f,&evalctx);
-            if (type==0) return 0;
+            type=Expr_EvalCtx(player,&n->condition,&i,&f,evalctx);
+            if (type==0) goto cleanup;
             selected=type==1 ? i!=0 : type==2 ? (!_isnan(f) && f!=0) : 0;
             chosen=selected?n->child:n->otherwise;
             if (chosen!=NO_NODE) {
-                if (top>=MAX_DEPTH*2+2) return 0;
+                if (top>=MAX_FRAMES) goto frame_limit;
                 frames[top++]=(struct Frame){chosen,0,0,0,0,0};
             }
             break;
         case NODE_FOR:
-            if (top>=MAX_DEPTH*2+2) return 0;
+            if (top>=MAX_FRAMES) goto frame_limit;
             frames[top]=(struct Frame){(uint32_t)(n-p->nodes),0,1,0,0,0};
-            if (!eval_value(player,&n->range[0],&evalctx,n->local,&frames[top].value) ||
-                !eval_value(player,&n->range[1],&evalctx,-1,&frames[top].end) ||
-                !eval_value(player,&n->range[2],&evalctx,-1,&frames[top].increment)) return 0;
+            if (!eval_value(player,&n->range[0],evalctx,n->local,&frames[top].value) ||
+                !eval_value(player,&n->range[1],evalctx,-1,&frames[top].end) ||
+                !eval_value(player,&n->range[2],evalctx,-1,&frames[top].increment)) goto cleanup;
             top++;break;
         case NODE_WHILE:
-            if (top>=MAX_DEPTH*2+2) return 0;
+            if (top>=MAX_FRAMES) goto frame_limit;
             frames[top++]=(struct Frame){(uint32_t)(n-p->nodes),0,1,0,0,0};break;
         case NODE_LET:
-            if (!eval_value(player,&n->condition,&evalctx,n->local,NULL)) return 0;
+            if (!eval_value(player,&n->condition,evalctx,n->local,NULL)) goto cleanup;
             break;
         case NODE_EXPRESSION:
-            if (!Expr_EvalCtx(player,&n->condition,&i,&f,&evalctx)) return 0;
+            if (!Expr_EvalCtx(player,&n->condition,&i,&f,evalctx)) goto cleanup;
             break;
+        case NODE_CALL:
+        {
+            const ZssCall *call=n->call;
+            ZssProgram *module=NULL;
+            const ZssFunction *function=find_function(p,library,call->name,&module);
+            struct Activation *callee;
+            void *storage=NULL;
+            if (function==NULL || call->argument_count!=function->arguments ||
+                (call->return_count && call->return_count!=function->returns)) {
+                call_warning(player,&call_warnings,call->name,function==NULL ? "undefined function" :
+                    call->argument_count!=function->arguments ? "argument count mismatch" : "return count mismatch");
+                break; /* Validate before evaluating any argument side effects. */
+            }
+            if (active_count==MAX_CALL_DEPTH+1) {
+                call_warning(player,&call_warnings,call->name,"call depth limit (32)");
+                bits|=STATECTRL_STOP;ok=1;goto cleanup;
+            }
+            if (top>=MAX_FRAMES) goto frame_limit;
+            if (function->locals) {
+                storage=calloc(function->locals,sizeof(ExprValue)+sizeof(char));
+                if (storage==NULL) {
+                    call_warning(player,&call_warnings,call->name,"out of memory creating local frame");
+                    bits|=STATECTRL_STOP;ok=1;goto cleanup;
+                }
+            }
+            callee=&activations[active_count++];
+            *callee=(struct Activation){module,{storage,storage!=NULL ?
+                (char *)storage+function->locals*sizeof(ExprValue) : NULL,function->locals},
+                call,top,function->arguments,storage};
+            if (function->locals) memset(callee->locals.types,EXPR_BOTTOM,function->locals);
+            for (count=0;count<call->argument_count;count++) {
+                type=Expr_EvalCtx(player,&call->arguments[count],&i,&f,evalctx);
+                if (!type) goto cleanup;
+                callee->locals.types[count]=type==1 ? EXPR_INT : type==2 ? EXPR_FLOAT : EXPR_BOTTOM;
+                if (type==1) callee->locals.values[count].i=i;
+                else if (type==2) callee->locals.values[count].f=f;
+            }
+            frames[top++]=(struct Frame){function->first,0,0,0,0,0};break;
+        }
         case NODE_BREAK:
         case NODE_CONTINUE:
             count=top;
-            while (count && !frames[count-1].loop) count--;
-            if (!count) return 0;
+            while (count>active->base && !frames[count-1].loop) count--;
+            if (count==active->base) goto cleanup;
             top=n->kind==NODE_BREAK ? count-1 : count;break;
         default:
-            bits|=run(player,&n->controller,&evalctx,context);
-            if (bits&STATECTRL_STOP) {*result=bits;return 1;}
+            bits|=run(player,&n->controller,evalctx,context);
+            if (bits&STATECTRL_STOP) {ok=1;goto cleanup;}
             break;
         }
     }
-    *result=bits;return 1;
+    ok=1;goto cleanup;
+frame_limit:
+    Player_Warn(player,"ZSS execution frame limit (256)");bits|=STATECTRL_STOP;ok=1;
+cleanup:
+    while (active_count>1) free(activations[--active_count].storage);
+    if (ok) *result=bits;
+    return ok;
+}
+int Zss_RunBody(ZssProgram *p, size_t state, Player *player,
+                ZssControllerRun run, void *context, int *result)
+{
+    return run_body(p,state,player,run,context,result,NULL);
 }
 
 /* Port integration: a private controller owns one reference to an immutable
  * program. No global sidecar or pointer into a growing StateDef array is used. */
 typedef struct ZssBinding {
     ZssProgram *program;
+    ZssLibrary *library;
     size_t state;
     unsigned trace_budget;
 } ZssBinding;
+static void free_library(ZssLibrary *library)
+{
+    uint32_t i;
+    if (library==NULL || --library->references) return;
+    for (i=0;i<library->count;i++) Zss_FreeProgram(library->modules[i]);
+    free(library->modules);free(library);
+}
 void Zss_FreeBoundBody(void *binding)
 {
     ZssBinding *b=binding;
     if (b==NULL) return;
-    Zss_FreeProgram(b->program);free(b);
+    Zss_FreeProgram(b->program);free_library(b->library);free(b);
 }
 static int run_bound_leaf(Player *p, StateCtrl *controller, ExprEvalCtx *frame, void *context)
 {
@@ -669,7 +954,7 @@ int Zss_RunBoundBody(Player *p, void *binding, StateRunCtx *context)
 {
     ZssBinding *b=binding;
     int result=0;
-    if (b==NULL || !Zss_RunBody(b->program,b->state,p,run_bound_leaf,context,&result)) {
+    if (b==NULL || !run_body(b->program,b->state,p,run_bound_leaf,context,&result,b->library)) {
         Player_Warn(p,"ZSS body execution failed");return STATECTRL_STOP;
     }
     /* Opt-in, bounded diagnostics for qualifying the experimental engine path. */
@@ -696,58 +981,100 @@ static void free_staged_state(StateDef *sd)
     }
     /* Property expressions are borrowed from the retained program. */
 }
+static int stage_binding(StateDef *sd, ZssProgram *p, size_t state, ZssLibrary *library)
+{
+    StateCtrl sc={0};
+    Expr always={0};
+    ZssBinding *binding;
+    const char *trace;
+    sd->ctrls=KeyedArray_Create(1,sizeof(StateCtrl));
+    if (sd->ctrls==NULL) return 0;
+    sc.triggers=KeyedArray_Create(1,sizeof(Expr));
+    if (sc.triggers==NULL) goto fail;
+    Expr_SetInt(&always,1);
+    if (KeyedArray_Add(sc.triggers,&always,0,0)==-1) goto fail;
+    sc.type=SCTRL_ZSS_BODY;sc.trigger_groups=1;sc.persistent=1;
+    binding=calloc(1,sizeof(*binding));if (binding==NULL) goto fail;
+    binding->program=p;binding->library=library;binding->state=state;
+    trace=getenv("MUGEN_ZSS_TRACE");
+    binding->trace_budget=trace!=NULL && !strcmp(trace,"1") ? 4u : 0u;
+    if (p!=NULL) p->references++;
+    if (library!=NULL) library->references++;
+    sc.params=binding;
+    if (KeyedArray_Add(sd->ctrls,&sc,SCTRL_ZSS_BODY,0)==-1) goto fail;
+    return 1;
+fail:
+    StateCtrl_Free(&sc);return 0;
+}
 int Zss_InstallProgram(ZssProgram *p, StateDefs *defs, const char **error)
 {
     StateDef *staged=NULL;
+    StateDef metadata={0};
     KeyedArray *merged=NULL, *old;
-    StateCtrl sc={0};
-    ZssBinding *binding;
-    Expr always={0};
+    ZssLibrary *library=NULL;
+    ZssProgram **modules=NULL;
     uint32_t i;
-    int k;
+    int k, add_metadata=0, extra;
     const char *why="Invalid ZSS installation target";
     if (error!=NULL) *error=NULL;
-    if (p==NULL || defs==NULL || defs->list==NULL || !p->state_count) goto fail;
+    if (p==NULL || defs==NULL || defs->list==NULL || (!p->state_count && !p->function_count)) goto fail;
     old=defs->list;
     if (old->elem_size!=(int)sizeof(StateDef)) goto fail;
-    if (old->count>INT_MAX-(int)p->state_count || p->references>UINT_MAX-p->state_count) goto fail;
+    if (old->count>INT_MAX-(int)p->state_count-1 || p->references>UINT_MAX-p->state_count-1) goto fail;
     for (i=0;i<p->state_count;i++) if (KeyedArray_Find(old,p->states[i].number,0)!=-1) {
         why="ZSS state collides with an already loaded state";goto fail;
     }
     why="Out of memory installing ZSS states";
-    staged=calloc(p->state_count,sizeof(*staged));if (staged==NULL) goto fail;
+    /* Original state lookups always use key2=0. A single private key2=INT_MIN
+     * entry anchors the library without growing StateDefs or a global sidecar.
+     * It is freed through the same binding lifecycle, never scheduled as a state. */
+    k=KeyedArray_Find(old,0,INT_MIN);
+    if (k>=0) {
+        StateDef *sd=(StateDef *)(old->data+old->elem_size*k);
+        ZssBinding *binding;
+        if (!Zss_IsBoundState(sd)) goto fail;
+        binding=((StateCtrl *)(sd->ctrls->data+sd->ctrls->elem_size*sd->ctrls->first))->params;
+        if (binding->program!=NULL || binding->state!=NO_NODE || binding->library==NULL) goto fail;
+        library=binding->library;
+        if (library->references>UINT_MAX-p->state_count-2) {library=NULL;goto fail;}
+        library->references++; /* temporary installation reference */
+    } else if (p->function_count || p->call_count) {
+        library=calloc(1,sizeof(*library));if (library==NULL) goto fail;
+        library->references=1;add_metadata=1;
+        if (!stage_binding(&metadata,NULL,NO_NODE,library)) goto fail;
+    }
+    if (p->function_count) {
+        if (library->count>=MAX_MODULES) {why="ZSS function module limit (64)";goto fail;}
+        modules=calloc(library->count+1,sizeof(*modules));if (modules==NULL) goto fail;
+        if (library->count) memcpy(modules,library->modules,library->count*sizeof(*modules));
+        modules[library->count]=p;
+    }
+    if (p->state_count) {
+        staged=calloc(p->state_count,sizeof(*staged));if (staged==NULL) goto fail;
+    }
     for (i=0;i<p->state_count;i++) {
         /* Immutable properties stay owned by the program, whose body binding
          * retains it. StateDefs_Free skips these borrowed expressions. */
         staged[i]=p->states[i].properties;
-        staged[i].ctrls=KeyedArray_Create(1,sizeof(StateCtrl));
-        if (staged[i].ctrls==NULL) goto fail;
-        sc.triggers=KeyedArray_Create(1,sizeof(Expr));if (sc.triggers==NULL) goto fail;
-        Expr_SetInt(&always,1);
-        if (KeyedArray_Add(sc.triggers,&always,0,0)==-1) goto fail;
-        sc.type=SCTRL_ZSS_BODY;sc.trigger_groups=1;sc.persistent=1;
-        binding=calloc(1,sizeof(*binding));if (binding==NULL) goto fail;
-        binding->program=p;binding->state=i;
-        {
-            const char *trace=getenv("MUGEN_ZSS_TRACE");
-            binding->trace_budget=trace!=NULL && !strcmp(trace,"1") ? 4u : 0u;
-        }
-        p->references++;
-        sc.params=binding;
-        if (KeyedArray_Add(staged[i].ctrls,&sc,SCTRL_ZSS_BODY,0)==-1) goto fail;
-        memset(&sc,0,sizeof(sc));
+        if (!stage_binding(&staged[i],p,i,library)) goto fail;
     }
-    merged=KeyedArray_Create(old->count+(int)p->state_count,sizeof(StateDef));
+    extra=(int)p->state_count+add_metadata;
+    merged=KeyedArray_Create(old->count+extra,sizeof(StateDef));
     if (merged==NULL) goto fail;
     for (k=0;k<old->capacity;k++) if (old->slots[k].used &&
         KeyedArray_Add(merged,old->data+old->elem_size*k,old->slots[k].key1,old->slots[k].key2)==-1) goto fail;
     for (i=0;i<p->state_count;i++) if (KeyedArray_Add(merged,&staged[i],p->states[i].number,0)==-1) goto fail;
-    /* Only array storage is replaced; existing payload ownership transfers. */
-    defs->list=merged;KeyedArray_Free(old);free(staged);return 1;
+    if (add_metadata && KeyedArray_Add(merged,&metadata,0,INT_MIN)==-1) goto fail;
+    /* Publish only after every allocation succeeds. Existing state bindings
+     * share the stable library handle and see later function-only files. */
+    if (modules!=NULL) {
+        free(library->modules);library->modules=modules;library->count++;p->references++;
+    }
+    defs->list=merged;KeyedArray_Free(old);free(staged);free_library(library);return 1;
 fail:
-    StateCtrl_Free(&sc);
     KeyedArray_Free(merged);
     if (staged!=NULL) {for (i=0;i<p->state_count;i++) free_staged_state(&staged[i]);free(staged);}
+    free_staged_state(&metadata);free(modules);free_library(library);
     if (error!=NULL) *error=why;
     return 0;
 }

@@ -24,11 +24,15 @@ FLAGS="$FLAGS -Ithird_party/lua-5.1.4/src -Ithird_party/libresample/include"
 case "$($CC -dumpmachine)" in
     *mingw*) FLAGS="$FLAGS -flto=auto" ;;
 esac
-ZSS_SOURCES="src/zss_program.c"
+ZSS_SOURCES=""
+ZSS_LEAF=""
 if [ "${TEST_ZSS_CONTROLLER:-0}" = 1 ]; then
     FLAGS="$FLAGS -DTEST_ZSS_CONTROLLER"
     LDFLAGS="${LDFLAGS:-} -Wl,--wrap=calloc -Wl,--wrap=free"
-    ZSS_SOURCES="src/ini.c src/scriptparams.c src/zss_controller.c src/zss_lex.c src/zss_params.c src/zss_statedef.c src/zss_program.c src/zss_load.c"
+    ZSS_SOURCES="src/ini.c src/scriptparams.c src/zss_controller.c src/zss_lex.c src/zss_params.c src/zss_statedef.c src/zss_load.c"
+    # Installed-function tests use expression statements; the game/AI leaf
+    # adapter is an aborting boundary, not a link of every game subsystem.
+    ZSS_LEAF="-DStateCtrl_RunCtx=Test_ZssBoundLeaf"
 fi
 SAN=""
 if [ "${SANITIZE:-0}" = 1 ]; then
@@ -43,8 +47,10 @@ $CC $FLAGS -c src/globals.c -o "$OUT/globals.o"
 # shellcheck disable=SC2086
 $CC $FLAGS $SAN -DMem_Calloc=Test_UtilMem_Calloc -c src/util.c -o "$OUT/util.o"
 # shellcheck disable=SC2086
+$CC $FLAGS $SAN $ZSS_LEAF -c src/zss_program.c -o "$OUT/zss_program.o"
+# shellcheck disable=SC2086
 $CC $FLAGS $SAN tools/test_cns_abi.c $ZSS_SOURCES src/cnsparse.c src/keyedarray.c src/compat_linux.c \
-    "$OUT/globals.o" "$OUT/util.o" -Wl,--gc-sections ${LDFLAGS:-} -lm -o "$OUT/test_cns_abi"
+    "$OUT/globals.o" "$OUT/util.o" "$OUT/zss_program.o" -Wl,--gc-sections ${LDFLAGS:-} -lm -o "$OUT/test_cns_abi"
 # shellcheck disable=SC2086
 ${RUNNER:-} "$OUT/test_cns_abi"
 if [ "${TEST_ZSS_CONTROLLER:-0}" = 1 ]; then
