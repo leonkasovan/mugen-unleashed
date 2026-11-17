@@ -1065,6 +1065,7 @@ static void test_zss_controller(void)
 }
 #include "test_zss_functions.inc"
 #include "test_zss_playsnd.inc"
+#include "test_zss_palfx.inc"
 #endif
 int main(void)
 {
@@ -1088,6 +1089,7 @@ int main(void)
     test_zss_function_library();
     test_zss_function_limits();
     test_zss_playsnd();
+    test_zss_palfx();
 #else
     test_controller_parse(); test_variables(); test_clipboard();
     test_expr_allocs(); test_trigger_copy_math(); test_state_headers();

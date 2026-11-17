@@ -8,9 +8,10 @@ Research date: 2026-11-16 (Asia/Jakarta).
 Current loader coverage (2026-11-17): explicit `.zss` primary `st`, additional
 `st0`..`st9`, and `stcommon`. Constants and CMD remain on the CNS path. Numeric
 functions/calls, result bindings and cross-file first-wins lookup are
-implemented, including numeric PlaySnd payloads and static F/S prefixes. The
-unchanged upstream KFM now compiles its first three functions and stops at
-EXFX's unsupported PalFX payload (kfm.zss:34:1). Broader controller
+implemented, including numeric PlaySnd payloads, static F/S prefixes and
+PalFX/BGPalFX/AllPalFX local expressions. The unchanged upstream KFM now compiles
+its first four functions and stops at the unsupported aiLevelF trigger in the
+walk-state condition (kfm.zss:41:66). Broader controller
 payloads, block attributes and Ikemen-specific extensions remain open.
 
 ## 1. Decision
@@ -1514,3 +1515,103 @@ Next priority is PalFX's owned-expression payload and shared runtime context,
 followed by persistence/hitpause block attributes and the remaining KFM
 controllers/extensions. Preserve the pinned corpus unchanged and keep reporting
 the first actual blocker as features become available.
+
+### PalFX family and owned vector expressions (2026-11-17)
+
+PalFX, BGPalFX and AllPalFX now share the audited controller table and use the
+same numeric payload schema: time, color, add, mul, sinadd and invertall. Their
+existing kind field selects the player's supplied PalFxDef, the global BG
+definition or the global All definition. No new field, legacy-layout change or
+controller opcode was introduced.
+
+PalFx_ParseParamsCtx threads the explicit compile context through scalar keys
+and every RGB/sinadd component. PalFx_ApplyCtx evaluates every stored expression
+against the live state/function local frame. StateCtrl_ApplyCtx forwards that
+frame rather than calling the legacy wrapper. The old PalFx_ParseParams and
+PalFx_Apply entry points still pass NULL and preserve the CNS behavior. The
+prefixed palfx.* parse path also accepts an explicit context for future use;
+this does not enable the rest of HitDef's unaudited payload in ZSS.
+
+```text
+[Function EXFX(time)]
+PalFX{time:$time;add:32,16,0;sinadd:64,32,5,3}
+
+[StateDef 65000]
+call EXFX(12);
+BGPalFX{time:12;mul:256,192,128}
+AllPalFX{time:12;color:128}
+```
+
+Defaults remain those of the shared MUGEN implementation: time/add/sinadd/
+period/invertall are zero, color and all mul components are 256. Add and mul
+require three values; sinadd accepts three or four, with the optional fourth
+being the period. Explicit ZSS rejects a comma without a final period, whereas
+the CNS wrapper retains its historical acceptance of sinadd=1,2,3,.
+
+Color uses this engine's integer 0..256 scale, not Ikemen's extended float color
+model; a fractional literal such as color:0.5 is rejected. Hue, sinmul, sincolor,
+sinhue, invertblend, redirected-player IDs and per-background id/index targeting
+remain rejected. No implicit conversion or ignored unsupported option is used
+to get past a source error.
+
+Application clears the destination first, resetting phase and reset fields,
+then evaluates time, color, add RGB, mul RGB, sinadd RGB, period and invertall in
+the existing order. Invalid time below -1 becomes 0 and warns. Out-of-range
+color and negative mul values warn without being clamped. Negative period and
+nonboolean invertall values retain the existing behavior. Time -1 remains an
+indefinite effect. Global variants do not overwrite the passed player definition
+or the other global target. These rules are shared with CNS, not new ZSS effect
+semantics.
+
+Failed controller construction now releases the partially compiled PalFxParams
+expressions before freeing the block; previously the block and any compiled
+expressions leaked. Cleanup accepts a NULL payload so allocation/parse failures
+can also pass through StateCtrl_Free safely. This is an explicit ownership fix
+for both front-ends, with successful payload layouts and defaults unchanged.
+
+Validation on Linux x86-64:
+
+- ASan/UBSan host tests pass with every injected calloc failure in a payload
+  containing dynamic expressions in all thirteen value slots. Trackers are empty
+  after success, late scalar/vector failure, later unsupported-controller
+  rejection and teardown. Leak detection remains disabled in this environment.
+- Exact definition assertions cover all three destinations, untouched alternate
+  targets, mutable locals (including color), mixed numeric local values,
+  default/empty effects, three/four-value sinadd, indefinite/invalid time,
+  warning-only ranges and complete destination reset. Per-field side-effect
+  values assert all thirteen evaluation positions independently of source key
+  order. Unknown keys, wrong arity, unknown locals and unsupported extensions
+  fail. Unbound standalone locals remain rejected.
+- A static CNS/ZSS vector produces identical complete PalFxDef output. The
+  explicit prefixed helper is tested independently without claiming HitDef
+  integration. The old PlaySnd rollback fixture now uses NoSuchController as its
+  deliberate error, rather than depending on PalFX remaining unsupported.
+- The native MUGEN_MODEL3D=0 build succeeds and all nine copied-game scenarios
+  pass. The added scenario calls PalFX, BGPalFX and AllPalFX through a function
+  and the real StateCtrl_RunCtx adapter. Local expressions in every player-effect
+  slot plus both global variants must produce the expected side-effect value
+  425 before the fixture can reach state 65001. Logs record negative state -2
+  result 5 and state 65001 result 0; state 65002 is never visited. Existing
+  function, sound-enabled, CNS and malformed-file probes continue to pass.
+- CNS and lexer host suites pass, as do host ANDROID_PORT syntax checks for the
+  changed production units. Original dependencies and 32-bit structure asserts
+  remain unchanged. Windows/32-bit, Android NDK and Vita/device builds were not
+  available; no such build/device qualification is implied.
+- The unmodified, 17-hash-verified KFM corpus exits 1 at
+  `ZSS kfm.zss:41:66: Condition rejected by MUGEN expression compiler`, with
+  `Invalid trigger: aiLevelF`. EndState, SysSnd, CSnd and EXFX compile, but the
+  first walk-state condition and all later files remain unqualified. map(...)
+  in the same condition is also outside the supported engine profile; the
+  actual first stop is aiLevelF. This remains a failed compatibility probe.
+
+This increment qualifies payload ownership, VM/controller integration and exact
+CPU definitions. It does not add a renderer or claim pixel equivalence across
+System/OpenGL/GLES/Vita backends. Screenshots/device effect output and concurrent
+precache qualification remain open, alongside block persistence/hitpause,
+remaining combat/effect controllers and the broader Ikemen dialect.
+
+Next priority is to audit aiLevelF and map storage/lookup/reset semantics against
+the pinned reference, then implement only an explicitly defined compatible
+subset. Do not alias a floating AI trigger to a convenient integer setting or
+fake map lookups as zero to advance the corpus. Keep the original KFM sources
+unchanged and retain isolated behavioral fixtures for each added facility.

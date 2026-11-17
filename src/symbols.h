@@ -2094,5 +2094,7 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
 int Cns_ParseSoundRefCtx(const char *s, int *fight, Expr *group, Expr *index, CharData *owner, ExprCompileCtx *ctx);
 int PlaySnd_ParseParamsCtx(PlaySndParams *ps, Ini *ini, CharData *owner, ExprCompileCtx *ctx);
 void PlaySnd_RunCtx(PlaySndParams *ps, Player *p, StateCtrl *sc, ExprEvalCtx *frame);
+int PalFx_ParseParamsCtx(PalFxParams *pf, Ini *ini, CharData *owner, int hitdef, ExprCompileCtx *ctx);
+int PalFx_ApplyCtx(PalFxDef *dst, PalFxParams *pf, Player *p, StateCtrl *sc, ExprEvalCtx *frame);
 
 #endif /* MUGEN_SYMBOLS_H */

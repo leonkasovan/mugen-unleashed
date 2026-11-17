@@ -15,7 +15,7 @@
  *
  * Quirks kept from the original:
  * - PORTABILITY FIX: overlong type names are rejected before the 256-byte copy.
- * - Some failures leak what was allocated (PalFX, Explod blocks; a
+ * - Some failures leak what was allocated (Explod blocks; a
  *   ReversalDef block without a valid reversal.attr).
  * - AfterImage palbright reads its first two values into the same Expr
  *   (palbright[1]); palbright[0] keeps its default.
@@ -196,7 +196,8 @@ static const struct {const char *name;int type;} script_controllers[]={
     {"changeanim",SCTRL_CHANGEANIM},{"turn",SCTRL_TURN},{"null",SCTRL_NULL},
     {"displaytoclipboard",SCTRL_DISPLAYTOCLIPBOARD},
     {"appendtoclipboard",SCTRL_APPENDTOCLIPBOARD},{"clearclipboard",SCTRL_CLEARCLIPBOARD},
-    {"playsnd",SCTRL_PLAYSND}
+    {"playsnd",SCTRL_PLAYSND},{"palfx",SCTRL_PALFX},
+    {"bgpalfx",SCTRL_PALFX},{"allpalfx",SCTRL_PALFX}
 };
 int StateCtrl_ScriptType(const char *name)
 {
@@ -1139,8 +1140,11 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
         if (pf == NULL) {
             return 0;
         }
-        if (!PalFx_ParseParams(pf, ini, owner, 0)) {
-            return 0;   /* pf leaks */
+        if (!PalFx_ParseParamsCtx(pf, ini, owner, 0, ctx)) {
+            /* Portability fix: failed payloads still own compiled Exprs. */
+            PalFxParams_Free(pf);
+            free(pf);
+            return 0;
         }
         pf->kind = name[0] == 'p' ? PALFX_PLAYER : name[0] == 'b' ? PALFX_BG : PALFX_ALL;
         sc->params = pf;
@@ -2607,7 +2611,7 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
     case SCTRL_MAKEDUST:
         return run_makedust(p, sc);
     case SCTRL_PALFX:
-        PalFx_Apply(&p->palfx_def, sc->params, p, sc);
+        PalFx_ApplyCtx(&p->palfx_def, sc->params, p, sc, frame);
         return 0;
     case SCTRL_REMAPPAL:
         return run_remappal(p, sc);
@@ -3242,6 +3246,21 @@ void ExplodParams_Free(ExplodParams *ep)
 /* 0x0044DF00: PalFX parameters; hitdef selects the "palfx." names of a HitDef. kind is set by the caller. */
 int PalFx_ParseParams(PalFxParams *pf, Ini *ini, CharData *owner, int hitdef)
 {
+    return PalFx_ParseParamsCtx(pf,ini,owner,hitdef,NULL);
+}
+/* Port addition: reject a missing optional fourth sinadd expression in ZSS.
+ * The legacy list reader accepts '1,2,3,'; keep that CNS behavior unchanged. */
+static int palfx_list_complete(const char *s, const char *end, ExprCompileCtx *ctx)
+{
+    size_t length;
+    if (*end!='\0') return 0;
+    if (ctx==NULL) return 1;
+    length=strlen(s);
+    while (length && Char_IsSpace(s[length-1])) length--;
+    return length && s[length-1]!=',';
+}
+int PalFx_ParseParamsCtx(PalFxParams *pf, Ini *ini, CharData *owner, int hitdef, ExprCompileCtx *ctx)
+{
     const char *s;
     const char *end;
     int n;
@@ -3249,36 +3268,36 @@ int PalFx_ParseParams(PalFxParams *pf, Ini *ini, CharData *owner, int hitdef)
     Expr_SetInt(&pf->mul[0], 0x100);
     Expr_SetInt(&pf->mul[1], 0x100);
     Expr_SetInt(&pf->mul[2], 0x100);
-    if (!Expr_Compile(Ini_GetValue(ini, hitdef ? "palfx.time" : "time"), &pf->time, owner, NULL, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, hitdef ? "palfx.time" : "time", &pf->time, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     s = Ini_GetValue(ini, hitdef ? "palfx.mul" : "mul");
     if (s != NULL) {
-        if (Cns_ParseValues(s, "iii", owner, &end, &pf->mul[0], &pf->mul[1], &pf->mul[2]) != 3 || *end != '\0') {
+        if (Cns_ParseValuesCtx(s, "iii", owner, &end, ctx, &pf->mul[0], &pf->mul[1], &pf->mul[2]) != 3 || !palfx_list_complete(s,end,ctx)) {
             return 0;
         }
     }
     s = Ini_GetValue(ini, hitdef ? "palfx.add" : "add");
     if (s != NULL) {
-        if (Cns_ParseValues(s, "iii", owner, &end, &pf->add[0], &pf->add[1], &pf->add[2]) != 3 || *end != '\0') {
+        if (Cns_ParseValuesCtx(s, "iii", owner, &end, ctx, &pf->add[0], &pf->add[1], &pf->add[2]) != 3 || !palfx_list_complete(s,end,ctx)) {
             return 0;
         }
     }
     s = Ini_GetValue(ini, hitdef ? "palfx.sinadd" : "sinadd");
     if (s != NULL) {
-        n = Cns_ParseValues(s, "iiii", owner, &end, &pf->sinadd[0], &pf->sinadd[1], &pf->sinadd[2], &pf->period);
-        if ((unsigned int)(n - 3) > 1 || *end != '\0') {
+        n = Cns_ParseValuesCtx(s, "iiii", owner, &end, ctx, &pf->sinadd[0], &pf->sinadd[1], &pf->sinadd[2], &pf->period);
+        if ((unsigned int)(n - 3) > 1 || !palfx_list_complete(s,end,ctx)) {
             return 0;
         }
     }
     s = Ini_GetValue(ini, hitdef ? "palfx.invertall" : "invertall");
     Expr_SetInt(&pf->invertall, 0);
-    if (s != NULL && !Expr_Compile(s, &pf->invertall, owner, NULL, EXPR_WANT_INT)) {
+    if (!compile_expr_ctx(s, &pf->invertall, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     s = Ini_GetValue(ini, hitdef ? "palfx.color" : "color");
     Expr_SetInt(&pf->color, 0x100);
-    if (s != NULL && !Expr_Compile(s, &pf->color, owner, NULL, EXPR_WANT_INT)) {
+    if (!compile_expr_ctx(s, &pf->color, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     return 1;
@@ -3291,37 +3310,42 @@ int PalFx_ParseParams(PalFxParams *pf, Ini *ini, CharData *owner, int hitdef)
  */
 int PalFx_Apply(PalFxDef *dst, PalFxParams *pf, Player *p, StateCtrl *sc)
 {
+    return PalFx_ApplyCtx(dst,pf,p,sc,NULL);
+}
+int PalFx_ApplyCtx(PalFxDef *dst, PalFxParams *pf, Player *p, StateCtrl *sc, ExprEvalCtx *frame)
+{
     int i;
 
+    if (pf == NULL) return 0;
     if (pf->kind == PALFX_BG) {
         dst = &g_game->bg_palfx_def;
     } else if (pf->kind == PALFX_ALL) {
         dst = &g_game->all_palfx_def;
     }
     memset(dst, 0, sizeof(*dst));
-    dst->active = Expr_EvalInt(p, &pf->time, 1);
+    dst->active = Expr_EvalIntCtx(p, &pf->time, 1, frame);
     if (dst->active < -1) {
         dst->active = 0;
         Player_WarnAt(p, sc, "%s", "invalid PalFX time");
     }
-    dst->color = Expr_EvalInt(p, &pf->color, 1);
+    dst->color = Expr_EvalIntCtx(p, &pf->color, 1, frame);
     if (dst->color < 0 || dst->color > 0x100) {
         Player_WarnAt(p, sc, "%s", "invalid PalFX color value");
     }
     for (i = 0; i < 3; i++) {
-        dst->add[i] = Expr_EvalInt(p, &pf->add[i], 1);
+        dst->add[i] = Expr_EvalIntCtx(p, &pf->add[i], 1, frame);
     }
     for (i = 0; i < 3; i++) {
-        dst->mul[i] = Expr_EvalInt(p, &pf->mul[i], 1);
+        dst->mul[i] = Expr_EvalIntCtx(p, &pf->mul[i], 1, frame);
     }
     if (dst->mul[0] < 0 || dst->mul[1] < 0 || dst->mul[2] < 0) {
         Player_WarnAt(p, sc, "%s", "invalid PalFX mul value");
     }
     for (i = 0; i < 3; i++) {
-        dst->sinadd[i] = Expr_EvalInt(p, &pf->sinadd[i], 1);
+        dst->sinadd[i] = Expr_EvalIntCtx(p, &pf->sinadd[i], 1, frame);
     }
-    dst->period = Expr_EvalInt(p, &pf->period, 1);
-    dst->invertall = Expr_EvalInt(p, &pf->invertall, 1);
+    dst->period = Expr_EvalIntCtx(p, &pf->period, 1, frame);
+    dst->invertall = Expr_EvalIntCtx(p, &pf->invertall, 1, frame);
     return 1;
 }
 
@@ -3330,6 +3354,8 @@ void PalFxParams_Free(PalFxParams *pf)
 {
     int i;
 
+    /* Failed construction has no published payload. */
+    if (pf == NULL) return;
     Expr_Free(&pf->time);
     Expr_Free(&pf->color);
     for (i = 0; i < 3; i++) {

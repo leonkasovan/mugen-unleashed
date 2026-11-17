@@ -202,7 +202,7 @@ static void test_zss_playsnd(void)
         StateCtrl_Free(&legacy);Ini_Free(ini);zss_no_allocs();
     }
     PlaySndParams_Free(NULL);PlaySnd_RunCtx(NULL,&player,NULL,NULL);
-    source="[Function sound(x)]\nPlaySnd{value:F $x,0}\n[Function unsupported()]\nPalFX{time:1}\n";
+    source="[Function sound(x)]\nPlaySnd{value:F $x,0}\n[Function unsupported()]\nNoSuchController{}\n";
     program=NULL;
     assert(!Zss_CompileProgram(source,strlen(source),&owner,&program,&d) && !program);
     zss_no_allocs();

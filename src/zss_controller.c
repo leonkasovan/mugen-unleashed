@@ -24,6 +24,9 @@ static int allowed_key(const char *type, const char *key)
                !_stricmp(key,"loop") || !_stricmp(key,"pan") || !_stricmp(key,"abspan");
     if (!_stricmp(type,"displaytoclipboard") || !_stricmp(type,"appendtoclipboard"))
         return !_stricmp(key,"text") || !_stricmp(key,"params");
+    if (!_stricmp(type,"palfx") || !_stricmp(type,"bgpalfx") || !_stricmp(type,"allpalfx"))
+        return !_stricmp(key,"time") || !_stricmp(key,"color") || !_stricmp(key,"add") ||
+               !_stricmp(key,"mul") || !_stricmp(key,"sinadd") || !_stricmp(key,"invertall");
     return 0;
 }
 

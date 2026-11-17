@@ -57,15 +57,19 @@ Loading character chars/kfm_zss/kfm_zss.def...
 Loading cmd command set kfm.cmd...OK
 Loading cns kfm.const...
 Character kfm_zss.def failed to load
-ZSS kfm.zss:34:1: Controller not yet enabled in the ZSS bridge
+Invalid trigger: aiLevelF
+ZSS kfm.zss:41:66: Condition rejected by MUGEN expression compiler
 ```
 
 The latest probe (2026-11-17) exited **1**, rather than reaching gameplay.
 Primary `st`, additional `st0`..`st9` and `stcommon` dispatch explicit `.zss`
 suffixes through the ZSS compiler. Functions/calls and PlaySnd's numeric/local
-parameters and static F/S sound prefixes are implemented. EndState, SysSnd and
-CSnd compile; the diagnostic now points to EXFX's `palFx` at line 34, whose
-payload is not enabled yet. This replaces the previous PlaySnd failure at line
+parameters and static F/S sound prefixes are implemented. PalFX, BGPalFX and
+AllPalFX now support the shared numeric payload and local frame. EndState,
+SysSnd, CSnd and EXFX compile; the diagnostic now points to the first walk-state
+condition at line 41. Its `aiLevelF` trigger is not implemented. The same
+condition also contains an unsupported `map(...)` expression, but the observed
+compiler stop is at aiLevelF. This replaces the PalFX failure at line 34, PlaySnd at line
 24, the unsupported-function error at line 16 and the earlier,
 misleading CNS error at line 2559. No upstream script was edited to get past
 these failures. This remains a failed compatibility probe,
@@ -90,6 +94,10 @@ dimensions. An eighth, sound-enabled scenario generates a small PCM SND effect,
 plays it from a function using local arguments and the real controller adapter,
 and checks the existing sound-cache CSV for decode/prepare/successful mixer-start
 events. It uses SDL's dummy audio driver; audible output is not qualified.
+A ninth scenario calls all three PalFX variants from a function and checks
+parameter side effects before reaching success state 65001. The host suite
+checks exact player/background/global definitions and untouched destinations;
+the native case does not assert screenshot pixels or OpenGL/GLES equivalence.
 F/common-bank selection has host boundary coverage rather than an independently
 traced native common-sound playback. ZIP stream lookup/ownership is checked at the host harness boundary;
 an end-to-end zipped character run remains open (QuickVS accepts loose DEF paths,
@@ -102,10 +110,10 @@ not the roster's ZIP-entry notation).
 | Primary and common-state ZSS loading | Implemented and covered by isolated fixtures; compiling this character's common file remains blocked by its earlier primary-source failure |
 | Functions and calls | Numeric functions/calls, frames, result bindings and first-wins cross-file lookup implemented |
 | Block attributes | Sources use `persistent(0)` and `ignorehitpause` |
-| More controller payloads | PlaySnd implemented; PalFX is now the first observed blocker, followed by still-unaudited combat/effect controllers |
+| More controller payloads | PlaySnd and the three PalFX variants implemented; combat/effect controller coverage remains incomplete |
 | Explicit Ikemen extensions | `aiLevelF`, `map(...)` and map controllers are not ordinary MUGEN expressions/controllers |
 
-The remaining unsupported rows are source-inspection requirements. PalFX is
+The remaining unsupported rows are source-inspection requirements. aiLevelF is
 the first observed compiler blocker; later files have not compiled successfully.
 Keep the corpus unchanged as an integration target. Add small isolated regression
 fixtures for each missing semantic feature, then rerun this complete character.

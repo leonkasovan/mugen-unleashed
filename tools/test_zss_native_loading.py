@@ -46,6 +46,21 @@ SOUND_PROBE = (
     "PlaySnd{value:S $group,$number;channel:$channel;volume:var(57):=987;"
     "volumescale:50;lowpriority:1;freqmul:1.5;loop:1;abspan:120}\n"
 )
+PALFX_PROBE = (
+    "[StateDef -2]\n"
+    "if var(58)=0 {var(58):=1; call EXFX(31,47,63,3);\n"
+    "if var(57)=425 {ChangeState{value:65001}} else {ChangeState{value:65002}}\n}\n"
+    "[StateDef 65001;type:S;movetype:I;physics:N;]\nCtrlSet{value:1}\n"
+    "[StateDef 65002;type:S;movetype:I;physics:N;]\nCtrlSet{value:0}\n"
+    "[Function EXFX(r,g,b,t)]\n"
+    "PalFX{time:var(57):=$t;color:var(57):=var(57)+$r;"
+    "add:(var(57):=var(57)+$r),(var(57):=var(57)+$g),(var(57):=var(57)+$b);"
+    "mul:(var(57):=var(57)+$t),(var(57):=var(57)+$t),(var(57):=var(57)+$t);"
+    "sinadd:(var(57):=var(57)+$r),(var(57):=var(57)+$g),(var(57):=var(57)+$b),(var(57):=var(57)+$t);"
+    "invertall:var(57):=var(57)+$t}\n"
+    "BGPalFX{time:var(57):=var(57)+$r}\n"
+    "AllPalFX{time:var(57):=var(57)+$b}\n"
+)
 
 
 def sound_bank():
@@ -87,6 +102,7 @@ def main():
         parser.error("output must be inside the repository and outside the source game tree")
     out.mkdir(parents=True, exist_ok=True)
     cases = [
+        ("palfx", "palfx", False),
         ("sounds", "sounds", False),
         ("functions", "functions", False),
         ("legacy-cns", "cns", False),
@@ -122,11 +138,12 @@ def main():
             definition = (char / "kfm.def").read_text()
             (char / "kfm.def").unlink()
             probe = "[StateDef -2]\nUnknown{}\n" if invalid else PROBE
-            if route == "sounds":
-                probe = SOUND_PROBE
+            if route in ("sounds", "palfx"):
+                probe = SOUND_PROBE if route == "sounds" else PALFX_PROBE
                 definition = re.sub(r"(?m)^st\s*=.*$", "st = probe.ZsS\nst9 = kfm.cns", definition)
-                definition = re.sub(r"(?m)^sound\s*=.*$", "sound = probe.snd", definition)
-                (char / "probe.snd").write_bytes(sound_bank())
+                if route == "sounds":
+                    definition = re.sub(r"(?m)^sound\s*=.*$", "sound = probe.snd", definition)
+                    (char / "probe.snd").write_bytes(sound_bank())
             elif route == "functions":
                 probe = FUNCTION_PROBE
                 definition = re.sub(r"(?m)^st\s*=.*$",
@@ -171,7 +188,7 @@ def main():
                   or (route != "cns" and "ZSS state -2 body result 0" not in log)
                   or (route == "cns" and "ZSS state" in log)):
                 raise RuntimeError(name + ": expected a loaded/running ZSS body; inspect " + str(out))
-            if route in ("functions", "sounds") and (
+            if route in ("functions", "sounds", "palfx") and (
                 "ZSS state -2 body result 5" not in log or "ZSS state 65001 body result 0" not in log
                 or "ZSS state 65002 body result" in log
             ):
@@ -179,7 +196,7 @@ def main():
             if route == "sounds":
                 check_sound_trace(game, out)
             print("ok: " + name, flush=True)
-    print("ok: native ZSS loader/function/sound scenarios (bounded smoke, not full-match qualification)")
+    print("ok: native ZSS loader/function/controller scenarios (bounded smoke, not full-match qualification)")
 
 
 if __name__ == "__main__":
