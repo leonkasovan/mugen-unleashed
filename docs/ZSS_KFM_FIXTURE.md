@@ -57,15 +57,16 @@ Loading character chars/kfm_zss/kfm_zss.def...
 Loading cmd command set kfm.cmd...OK
 Loading cns kfm.const...
 Character kfm_zss.def failed to load
-ZSS kfm.zss:24:1: Controller not yet enabled in the ZSS bridge
+ZSS kfm.zss:34:1: Controller not yet enabled in the ZSS bridge
 ```
 
 The latest probe (2026-11-17) exited **1**, rather than reaching gameplay.
 Primary `st`, additional `st0`..`st9` and `stcommon` dispatch explicit `.zss`
-suffixes through the ZSS compiler. Functions/calls are now implemented; the first
-EndState function compiles. The diagnostic points to SysSnd's `playSnd` at line
-24: that controller and its sound-prefix payload are not enabled in the bridge.
-This replaces the prior unsupported-function error at line 16 and the earlier,
+suffixes through the ZSS compiler. Functions/calls and PlaySnd's numeric/local
+parameters and static F/S sound prefixes are implemented. EndState, SysSnd and
+CSnd compile; the diagnostic now points to EXFX's `palFx` at line 34, whose
+payload is not enabled yet. This replaces the previous PlaySnd failure at line
+24, the unsupported-function error at line 16 and the earlier,
 misleading CNS error at line 2559. No upstream script was edited to get past
 these failures. This remains a failed compatibility probe,
 not PASS/SKIP or a test of playable ZSS combat. The upstream character's additional
@@ -85,7 +86,12 @@ python3 tools/test_zss_native_loading.py \
 ```
 
 The runner changes only disposable copies of the game and preserves display
-dimensions. ZIP stream lookup/ownership is checked at the host harness boundary;
+dimensions. An eighth, sound-enabled scenario generates a small PCM SND effect,
+plays it from a function using local arguments and the real controller adapter,
+and checks the existing sound-cache CSV for decode/prepare/successful mixer-start
+events. It uses SDL's dummy audio driver; audible output is not qualified.
+F/common-bank selection has host boundary coverage rather than an independently
+traced native common-sound playback. ZIP stream lookup/ownership is checked at the host harness boundary;
 an end-to-end zipped character run remains open (QuickVS accepts loose DEF paths,
 not the roster's ZIP-entry notation).
 
@@ -94,12 +100,12 @@ not the roster's ZIP-entry notation).
 | Work | Why it is needed |
 |---|---|
 | Primary and common-state ZSS loading | Implemented and covered by isolated fixtures; compiling this character's common file remains blocked by its earlier primary-source failure |
-| Functions and calls | Numeric functions/calls, frames, result bindings and first-wins cross-file lookup implemented; full KFM compilation still blocked by the PlaySnd payload |
+| Functions and calls | Numeric functions/calls, frames, result bindings and first-wins cross-file lookup implemented |
 | Block attributes | Sources use `persistent(0)` and `ignorehitpause` |
-| More controller payloads | PlaySnd, HitDef, AssertSpecial and effects exceed the audited subset |
+| More controller payloads | PlaySnd implemented; PalFX is now the first observed blocker, followed by still-unaudited combat/effect controllers |
 | Explicit Ikemen extensions | `aiLevelF`, `map(...)` and map controllers are not ordinary MUGEN expressions/controllers |
 
-The remaining unsupported rows are source-inspection requirements. PlaySnd is
+The remaining unsupported rows are source-inspection requirements. PalFX is
 the first observed compiler blocker; later files have not compiled successfully.
 Keep the corpus unchanged as an integration target. Add small isolated regression
 fixtures for each missing semantic feature, then rerun this complete character.

@@ -440,6 +440,32 @@ int Cns_ParseSoundRef(const char *s, int *fight, Expr *group, Expr *index, CharD
     return *end == '\0';
 }
 
+/* Port addition: explicit numeric ZSS context. Keep the original entry point's
+ * prefix/terminator quirks unchanged. A missing index keeps its default; an
+ * explicit comma requires an index. F/S precedes whitespace, a local, number,
+ * sign or parenthesized expression, never the first letter of fvar/floor/sin.
+ * Use 'F floor(...)', not a compact identifier prefix, in this profile. */
+int Cns_ParseSoundRefCtx(const char *s, int *fight, Expr *group, Expr *index,
+                         CharData *owner, ExprCompileCtx *ctx)
+{
+    const char *end;
+    int c;
+    if (ctx == NULL) return Cns_ParseSoundRef(s,fight,group,index,owner);
+    if (s == NULL) return 1;
+    while (is_blank(*s)) s++;
+    c=lower(*s);
+    if ((c=='f' || c=='s') &&
+        (is_blank(s[1]) || s[1]=='$' || s[1]=='(' || s[1]=='+' || s[1]=='-' ||
+         s[1]=='.' || (s[1]>='0' && s[1]<='9'))) {
+        *fight=c=='f';s++;
+    }
+    if (!Expr_CompileCtx(s,group,owner,&end,EXPR_WANT_INT,ctx)) return 0;
+    if (*end=='\0') return 1;
+    if (*end!=',') return 0;
+    if (!Expr_CompileCtx(end+1,index,owner,&end,EXPR_WANT_INT,ctx)) return 0;
+    return *end=='\0';
+}
+
 /*
  * 0x00459930: "x, y" float velocities where "n" stands for "none" (-FLT_MAX);
  * the y value is optional. The first "n" may be followed by a blank, ',' or

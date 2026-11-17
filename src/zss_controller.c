@@ -18,6 +18,10 @@ static int allowed_key(const char *type, const char *key)
     if (!_stricmp(type,"changestate"))
         return !_stricmp(key,"value") || !_stricmp(key,"ctrl") || !_stricmp(key,"anim");
     if (!_stricmp(type,"changeanim")) return !_stricmp(key,"value") || !_stricmp(key,"elem");
+    if (!_stricmp(type,"playsnd"))
+        return !_stricmp(key,"value") || !_stricmp(key,"channel") || !_stricmp(key,"volume") ||
+               !_stricmp(key,"volumescale") || !_stricmp(key,"lowpriority") || !_stricmp(key,"freqmul") ||
+               !_stricmp(key,"loop") || !_stricmp(key,"pan") || !_stricmp(key,"abspan");
     if (!_stricmp(type,"displaytoclipboard") || !_stricmp(type,"appendtoclipboard"))
         return !_stricmp(key,"text") || !_stricmp(key,"params");
     return 0;
@@ -39,6 +43,7 @@ int Zss_CompileControllerCtx(const char *source, size_t size, CharData *owner,
     Ini *ini = NULL;
     const char *message = "Expected a controller name";
     size_t i;
+    ExprCompileCtx numeric = {0};
     if (diagnostic != NULL) memset(diagnostic, 0, sizeof(*diagnostic));
     memset(&lex, 0, sizeof(lex)); lex.token.line = lex.token.column = 1;
     if (source == NULL || owner == NULL || out == NULL || size > ZSS_MAX_SOURCE) {
@@ -66,7 +71,9 @@ int Zss_CompileControllerCtx(const char *source, size_t size, CharData *owner,
     ini = ScriptParams_ToIni(pairs, block.count, &message);
     if (ini == NULL) goto done;
     /* Locals remain symbolic operands; never snapshot parameter values here. */
-    if (!StateCtrl_ParseParamsCtx(ini, &controller, owner, ctx)) {
+    /* Standalone ZSS leaves still use strict ZSS semantics, even without any
+     * locals. The parameter reader above keeps rejecting unbound '$' names. */
+    if (!StateCtrl_ParseParamsCtx(ini, &controller, owner, ctx!=NULL ? ctx : &numeric)) {
         message = "Controller parameters rejected by MUGEN compiler"; goto done;
     }
     *out = controller;

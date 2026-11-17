@@ -8,8 +8,9 @@ Research date: 2026-11-16 (Asia/Jakarta).
 Current loader coverage (2026-11-17): explicit `.zss` primary `st`, additional
 `st0`..`st9`, and `stcommon`. Constants and CMD remain on the CNS path. Numeric
 functions/calls, result bindings and cross-file first-wins lookup are
-implemented. The unchanged upstream KFM now compiles its first function and
-stops at SysSnd's unsupported PlaySnd payload (kfm.zss:24:1). Broader controller
+implemented, including numeric PlaySnd payloads and static F/S prefixes. The
+unchanged upstream KFM now compiles its first three functions and stops at
+EXFX's unsupported PalFX payload (kfm.zss:34:1). Broader controller
 payloads, block attributes and Ikemen-specific extensions remain open.
 
 ## 1. Decision
@@ -1409,3 +1410,107 @@ qualification remain open. Next, audit the shared PlaySnd parameter compiler and
 runtime context propagation, including F/S sound prefixes and ownership, before
 enabling it in the bridge; then continue the unchanged KFM probe to the next
 explicit blocker.
+
+### PlaySnd payload and runtime context (2026-11-17)
+
+PlaySnd is now in the shared audited-controller capability table. Its enabled
+keys are value, channel, volume, volumescale, lowpriority, freqmul, loop, pan and
+abspan. Locals reach every stored Expr through Cns_ParseSoundRefCtx,
+PlaySnd_ParseParamsCtx and PlaySnd_RunCtx; the legacy public wrappers pass NULL.
+StateCtrl_ApplyCtx forwards the active function/state frame to the runner.
+Standalone ZSS controller compilation also supplies an empty numeric context,
+so strict ZSS parsing and lazy expressions do not depend on the presence of a
+local-variable resolver. Its token reader still rejects unbound local names.
+
+```text
+[Function SysSnd(group,number,channel)]
+PlaySnd{value:F $group,$number;channel:$channel}
+
+[Function CharSnd(group,number,channel)]
+PlaySnd{value:S $group,$number;channel:$channel;volumescale:50;abspan:120}
+```
+
+F selects the fight/system common SND; S or no prefix selects the executing
+player's character SND. Function lookup still uses the bound state's library,
+while sound-bank ownership retains the original MUGEN player semantics. The
+bank selector is static; runtime group, number and other numeric values use the
+current frame and are not captured at compilation.
+
+In this numeric subset F/S may precede whitespace, a local, numeric literal,
+sign or parenthesized expression. Compact F40/S40 and canonical F $group are
+accepted. A trigger identifier such as fvar, floor, sin or sysvar is not mistaken
+for a one-letter prefix. Use `F floor(...)` when prefixing a trigger; compact
+identifier prefixes such as Ffloor are deliberately outside this initial
+grammar. String/dynamic/common-FX prefixes and Ikemen-only parameters such as
+redirectid, priority, loopstart/end and stop-on-hit/state-change remain rejected.
+
+A lone group keeps the existing default index 0. In explicit ZSS parsing, a
+comma requires a second expression and all input must be consumed. The original
+CNS parser retains its one-value/trailing-comma behavior. This is deliberate
+ZSS validation, not a rewrite of the legacy parser.
+
+Runtime behavior is shared with CNS: channel, group, number, volume,
+volumescale, lowpriority, freqmul, loop and effective pan are evaluated in that
+order before mute, missing-bank or priority gates. Abspan takes precedence over
+pan, and facing multiplication still applies to it. Defaults, invalid-channel/
+group/number handling, player-volume scaling and stereo settings remain shared.
+The original volume parameter is evaluated but unused; freqmul is evaluated and
+checked but does not change playback rate. Those fidelity quirks remain visible
+in this ZSS numeric profile; this is not Ikemen's extended audio runtime.
+
+Two portability/ownership repairs accompany enabling the payload:
+
+- Failed PlaySnd construction now frees all partially compiled expressions
+  before freeing its parameter block. NULL payload cleanup is safe, so a caller
+  can also free a rejected controller without dereferencing a missing block.
+  This applies to both CNS and ZSS failure paths; successful payload layouts
+  and playback behavior are unchanged.
+- Facing-times-pan and Sound_Pan's x-times-320 products now explicitly preserve
+  x86 int32 wrap using unsigned arithmetic and representable conversion. Extreme
+  INT_MIN/INT_MAX inputs no longer invoke signed-overflow UB on either pointer
+  width. Normal coordinates retain the existing integer-division behavior.
+
+Validation completed on Linux x86-64:
+
+- The ZSS suite passes ASan/UBSan, including injected calloc failures throughout
+  the nine-expression payload, malformed/extra/unknown parameters, partial CNS
+  parse failure and safe rejected-controller cleanup. Allocation trackers are
+  empty after each case. Leak detection remains disabled in this environment;
+  the harness now observes StateCtrl's frees as well as Expr/Trigger frees.
+- Real parameter compilation, expression evaluation, function-local frames and
+  pan math run in the host harness. The explicit slot/mixer boundaries record
+  bank, channel, group/index, volume, pan, loop and call order. Cases cover both
+  banks, mutable locals, defaults, absent sounds, mute/no-sounds gates,
+  lowpriority, unavailable slots, invalid inputs, stereo/pan precedence and
+  INT_MIN/INT_MAX. A side-effect sequence asserts that every effective parameter
+  is evaluated once and in order before early returns. A CNS/ZSS static vector
+  produces matching bank/channel/group/index/volume/pan/loop values.
+- The native MUGEN_MODEL3D=0 engine builds, and all eight copied-game smoke
+  scenarios pass. The added scenario enables sound, creates a generated
+  0.1-second mono PCM SND effect at group 65000/index 17, and plays it through a
+  function and the real StateCtrl_RunCtx adapter. It checks a parameter side
+  effect before reaching success state 65001. Existing SoundCache trace events
+  must link that effect's request to preparation and a successful nonnegative
+  SDL_mixer channel result; a copied/stale trace is deleted before the run.
+  Observed: 17640 decoded PCM bytes, slot 0, mixer channel 0. No new production
+  tracing or test-only engine hook was introduced.
+- Existing CNS and lexer suites pass. The changed production units pass strict
+  host syntax checks with ANDROID_PORT and the repository's established warning
+  suppressions. Original structure layouts/assertions and dependencies remain
+  unchanged. No Android NDK/APK, Windows/32-bit or Vita device result is claimed.
+- All 17 upstream KFM file hashes still match. The unmodified fixture exits 1
+  at `ZSS kfm.zss:34:1: Controller not yet enabled in the ZSS bridge`, EXFX's
+  PalFX. EndState, SysSnd and CSnd compile; later source/common files remain
+  unqualified. This is a failed compatibility probe, not playable KFM.
+
+The native audio scenario uses SDL_AUDIODRIVER=dummy: it proves decoder/mixer
+submission and a successful channel start, not audible output. Common F-bank
+selection has exact host boundary coverage; the native generated-effect trace
+qualifies the character S-bank route. Common/eager sound playback, audible/device
+results, BGM completeness, ZIP-character execution and concurrent precache are
+still separate qualification work.
+
+Next priority is PalFX's owned-expression payload and shared runtime context,
+followed by persistence/hitpause block attributes and the remaining KFM
+controllers/extensions. Preserve the pinned corpus unchanged and keep reporting
+the first actual blocker as features become available.

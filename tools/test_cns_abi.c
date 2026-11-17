@@ -56,9 +56,9 @@ void Error_Printf(const char *fmt, ...) { (void)fmt; }
 void Error_Exit(void) { if (expect_exit) longjmp(exit_jump, 1); abort(); }
 void Error_Fatal(const char *fmt, ...) { (void)fmt; abort(); }
 void Error_OutOfMemory(void) { abort(); }
-static int player_warnings, random_reads;
+static int player_warnings, player_warnings_at, random_reads;
 void Player_Warn(Player *p, const char *msg) { (void)p; (void)msg; player_warnings++; }
-void Player_WarnAt(Player *p, const StateCtrl *sc, const char *fmt, ...) { (void)p; (void)sc; (void)fmt; }
+void Player_WarnAt(Player *p, const StateCtrl *sc, const char *fmt, ...) { (void)p; (void)sc; (void)fmt; player_warnings_at++; }
 void TextRing_SetPrintf(TextRing *ring, const char *fmt, ...)
 {
     va_list ap;
@@ -101,9 +101,9 @@ static void test_trigger_eval_ctx(Player *p, const Trigger *t, ExprEvalCtx *ctx)
 #include "../src/trigger.c"
 #define Trigger_EvalCtx test_trigger_eval_ctx
 #include "../src/expr.c"
-#undef free
 #undef Trigger_EvalCtx
 #include "../src/sctrl.c"
+#undef free
 #include "../src/statedef.c"
 
 static void test_trigger_eval(Player *p, const Trigger *t)
@@ -1064,6 +1064,7 @@ static void test_zss_controller(void)
     check_no_allocs();puts("ok: ZSS controller parsing uses real INI and MUGEN parameter/expression compilers");
 }
 #include "test_zss_functions.inc"
+#include "test_zss_playsnd.inc"
 #endif
 int main(void)
 {
@@ -1086,6 +1087,7 @@ int main(void)
     test_zss_functions();
     test_zss_function_library();
     test_zss_function_limits();
+    test_zss_playsnd();
 #else
     test_controller_parse(); test_variables(); test_clipboard();
     test_expr_allocs(); test_trigger_copy_math(); test_state_headers();

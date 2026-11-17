@@ -42,6 +42,14 @@
 
 /* ------------------------------------------------------------ sound helpers */
 
+/* Portability fix: preserve x86 int32 multiply wrap for extreme pan values
+ * without signed-overflow UB on either pointer width. */
+static int sound_mul32(int a, int b)
+{
+    uint32_t bits=(uint32_t)a*(uint32_t)b;
+    return bits<=INT32_MAX ? (int)bits : (int)((int64_t)bits-INT64_C(4294967296));
+}
+
 /* 0x00444AA0: a system sound (menus) at the volume of the [Sound] settings. */
 void Sound_PlaySystem(Snd *snd, int group, int channel, int number, double volume)
 {
@@ -64,7 +72,7 @@ int Sound_Pan(int x)
 {
     GameVars *g = g_game;
     int width = (int)g->game_coord[0];
-    int pos = x * 320 / width;
+    int pos = sound_mul32(x,320) / width;
     int range;
     int pan;
 
@@ -179,7 +187,7 @@ int StateCtrl_VersionOk(int type, unsigned int version)
 
 /* ------------------------------------------------------------ parsing */
 
-/* Port addition: explicitly audited inline-expression controllers. The same
+/* Port addition: explicitly audited context-aware controllers. The same
  * capability table guards compilation and context-aware runtime dispatch. */
 static const struct {const char *name;int type;} script_controllers[]={
     {"velset",SCTRL_VELSET},{"veladd",SCTRL_VELADD},
@@ -187,7 +195,8 @@ static const struct {const char *name;int type;} script_controllers[]={
     {"ctrlset",SCTRL_CTRLSET},{"changestate",SCTRL_CHANGESTATE},
     {"changeanim",SCTRL_CHANGEANIM},{"turn",SCTRL_TURN},{"null",SCTRL_NULL},
     {"displaytoclipboard",SCTRL_DISPLAYTOCLIPBOARD},
-    {"appendtoclipboard",SCTRL_APPENDTOCLIPBOARD},{"clearclipboard",SCTRL_CLEARCLIPBOARD}
+    {"appendtoclipboard",SCTRL_APPENDTOCLIPBOARD},{"clearclipboard",SCTRL_CLEARCLIPBOARD},
+    {"playsnd",SCTRL_PLAYSND}
 };
 int StateCtrl_ScriptType(const char *name)
 {
@@ -473,7 +482,9 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
             return 0;
         }
         sc->type = SCTRL_PLAYSND;
-        if (!PlaySnd_ParseParams(ps, ini, owner)) {
+        if (!PlaySnd_ParseParamsCtx(ps, ini, owner, ctx)) {
+            /* Portability fix: release every partially compiled expression. */
+            PlaySndParams_Free(ps);
             free(ps);
             Error_Printf("Error parsing PlaySnd\n");
             return 0;
@@ -2299,7 +2310,7 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
         run_change_anim(p, sc, 1, frame);
         return 0;
     case SCTRL_PLAYSND:
-        PlaySnd_Run(sc->params, p, sc);
+        PlaySnd_RunCtx(sc->params, p, sc, frame);
         return 0;
     case SCTRL_STOPSND:
         v = Expr_EvalInt(p, &sc->arg[0], 1);
@@ -3337,6 +3348,10 @@ void PalFxParams_Free(PalFxParams *pf)
 /* 0x0044E3C0: PlaySnd parameters; the value is required. */
 int PlaySnd_ParseParams(PlaySndParams *ps, Ini *ini, CharData *owner)
 {
+    return PlaySnd_ParseParamsCtx(ps,ini,owner,NULL);
+}
+int PlaySnd_ParseParamsCtx(PlaySndParams *ps, Ini *ini, CharData *owner, ExprCompileCtx *ctx)
+{
     const char *value = Ini_GetValue(ini, "value");
     const char *s;
     int fight;
@@ -3348,37 +3363,37 @@ int PlaySnd_ParseParams(PlaySndParams *ps, Ini *ini, CharData *owner)
     Expr_SetFloat(&ps->freqmul, 1.0f);
     Expr_SetFloat(&ps->volumescale, 100.0f);
     fight = 0;
-    if (!Cns_ParseSoundRef(value, &fight, &ps->group, &ps->number, owner)) {
+    if (!Cns_ParseSoundRefCtx(value, &fight, &ps->group, &ps->number, owner, ctx)) {
         return 0;
     }
     ps->fight = fight;
-    if (!compile_key(ini, "volume", &ps->volume, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "volume", &ps->volume, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!compile_key(ini, "volumescale", &ps->volumescale, owner, EXPR_WANT_FLOAT)) {
+    if (!compile_key_ctx(ini, "volumescale", &ps->volumescale, owner, EXPR_WANT_FLOAT, ctx)) {
         return 0;
     }
-    if (!compile_key(ini, "channel", &ps->channel, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "channel", &ps->channel, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!compile_key(ini, "lowpriority", &ps->lowpriority, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "lowpriority", &ps->lowpriority, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
-    if (!compile_key(ini, "freqmul", &ps->freqmul, owner, EXPR_WANT_FLOAT)) {
+    if (!compile_key_ctx(ini, "freqmul", &ps->freqmul, owner, EXPR_WANT_FLOAT, ctx)) {
         return 0;
     }
-    if (!compile_key(ini, "loop", &ps->loop, owner, EXPR_WANT_INT)) {
+    if (!compile_key_ctx(ini, "loop", &ps->loop, owner, EXPR_WANT_INT, ctx)) {
         return 0;
     }
     s = Ini_GetValue(ini, "abspan");
     if (s != NULL) {
-        if (!Expr_Compile(s, &ps->pan, owner, NULL, EXPR_WANT_INT)) {
+        if (!compile_expr_ctx(s, &ps->pan, owner, EXPR_WANT_INT, ctx)) {
             return 0;
         }
         ps->abspan = 1;
         return 1;
     }
-    return compile_key(ini, "pan", &ps->pan, owner, EXPR_WANT_INT);
+    return compile_key_ctx(ini, "pan", &ps->pan, owner, EXPR_WANT_INT, ctx);
 }
 
 /*
@@ -3389,6 +3404,10 @@ int PlaySnd_ParseParams(PlaySndParams *ps, Ini *ini, CharData *owner)
  */
 void PlaySnd_Run(PlaySndParams *ps, Player *p, StateCtrl *sc)
 {
+    PlaySnd_RunCtx(ps,p,sc,NULL);
+}
+void PlaySnd_RunCtx(PlaySndParams *ps, Player *p, StateCtrl *sc, ExprEvalCtx *frame)
+{
     GameVars *g;
     Snd *snd;
     int channel, group, number, fight, lowpriority, loop, abspan, pan, id, slot, x;
@@ -3398,17 +3417,17 @@ void PlaySnd_Run(PlaySndParams *ps, Player *p, StateCtrl *sc)
     if (ps == NULL) {
         return;
     }
-    channel = Expr_EvalInt(p, &ps->channel, 1);
-    group = Expr_EvalInt(p, &ps->group, 1);
-    number = Expr_EvalInt(p, &ps->number, 1);
-    Expr_EvalInt(p, &ps->volume, 1);
-    volumescale = Expr_EvalFloat(p, &ps->volumescale);
+    channel = Expr_EvalIntCtx(p, &ps->channel, 1, frame);
+    group = Expr_EvalIntCtx(p, &ps->group, 1, frame);
+    number = Expr_EvalIntCtx(p, &ps->number, 1, frame);
+    Expr_EvalIntCtx(p, &ps->volume, 1, frame);
+    volumescale = Expr_EvalFloatCtx(p, &ps->volumescale, frame);
     fight = ps->fight;
-    lowpriority = Expr_EvalInt(p, &ps->lowpriority, 1);
-    freqmul = Expr_EvalFloat(p, &ps->freqmul);
-    loop = Expr_EvalInt(p, &ps->loop, 1);
+    lowpriority = Expr_EvalIntCtx(p, &ps->lowpriority, 1, frame);
+    freqmul = Expr_EvalFloatCtx(p, &ps->freqmul, frame);
+    loop = Expr_EvalIntCtx(p, &ps->loop, 1, frame);
     abspan = ps->abspan;
-    pan = Expr_EvalInt(p, &ps->pan, 1);
+    pan = Expr_EvalIntCtx(p, &ps->pan, 1, frame);
     g = g_game;
     if (!g->sound_enabled || g->no_sounds != 0) {
         return;
@@ -3440,7 +3459,7 @@ void PlaySnd_Run(PlaySndParams *ps, Player *p, StateCtrl *sc)
     if (slot == -1 || group == -1) {
         return;
     }
-    x = p->facing * pan;
+    x = sound_mul32(p->facing,pan);
     g = g_game;
     if (!abspan) {
         x = Ftol(p->pos.x - g->camera_offset_x + x);
@@ -3462,6 +3481,8 @@ void PlaySnd_Run(PlaySndParams *ps, Player *p, StateCtrl *sc)
 /* 0x0044E890 */
 void PlaySndParams_Free(PlaySndParams *ps)
 {
+    /* Failed controller construction has no published payload. */
+    if (ps == NULL) return;
     Expr_Free(&ps->channel);
     Expr_Free(&ps->group);
     Expr_Free(&ps->number);

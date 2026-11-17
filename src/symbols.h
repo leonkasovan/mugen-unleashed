@@ -2091,5 +2091,8 @@ int StateCtrl_ScriptType(const char *name);
 int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompileCtx *ctx);
 int StateCtrl_RunCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *frame);
 int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *frame);
+int Cns_ParseSoundRefCtx(const char *s, int *fight, Expr *group, Expr *index, CharData *owner, ExprCompileCtx *ctx);
+int PlaySnd_ParseParamsCtx(PlaySndParams *ps, Ini *ini, CharData *owner, ExprCompileCtx *ctx);
+void PlaySnd_RunCtx(PlaySndParams *ps, Player *p, StateCtrl *sc, ExprEvalCtx *frame);
 
 #endif /* MUGEN_SYMBOLS_H */
