@@ -221,10 +221,10 @@ jobs:
           set "RC=%ERRORLEVEL%"
           type build\tmp\port-android.log
           if "%RC%"=="0" exit /b 0
-          rem Surface the tail as annotations: the step log needs a login to read,
-          rem an annotation does not, and a port failing in eight seconds with no
-          rem visible reason is the failure mode this exists for.
-          powershell -NoProfile -Command "Get-Content build\tmp\port-android.log -Tail 30 | ForEach-Object { Write-Host ('::error::' + $_) }"
+          rem The step log needs a login to read; an annotation does not. The
+          rem helper filters for the lines that name a cause -- GitHub keeps the
+          rem first ten annotations, so a plain tail would show only progress.
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools\fail_annotations.ps1 -Log build\tmp\port-android.log
           exit /b 1
       - name: Report packaged APK
         shell: pwsh
@@ -283,10 +283,10 @@ jobs:
           set "RC=%ERRORLEVEL%"
           type build\tmp\port-psvita.log
           if "%RC%"=="0" exit /b 0
-          rem Surface the tail as annotations: the step log needs a login to read,
-          rem an annotation does not, and a port failing in eight seconds with no
-          rem visible reason is the failure mode this exists for.
-          powershell -NoProfile -Command "Get-Content build\tmp\port-psvita.log -Tail 30 | ForEach-Object { Write-Host ('::error::' + $_) }"
+          rem The step log needs a login to read; an annotation does not. The
+          rem helper filters for the lines that name a cause -- GitHub keeps the
+          rem first ten annotations, so a plain tail would show only progress.
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools\fail_annotations.ps1 -Log build\tmp\port-psvita.log
           exit /b 1
       - name: Report packaged VPK
         shell: pwsh
@@ -342,10 +342,10 @@ jobs:
           set "RC=%ERRORLEVEL%"
           type build\tmp\port-arm64.log
           if "%RC%"=="0" exit /b 0
-          rem Surface the tail as annotations: the step log needs a login to read,
-          rem an annotation does not, and a port failing in eight seconds with no
-          rem visible reason is the failure mode this exists for.
-          powershell -NoProfile -Command "Get-Content build\tmp\port-arm64.log -Tail 30 | ForEach-Object { Write-Host ('::error::' + $_) }"
+          rem The step log needs a login to read; an annotation does not. The
+          rem helper filters for the lines that name a cause -- GitHub keeps the
+          rem first ten annotations, so a plain tail would show only progress.
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools\fail_annotations.ps1 -Log build\tmp\port-arm64.log
           exit /b 1
       # The GLES renderer reads its shaders from data/gles/*, and the platform
       # config is data/mugen.arm64.cfg -- both ours, not game content, and both
