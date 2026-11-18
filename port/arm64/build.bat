@@ -629,8 +629,8 @@ rem under a temporary name and moved into place only after the checksum matches,
 rem and the previous binary is kept as .prev.
 rem
 rem SSHOPTS keep the host key out of the user profile and hide OpenSSH's
-rem post-quantum advisory. DEVICE_PASS is not honoured here -- Windows has no
-rem sshpass; use a key, or type the password when ssh asks for it.
+rem post-quantum advisory. When sshpass.exe is available, pass DEVICE_PASS
+rem through SSHPASS. Otherwise OpenSSH uses a key or prompts interactively.
 :upload
 echo.
 echo ==^> Uploading to %DEVICE%:%DEVICE_DIR%/
@@ -656,8 +656,11 @@ set "UPLOAD_CMD=!UPLOAD_CMD! && cat > $stage && digest=$(md5sum < $stage) && set
 if "%KEEP_OLD%"=="1" set "UPLOAD_CMD=!UPLOAD_CMD! && if [ -f '!REMOTE_BIN!' ]; then cp -p -- '!REMOTE_BIN!' $stage.prev && mv -fT -- $stage.prev '!REMOTE_BIN!.prev' || exit 1; fi"
 set "UPLOAD_CMD=!UPLOAD_CMD! && mv -fT -- $stage '!REMOTE_BIN!'"
 
+set "SSH_LAUNCH=ssh.exe"
+if defined DEVICE_PASS where sshpass.exe >nul 2>&1 && set "SSH_LAUNCH=sshpass.exe -e ssh.exe"
+set "SSHPASS=!DEVICE_PASS!"
 echo     sending %BIN%
-ssh.exe -T %SSHOPTS% -- "%DEVICE%" "!UPLOAD_CMD:"=\"!" < "%OUT%\%BIN%" || (
+%SSH_LAUNCH% -T %SSHOPTS% -- "%DEVICE%" "!UPLOAD_CMD:"=\"!" < "%OUT%\%BIN%" || (
     echo error: upload or installation failed -- see SSH output above
     exit /b 1
 )
