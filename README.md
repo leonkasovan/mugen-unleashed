@@ -21,6 +21,7 @@ retired. Android and PS Vita retain their own CMake projects.
 build.bat             :: install what is missing, then build win32 and win64
 build.bat /build32    :: only the reference build
 build.bat /build64    :: only the 64-bit build
+build.bat /setup      :: install what is missing, build nothing
 ```
 
 Or put the desired kit on PATH and run `make check-toolchain` then `make -j8`:

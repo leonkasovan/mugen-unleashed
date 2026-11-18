@@ -376,7 +376,9 @@ the 32-bit reference build, put `x86devkit` first or pass the compiler
 `build.bat` (repository root) installs both devkits and both dependency trees
 from nothing, verifies them and builds: with no arguments it does the whole
 job (install what is missing, then build win32 and win64); `/build`,
-`/build32`, `/build64`, `/check` and `/force` narrow it. The kits go to
+`/build32`, `/build64`, `/setup`, `/check` and `/force` narrow it (`/setup`
+installs the kits and trees and builds nothing, which is what the CI port jobs
+need before they run a port's own `build.bat`). The kits go to
 `C:\w64devkit` and `C:\x86devkit`; the trees go to `build/sysroots/win64-sysroot`
 and `build/sysroots/win32-sysroot`.
 

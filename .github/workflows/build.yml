@@ -12,13 +12,15 @@ permissions:
   contents: read
 jobs:
   linux:
+    name: Linux x64
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
       - name: Install SDL2 development dependencies
-        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev libsdl2-mixer-dev libsdl2-ttf-dev libpng-dev zlib1g-dev libglu1-mesa-dev
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev libsdl2-mixer-dev libsdl2-ttf-dev libpng-dev zlib1g-dev libglu1-mesa-dev zip unzip
       - name: Build desktop GL and GLES
         run: |
           make -j2
@@ -49,18 +51,42 @@ jobs:
           sh tools/test_zss_controller.sh
           sh tools/test_gl_errors.sh
           sh tools/test_model.sh
+      # The Makefile's own STRIPPED rule -- the same strip `make install` copies
+      # into install/ -- rather than a `strip` of our own, so the released binary
+      # is the one the project's own install path produces. `zip` (not tar) so
+      # the executable bit survives extraction.
+      - name: Package stripped executable
+        run: |
+          make build/linux-x64-sdl2/mugen-linux-x64-stripped
+          rm -rf build/dist-linux && mkdir -p build/dist-linux
+          cp build/linux-x64-sdl2/mugen-linux-x64-stripped build/dist-linux/mugen-linux-x64
+          cp README.md build/dist-linux/
+          cp third_party/README.md build/dist-linux/THIRD_PARTY.md
+          chmod +x build/dist-linux/mugen-linux-x64
+          full=$(stat -c%s build/linux-x64-sdl2/mugen-linux-x64)
+          thin=$(stat -c%s build/dist-linux/mugen-linux-x64)
+          if [ "$thin" -ge "$full" ]; then
+              echo "error: the packaged binary ($thin) is not stripped; the build output is $full" >&2
+              exit 1
+          fi
+          rm -f mugen-linux-x64-sdl2.zip
+          (cd build/dist-linux && zip -9 -r ../../mugen-linux-x64-sdl2.zip .)
+          echo "stripped: $full -> $thin bytes"
+          unzip -l mugen-linux-x64-sdl2.zip
       - uses: actions/upload-artifact@v4
         with:
           name: mugen-linux-x64-sdl2
-          path: build/linux-x64-sdl2/mugen-linux-x64
-      - name: Attach Linux executable to tagged release
+          path: mugen-linux-x64-sdl2.zip
+          if-no-files-found: error
+      - name: Attach Linux package to tagged release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: build/linux-x64-sdl2/mugen-linux-x64
+          files: mugen-linux-x64-sdl2.zip
   windows:
     name: MinGW ${{ matrix.target }} SDL2
     runs-on: windows-2022
+    timeout-minutes: 90
     # Keep both kits writable and on the checkout volume; no C: root install.
     env:
       W64DEVKIT_DIR: ${{ github.workspace }}\build\toolchains\w64devkit
@@ -107,16 +133,26 @@ jobs:
         run: |
           set "PATH=%W64DEVKIT_DIR%\bin;%PATH%"
           python tools/check_sdl2_only.py --binary build/${{ matrix.target == 'win32' && 'mingw-sdl2' || 'mingw64-sdl2' }}/mugen-mingw-${{ matrix.target }}-sdl2.exe
-      - name: Package standalone executable
+      # The -stripped.exe is what `make install` puts into install/, i.e. what a
+      # player actually runs; the plain executable beside it keeps its symbols for
+      # debugging. Packaging the build output shipped 18 MB where 8 MB would run.
+      - name: Package stripped executable
         shell: pwsh
         run: |
+          $dir = 'build/${{ matrix.target == 'win32' && 'mingw-sdl2' || 'mingw64-sdl2' }}'
+          $name = 'mugen-mingw-${{ matrix.target }}-sdl2'
+          $stripped = Join-Path $dir "$name-stripped.exe"
+          $full = Join-Path $dir "$name.exe"
+          if (-not (Test-Path $stripped)) { throw "stripped executable missing: $stripped (make install produces it)" }
+          $thin = (Get-Item $stripped).Length
+          $fat = (Get-Item $full).Length
+          if ($thin -ge $fat) { throw "the stripped binary ($thin) is not smaller than the build output ($fat)" }
           New-Item -ItemType Directory -Force build/dist | Out-Null
-          $exe = Get-ChildItem build -Recurse -Filter mugen-mingw-${{ matrix.target }}-sdl2.exe | Select-Object -First 1
-          if (-not $exe) { throw "SDL2 executable missing" }
-          Copy-Item $exe.FullName build/dist/
+          Copy-Item $stripped "build/dist/$name.exe"
           Copy-Item README.md build/dist/
           Copy-Item third_party/README.md build/dist/THIRD_PARTY.md
-          Compress-Archive -Path build/dist/* -DestinationPath mugen-mingw-${{ matrix.target }}-sdl2.zip
+          Compress-Archive -Path build/dist/* -DestinationPath $name.zip -Force
+          Write-Host "stripped: $fat -> $thin bytes"
       - uses: actions/upload-artifact@v4
         with:
           name: mugen-mingw-${{ matrix.target }}-sdl2
@@ -128,3 +164,198 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: mugen-mingw-${{ matrix.target }}-sdl2.zip
+
+  # ---------------------------------------------------------------------------
+  # The three ports. Each needs tools the runner does not have -- a JDK plus the
+  # Android SDK/NDK, VitaSDK, or Arm's cross toolchain -- so each downloads a few
+  # hundred MB and takes tens of minutes. They are therefore kept off pushes and
+  # pull requests: a push still answers "did the engine build" on the desktop
+  # jobs in minutes, while a tag or a manual dispatch also carries every platform
+  # to the release. Widen the `if:` on any of them to run it on every push.
+  #
+  # All three are cross-built on windows-2022 because the only entry points are
+  # the cmd.exe build.bat files (see each port's README); none of them needs a
+  # device, so a build here is real evidence for the artifact, not for hardware.
+  # ---------------------------------------------------------------------------
+  android:
+    name: Android arm64-v8a APK
+    runs-on: windows-2022
+    timeout-minutes: 150
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    env:
+      W64DEVKIT_DIR: ${{ github.workspace }}\build\toolchains\w64devkit
+      X86DEVKIT_DIR: ${{ github.workspace }}\build\toolchains\x86devkit
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      # The ports' build.bat files take make/sh/cmake/ninja/pkg-config from a devkit
+      # and never download one, so install the kits (and the dependency trees) the
+      # same way the Windows job does, minus the desktop build. /setup also fetches
+      # the game tree into install/, which is the APK's asset source.
+      - name: Install dependency kits
+        shell: cmd
+        run: build.bat /setup
+      - name: Confirm the game tree is there
+        shell: cmd
+        run: |
+          set "PATH=%W64DEVKIT_DIR%\bin;%PATH%"
+          sh tools/fetch_game_data.sh --check --dest install
+          if errorlevel 1 exit /b 1
+      - name: Build APK
+        shell: cmd
+        run: |
+          set "PATH=%W64DEVKIT_DIR%\bin;%PATH%"
+          port\android\build.bat
+          if errorlevel 1 exit /b 1
+      - name: Report packaged APK
+        shell: pwsh
+        run: |
+          $apk = 'build/android/mugen-android-arm64-v8a.apk'
+          if (-not (Test-Path $apk)) { throw "APK missing: $apk" }
+          $size = [math]::Round((Get-Item $apk).Length / 1MB, 1)
+          Write-Host "APK: $apk ($size MB)"
+          Write-Host "debug-signed unless ANDROID_KEYSTORE was supplied; installable as-is"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mugen-android-arm64-v8a
+          path: build/android/mugen-android-arm64-v8a.apk
+          if-no-files-found: error
+      - name: Attach APK to tagged release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/android/mugen-android-arm64-v8a.apk
+
+  psvita:
+    name: PS Vita VPK
+    runs-on: windows-2022
+    timeout-minutes: 150
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    env:
+      W64DEVKIT_DIR: ${{ github.workspace }}\build\toolchains\w64devkit
+      X86DEVKIT_DIR: ${{ github.workspace }}\build\toolchains\x86devkit
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      # VitaSDK lands at C:\vitasdk -- the path its own tools expect, and one of
+      # the two sanctioned exceptions to "keep artefacts inside the project".
+      # What the script downloads still goes to build/downloads/, its staging to
+      # build/tmp/, and its output to build/psvita/.
+      # The kits are installed the same way the Windows job does it: the Vita
+      # script takes cmake/ninja/pkg-config from a devkit and never fetches one.
+      - name: Install dependency kits
+        shell: cmd
+        run: build.bat /setup
+      # The VPK packs install/ as /data, so the tree has to be there first.
+      - name: Confirm the game tree is there
+        shell: cmd
+        run: |
+          set "PATH=%W64DEVKIT_DIR%\bin;%PATH%"
+          sh tools/fetch_game_data.sh --check --dest install
+          if errorlevel 1 exit /b 1
+      - name: Build VPK
+        shell: cmd
+        run: |
+          set "PATH=%W64DEVKIT_DIR%\bin;%PATH%"
+          port\psvita\build.bat --data install
+          if errorlevel 1 exit /b 1
+      - name: Report packaged VPK
+        shell: pwsh
+        run: |
+          $vpk = 'build/psvita/mugen-psvita.vpk'
+          if (-not (Test-Path $vpk)) { throw "VPK missing: $vpk" }
+          $size = [math]::Round((Get-Item $vpk).Length / 1MB, 1)
+          Write-Host "VPK: $vpk ($size MB), packs install/ as /data and bundles libshacccg.suprx"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mugen-psvita
+          path: |
+            build/psvita/mugen-psvita.vpk
+            build/psvita/mugen-psvita.self
+          if-no-files-found: error
+      - name: Attach VPK to tagged release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/psvita/mugen-psvita.vpk
+
+  arm64:
+    name: Linux arm64 (cross, GLES)
+    runs-on: windows-2022
+    timeout-minutes: 120
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    # TOOLCHAIN_DIR is pinned into the checkout rather than left at the script's
+    # C:\arm-gnu-toolchain-<version> default, so the packaging step can name the
+    # same strip binary the build used. It must agree with ARM64_TOOLCHAIN.
+    env:
+      W64DEVKIT_DIR: ${{ github.workspace }}\build\toolchains\w64devkit
+      X86DEVKIT_DIR: ${{ github.workspace }}\build\toolchains\x86devkit
+      ARM64_TOOLCHAIN: '9.2'
+      TOOLCHAIN_DIR: ${{ github.workspace }}\build\toolchains\arm-gnu-toolchain-9.2
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      # The arm64 script needs make/sh from a devkit and never downloads one.
+      - name: Install dependency kits
+        shell: cmd
+        run: build.bat /setup
+      # Defaults: GLES 3.0 renderer (the handhelds expose only GLES), models on,
+      # glibc 2.30 for the toolchain. The dependency tree is the published
+      # arm64-sysroot.zip asset, checksum-verified by the script.
+      - name: Build
+        shell: cmd
+        run: |
+          set "PATH=%W64DEVKIT_DIR%\bin;%PATH%"
+          port\arm64\build.bat
+          if errorlevel 1 exit /b 1
+      # The GLES renderer reads its shaders from data/gles/*, and the platform
+      # config is data/mugen.arm64.cfg -- both ours, not game content, and both
+      # what `make install` puts beside the binary. Ship them with it, plus the
+      # binary stripped with the same toolchain that built it.
+      - name: Package stripped executable
+        shell: pwsh
+        run: |
+          $dir = 'build/linux-arm64-aarch64-none-linux-gnu-sdl2'
+          $name = 'mugen-linux-arm64-aarch64-none-linux-gnu'
+          $bin = Join-Path $dir $name
+          if (-not (Test-Path $bin)) { throw "arm64 executable missing: $bin" }
+          $dist = 'build/dist-arm64'
+          Remove-Item -Recurse -Force $dist -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force "$dist/data/gles" | Out-Null
+          & "$env:TOOLCHAIN_DIR\bin\aarch64-none-linux-gnu-strip.exe" -o (Join-Path $dist $name) $bin
+          if ($LASTEXITCODE -ne 0) { throw "aarch64 strip failed ($LASTEXITCODE)" }
+          $thin = (Get-Item (Join-Path $dist $name)).Length
+          $fat = (Get-Item $bin).Length
+          if ($thin -ge $fat) { throw "the stripped binary ($thin) is not smaller than the build output ($fat)" }
+          Copy-Item res/shaders/gles/* "$dist/data/gles/"
+          Copy-Item port/arm64/mugen.arm64.cfg "$dist/data/mugen.arm64.cfg"
+          Copy-Item README.md $dist/
+          Copy-Item third_party/README.md "$dist/THIRD_PARTY.md"
+          Compress-Archive -Path "$dist/*" -DestinationPath mugen-linux-arm64.zip -Force
+          Write-Host "stripped: $fat -> $thin bytes"
+      - name: Note the executable bit
+        shell: bash
+        run: |
+          # Compress-Archive writes no Unix mode, so a Windows-made zip loses the
+          # executable bit on extraction. Say so where a downloader will look.
+          {
+              echo '### mugen-linux-arm64.zip'
+              echo ''
+              echo '    chmod +x mugen-linux-arm64-aarch64-none-linux-gnu'
+              echo ''
+              echo 'Ship `data/gles/` and `data/mugen.arm64.cfg` next to the binary;'
+              echo 'the GLES renderer reads the shaders from there.'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mugen-linux-arm64
+          path: mugen-linux-arm64.zip
+          if-no-files-found: error
+      - name: Attach arm64 package to tagged release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: mugen-linux-arm64.zip

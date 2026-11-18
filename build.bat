@@ -6,6 +6,7 @@ rem   build.bat             install what is missing, then build win32 and win64
 rem   build.bat /build      the same thing, spelled out
 rem   build.bat /build64    ... then build win64 only
 rem   build.bat /build32    ... then build win32 only
+rem   build.bat /setup      install what is missing, build nothing
 rem   build.bat /check      only verify what is installed, install nothing
 rem   build.bat /force      re-download and re-extract even if installed
 rem   build.bat /help
@@ -99,6 +100,15 @@ for %%a in (%*) do (
     )
     if /i "%%~a"=="/build32" set "DO_BUILD32=1"
     if /i "%%~a"=="/build64" set "DO_BUILD64=1"
+    rem /setup is the "install, build nothing" form the port scripts have
+    rem (--setup in port\arm64, port\psvita and port\android). It is the same
+    rem state the script already reaches when no build flag is given, spelled
+    rem out so a caller -- CI builds the Android/Vita/arm64 ports and only wants
+    rem the kits on disk -- does not have to rely on that accident.
+    if /i "%%~a"=="/setup" (
+        set "DO_BUILD32=0"
+        set "DO_BUILD64=0"
+    )
     if /i "%%~a"=="/force" set "DO_FORCE=1"
     if /i "%%~a"=="/check" set "DO_CHECK=1"
     if /i "%%~a"=="/help" goto :usage
@@ -198,6 +208,7 @@ echo   build.bat             install what is missing, then build win32 and win64
 echo   build.bat /build      the same thing, spelled out
 echo   build.bat /build32    ... only the reference build
 echo   build.bat /build64    ... only the 64-bit build
+echo   build.bat /setup      install what is missing, build nothing
 echo   build.bat /check      only verify what is installed
 echo   build.bat /force      re-download and re-extract even if installed
 echo.

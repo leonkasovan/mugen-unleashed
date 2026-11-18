@@ -17,6 +17,7 @@ build.bat             :: install what is missing, then build win32 and win64
 build.bat /build      :: the same thing, spelled out
 build.bat /build32    :: ... only the reference build
 build.bat /build64    :: ... only the 64-bit build
+build.bat /setup      :: install what is missing, build nothing
 build.bat /check      :: verify what is installed, install nothing
 build.bat /force      :: re-download and re-extract
 ```
