@@ -103,6 +103,8 @@ int GlesDraw_LoadProgram(GlesProgram *out, const char *vert_src, const char *fra
      * guarantee before link. */
     glBindAttribLocation(p, GLES_ATTR_POSITION, "a_position");
     glBindAttribLocation(p, GLES_ATTR_TEXCOORD, "a_texcoord");
+    glBindAttribLocation(p, GLES_ATTR_ATLAS_MVP, "a_instance_mvp");
+    glBindAttribLocation(p, GLES_ATTR_ATLAS_RECT, "a_atlas_rect");
     glLinkProgram(p);
     glGetProgramiv(p, GL_LINK_STATUS, &ok);
     if (!ok) {
@@ -131,10 +133,13 @@ int GlesDraw_LoadProgram(GlesProgram *out, const char *vert_src, const char *fra
     out->colorbal = glGetUniformLocation(p, "colorbal");
     out->texsize = glGetUniformLocation(p, "texsize");
     out->src_alphamul = glGetUniformLocation(p, "src_alphamul");
-    if (out->u_mvp < 0) {
+    if (out->u_mvp < 0 &&
+        (glGetAttribLocation(p, "a_instance_mvp") != GLES_ATTR_ATLAS_MVP ||
+         glGetAttribLocation(p, "a_atlas_rect") != GLES_ATTR_ATLAS_RECT ||
+         out->texsize < 0)) {
         /* Without the MVP the quad cannot be placed; treat it as a failure
          * rather than drawing at an undefined transform. */
-        Log_Printf("GLES: %s has no u_mvp uniform\n", label);
+        Log_Printf("GLES: %s has no usable sprite transform\n", label);
         glDeleteProgram(p);
         out->program = 0;
         return 0;
@@ -203,51 +208,11 @@ void GlesDraw_InvalidateState(void)
     g_stateAttribsValid = 0;
 }
 
-void GlesDraw_Quad(GlesBuffer *buf, const GlesProgram *prog, const float *mvp16, const float *positions8,
-                   const float *texcoords16, int indexed, int mask, float add_r, float add_g, float add_b,
-                   float mul_r, float mul_g, float mul_b, int invertall, float colorbal, float tex_w, float tex_h,
-                   float src_alphamul)
+static void gles_draw_uniforms(const GlesProgram *prog, const float *mvp16, int mask,
+                               float add_r, float add_g, float add_b, float mul_r, float mul_g,
+                               float mul_b, int invertall, float colorbal, float tex_w, float tex_h,
+                               float src_alphamul)
 {
-    float verts[GL_QUAD_VERTEX_COUNT * GL_QUAD_VERTEX_FLOATS];
-    GlQuadVerts quad;
-    unsigned int stride;
-    unsigned int pos_off;
-    unsigned int tc_off;
-    unsigned long long bp_start;
-    unsigned long long bp_quad_start;
-    int i;
-
-    if (buf == NULL || prog == NULL || prog->program == 0 || mvp16 == NULL || positions8 == NULL ||
-        texcoords16 == NULL) {
-        return;
-    }
-    if (buf->vbo == 0) {
-        glGenBuffers(1, &buf->vbo);
-        if (buf->vbo == 0) {
-            Log_Printf("GLES: glGenBuffers failed\n");
-            return;
-        }
-    }
-
-    /* The caller hands over the corners and texcoords the CPU geometry step
-     * produced (GlQuad_Build); this only interleaves them for the GPU. */
-    for (i = 0; i < GL_QUAD_VERTEX_COUNT; i++) {
-        quad.pos[i][0] = positions8[i * 2];
-        quad.pos[i][1] = positions8[i * 2 + 1];
-        quad.tc[i][0] = texcoords16[i * 4];
-        quad.tc[i][1] = texcoords16[i * 4 + 1];
-        quad.tc[i][2] = texcoords16[i * 4 + 2];
-        quad.tc[i][3] = texcoords16[i * 4 + 3];
-    }
-    quad.count = GL_QUAD_VERTEX_COUNT;
-    GlQuad_Interleave(verts, &quad);
-    GlQuad_Layout(&stride, &pos_off, &tc_off);
-
-    /* MUGEN_DEBUG: times the whole submission. The counter reads are part of
-     * what is measured, so the result is an upper bound (batchprof.h). */
-    bp_quad_start = BATCHPROF_NOW();
-    bp_start = bp_quad_start;
-
     /* Program: skip the bind when it is already the current one. Locations of
      * -1 are optimised away and setting them is a no-op by definition. */
     if (!g_stateProgramValid || g_stateProgram != prog->program) {
@@ -259,7 +224,7 @@ void GlesDraw_Quad(GlesBuffer *buf, const GlesProgram *prog, const float *mvp16,
     }
 
     /* MVP and the texture size change per quad, so they are always sent. */
-    if (prog->u_mvp >= 0) {
+    if (mvp16 != NULL && prog->u_mvp >= 0) {
         glUniformMatrix4fv(prog->u_mvp, 1, GL_FALSE, mvp16);
     }
     if (prog->texsize >= 0) {
@@ -314,6 +279,64 @@ void GlesDraw_Quad(GlesBuffer *buf, const GlesProgram *prog, const float *mvp16,
     if (prog->texunit1 >= 0) {
         glUniform1i(prog->texunit1, 1);
     }
+
+}
+
+static int gles_draw_buffer_ready(GlesBuffer *buf)
+{
+    if (buf->vbo == 0) {
+        glGenBuffers(1, &buf->vbo);
+        if (buf->vbo == 0) {
+            Log_Printf("GLES: glGenBuffers failed\n");
+            return 0;
+        }
+    }
+    return 1;
+}
+
+void GlesDraw_Quad(GlesBuffer *buf, const GlesProgram *prog, const float *mvp16, const float *positions8,
+                   const float *texcoords16, int indexed, int mask, float add_r, float add_g, float add_b,
+                   float mul_r, float mul_g, float mul_b, int invertall, float colorbal, float tex_w, float tex_h,
+                   float src_alphamul)
+{
+    float verts[GL_QUAD_VERTEX_COUNT * GL_QUAD_VERTEX_FLOATS];
+    GlQuadVerts quad;
+    unsigned int stride;
+    unsigned int pos_off;
+    unsigned int tc_off;
+    unsigned long long bp_start;
+    unsigned long long bp_quad_start;
+    int i;
+
+    if (buf == NULL || prog == NULL || prog->program == 0 || mvp16 == NULL || positions8 == NULL ||
+        texcoords16 == NULL) {
+        return;
+    }
+    if (!gles_draw_buffer_ready(buf)) {
+        return;
+    }
+
+    /* The caller hands over the corners and texcoords the CPU geometry step
+     * produced (GlQuad_Build); this only interleaves them for the GPU. */
+    for (i = 0; i < GL_QUAD_VERTEX_COUNT; i++) {
+        quad.pos[i][0] = positions8[i * 2];
+        quad.pos[i][1] = positions8[i * 2 + 1];
+        quad.tc[i][0] = texcoords16[i * 4];
+        quad.tc[i][1] = texcoords16[i * 4 + 1];
+        quad.tc[i][2] = texcoords16[i * 4 + 2];
+        quad.tc[i][3] = texcoords16[i * 4 + 3];
+    }
+    quad.count = GL_QUAD_VERTEX_COUNT;
+    GlQuad_Interleave(verts, &quad);
+    GlQuad_Layout(&stride, &pos_off, &tc_off);
+
+    /* MUGEN_DEBUG: times the whole submission. The counter reads are part of
+     * what is measured, so the result is an upper bound (batchprof.h). */
+    bp_quad_start = BATCHPROF_NOW();
+    bp_start = bp_quad_start;
+
+    gles_draw_uniforms(prog, mvp16, mask, add_r, add_g, add_b, mul_r, mul_g, mul_b,
+                       invertall, colorbal, tex_w, tex_h, src_alphamul);
 
     /* Texture units: 0 is the sprite, 1 the palette (indexed only; the RGBA
      * program has no texunit1 and its location is -1). Left on unit 0 so the
@@ -370,6 +393,50 @@ void GlesDraw_Quad(GlesBuffer *buf, const GlesProgram *prog, const float *mvp16,
         BatchProf_Split(BATCHPROF_SPLIT_DRAW, bp_end - bp_start);
     }
     (void)indexed;
+}
+
+void GlesDraw_Atlas(GlesBuffer *buf, const GlesProgram *prog, const GlesAtlasBatch *batch,
+                    int count, int mask, const float *add, const float *mul, int invertall,
+                    float colorbal, float tex_w, float tex_h, float src_alphamul)
+{
+    size_t sprite_offset = offsetof(GlesAtlasBatch, sprites);
+    size_t bytes = sprite_offset + (size_t)count * sizeof(batch->sprites[0]);
+    unsigned long long start = BATCHPROF_NOW(), mark;
+    unsigned int attr;
+
+    if (!gles_draw_buffer_ready(buf)) {
+        return;
+    }
+    gles_draw_uniforms(prog, NULL, mask, add[0], add[1], add[2], mul[0], mul[1], mul[2],
+                       invertall, colorbal, tex_w, tex_h, src_alphamul);
+    glBindBuffer(GL_ARRAY_BUFFER, buf->vbo);
+    glVertexAttribPointer(GLES_ATTR_POSITION, 2, GL_FLOAT, GL_FALSE, 0, NULL);
+    glEnableVertexAttribArray(GLES_ATTR_POSITION);
+    for (attr = GLES_ATTR_ATLAS_MVP; attr <= GLES_ATTR_ATLAS_RECT; attr++) {
+        size_t offset = sprite_offset + (attr - GLES_ATTR_ATLAS_MVP) * 4 * sizeof(float);
+
+        glVertexAttribPointer(attr, 4, GL_FLOAT, GL_FALSE, sizeof(batch->sprites[0]), (const void *)offset);
+        glEnableVertexAttribArray(attr);
+        glVertexAttribDivisor(attr, 1);
+    }
+    mark = BATCHPROF_NOW();
+    BatchProf_Split(BATCHPROF_SPLIT_STATE, mark - start);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)bytes, batch, GL_STREAM_DRAW);
+    {
+        unsigned long long now = BATCHPROF_NOW();
+
+        BatchProf_Split(BATCHPROF_SPLIT_BUFFER, now - mark);
+        mark = now;
+    }
+    glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, count);
+    Perf_CountDraw(2 * (unsigned int)count);
+    BatchProf_Split(BATCHPROF_SPLIT_DRAW, BATCHPROF_NOW() - mark);
+    for (attr = GLES_ATTR_ATLAS_MVP; attr <= GLES_ATTR_ATLAS_RECT; attr++) {
+        glVertexAttribDivisor(attr, 0);
+        glDisableVertexAttribArray(attr);
+    }
+    g_stateAttribsValid = 0;   /* The next regular quad has a different layout. */
+    BatchProf_Submit(count, 4 * count, (unsigned long)bytes, 2 * (unsigned int)count, BATCHPROF_NOW() - start);
 }
 
 #endif /* MUGEN_GLES */

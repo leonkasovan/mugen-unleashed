@@ -23,6 +23,8 @@
 
 #ifdef MUGEN_GLES
 
+typedef struct SpriteSet SpriteSet;
+
 /* 1 when the renderer has a context and its programs are linked. */
 int Gles_IsReady(void);
 
@@ -48,7 +50,12 @@ void Gles_OnContextLost(void);
  * look like a cache hit. Dropping the cache here makes that impossible rather
  * than unlikely.
  */
-void Gles_OnSpriteSetFreed(void);
+void Gles_OnSpriteSetFreed(const SpriteSet *set);
+
+/* Port addition: retain CPU sources for eligible SFF sprites, then plan atlas
+ * placement without decoding or touching GPU textures. */
+int Gles_AtlasUsesSource(int w, int h, int bpp);
+void Gles_AtlasPlan(const SpriteSet *set);
 
 /*
  * Port addition: the deferred sprite-draw queue (gles_render.c).

@@ -35,6 +35,20 @@ extern "C" {
 /* Attribute locations, bound explicitly before linking. */
 #define GLES_ATTR_POSITION  0
 #define GLES_ATTR_TEXCOORD  1
+#define GLES_ATTR_ATLAS_MVP 2       /* a mat4 takes locations 2 through 5 */
+#define GLES_ATTR_ATLAS_RECT 6
+
+#define GLES_MAX_ATLAS_INSTANCES 512
+
+typedef struct GlesAtlasInstance {
+    float mvp[16];
+    float rect[4];                  /* x, y, width, height in page texels */
+} GlesAtlasInstance;
+
+typedef struct GlesAtlasBatch {
+    float corners[8];
+    GlesAtlasInstance sprites[GLES_MAX_ATLAS_INSTANCES];
+} GlesAtlasBatch;
 
 /* A linked program and its uniform locations. A location of -1 means the
  * compiler optimised the uniform out, which is normal and tolerated. */
@@ -80,6 +94,11 @@ void GlesDraw_Quad(GlesBuffer *buf, const GlesProgram *prog, const float *mvp16,
                    const float *texcoords16, int indexed, int mask, float add_r, float add_g, float add_b,
                    float mul_r, float mul_g, float mul_b, int invertall, float colorbal, float tex_w, float tex_h,
                    float src_alphamul);
+
+/* Draws a run of consecutive indexed sprites with common draw state. */
+void GlesDraw_Atlas(GlesBuffer *buf, const GlesProgram *prog, const GlesAtlasBatch *batch,
+                    int count, int mask, const float *add, const float *mul, int invertall,
+                    float colorbal, float tex_w, float tex_h, float src_alphamul);
 
 /* Releases the vertex buffer. */
 void GlesDraw_FreeBuffer(GlesBuffer *buf);

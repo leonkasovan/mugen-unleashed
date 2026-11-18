@@ -19,6 +19,9 @@
  */
 
 #include "mugen.h"
+#ifdef MUGEN_GLES
+#include "gles_render.h"
+#endif
 #include "gl_size.h"
 
 
@@ -169,6 +172,9 @@ int Gfx_SetRenderTarget(SpriteSet *target, int index)
     int old_w = g_targetWidth, old_h = g_targetHeight, old_pixels = g_targetPixels;
     int old_bpp = g_targetBpp, old_bytes = g_targetBytesPerPixel, old_skip = g_clipRowSkip;
 
+#ifdef MUGEN_GLES
+    if (changed) GlesBatch_Flush();
+#endif
     if (target == NULL) {
         g_targetWidth = g_videoWidth;
         g_targetHeight = g_videoHeight;

@@ -11,13 +11,15 @@ export TMPDIR="$OUT/tmp"
 SDL2_CFLAGS="${SDL2_CFLAGS:-$(pkg-config --cflags sdl2 SDL2_mixer SDL2_ttf)}"
 EGL_CFLAGS="${EGL_CFLAGS:-$(pkg-config --cflags egl)}"
 EGL_LIBS="${EGL_LIBS:-$(pkg-config --libs egl)}"
+SDL2_LIBS="${SDL2_LIBS:-$(pkg-config --libs sdl2)}"
 FLAGS="${CFLAGS:-} -DSDL_MAIN_HANDLED -std=gnu11 -O1 -g -UNDEBUG -Wall -Wno-unused-parameter -ffunction-sections -fdata-sections"
 FLAGS="$FLAGS -DANDROID_PORT -DMUGEN_GLES -DMUGEN_ANDROID_SW -Isrc"
 FLAGS="$FLAGS -Iport/android/app/src/main/jni/src -Ithird_party/glad-es-3.0"
 FLAGS="$FLAGS -Ithird_party/minizip-0.15 -Ithird_party/libpng-1.2.38 -Ithird_party/lua-5.1.4/src -Ithird_party/libresample/include"
 FLAGS="$FLAGS $SDL2_CFLAGS $EGL_CFLAGS"
 $CC $FLAGS -c src/globals.c -o "$OUT/globals.o"
-$CC $FLAGS tools/test_gles_smoke.c src/perf.c src/gl_mvp.c third_party/glad-es-3.0/glad.c \
-    "$OUT/globals.o" -Wl,--gc-sections ${LDFLAGS:-} $EGL_LIBS -lm -ldl -o "$OUT/test_gles_smoke"
+$CC $FLAGS tools/test_gles_smoke.c src/perf.c src/gl_mvp.c src/gputime.c src/memprof.c \
+    third_party/glad-es-3.0/glad.c \
+    "$OUT/globals.o" -Wl,--gc-sections ${LDFLAGS:-} $EGL_LIBS $SDL2_LIBS -lm -ldl -o "$OUT/test_gles_smoke"
 cp res/shaders/gles/* "$OUT/data/gles/"
-(cd "$OUT"; ./test_gles_smoke)
+(cd "$OUT"; MUGEN_SPRITEATLAS=1 ./test_gles_smoke)

@@ -13,6 +13,7 @@ SDL2_mixer and SDL2_ttf come from the selected platform dependency tree.
 | `minizip-0.15/` | unzip 0.15 by Gilles Vollant (zlib 1.1.3 contrib) | zlib license (`unzip.h`) |
 | `cgltf-1.14/` | cgltf 1.14 by Johannes Kuhlmann, the glTF reader of 3D stages (a mugen-unleashed addition, not in the original) | MIT (`LICENSE`) |
 | `stb/` | stb_image 2.30 by Sean Barrett (nothings/stb commit 013ac3b), the JPEG decoder of 3D stage textures (a mugen-unleashed addition) | public domain or MIT (end of `stb_image.h`) |
+| `stb/stb_rect_pack.h` | stb_rect_pack 1.02 by Sean Barrett, used by the optional indexed GLES sprite atlas. | Public domain or MIT (end of header) |
 | `sdk/include/zlib.h`, `zconf.h` | zlib 1.2.3 headers | zlib license |
 | `sdk/include/pthread.h`, `sched.h` | pthreads-win32 2.8.0 headers | GNU LGPL 2.1 |
 | `sdk/include/libresample.h` | declarations for the game's `libresample.dll` (libresample 0.1.3), written for this project from the calls in `mugen.exe`. historical ABI reference only; builds use `libresample/include` | — |
