@@ -640,39 +640,34 @@ where ssh.exe >nul 2>&1 || (
 )
 set "SSHOPTS=-o StrictHostKeyChecking=no -o UserKnownHostsFile=%SCRATCH%\arm64-ssh-known-hosts -o ConnectTimeout=15 -o LogLevel=ERROR"
 if not exist "%SCRATCH%" mkdir "%SCRATCH%"
-set "NEWNAME=.%DEVICE_BIN%.new"
+set "LOCAL_MD5="
+for /f "usebackq tokens=1" %%M in (`md5sum.exe "%OUT%\%BIN%"`) do set "LOCAL_MD5=%%M"
+if "!LOCAL_MD5:~31,1!"=="" goto local_checksum_failed
+if not "!LOCAL_MD5:~32!"=="" goto local_checksum_failed
 
-ssh.exe %SSHOPTS% "%DEVICE%" "mkdir -p '%DEVICE_DIR%'" || (
-    echo error: cannot log in to %DEVICE% -- check DEVICE and your key
-    exit /b 1
-)
+rem Keep stdin binary (-T) and use one login. The checksum runs on the device
+rem in the same session, so no password prompt is captured by cmd's FOR /F.
+rem Quote destination words for the remote shell. Only the mktemp-generated
+rem stage name and md5sum words are expanded unquoted on the device.
+set "REMOTE_DIR=!DEVICE_DIR:'='\''!"
+set "REMOTE_BIN=!DEVICE_BIN:'='\''!"
+set "UPLOAD_CMD=mkdir -p -- '!REMOTE_DIR!' && cd -- '!REMOTE_DIR!' && stage=$(mktemp .mugen-upload.XXXXXX) && trap 'rm -f -- $stage $stage.prev' 0 && trap 'exit 1' HUP INT TERM"
+set "UPLOAD_CMD=!UPLOAD_CMD! && cat > $stage && digest=$(md5sum < $stage) && set -- $digest && { [ x$1 = x!LOCAL_MD5! ] || { echo 'error: checksum mismatch after upload' >&2; exit 1; }; } && chmod +x -- $stage"
+if "%KEEP_OLD%"=="1" set "UPLOAD_CMD=!UPLOAD_CMD! && if [ -f '!REMOTE_BIN!' ]; then cp -p -- '!REMOTE_BIN!' $stage.prev && mv -fT -- $stage.prev '!REMOTE_BIN!.prev' || exit 1; fi"
+set "UPLOAD_CMD=!UPLOAD_CMD! && mv -fT -- $stage '!REMOTE_BIN!'"
+
 echo     sending %BIN%
-ssh.exe %SSHOPTS% "%DEVICE%" "cd '%DEVICE_DIR%' && cat > '%NEWNAME%'" < "%OUT%\%BIN%" || (
-    echo error: transfer failed
-    exit /b 1
-)
-for /f "usebackq delims=" %%M in (`md5sum.exe "%OUT%\%BIN%"`) do set "LOCAL_MD5=%%M"
-set "LOCAL_MD5=!LOCAL_MD5: =!"
-set "LOCAL_MD5=!LOCAL_MD5:~0,32!"
-set "REMOTE_MD5="
-for /f "usebackq delims=" %%M in (`ssh.exe %SSHOPTS% "%DEVICE%" "md5sum '%DEVICE_DIR%/%NEWNAME%'" 2^>nul`) do if not defined REMOTE_MD5 set "REMOTE_MD5=%%M"
-set "REMOTE_MD5=!REMOTE_MD5: =!"
-set "REMOTE_MD5=!REMOTE_MD5:~0,32!"
-if /I not "!REMOTE_MD5!"=="!LOCAL_MD5!" (
-    ssh.exe %SSHOPTS% "%DEVICE%" "rm -f '%DEVICE_DIR%/%NEWNAME%'" 2>nul
-    echo error: checksum mismatch after upload ^(local !LOCAL_MD5!, remote !REMOTE_MD5!^);
-    echo        nothing was replaced
+ssh.exe -T %SSHOPTS% -- "%DEVICE%" "!UPLOAD_CMD:"=\"!" < "%OUT%\%BIN%" || (
+    echo error: upload or installation failed -- see SSH output above
     exit /b 1
 )
 echo     checksum verified ^(!LOCAL_MD5!^)
-set "MV=chmod +x '%NEWNAME%' && mv -f '%NEWNAME%' '%DEVICE_BIN%'"
-if "%KEEP_OLD%"=="1" set "MV=chmod +x '%NEWNAME%' && if [ -f '%DEVICE_BIN%' ]; then mv -f '%DEVICE_BIN%' '%DEVICE_BIN%.prev'; fi && mv -f '%NEWNAME%' '%DEVICE_BIN%'"
-ssh.exe %SSHOPTS% "%DEVICE%" "cd '%DEVICE_DIR%' && %MV%" || (
-    echo error: could not move the new binary into place
-    exit /b 1
-)
 echo     installed as %DEVICE_DIR%/%DEVICE_BIN%
 exit /b 0
+
+:local_checksum_failed
+echo error: could not compute the local MD5 of the binary
+exit /b 1
 
 rem ==================================================================== errors
 :bad_gles
