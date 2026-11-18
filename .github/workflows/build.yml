@@ -192,6 +192,15 @@ jobs:
       # script needs it: its scan used to look for <PATH entry>\bin\make.exe and
       # never matched a kit that was only on PATH).
       MUGEN_WIN_KIT: ${{ github.workspace }}\build\toolchains\w64devkit
+      # windows-2022 preinstalls an Android SDK whose NDK is 27.3.13750724, while
+      # app/build.gradle pins 27.1.12297006; the script refuses the mismatch, and
+      # it checks before it installs anything. Emptying the three variables makes
+      # it provision its own pinned SDK under build\android\toolchains\sdk
+      # (cmd treats an empty variable as undefined), which is also what makes the
+      # build reproducible off a runner.
+      ANDROID_SDK_ROOT: ''
+      ANDROID_HOME: ''
+      ANDROID_NDK_HOME: ''
     permissions:
       contents: write
     steps:
@@ -254,11 +263,18 @@ jobs:
       W64DEVKIT_DIR: ${{ github.workspace }}\build\toolchains\w64devkit
       X86DEVKIT_DIR: ${{ github.workspace }}\build\toolchains\x86devkit
       MUGEN_WIN_KIT: ${{ github.workspace }}\build\toolchains\w64devkit
+      # The script installs as a transaction: it stages the tree beside the
+      # destination as <dir>.mugen-new and then swaps. With the C:\vitasdk
+      # default that staging directory sits in C:\ root, which a runner's
+      # non-elevated user cannot create -- "Access is denied" after a 196 MB
+      # download. Keeping the SDK in the workspace avoids it (and needs no
+      # elevation anywhere).
+      VITASDK_DIR: ${{ github.workspace }}\build\toolchains\vitasdk
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      # VitaSDK lands at C:\vitasdk -- the path its own tools expect, and one of
+      # VitaSDK lands in build\toolchains\vitasdk here rather than at C:\vitasdk
       # the two sanctioned exceptions to "keep artefacts inside the project".
       # What the script downloads still goes to build/downloads/, its staging to
       # build/tmp/, and its output to build/psvita/.
