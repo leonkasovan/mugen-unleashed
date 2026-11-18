@@ -114,8 +114,9 @@ python3 tools/compare_model_frames.py build/tmp/model-desktop build/tmp/model-gl
 python3 tools/compare_model_frames.py --basic build/tmp/model-desktop build/tmp/model-basic
 python3 tools/test_model_build.py
 sh tools/test_model_vita_api.sh
-python3 tools/test_vita_build.py
-python3 -m unittest discover -s port/android/tests -p test_build.py
+cmake -S port/android/tests -B build/tmp/android-native-tests
+cmake --build build/tmp/android-native-tests -j4
+ctest --test-dir build/tmp/android-native-tests --output-on-failure
 ```
 
 Use distinct `OUT` directories when running model variants concurrently.

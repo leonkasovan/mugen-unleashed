@@ -17,11 +17,10 @@
 
 | Path | Purpose |
 |---|---|
-| `port/android/build.sh` | Host preflight, tool bootstrap, Gradle invocation, APK staging |
+| `port/android/build.bat` | Host preflight, tool bootstrap, Gradle invocation, APK staging |
 | `port/android/app/build.gradle` | ABI, SDK/NDK/CMake pins, signing |
 | `port/android/app/src/main/jni/src/CMakeLists.txt` | Native `libmain.so` build |
-| `port/android/tests/test_build.py` | Offline bootstrap/orchestration fixtures |
-| `port/android/native_tests/` (if present) | Host-compiled Android engine test binary |
+| `port/android/tests/CMakeLists.txt` | Host build of the Android engine paths (`ctest`: `native_sdl2`) |
 
 See `port/android/README.md` for full toolchain, SDK/NDK pinning, and asset staging steps.
 

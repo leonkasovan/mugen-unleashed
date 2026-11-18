@@ -43,10 +43,10 @@ port/android/
     build_sdl2_companions.bat       SDL2 + SDL2_ttf + SDL2_mixer cross-build
     build_sdl2_companions.ps1       the same, PowerShell parameters
     toolchain_metadata.ps1          Adoptium / Google metadata for the bootstrap
-  tests/test_build.py               offline bootstrap/orchestration fixtures
-  tests/test_icons.py               launcher icons come from res/icons
   tests/CMakeLists.txt              host build of the actual Android engine paths
   tests/test_native_sdl2.c           native SDL2 runtime tests
+  tests/test_present_host.c          present/capture host harness
+  tests/test_manifest_hash.c         FNV-1a vectors (not wired into the build)
 ```
 
 ## 1. Toolchain setup
@@ -257,8 +257,10 @@ the same artwork the Windows and PS Vita builds use — into
 override the committed copies in `app/src/main/res/mipmap-*` instead of colliding
 with them; those copies are the same generation and are what a build without
 Python (or a bare `gradlew assembleDebug`) shows. Replacing the artwork means
-replacing `res/icons/`, and `python3 port/android/tests/test_icons.py` keeps the
-two in step.
+replacing `res/icons/` and re-deriving the committed copies; nothing does that
+automatically any more (the Python checker that watched them went with the MSYS2
+entry points), so the two `tools/iconpack.py` subcommands below are the whole
+procedure.
 
 **`port\android\build.bat` uses no Python**, so it never runs that derivation: it
 removes any `app/build/generated/res/mugen-icons/` left by an earlier run (that
@@ -409,14 +411,7 @@ Renderer-reset events invalidate the texture and retain CPU pixels for upload.
 
 ## 5. Verification
 
-### 5.1 Host fixtures and native tests
-
-Bootstrap/orchestration fixtures:
-
-```sh
-python3 port/android/tests/test_build.py
-python3 port/android/tests/test_icons.py     # launcher icons vs res/icons
-```
+### 5.1 Host native tests
 
 Native Linux host tests require a C compiler, GNU-compatible linker,
 CMake 3.22.1+, zlib headers and native

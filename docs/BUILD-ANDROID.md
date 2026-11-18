@@ -7,8 +7,8 @@ remains for Windows/Linux; do not invoke it to build this port.
 
 On Windows, `port\android\build.bat` needs no Bash and no Python at all: it
 drives the JDK, the SDK's `sdkmanager.bat`/CMake, `gradlew.bat` and cmd
-execution. `port\android\build.bat` is the Bash entry point (MSYS2/Git Bash) and
-does require Bash, `curl` and Python 3.8+ for its tool-installation path.
+execution. The MSYS2 `build.sh` it replaced was removed, so there is no Bash
+entry point; `build.ps1` is a PowerShell front end over the same `build.bat`.
 
 | Component | Pins / notes |
 |---|---|
@@ -26,7 +26,7 @@ does require Bash, `curl` and Python 3.8+ for its tool-installation path.
 | `port\android\build.bat` | Host preflight, tool bootstrap, Gradle invocation, APK staging |
 | `port/android/app/build.gradle` | ABI, SDK/NDK/CMake pins, signing |
 | `port/android/app/src/main/jni/src/CMakeLists.txt` | Native `libmain.so` + engine vendor sources |
-| `port/android/tests/test_build.py` | Offline bootstrap/orchestration fixtures |
+| `port/android/tests/CMakeLists.txt` | Host build of the Android engine paths (`ctest`: `native_sdl2`) |
 
 ## Typical workflow
 

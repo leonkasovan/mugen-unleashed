@@ -564,8 +564,11 @@ All three platforms use it, and nothing else: the artwork is edited in one place
   `app/build/generated/res/mugen-icons`, which `build.gradle` adds to the debug
   and release source sets so it overrides — rather than collides with — the
   committed copies in `app/src/main/res/mipmap-*`, which are that same
-  generation and serve a build without Python. `port/android/tests/test_icons.py`
-  keeps the two from drifting.
+  generation and serve a build without Python. That generator and the Python
+  checker that watched it went with the MSYS2 entry points, so **nothing now
+  regenerates or verifies the committed set**: after editing `res/icons/`,
+  re-derive the five density buckets and the adaptive foreground with
+  `tools/iconpack.py` and commit the result.
 
 `tools/iconpack.py` is standard-library only, so no build needs an imaging
 package. It is the only place that decodes `.ico` (BMP/DIB entries with an AND
@@ -612,9 +615,16 @@ render fixtures. No SDL1 development headers/libraries are needed. Keep the
 fixture hashes fixed; never regenerate expected values from a failing candidate.
 Historical SDL1 differential evidence remains in Git and SDL2_PLAN.md.
 
-The Android port has its own suite under `port/android/tests/` (native SDL2,
-present host, manifest hashes, plus `test_build.py`); the Vita port has
-`port/psvita/validation/`. Those cover pieces the desktop build cannot reach.
+The Android port has a host suite under `port/android/tests/`: its own
+CMakeLists compiles `src/` except the Windows entry point, the desktop GL
+renderer and the desktop SDL2 video backend, plus Lua/libpng/libresample/
+minizip and the Android platform files other than `android_main.c`, and runs
+`test_native_sdl2` under ctest. It needs a Linux host with native
+SDL2/SDL2_mixer/SDL2_ttf (commands in `docs/BUILD-ANDROID.md`); on Windows it
+does not compile, because `src/perf.c` includes `GLES2/gl2.h` and neither devkit
+ships GLES headers. `tests/test_manifest_hash.c` is in that directory but
+nothing builds or runs it. The Vita port has `port/psvita/validation/`.
+Those cover pieces the desktop build cannot reach.
 
 **2. Log comparison — does it behave like the original?**
 
