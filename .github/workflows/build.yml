@@ -151,7 +151,9 @@ jobs:
           Copy-Item $stripped "build/dist/$name.exe"
           Copy-Item README.md build/dist/
           Copy-Item third_party/README.md build/dist/THIRD_PARTY.md
-          Compress-Archive -Path build/dist/* -DestinationPath $name.zip -Force
+          # "$name.zip", not $name.zip: PowerShell reads the latter as a property
+          # access on $name and passes an empty -DestinationPath.
+          Compress-Archive -Path build/dist/* -DestinationPath "$name.zip" -Force
           Write-Host "stripped: $fat -> $thin bytes"
       - uses: actions/upload-artifact@v4
         with:
