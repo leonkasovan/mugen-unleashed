@@ -213,8 +213,16 @@ jobs:
         shell: cmd
         run: |
           set "PATH=%W64DEVKIT_DIR%\bin;%PATH%"
-          port\android\build.bat
-          if errorlevel 1 exit /b 1
+          if not exist build\tmp mkdir build\tmp
+          port\android\build.bat > build\tmp\port-android.log 2>&1
+          set "RC=%ERRORLEVEL%"
+          type build\tmp\port-android.log
+          if "%RC%"=="0" exit /b 0
+          rem Surface the tail as annotations: the step log needs a login to read,
+          rem an annotation does not, and a port failing in eight seconds with no
+          rem visible reason is the failure mode this exists for.
+          powershell -NoProfile -Command "Get-Content build\tmp\port-android.log -Tail 30 | ForEach-Object { Write-Host ('::error::' + $_) }"
+          exit /b 1
       - name: Report packaged APK
         shell: pwsh
         run: |
@@ -267,8 +275,16 @@ jobs:
         shell: cmd
         run: |
           set "PATH=%W64DEVKIT_DIR%\bin;%PATH%"
-          port\psvita\build.bat --data install
-          if errorlevel 1 exit /b 1
+          if not exist build\tmp mkdir build\tmp
+          port\psvita\build.bat --data install > build\tmp\port-psvita.log 2>&1
+          set "RC=%ERRORLEVEL%"
+          type build\tmp\port-psvita.log
+          if "%RC%"=="0" exit /b 0
+          rem Surface the tail as annotations: the step log needs a login to read,
+          rem an annotation does not, and a port failing in eight seconds with no
+          rem visible reason is the failure mode this exists for.
+          powershell -NoProfile -Command "Get-Content build\tmp\port-psvita.log -Tail 30 | ForEach-Object { Write-Host ('::error::' + $_) }"
+          exit /b 1
       - name: Report packaged VPK
         shell: pwsh
         run: |
@@ -318,8 +334,16 @@ jobs:
         shell: cmd
         run: |
           set "PATH=%W64DEVKIT_DIR%\bin;%PATH%"
-          port\arm64\build.bat
-          if errorlevel 1 exit /b 1
+          if not exist build\tmp mkdir build\tmp
+          port\arm64\build.bat > build\tmp\port-arm64.log 2>&1
+          set "RC=%ERRORLEVEL%"
+          type build\tmp\port-arm64.log
+          if "%RC%"=="0" exit /b 0
+          rem Surface the tail as annotations: the step log needs a login to read,
+          rem an annotation does not, and a port failing in eight seconds with no
+          rem visible reason is the failure mode this exists for.
+          powershell -NoProfile -Command "Get-Content build\tmp\port-arm64.log -Tail 30 | ForEach-Object { Write-Host ('::error::' + $_) }"
+          exit /b 1
       # The GLES renderer reads its shaders from data/gles/*, and the platform
       # config is data/mugen.arm64.cfg -- both ours, not game content, and both
       # what `make install` puts beside the binary. Ship them with it, plus the
