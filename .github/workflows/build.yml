@@ -2,7 +2,10 @@ name: SDL2 build
 on:
   push:
     branches: [main, sdl2]
-    tags: ['v*']
+    # 'mugen-v*' is the project's release tag (mugen-v2.0.0); 'v*' keeps the plain
+    # form working. A push of either attaches the built executables to that
+    # tag's release -- see the "Attach ... to tagged release" steps.
+    tags: ['v*', 'mugen-v*']
   pull_request:
   workflow_dispatch:
 permissions:
@@ -10,6 +13,8 @@ permissions:
 jobs:
   linux:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - name: Install SDL2 development dependencies
@@ -48,6 +53,11 @@ jobs:
         with:
           name: mugen-linux-x64-sdl2
           path: build/linux-x64-sdl2/mugen-linux-x64
+      - name: Attach Linux executable to tagged release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/linux-x64-sdl2/mugen-linux-x64
   windows:
     name: MinGW ${{ matrix.target }} SDL2
     runs-on: windows-2022
@@ -113,7 +123,8 @@ jobs:
           path: mugen-mingw-${{ matrix.target }}-sdl2.zip
           if-no-files-found: error
       - name: Attach standalone package to tagged release
-        if: startsWith(github.ref, 'refs/tags/v')
+        # Any tag, not just 'v*': the mugen-v* releases carry these assets.
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: mugen-mingw-${{ matrix.target }}-sdl2.zip
