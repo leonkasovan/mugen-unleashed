@@ -5,8 +5,8 @@ out="${OUT:-$PWD/build/tmp/model-test}"
 mkdir -p "$out/tmp" "$out/shaders"
 export TMPDIR="$out/tmp"
 cc="${CC:-cc}"
-sdl_cflags="${SDL_CFLAGS:-$(pkg-config --cflags sdl2 libpng zlib)}"
-sdl_libs="${SDL_LIBS:-$(pkg-config --libs sdl2 libpng zlib)}"
+sdl_cflags="${SDL_CFLAGS:-$(pkg-config --cflags sdl2 libpng16 zlib)}"
+sdl_libs="${SDL_LIBS:-$(pkg-config --libs sdl2 libpng16 zlib)}"
 # -ldl/-lm are POSIX: a MinGW host has neither, and SDL2's own -l line already
 # carries what it needs there. Detected rather than assumed.
 # Windows_NT: a kit first on PATH can shadow MSYS uname (port\psvita\build.bat

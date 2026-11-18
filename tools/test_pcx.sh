@@ -10,7 +10,7 @@ if [ "${SANITIZE:-0}" = 1 ]; then san="-fsanitize=address,undefined -fno-omit-fr
 ${CC:-cc} -std=gnu11 -g -O1 $san -ffunction-sections -fdata-sections \
  -DMUGEN_MEMPROF_NO_WRAP=1 -DSDL_MAIN_HANDLED -Isrc -Ithird_party/glad-2.1 \
  -Ithird_party/minizip-0.15 -Ithird_party/lua-5.1.4/src -Ithird_party/libresample/include \
- $(pkg-config --cflags sdl2 libpng) tools/test_pcx.c src/stream.c \
+ $(pkg-config --cflags sdl2 libpng16) tools/test_pcx.c src/stream.c \
  -Wl,--gc-sections,--wrap=calloc -o "$OUT/probe"
 "$OUT/probe"
 timeout 5s "$OUT/probe" io-error

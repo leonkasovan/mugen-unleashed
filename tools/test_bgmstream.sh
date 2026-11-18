@@ -10,7 +10,7 @@ INC="-Isrc -Ithird_party/glad-2.1 -Ithird_party/minizip-0.15 -Ithird_party/lua-5
 case "$TARGET" in
 win32) INC="$INC -Ibuild/sysroots/win32-sysroot/usr/include -Ibuild/sysroots/win32-sysroot/usr/include/SDL2" ;;
 win64) INC="$INC -Ibuild/sysroots/win64-sysroot/usr/include -Ibuild/sysroots/win64-sysroot/usr/include/SDL2" ;;
-*) INC="$INC $("$PKGCONF" --cflags sdl2 libpng)" ;;
+*) INC="$INC $(pc_cflags sdl2 libpng16)" ;;
 esac
 SAN_FLAGS=""
 if [ -n "${SANITIZE:-}" ]; then

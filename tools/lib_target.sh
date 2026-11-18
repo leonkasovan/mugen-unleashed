@@ -94,6 +94,34 @@ esac
 CFLAGS="${CFLAGS:-} -DMUGEN_MEMPROF_NO_WRAP=1"
 export CFLAGS
 
+# pkg-config's cflags for this target's static SDL stack.
+#
+# A failed query expands to nothing, and the compile that follows then reports
+# whatever header it missed first -- "SDL.h: No such file or directory" -- which
+# names neither pkg-config nor the package that was not found. That is exactly
+# how the CI win64 job failed: the kit's .pc tree published libpng16.pc, the
+# harness asked for libpng, and the empty cflags took SDL's include path with
+# it. Fail here instead, while the reason is still visible.
+pc_cflags() {
+    _pc_out=$("$PKGCONF" --cflags "$@") || {
+        echo "error: $PKGCONF --cflags $* failed" >&2
+        echo "       PKG_CONFIG_LIBDIR=${PKG_CONFIG_LIBDIR:-<unset>}" >&2
+        exit 1
+    }
+    # sdl2.pc carries -Dmain=SDL_main for -lSDL2main's benefit. These harnesses
+    # define their own entry point and link -lSDL2, so the rename only loses
+    # `main` and leaves the CRT reaching for WinMain -- the Makefile filters the
+    # same flag out of PKG_CFLAGS for exactly this reason.
+    _pc_keep=""
+    for _pc_flag in $_pc_out; do
+        case "$_pc_flag" in
+        -Dmain=SDL_main) ;;
+        *) _pc_keep="$_pc_keep $_pc_flag" ;;
+        esac
+    done
+    printf '%s\n' "$_pc_keep"
+}
+
 # Runs a built harness and enforces the target's pointer width.
 #
 # Prints the harness output, fails when it reports a different width than the

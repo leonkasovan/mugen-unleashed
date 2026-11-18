@@ -28,6 +28,6 @@ done
     -DSDL_VIDEO_RENDER_VITA_GXM=1 -Isrc -Iport/psvita/src -I"$out" -I"$out/shaders" \
     -Ithird_party/vitagl/src/source -Ithird_party/cgltf-1.14 -Ithird_party/stb \
     -Ithird_party/minizip-0.15 -Ithird_party/lua-5.1.4/src -Ithird_party/libresample/include \
-    $(pkg-config --cflags sdl2 libpng) \
+    $(pkg-config --cflags sdl2 libpng16) \
     src/model.c src/model_asset.c src/model_gpu.c src/model_pass.c
 echo 'ok: model sources match VitaGL declarations (host syntax only; device OPEN)'

@@ -13,7 +13,7 @@ if [ "${SANITIZE:-0}" = 1 ]; then san="-fsanitize=address,undefined -fno-sanitiz
  -ffunction-sections -fdata-sections -DSDL_MAIN_HANDLED \
  -Isrc -Ithird_party/glad-2.1 -Ithird_party/minizip-0.15 \
  -Ithird_party/lua-5.1.4/src -Ithird_party/libresample/include \
- $("$PKGCONF" --cflags sdl2 libpng) tools/test_decompbuffer.c \
+ $(pc_cflags sdl2 libpng16) tools/test_decompbuffer.c \
  -Wl,--gc-sections -o "$OUT/probe"
 for case_name in normal zero upper config request clock oom null-key; do
     run_harness "$OUT/probe" "$case_name"
