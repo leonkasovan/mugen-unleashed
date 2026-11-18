@@ -61,6 +61,9 @@ third_party/    Lua 5.1.4, libpng 1.2.38, glad 2.1, minizip 0.15, sdk,
 port/*/cmake/   platform-only CMake helpers; no root MSVC build
 build.bat       installs the two Windows devkits + dependency trees, then builds
 res/icons/      the window/bubble icon as one .ico per size (see below)
+res/mugen.cfg   the default configuration: the one file every target ships as
+                data/mugen.cfg (make install, the Android assets, the Vita VPK),
+                with a comment on every key. See "The default configuration"
 res/shaders/    project-owned shader dialects: gles/ (staged as data/gles by the
                 Android build) and vita/ (substituted into the VPK); the desktop
                 shaders are the game installation's own data/*.{vert,frag}
@@ -325,7 +328,9 @@ Driving `make` by hand still works, from a shell that has the kit first:
 export PATH=/c/x86devkit/bin:$PATH      # MSYS2/Git Bash: the 32-bit kit, not w64devkit
 make check-toolchain
 make -j8
-make install                            # strips and copies into install/
+make install                            # strips and copies into install/,
+                                        # installing res/mugen.cfg if the tree
+                                        # has no data/mugen.cfg
 ```
 
 ```bat
@@ -568,6 +573,33 @@ mask) and writes PNG; keep it that way rather than duplicating the decoder. Its
 `png` subcommand makes a square icon, `canvas` composes the artwork onto a
 larger frame (Vita LiveArea, Android adaptive foreground).
 
+## The default configuration
+
+`res/mugen.cfg` is the one default configuration, and every target ships it as
+`data/mugen.cfg`:
+
+| Target | How |
+|---|---|
+| `make install` | copied when the tree has no `data/mugen.cfg`; `MUGEN_CFG_FORCE=1` replaces an existing one, `MUGEN_CFG=<path>` installs another |
+| Android | `port\android\build.bat` stages it as the APK's `data/mugen.cfg` (`GAME_CFG=` overrides) |
+| PS Vita | `MUGEN_VITA_GAME_CFG` (default `res/mugen.cfg`) is packed as `data/mugen.cfg`; `--data DIR` packs that tree's own instead |
+
+It is the same file in all three so the values and the comments cannot drift,
+and it carries a comment on every key saying what it accepts, its range and its
+clamp, and what happens when it is absent — including the keys that are parsed
+but have no effect in this build (`[Video] Depth`, `[Input] ForceFeedback`,
+`[Input] PSXDelay`, `[Debug] HideDevelopmentBuildBanner`). **Update it when a
+config key is added, removed or its handling changes**, and keep those
+"no effect" notes honest rather than dropping them.
+
+What is *not* in it is anything device-specific: the ports layer
+`data/mugen.psvita.cfg`, `data/mugen.android.cfg` and `data/mugen.arm64.cfg`
+over it per key at start-up (`src/configmerge.c`), and those files may not force
+the groups the engine writes back. The engine rewrites `[Options]`, the three
+`[Sound]` volumes, `[Input] p<n>.joystick.type` and the four `[P<n> Keys]` /
+`[P<n> Joystick]` groups in place, which is why `make install` does not
+overwrite an existing `data/mugen.cfg`: that file is the player's.
+
 ## Testing
 
 There are two kinds of check, and they answer different questions.
@@ -590,7 +622,8 @@ Behaviour is validated by **running both binaries on the same scenario and
 diffing `mugen.log`** (`docs/ANALYSIS.md`, "Validation").
 
 `install/` holds a real M.U.G.E.N 1.1b1 tree, so tests can be run end to end.
-`make install` puts the static executable there for you:
+`make install` puts the static executable there for you (and, on a fresh tree,
+`res/mugen.cfg` as its `data/mugen.cfg`):
 
 ```sh
 make install

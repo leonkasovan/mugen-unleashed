@@ -28,8 +28,11 @@ rem  downloads SDL2's release tarball with BITS. Nothing is fetched with git.
 rem  --check-tools and --offline never download; --setup stops after the tools
 rem  and libraries are in place, and --download-tools continues to the APK.
 rem
-rem  The packaged data/mugen.cfg is port/android/mugen.cfg, the Android defaults,
-rem  not the game tree copy. GAME_CFG=path stages a different one.
+rem  The packaged data/mugen.cfg is res\mugen.cfg, the project's documented
+rem  default, so the APK ships the same config make install and the Vita VPK do.
+rem  GAME_CFG=path stages a different one. The device's own settings -- full
+rem  screen, the panel's resolution, RenderMode -- live in
+rem  port\android\mugen.android.cfg, which the engine merges over it per key.
 rem  Output: build\android\mugen-android-arm64-v8a.apk
 rem
 rem  Environment:
@@ -42,7 +45,7 @@ rem    ANDROID_NDK_HOME         optional external NDK; must be the pinned one
 rem    SDL2_DEPS_DIR            SDL2 prefix, default build\android\sdl2\abi
 rem    SDL2_COMPANION_DIR       mixer/ttf prefix, default android-deps\abi
 rem    GAME_DATA_DIR            game tree to copy, default install\
-rem    GAME_CFG                 platform mugen.cfg, default port\android\mugen.cfg
+rem    GAME_CFG                 staged data/mugen.cfg, default res\mugen.cfg
 rem    GRADLE_USER_HOME         default build\android\gradle-user-home
 rem    ANDROID_USER_HOME        default build\android\toolchains\android-user-home
 rem    MUGEN_ANDROID_TOOLS_DIR  default build\android\toolchains
@@ -907,19 +910,23 @@ for %%S in ("%ROOT%\res\shaders\gles\*") do if not exist "%%~fS\" (
 )
 echo     !SHCOUNT! GLES shader^(s^)
 
-rem Platform config: port\android\mugen.cfg holds the Android defaults, so the
-rem APK ships settings that suit the device rather than a desktop's. GAME_CFG
-rem stages a different file instead.
+rem Platform config: res\mugen.cfg is the project's default configuration, the
+rem same file make install puts in the game tree and the Vita VPK packs, so the
+rem APK ships the documented defaults. GAME_CFG stages a different file instead.
+rem What is Android-specific is not here: FullScreen, the panel's resolution and
+rem RenderMode live in port\android\mugen.android.cfg below, which the engine
+rem merges over this file per key at start-up, so the game tree's own values
+rem survive everywhere the device has no opinion.
 if defined GAME_CFG (
     for %%I in ("%GAME_CFG%") do set "GAME_CFG=%%~fI"
 ) else (
-    set "GAME_CFG=%PORTDIR%\mugen.cfg"
+    set "GAME_CFG=%ROOT%\res\mugen.cfg"
 )
 if not exist "%GAME_CFG%" (
     rem Name the expected file, not just the path: a caller who deleted the
     rem template needs to know what to restore.
-    echo error: platform mugen.cfg not found at %GAME_CFG%
-    echo        set GAME_CFG=path, or restore port\android\mugen.cfg
+    echo error: staged mugen.cfg not found at %GAME_CFG%
+    echo        set GAME_CFG=path, or restore res\mugen.cfg
     exit /b 1
 )
 if not exist "%ASSETS%\data" mkdir "%ASSETS%\data"

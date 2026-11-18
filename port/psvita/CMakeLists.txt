@@ -214,6 +214,36 @@ message(STATUS "      ${_vita_renderer} ${_vita_out_w}x${_vita_out_h}, game "
                "${_vita_game_w}x${_vita_game_h}, FullScreen ${_vita_fullscreen}, "
                "Precache ${_vita_precache}")
 
+# ------------------------------------------------------- game config --
+#
+# data/mugen.cfg in the VPK is res/mugen.cfg, the project's documented default:
+# the same file `make install` puts in the game tree and port\android\build.bat
+# stages into the APK, so all three ship one configuration with one set of
+# comments. The Vita's own settings are NOT here -- they are in the platform
+# file above, merged over it per key at start-up.
+#
+# This decides what ships, not what the console keeps. The options screen writes
+# back into the packed data/mugen.cfg, so a player's saved values survive a
+# reinstall of the same VPK; nothing in the build rewrites the file at runtime.
+#
+# Set it empty to pack the game tree's own data/mugen.cfg instead, which is what
+# port\psvita\build.bat does when --data names a tree the caller supplied: their
+# tree, their config.
+set(MUGEN_VITA_GAME_CFG "${CMAKE_CURRENT_SOURCE_DIR}/../../res/mugen.cfg" CACHE FILEPATH
+    "config packed as data/mugen.cfg (empty: the game tree's own copy)")
+if(MUGEN_VITA_GAME_CFG AND
+   (NOT EXISTS "${MUGEN_VITA_GAME_CFG}" OR IS_DIRECTORY "${MUGEN_VITA_GAME_CFG}"))
+  message(FATAL_ERROR
+    "MUGEN_VITA_GAME_CFG=${MUGEN_VITA_GAME_CFG} does not exist. Point it at a "
+    "mugen.cfg, or set it empty to pack the game tree's own copy.")
+endif()
+if(MUGEN_VITA_GAME_CFG)
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${MUGEN_VITA_GAME_CFG}")
+  message(STATUS "mugen-psvita.vpk packs ${MUGEN_VITA_GAME_CFG} as data/mugen.cfg")
+else()
+  message(STATUS "mugen-psvita.vpk packs the game tree's own data/mugen.cfg")
+endif()
+
 # Memory budget for the process, in KiB, passed to vita-make-fself as -m.
 #
 # Read vita-make-fself's help carefully: "Normal app: 0, System mode app:
@@ -823,11 +853,13 @@ if(MUGEN_VITA_DATA_DIR)
 
   # --- the platform config -------------------------------------------------
   #
-  # data/mugen.cfg is packed exactly as the tree ships it. The Vita's own
-  # settings are port/psvita/mugen.psvita.cfg, packed beside it as
-  # data/mugen.psvita.cfg and merged over it per key by the engine
-  # (src/configmerge.c, called from Config_Load and Options_Load). Nothing is
-  # rewritten here, which is what keeps the game's file the user's: the options
+  # data/mugen.cfg is res/mugen.cfg (MUGEN_VITA_GAME_CFG, set above): the
+  # project's documented default, the same file `make install` puts in the game
+  # tree and the Android build stages. The Vita's own settings are
+  # port/psvita/mugen.psvita.cfg, packed beside it as data/mugen.psvita.cfg and
+  # merged over it per key by the engine (src/configmerge.c, called from
+  # Config_Load and Options_Load). Nothing is rewritten here, which is what
+  # keeps the packed file the user's once it is on the console: the options
   # screen saves into it, and a value baked in at build time would look like a
   # setting that refuses to change.
   #
@@ -982,11 +1014,16 @@ if(MUGEN_VITA_DATA_DIR)
     if(_entry STREQUAL "data")
       file(GLOB _mugen_data_files RELATIVE "${MUGEN_VITA_DATA_DIR}/data"
            "${MUGEN_VITA_DATA_DIR}/data/*")
+      set(_mugen_packed_game_cfg 0)
       foreach(_sub IN LISTS _mugen_data_files)
         if(_sub STREQUAL "mugen.psvita.cfg")
           # The port's file is packed below; a copy left in the game tree would
           # be a duplicate destination, and vita-pack-vpk rejects those.
           continue()
+        elseif(_sub STREQUAL "mugen.cfg" AND MUGEN_VITA_GAME_CFG)
+          # The project default replaces the tree's copy (MUGEN_VITA_GAME_CFG).
+          list(APPEND _mugen_vpk_args -a "${MUGEN_VITA_GAME_CFG}=data/mugen.cfg")
+          set(_mugen_packed_game_cfg 1)
         elseif(MUGEN_VITA_SHADER_${_sub})
           list(APPEND _mugen_vpk_args -a "${MUGEN_VITA_SHADER_${_sub}}=data/${_sub}")
         else()
@@ -994,6 +1031,12 @@ if(MUGEN_VITA_DATA_DIR)
                -a "${MUGEN_VITA_DATA_DIR}/data/${_sub}=data/${_sub}")
         endif()
       endforeach()
+      # A tree with no data/mugen.cfg would otherwise produce a VPK missing the
+      # file the engine opens first. The configure above already warns about the
+      # incomplete tree; this keeps the package startable anyway.
+      if(NOT _mugen_packed_game_cfg AND MUGEN_VITA_GAME_CFG)
+        list(APPEND _mugen_vpk_args -a "${MUGEN_VITA_GAME_CFG}=data/mugen.cfg")
+      endif()
       # Verbatim: no value in the file is rewritten by the build.
       list(APPEND _mugen_vpk_args -a "${MUGEN_VITA_CFG}=data/mugen.psvita.cfg")
     else()
@@ -1007,7 +1050,7 @@ add_custom_command(
   COMMAND ${VITA_PACK_VPK} ${_mugen_vpk_args} ${MUGEN_VITA_VPK}
   DEPENDS ${MUGEN_VITA_SFO} ${MUGEN_VITA_EBOOT} mugen-psvita.self
           ${MUGEN_VITA_ICON_PNG} ${MUGEN_VITA_BG_PNG} ${MUGEN_VITA_STARTUP_PNG}
-          ${MUGEN_VITA_CFG} ${MUGEN_VITA_SHADER_COMPILER}
+          ${MUGEN_VITA_CFG} ${MUGEN_VITA_GAME_CFG} ${MUGEN_VITA_SHADER_COMPILER}
           "${MUGEN_VITA_SCE_SYS}/livearea/contents/template.xml"
           ${MUGEN_VITA_SHADER_indexed.vert} ${MUGEN_VITA_SHADER_indexed.frag}
           ${MUGEN_VITA_SHADER_rgba.vert} ${MUGEN_VITA_SHADER_rgba.frag}

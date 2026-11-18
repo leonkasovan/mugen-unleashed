@@ -22,7 +22,8 @@ rem    port\psvita\build.bat --debug        Debug build (default: Release)
 rem    port\psvita\build.bat --profile      Release (-O2) with MUGEN_DEBUG
 rem                                         diagnostics: batch/model counters
 rem                                         in mugen.log; own build directory
-rem    port\psvita\build.bat --data DIR     pack this M.U.G.E.N tree into the VPK
+rem    port\psvita\build.bat --data DIR     pack this M.U.G.E.N tree into the VPK,
+rem                                         with that tree's own data/mugen.cfg
 rem    port\psvita\build.bat --no-data      pack no game data (engine only)
 rem    port\psvita\build.bat --titleid ID   nine-character title id (MUGEN0001)
 rem    port\psvita\build.bat --shader-compiler FILE  bundle this libshacccg.suprx
@@ -59,6 +60,10 @@ rem  are read from that file; the flags that used to write them
 rem  (--renderer, --precache, --resolution, --game-resolution,
 rem  --output-resolution) fail with a message naming the file rather than being
 rem  silently ignored.
+rem
+rem  data/mugen.cfg in the VPK is res\mugen.cfg, the project default that make
+rem  install puts in the game tree and the Android build stages. --data is the
+rem  exception: a tree the caller supplied ships with its own mugen.cfg.
 rem
 rem  Nothing here writes outside the repository except VITASDK itself, which is
 rem  not our artefact and cannot work anywhere else: downloads are cached in
@@ -113,6 +118,7 @@ set "DO_SETUP=0"
 set "CHECK_TOOLS=0"
 set "PRINT_ENV=0"
 set "DATA_SET=0"
+set "DATA_ARG=0"
 set "DATA_DIR="
 set "TITLEID=MUGEN0001"
 set "MODEL3D=ON"
@@ -177,7 +183,7 @@ if /I "!ARGNAME!"=="--renderer"          goto retired_renderer
 if /I "!ARGNAME!"=="--precache"          goto retired_precache
 
 if /I "!ARG!"=="--jobs"   ( set "JOBS=%~2" & shift & shift & goto parse )
-if /I "!ARG!"=="--data"   ( set "DATA_DIR=%~2" & set "DATA_SET=1" & shift & shift & goto parse )
+if /I "!ARG!"=="--data"   ( set "DATA_DIR=%~2" & set "DATA_SET=1" & set "DATA_ARG=1" & shift & shift & goto parse )
 if /I "!ARG!"=="--titleid" ( set "TITLEID=%~2" & shift & shift & goto parse )
 if /I "!ARG!"=="--shader-compiler" (
     set "SHADER_COMPILER_SET=1"
@@ -191,7 +197,7 @@ if /I "!ARG!"=="--shader-compiler" (
 rem The =VALUE forms. The substring offset is the length of the flag plus the
 rem "=", which is why each one is spelled out rather than computed.
 if /I "!ARGNAME!"=="--jobs" ( set "JOBS=!ARG:~7!" & shift & goto parse )
-if /I "!ARGNAME!"=="--data" ( set "DATA_DIR=!ARG:~7!" & set "DATA_SET=1" & shift & goto parse )
+if /I "!ARGNAME!"=="--data" ( set "DATA_DIR=!ARG:~7!" & set "DATA_SET=1" & set "DATA_ARG=1" & shift & goto parse )
 if /I "!ARGNAME!"=="--titleid" ( set "TITLEID=!ARG:~10!" & shift & goto parse )
 if /I "!ARGNAME!"=="--shader-compiler" (
     set "SHADER_COMPILER_SET=1"
@@ -357,6 +363,22 @@ rem error rather than "no data". Empty must stay empty.
 set "DATA_FWD="
 if defined DATA_DIR set "DATA_FWD=%DATA_DIR:\=/%"
 
+rem Which mugen.cfg goes into the VPK as data/mugen.cfg.
+rem
+rem The default tree is this project's own install/, and what ships with it is
+rem res\mugen.cfg -- the documented default that `make install` puts in the
+rem tree and port\android\build.bat stages into the APK, so all three carry one
+rem configuration with one set of comments. The Vita's own values are not in it:
+rem they are in mugen.psvita.cfg, merged over it per key at start-up.
+rem
+rem --data names a tree the caller supplied, and that tree's own data/mugen.cfg
+rem is what gets packed: their tree, their config. Nothing is rewritten on
+rem disk either way; the substitution happens only in the VPK's file list.
+set "GAME_CFG="
+set "GAME_CFG_FWD="
+if not "%DATA_ARG%"=="1" set "GAME_CFG=%ROOT%\res\mugen.cfg"
+if defined GAME_CFG set "GAME_CFG_FWD=%GAME_CFG:\=/%"
+
 rem ------------------------------------------------------------------ build
 rem Generator: Ninja when available (fast, and what the README shows). "MinGW
 rem Makefiles" is deliberately not a fallback: it refuses to configure when
@@ -404,6 +426,13 @@ if defined DATA_DIR (
 ) else (
     echo     game data none ^(engine-only VPK; see --data^)
 )
+if defined DATA_DIR (
+    if defined GAME_CFG (
+        echo     mugen.cfg %GAME_CFG% ^(the project default^)
+    ) else (
+        echo     mugen.cfg the game tree's own copy ^(--data^)
+    )
+)
 echo     title id  %TITLEID%
 call :install_vita_libs
 if errorlevel 1 goto fail
@@ -440,6 +469,10 @@ set "CMAKE_ARGS=-S "%PORTDIR%" -B "%OUT%" -G "%GENERATOR%""
 set "CMAKE_ARGS=%CMAKE_ARGS% "-DCMAKE_TOOLCHAIN_FILE=%TOOLCHAIN_FILE_WIN%""
 set "CMAKE_ARGS=%CMAKE_ARGS% "-DCMAKE_BUILD_TYPE=%BUILD_TYPE%""
 set "CMAKE_ARGS=%CMAKE_ARGS% "-DMUGEN_VITA_DATA_DIR=%DATA_FWD%""
+rem Always forwarded for the same reason as DATA_FWD: an empty value must reach
+rem CMake as empty, so a cached path from an earlier configure cannot survive a
+rem run that asked for the tree's own config.
+set "CMAKE_ARGS=%CMAKE_ARGS% "-DMUGEN_VITA_GAME_CFG=%GAME_CFG_FWD%""
 set "CMAKE_ARGS=%CMAKE_ARGS% "-DMUGEN_VITA_GL_SELFTEST=%GL_SELFTEST%""
 set "CMAKE_ARGS=%CMAKE_ARGS% "-DMUGEN_MODEL3D=%MODEL3D%""
 set "CMAKE_ARGS=%CMAKE_ARGS% "-DMUGEN_VITA_CFG=%CFG_ARG%""

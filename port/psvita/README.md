@@ -220,9 +220,13 @@ chooses Ninja, then Unix Makefiles, for exactly this reason.
 
 ### Configuration ownership
 
-The game's `data/mugen.cfg` is packed unchanged. The required platform overlay
-is `port/psvita/mugen.psvita.cfg`, selected by `MUGEN_VITA_CFG`. Localized
+The `data/mugen.cfg` packed into the VPK is `res/mugen.cfg`, the project's
+documented default — the same file `make install` puts in the game tree and the
+Android build stages. The required platform overlay is
+`port/psvita/mugen.psvita.cfg`, selected by `MUGEN_VITA_CFG`. Localized
 write-back groups such as `[en.Options]` remain owned by the game's config.
+`--data DIR` is the exception: a tree the caller supplied ships with its own
+`data/mugen.cfg` (`MUGEN_VITA_GAME_CFG=` empty).
 The old `port/psvita/mugen.cfg` is a historical SDL1 template, not a build input.
 
 ### `mugen.psvita.cfg` is merged over the game's `mugen.cfg`
@@ -240,12 +244,13 @@ RenderMode = OpenGL     ; see "The OpenGL renderer" below
 FullScreen = 1          ; was 0
 ```
 
-The values above are not packed by rewriting anything: `data/mugen.cfg` goes into
-the VPK exactly as the game tree ships it, and `port/psvita/mugen.psvita.cfg` is
-packed beside it as `data/mugen.psvita.cfg`. At start-up the engine merges that
-file over the game's **per key** (`src/configmerge.c`, called from `Config_Load`
-and `Options_Load`): a key the platform file names wins, every other key keeps
-the game's value, and a group only the platform file has is appended.
+The values above are not packed by rewriting anything: `data/mugen.cfg` is
+`res/mugen.cfg` (or, with `--data`, the supplied tree's own copy), and
+`port/psvita/mugen.psvita.cfg` is packed beside it as `data/mugen.psvita.cfg`.
+At start-up the engine merges that file over the game's **per key**
+(`src/configmerge.c`, called from `Config_Load` and `Options_Load`): a key the
+platform file names wins, every other key keeps the game's value, and a group
+only the platform file has is appended.
 
 ```ini
 [Config]
@@ -280,11 +285,13 @@ together, so independent sizes require OpenGL. These rules are enforced at
 configure time against the platform file itself, so a bad combination fails the
 build instead of the console.
 
-**Your game tree is never modified, and nothing in it is rewritten.** The VPK
-carries `data/mugen.cfg` byte-for-byte as the tree ships it, plus
-`data/mugen.psvita.cfg` from `port/psvita/`. Because the merge happens in memory
-at start-up, a user who edits `data/mugen.cfg` on the console keeps their
-change; only the keys the platform file names are overridden.
+**Your game tree is never modified, and nothing in it is rewritten.** The
+substitution happens only in the VPK's file list: `data/mugen.cfg` comes from
+`res/mugen.cfg` (or the supplied tree, with `--data`), and
+`data/mugen.psvita.cfg` from `port/psvita/`. The tree on disk is untouched.
+Because the merge happens in memory at start-up, a user who edits
+`data/mugen.cfg` on the console keeps their change; only the keys the platform
+file names are overridden.
 
 The one engine change this affects: `src/video.c` checks for a NULL surface
 under `MUGEN_VITA_GL` and returns `LIBERR_VIDEO_MODE`, so a bad resolution now

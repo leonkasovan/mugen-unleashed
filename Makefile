@@ -27,7 +27,8 @@
 #                     backend there)
 # (verify with "make help")
 #   make -j8          parallel build
-#   make install      strip and copy the executable into install/
+#   make install      strip and copy the executable into install/, and install
+#                     res/mugen.cfg as its data/mugen.cfg when the tree has none
 #   make V=1          show the full command lines
 #   make clean        remove the object files of $(BUILD)
 #   make distclean    remove $(BUILD) entirely
@@ -40,6 +41,9 @@
 #                                         instead (needs python3;
 #                                         tools/extract_icon.py)
 #   make MUGEN_ICONS=res/icons/1.ico      a different icon, or several to merge
+#   make MUGEN_CFG_FORCE=1                replace install/data/mugen.cfg, which
+#                                         is otherwise the player's to keep
+#   make MUGEN_CFG=<path>                 install a different config file
 #   make BUILD=build/mingw-debug DEBUG=1  unoptimised build with debug info
 #   make MUGEN_GLES=0                     force the desktop-GL renderer on a
 #                                         Linux GLES target (see below)
@@ -1018,23 +1022,48 @@ $(RC_OBJ): $(ALL_RC) $(CONFIG_STAMP)
 # Windows name on Linux: mugen-mingw-*.exe on Windows, mugen-linux-<arch> on
 # Linux (an ELF binary called .exe was the old behaviour here). The name marks
 # the backend, so installing one backend never clobbers the other.
+#
+# data/mugen.cfg is res/mugen.cfg, the project's documented default (see its
+# header for what every key does). It is installed when the tree has no config
+# -- i.e. on a fresh clone, right after the fetch -- and NOT over one that is
+# already there, because that file is the player's: the options screen rewrites
+# [Options], the volumes, the joystick type and the key groups in place, so
+# replacing it on every install would discard every setting the player saved.
+# MUGEN_CFG_FORCE=1 replaces it anyway, and MUGEN_CFG=<path> installs a
+# different file.
 
 INSTALL_DIR  ?= install
 INSTALL_NAME ?= $(notdir $(TARGET))
 STRIPPED     := $(BUILD)/$(basename $(INSTALL_NAME))-stripped$(suffix $(INSTALL_NAME))
+
+# The default configuration. Absolute, so the recipe works from any directory
+# and the existence check names the same file the copy reads.
+MUGEN_CFG       ?= $(CURDIR)/res/mugen.cfg
+MUGEN_CFG_FORCE ?= 0
 
 $(STRIPPED): $(TARGET)
 	@echo "  STRIP   $@"
 	$(Q)$(STRIP) -o $@ $(TARGET)
 
 install: $(STRIPPED)
-	@if [ ! -f "$(INSTALL_DIR)/data/mugen.cfg" ]; then \
+	@fresh=0; \
+	if [ ! -f "$(INSTALL_DIR)/data/mugen.cfg" ]; then \
+	    fresh=1; \
 	    echo "  DATA    $(INSTALL_DIR)/ (default M.U.G.E.N assets)"; \
 	    sh tools/fetch_game_data.sh --dest "$(INSTALL_DIR)" || \
 	        echo "  WARN    no game data: the binary will exit at start"; \
+	fi; \
+	if [ ! -f "$(MUGEN_CFG)" ]; then \
+	    echo "  ERROR   MUGEN_CFG=$(MUGEN_CFG) does not exist"; exit 1; \
+	fi; \
+	mkdir -p $(INSTALL_DIR)/data; \
+	if [ "$$fresh" = 1 ] || [ "$(MUGEN_CFG_FORCE)" != "0" ]; then \
+	    echo "  CFG     $(INSTALL_DIR)/data/mugen.cfg <- $(notdir $(MUGEN_CFG))"; \
+	    cp -f "$(MUGEN_CFG)" "$(INSTALL_DIR)/data/mugen.cfg"; \
+	else \
+	    echo "  CFG     $(INSTALL_DIR)/data/mugen.cfg kept (MUGEN_CFG_FORCE=1 to replace)"; \
 	fi
 	@echo "  INSTALL $(INSTALL_DIR)/$(INSTALL_NAME)"
-	$(Q)mkdir -p $(INSTALL_DIR)
 	$(Q)cp $(STRIPPED) $(INSTALL_DIR)/$(INSTALL_NAME)
 ifeq ($(MUGEN_TARGET),linux-arm64)
 	$(Q)mkdir -p $(INSTALL_DIR)/data
