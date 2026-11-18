@@ -18,7 +18,8 @@ port\psvita\build.bat
 ```
 
 `build.bat` needs no POSIX shell (VitaSDK's own `cmake`/`ninja`/`vita-pack-vpk`,
-BITS for the downloads, PowerShell's `Get-FileHash` and System32's bsdtar). From
+BITS for the downloads — `curl.exe` when BITS is unavailable — PowerShell's
+`Get-FileHash` and System32's bsdtar). From
 PowerShell:
 
 ```powershell

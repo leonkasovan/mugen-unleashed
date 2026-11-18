@@ -187,6 +187,11 @@ jobs:
     env:
       W64DEVKIT_DIR: ${{ github.workspace }}\build\toolchains\w64devkit
       X86DEVKIT_DIR: ${{ github.workspace }}\build\toolchains\x86devkit
+      # The ports look for a devkit at C:\w64devkit, which a runner does not have.
+      # Naming it is more reliable than relying on the PATH scan (and the arm64
+      # script needs it: its scan used to look for <PATH entry>\bin\make.exe and
+      # never matched a kit that was only on PATH).
+      MUGEN_WIN_KIT: ${{ github.workspace }}\build\toolchains\w64devkit
     permissions:
       contents: write
     steps:
@@ -237,6 +242,7 @@ jobs:
     env:
       W64DEVKIT_DIR: ${{ github.workspace }}\build\toolchains\w64devkit
       X86DEVKIT_DIR: ${{ github.workspace }}\build\toolchains\x86devkit
+      MUGEN_WIN_KIT: ${{ github.workspace }}\build\toolchains\w64devkit
     permissions:
       contents: write
     steps:
@@ -296,6 +302,7 @@ jobs:
       X86DEVKIT_DIR: ${{ github.workspace }}\build\toolchains\x86devkit
       ARM64_TOOLCHAIN: '9.2'
       TOOLCHAIN_DIR: ${{ github.workspace }}\build\toolchains\arm-gnu-toolchain-9.2
+      MUGEN_WIN_KIT: ${{ github.workspace }}\build\toolchains\w64devkit
     permissions:
       contents: write
     steps:

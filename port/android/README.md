@@ -51,7 +51,8 @@ port/android/
 
 ## 1. Toolchain setup
 
-`port\android\build.bat` needs no Bash, Python or MSYS2: BITS, bsdtar and
+`port\android\build.bat` needs no Bash, Python or MSYS2: BITS (or `curl.exe`
+when BITS is unavailable), bsdtar and
 PowerShell are Windows' own, and CMake/Ninja come from the SDK. Missing pieces
 are downloaded rather than left as documented prerequisites, and nothing is
 fetched with git. The cmd.exe entry points build on Windows x64 only; the

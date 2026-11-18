@@ -416,7 +416,15 @@ if errorlevel 1 (
 exit /b 0
 
 :try_kit
-if not "%~1"=="" if exist "%~1\bin\make.exe" if exist "%~1\bin\sh.exe" if not defined KIT set "KIT=%~1"
+rem A kit is normally named by its root (%MUGEN_WIN_KIT=C:\w64devkit). The PATH
+rem scan below, however, hands us the entries PATH actually holds, and those are
+rem bin directories -- so accept either shape. Without the second test a kit that
+rem is only on PATH (a CI runner with the kit unpacked somewhere else, and no
+rem C:\w64devkit) was never found: the check looked for <entry>\bin\make.exe,
+rem i.e. <kit>\bin\bin\make.exe, and the script exited with "no devkit found"
+rem before it had built anything.
+if not "%~1"=="" if not defined KIT if exist "%~1\bin\make.exe" if exist "%~1\bin\sh.exe" set "KIT=%~1"
+if not "%~1"=="" if not defined KIT if exist "%~1\make.exe" if exist "%~1\sh.exe" for %%K in ("%~1\..") do set "KIT=%%~fK"
 exit /b 0
 
 rem ============================================================ install steps
