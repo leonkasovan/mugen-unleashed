@@ -68,6 +68,7 @@ res/shaders/    project-owned shader dialects: gles/ (staged as data/gles by the
                 Android build) and vita/ (substituted into the VPK); the desktop
                 shaders are the game installation's own data/*.{vert,frag}
 tools/          extract_icon.py, iconpack.py, compare_logs.py,
+                validate.c (asset-path checker, `make validate`),
                 test_*.sh                     (make_win_sysroot.sh was removed
                                               with the MSYS2 entry points)
 port/           android/, psvita/ and arm64/ — the platform ports, each with a
@@ -609,6 +610,32 @@ overwrite an existing `data/mugen.cfg`: that file is the player's.
 
 There are two kinds of check, and they answer different questions.
 
+**0. Does the game data resolve at all? — `make validate`**
+
+`tools/validate.c` checks that a pack's asset paths resolve on **this**
+filesystem, which is not the same question Windows answers: Windows compares
+filenames case-insensitively and accepts `\` as a separator, Linux does neither.
+A pack built on Windows routinely carries `chars\KFM\KFM.def` or
+`states\constants.cns` and then fails on a handheld with nothing but
+`Error reading character file` to show for it.
+
+```sh
+make validate                                       # -> build/<build>/validate
+make validate-run VALIDATE_DIR=install               # run it over a tree
+./build/mingw-sdl2/validate --fix                    # cd into the game first
+```
+
+Default is report-only (exit 0 clean, 1 problems, 2 usage). `--fix` rewrites the
+offending values in place, keeping a `.bak`, and preserves each file's comments,
+spacing and CRLF/LF ending. It is host-native but cross-compiles with the same
+`CROSS_COMPILE` the engine uses, so the device can check its own media.
+
+This replaced an earlier `res/validate.lua`: the engine has no way to run a
+script (only `data/init.lua` is loaded, and the console's `lexec` takes one
+line), and its Lua build has no `io.popen`. A C tool needs no Lua, no engine and
+no display, and runs on a build box.
+
+**1. Differential tests — does the port match the original?**
 **1. Differential tests — does the port match the original?**
 
 `tools/test_zoomdiff.sh` checks 21 SDL2 scaling cases against committed

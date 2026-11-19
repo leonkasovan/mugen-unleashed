@@ -33,6 +33,8 @@
 #   make clean        remove the object files of $(BUILD)
 #   make distclean    remove $(BUILD) entirely
 #   make check-toolchain   verify the compiler and the libraries this target needs
+#   make validate     build tools/validate, the asset-path checker (see below);
+#                     it has its own section with the cross-compile line
 #
 # The window icon comes from res/icons/*.ico (see "the window icon" below).
 #
@@ -825,7 +827,8 @@ endif
 
 # --------------------------------------------------------------------- rules
 
-.PHONY: all clean distclean check-toolchain check-libs check-pkgconfig help install perf
+.PHONY: all clean distclean check-toolchain check-libs check-pkgconfig help install perf \
+        validate validate-run
 .DELETE_ON_ERROR:
 
 # check-pkgconfig runs first so a missing .pc file is reported as such instead
@@ -1103,6 +1106,50 @@ perf: install
 	  sh tools/run_perf.sh '$(INSTALL_DIR)' '$(INSTALL_NAME)' $(PERF_ARGS)
 
 .PHONY: perf
+
+# --- asset path validation --------------------------------------------------
+# Builds tools/validate: it checks that a game pack's asset paths resolve on
+# this filesystem, which matters because Windows
+# compares filenames case-insensitively and Linux does not. Windows-made packs
+# routinely carry "chars\KFM\KFM.def" or "states\constants.cns" and fail on a
+# Linux target with only "Error reading character file" to show for it.
+#
+# The tool is standalone: no engine objects, no SDL, no Lua, no display. It is
+# host-native because that is where you run it -- on the machine that holds the
+# pack -- but it cross-compiles to the handheld with the same CROSS_COMPILE the
+# engine uses, so the device can check its own media:
+#
+#   make validate                     build build/<host>/validate
+#   make validate-run VALIDATE_DIR=...  build, then run it over a game directory
+#   make validate MUGEN_TARGET=linux-arm64 CROSS_COMPILE=aarch64-none-linux-gnu- \
+#        XSYSROOT=build/sysroots/arm64-sysroot   the same tool for the device
+#
+# The tool itself does not use the sysroot or pkg-config; those variables are
+# only carried so the command line matches the port's build.bat. The engine's
+# COMMONFLAGS are deliberately NOT used: they carry -MMD into $(OBJ_DIR) and
+# engine defines this program must not inherit.
+VALIDATE_SRC := tools/validate.c
+VALIDATE_BIN := $(BUILD)/validate$(if $(filter win32,$(MUGEN_FAMILY)),.exe)
+VALIDATE_DIR ?=
+VALIDATE_ARGS ?=
+# -D_GNU_SOURCE for localtime_r on glibc; the tool is otherwise plain C.
+VALIDATE_CFLAGS := -std=gnu11 -O2 -Wall -Wextra -Werror -D_GNU_SOURCE $(VALIDATE_CFLAGS_EXTRA)
+
+$(VALIDATE_BIN): $(VALIDATE_SRC)
+	@mkdir -p $(dir $@)
+	$(Q)$(CC) $(VALIDATE_CFLAGS) $< -o $@
+	@echo "validate: $@"
+
+validate: $(VALIDATE_BIN)
+
+validate-run: $(VALIDATE_BIN)
+	@test -n '$(VALIDATE_DIR)' || { \
+	  echo "error: VALIDATE_DIR is required, eg. make validate-run VALIDATE_DIR=install"; \
+	  exit 2; \
+	}
+	@cd '$(VALIDATE_DIR)' && '$(abspath $(VALIDATE_BIN))' $(VALIDATE_ARGS)
+
+.PHONY: validate validate-run
 
 # --- toolchain and dependency checks ----------------------------------------
 # The two platforms need different things, and these targets say which is
