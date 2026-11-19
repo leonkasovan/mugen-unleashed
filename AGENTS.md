@@ -773,6 +773,16 @@ per draw) was worth 3.5 -> 58 fps on one screen, and two larger ones (a sprite
 atlas, instanced batching) were measured, implemented, and rejected on evidence.
 That directory is the pristine game tree; leave it as you found it.
 
+**A mean over loop frames hides what a drawn frame costs.** `perf:` divides by
+*all* loop frames, and the engine skips most of them when it falls behind
+(`Frame_UpdateSkip`). On the HyperDBZ pack 79 % of frames are skipped and do no
+draw work, so the mean reported `draw=4.6 ms` while an actually-drawn frame costs
+**20.6 ms** -- with present 12.9 ms and logic 9.0 ms against a 42.6 ms period.
+`MUGEN_FRAME_TRACE=<csv>` (src/perf.c) records the per-frame split and is the
+right instrument; read `drawn` and split the distribution before drawing
+conclusions from `perf:`. The trap caught this project once already: "logic
+dominates, so optimise the trigger VM" was wrong, logic is 21 % of a drawn frame.
+
 **A profiler line does not say *when* it ran.** `tools/test_memprof_buckets.sh`
 (`make check-memprof-buckets`) is the cautionary case, kept because the lesson
 cost real time to learn twice. A cross-pack profile put

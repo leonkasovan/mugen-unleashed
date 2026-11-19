@@ -1128,3 +1128,42 @@ excluded.
 discrepancy between a near-budget frame and a heavy skip rate is now the largest
 unexplained thing in this picture and is the next thing to investigate -- see
 below.
+
+## Frame trace: the perf line's means were misleading
+
+Upstream added `MUGEN_FRAME_TRACE=<csv>` (a90fbf4), which records per-frame
+`logic/draw/wait/present/gl_swap/period`, the budget, `late_frames` and the skip
+decision. Running it on the HyperDBZ pack invalidates the conclusion drawn from
+the `perf:` line means, including the one written above.
+
+`perf:` averages over **all loop frames**, and ~79 % of them are skipped frames
+that do no draw work. That dilution made `draw` look like 4.6 ms. Per frame,
+split by whether the frame was actually drawn (568 steady-state frames, 122
+drawn):
+
+| | logic | draw | present | period |
+|---|---|---|---|---|
+| **drawn** (122) | 9.03 | **20.62** | **12.86** | **42.59** |
+| skipped (446) | 9.34 | 0.20 | 0.00 | 9.55 |
+| perf: mean | 9.27 | 4.58 | 2.76 | 16.67 |
+
+A drawn frame costs **42.6 ms, not 16.7 ms**. Draw is the largest single term at
+20.6 ms, present 12.9 ms (of which 9.7 ms is the synchronous `gl_swap`, i.e.
+vsync wait), logic only 9.0 ms.
+
+Consequences:
+
+- **"logic dominates" was wrong.** It is 21 % of a drawn frame. Even with zero
+  logic the frame would be 33.5 ms, still twice the budget.
+- The skip pattern follows directly: a draw takes 42.6 ms, the loop falls ~3
+  frames behind (`late_frames` = 3 for 113 of 122 drawn frames), then skips ~3.6
+  frames on average (each 9.6 ms) before drawing again. That is the original's
+  `late > 1` rule doing its job, not a bug: 122 drawn / 9.5 s = 12.8 fps, which
+  matches the reported draw rate.
+- **The atlas deserves a re-measurement with this metric.** It was rejected on
+  the diluted mean (draw 3.99 -> 3.36, "a wash" against present rising). On
+  drawn frames draw is 20.6 ms, so a comparable relative saving is ~3.3 ms --
+  worth re-testing with `MUGEN_FRAME_TRACE` rather than the perf means.
+- Next target is the **draw path**, not the expression evaluator: 20.6 ms for a
+  handful of quads is far off what Mali-G31 should manage, and `gl_swap` inside
+  present is a further 9.7 ms of vsync wait that no optimisation removes.
