@@ -812,10 +812,20 @@ is 10-745x. `make check-explods-count` pins it: exhaustive, randomised and
 boundary layouts must match the original scan exactly, and a deliberately
 inconsistent `count` must make them diverge (otherwise the test proves nothing).
 
+The same treatment applies to `Explods_RemoveOwner` (7.9 % under OpenGL), with
+one extra rule: it **mutates** the list, so `list->count` must be snapshotted
+before the scan. Reading the live field lowers the stopping point with every
+removal and leaves matching explods alive -- `make check-explods-count` shows
+that concretely (9 entries left behind in its fixture). `seen` must count every
+used slot, including other players' entries, or later matches are missed.
+
 Validated on the RG351MP: five scenarios with `-sessionseed 424242` produce
 byte-identical logs before/after (excluding timing lines), and over 8 alternating
 15 s pairs logic fell 14.92 -> 10.38 ms (t=12.41) with drawn fps 5.35 -> 8.82
-(t=8.72). It does not reach 60, and **the renderer changes how much the fix is worth**:
+(t=8.72). With the RG351MP overlay on `RenderMode = OpenGL` (the pack's own
+`OpenGLScreen` cannot be presented by this build and silently falls back to
+System), `Explods_RemoveOwner` then took logic 10.80 -> 9.47 ms (t=6.35) and
+drawn fps 10.06 -> 12.26 (t=6.02) over 5 interleaved pairs. It does not reach 60, and **the renderer changes how much the fix is worth**:
 +74 % drawn frames under the System renderer but +161 % under
 `RenderMode = OpenGL`, because GL leaves draw+present at ~2.5 ms rather than
 ~10.5 ms, so the logic saving is what takes the frame to the 16.67 ms budget

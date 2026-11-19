@@ -1079,3 +1079,52 @@ marginally over budget, so the remaining gap is small but real. Re-profiling the
 entries, with the remaining in-match cost now `Soft_Scale` 18.6 %,
 `Expr_EvalCtx` 17.9 %, `Blend_Scale` 11.8 %, `Trigger_EvalCtx` 11.2 % — i.e. the
 software scaler and the trigger/expression engine, both original cost models.
+
+## Explods_RemoveOwner fast path — validated on device
+
+Same treatment as `Explods_Count`, with one difference that matters:
+`Explods_RemoveOwner` **mutates** the list, so `list->count` must be snapshotted
+before the scan. Reading the live field would lower the stopping point with every
+removal and leave matching explods alive. `tools/test_explods_count.sh` shows the
+bug concretely -- a loop that re-reads the count leaves 9 entries behind in its
+fixture -- so the test proves the snapshot is load-bearing rather than assuming
+it.
+
+`seen` counts every used slot, including entries owned by other players and
+entries whose id does not match; stopping on matching entries would end the scan
+early and miss later matches. Gated on `live * 2 <= capacity` like
+`Explods_Count` (dense measured 0.66x ungated, 1.00x gated).
+
+**Config first, then code.** The RG351MP overlay now carries
+`[Video] RenderMode = OpenGL`. The pack's own `data/mugen.cfg` asks for
+`OpenGLScreen`, which this build cannot present, so it was silently running the
+software System renderer -- the slower path. Verified `effective=opengl`,
+`gameCoord 640x480`, `trying 640x480x32`, no `SFF atlas` lines (atlas and
+batching off for both sides of the comparison).
+
+**Speed: 5 interleaved pairs, 15 s, `-p1 C18Z2 -p2 C18Z2 -s hdbz_ball`:**
+
+| | config-only baseline | + RemoveOwner | delta | paired t (df=4) |
+|---|---|---|---|---|
+| logic | 10.80 ms | **9.47 ms** | −1.33 ms (−12 %) | 6.35 |
+| drawn fps | 10.06 | **12.26** | +22 % | 6.02 |
+| draw calls | 10.68 | 13.18 | +2.50 | 7.57 |
+| game fps | 58.27 | 58.32 | +0.06 | 0.23 (n.s.) |
+
+The baseline here is the config-only run (Explods_Count fix, RenderMode=OpenGL,
+no RemoveOwner change), so the delta is attributable to the code change alone.
+
+Frame total is flat (16.76 -> 16.78 ms) for the now-familiar reason: more frames
+are drawn, so more draw work per loop iteration. `game_fps` is unchanged because
+logic and draw trade places inside the same wall-clock second.
+
+**Behaviour: identical.** Five scenarios with `-sessionseed 424242`, baseline vs
+change, 20 s each -- `ball_c18`, `ball_ai`, `buu_ai`, `kame`, `grav` -- are
+byte-identical (174/174/174/193/131 lines) once timing-dependent lines are
+excluded.
+
+**Still not 60 drawn fps** (~12 of ~60): the frame is 16.78 ms against a
+16.67 ms budget, i.e. 0.7 % over, yet ~80 % of frames are skipped. That
+discrepancy between a near-budget frame and a heavy skip rate is now the largest
+unexplained thing in this picture and is the next thing to investigate -- see
+below.

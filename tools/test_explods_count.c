@@ -145,6 +145,131 @@ static int compare_all(const TestList *list, const char *what)
     return 0;
 }
 
+
+/* ---------------------------------------------------------------- remove --- */
+/*
+ * Explods_RemoveOwner mutates the list, which is the case where a wrong stopping
+ * rule fails silently: reading the live `count` instead of a snapshot lowers the
+ * stopping point with every removal, so matching explods late in the list are
+ * never visited. These checks compare the final list state against the original
+ * loop, not just a count, so a leftover entry cannot pass.
+ */
+static int remove_original(TestList *list, int owner_id, int id)
+{
+    int removed = 0;
+    int i;
+
+    for (i = 0; i < list->capacity; i++) {
+        TestItem *e = &list->items[i];
+        if (e->used && (e->id == id || id == -1) && e->owner_id == owner_id) {
+            e->used = 0;
+            list->count--;
+            removed++;
+        }
+    }
+    return removed;
+}
+
+static int remove_fast(TestList *list, int owner_id, int id)
+{
+    int live = list->count;   /* snapshot: the sparse loop decrements it */
+    int removed = 0;
+    int i;
+
+    if (live <= 0) {
+        return 0;
+    }
+    if (live * 2 > list->capacity) {   /* dense: original range */
+        for (i = 0; i < list->capacity; i++) {
+            TestItem *e = &list->items[i];
+            if (e->used && (e->id == id || id == -1) && e->owner_id == owner_id) {
+                e->used = 0;
+                list->count--;
+                removed++;
+            }
+        }
+        return removed;
+    }
+    {
+        int seen = 0;
+
+        for (i = 0; i < list->capacity && seen < live; i++) {
+            TestItem *e = &list->items[i];
+
+            if (!e->used) {
+                continue;
+            }
+            seen++;
+            if ((e->id == id || id == -1) && e->owner_id == owner_id) {
+                e->used = 0;
+                list->count--;
+                removed++;
+            }
+        }
+    }
+    return removed;
+}
+
+static void build_random(TestList *list, unsigned long seed, int cap, int density_pct)
+{
+    int i;
+
+    rng_state = seed ? seed : 1u;
+    list->capacity = cap;
+    list->items = calloc((size_t)cap, sizeof(TestItem));
+    for (i = 0; i < cap; i++) {
+        if ((int)(rnd() % 100) < density_pct) {
+            list->items[i].used = 1;
+            list->items[i].owner_id = (int)(rnd() % 4);
+            list->items[i].id = (int)(rnd() % 6) - 1;   /* includes -1 */
+        }
+    }
+    list->count = live_items(list);
+}
+
+/* Compares the whole list, so a surviving entry cannot be missed. */
+static int remove_compare(int cap, int density, unsigned long seed, int owner_id, int id,
+                          const char *what)
+{
+    TestList a, b;
+    int ra, rb, i, bad = 0;
+
+    build_random(&a, seed, cap, density);
+    build_random(&b, seed, cap, density);
+
+    ra = remove_original(&a, owner_id, id);
+    rb = remove_fast(&b, owner_id, id);
+
+    if (ra != rb) {
+        printf("FAIL: %s cap=%d density=%d owner=%d id=%d removed %d vs %d\n",
+               what, cap, density, owner_id, id, rb, ra);
+        bad = 1;
+    }
+    if (a.count != b.count) {
+        printf("FAIL: %s count %d vs %d\n", what, b.count, a.count);
+        bad = 1;
+    }
+    if (live_items(&a) != live_items(&b)) {
+        printf("FAIL: %s live %d vs %d\n", what, live_items(&b), live_items(&a));
+        bad = 1;
+    }
+    for (i = 0; i < cap && !bad; i++) {
+        if (a.items[i].used != b.items[i].used) {
+            printf("FAIL: %s slot %d used %d vs %d (owner %d id %d)\n",
+                   what, i, b.items[i].used, a.items[i].used,
+                   a.items[i].owner_id, a.items[i].id);
+            bad = 1;
+        }
+    }
+    if (live_items(&b) != b.count) {
+        printf("FAIL: %s fast left count=%d but %d live\n", what, b.count, live_items(&b));
+        bad = 1;
+    }
+    free(a.items);
+    free(b.items);
+    return bad;
+}
+
 int main(void)
 {
     int failures = 0;
@@ -283,6 +408,62 @@ int main(void)
                bad ? "ok  " : "FAIL");
         if (!bad) failures = 1;
         free(list.items);
+    }
+
+    /* ---- 3. Explods_RemoveOwner: sparse, mixed owners, specific id, wildcard ---- */
+    {
+        static const int owners[] = { -1, 0, 1, 2, 3 };
+        static const int ids[] = { -1, 0, 1, 2, 3, 4 };
+        int oi, ii, d;
+        int cases = 0;
+
+        for (d = 0; d < 3; d++) {
+            int density = (d == 0) ? 2 : (d == 1) ? 10 : 60;  /* sparse .. dense */
+            for (oi = 0; oi < 5; oi++) {
+                for (ii = 0; ii < 6; ii++) {
+                    failures += remove_compare(500, density, 0x1234u + (unsigned long)cases,
+                                               owners[oi], ids[ii], "remove");
+                    cases++;
+                    if (failures) break;
+                }
+                if (failures) break;
+            }
+            if (failures) break;
+        }
+        if (!failures) printf("ok   %d remove cases (sparse/mixed/specific id/wildcard)\n", cases);
+    }
+
+    /* ---- 4. The snapshot is load-bearing: reading the live count must fail. ---- */
+    {
+        TestList l;
+        int i, left = 0;
+
+        /* Three matches for owner 0, spaced out so a shrinking stop point matters. */
+        l.capacity = 100;
+        l.items = calloc(100, sizeof(TestItem));
+        l.count = 0;
+        for (i = 0; i < 100; i += 10) {
+            l.items[i].used = 1;
+            l.items[i].owner_id = 0;
+            l.items[i].id = 7;
+            l.count++;
+        }
+        /* Same loop but re-reading list->count each iteration (the bug). */
+        for (i = 0; i < l.capacity && i < l.count; i++) {
+            TestItem *e = &l.items[i];
+            if (!e->used) continue;
+            if ((e->id == 7 || 7 == -1) && e->owner_id == 0) {
+                e->used = 0;
+                l.count--;
+            }
+        }
+        for (i = 0; i < l.capacity; i++) {
+            if (l.items[i].used) left++;
+        }
+        printf("%s re-reading count leaves %d entry(ies) behind (snapshot is required)\n",
+               (left > 0) ? "ok  " : "FAIL", left);
+        if (left == 0) failures = 1;
+        free(l.items);
     }
 
     printf("\n%s\n", failures ? "FAILURES" : "ALL PASS");

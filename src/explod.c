@@ -939,21 +939,64 @@ void Explod_ModifyCtx(Player *p, ExplodParams *ep, StateRunCtx *ctx, StateCtrl *
     }
 }
 
-/* 0x00411510: RemoveExplod: the explods of a player with the ID (-1: all of them). */
+/*
+ * 0x00411510: RemoveExplod: the explods of a player with the ID (-1: all of them).
+ *
+ * Port optimisation (no behaviour change): like Explods_Count, the original
+ * walks all `capacity` slots. Reachable every tick through the `removeexplod`
+ * state controller (src/sctrl.c), where it measured 7.9% of in-match CPU under
+ * OpenGL on a heavy pack.
+ *
+ * `live` is a SNAPSHOT of list->count taken before the scan, and the loop stops
+ * after visiting that many used slots. The snapshot is required for correctness,
+ * not just speed: this loop decrements list->count as it removes entries, so
+ * reading the live field would lower the stopping point with every removal and
+ * leave matching explods behind. Explods_Count could read the field directly
+ * because it only reads the list; tools/test_explods_count.sh demonstrates the
+ * difference -- re-reading the count leaves 9 entries behind in its fixture.
+ *
+ * `seen` counts every used slot encountered, including entries owned by other
+ * players and entries whose id does not match. Stopping on matching entries
+ * would end the scan early and miss later matches.
+ *
+ * The early exit is gated on `live * 2 <= capacity` for the same reason as
+ * Explods_Count: on a nearly-full list it would test every slot and the
+ * bookkeeping measured 0.66x, a regression. Gated, the worst case is 0.94x and
+ * the sparse case is 4x-490x.
+ */
 void Explods_RemoveOwner(SysDrawList *list, int owner_id, int id)
 {
+    int live = list->count;   /* snapshot: the sparse loop below decrements it */
     int i;
 
-    for (i = 0; i < list->capacity; i++) {
-        SysDrawItem *e = &list->items[i];
-        if (e->used && (e->id == id || id == -1) && e->owner_id == owner_id) {
-            if (e->sprites != NULL) {
-                SpriteSet_Free(e->sprites);
+    if (live <= 0) {
+        return;
+    }
+    if (live * 2 > list->capacity) {
+        /* Dense: walk the original range; the early exit would save nothing. */
+        for (i = 0; i < list->capacity; i++) {
+            SysDrawItem *e = &list->items[i];
+            if (e->used && (e->id == id || id == -1) && e->owner_id == owner_id) {
+                SysDrawItem_Free(e);
+                list->count--;
             }
-            e->sprites = NULL;
-            e->draw_sprites = NULL;
-            e->used = 0;
-            list->count--;
+        }
+        return;
+    }
+    {
+        int seen = 0;
+
+        for (i = 0; i < list->capacity && seen < live; i++) {
+            SysDrawItem *e = &list->items[i];
+
+            if (!e->used) {
+                continue;
+            }
+            seen++;           /* every used slot counts, not just matching ones */
+            if ((e->id == id || id == -1) && e->owner_id == owner_id) {
+                SysDrawItem_Free(e);
+                list->count--;
+            }
         }
     }
 }
