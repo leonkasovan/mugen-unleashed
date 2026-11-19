@@ -79,6 +79,122 @@ static double Perf_Since(Uint64 then, Uint64 now)
     return (double)(now - then) * 1000.0 / Perf_Frequency();
 }
 
+/*
+ * Opt-in wall-clock capture for frame pacing. Keep I/O outside the frame loop
+ * and bound the memory used even when the game is left running.
+ */
+#define FRAME_TRACE_CAPACITY 18000
+
+typedef struct PerfTraceFrame {
+    Uint64 start, present_end, next_start;
+    double logic_ms, draw_ms, wait_ms, present_ms, budget_ms;
+    Uint64 swap_ticks;
+    unsigned swap_calls;
+    int screen, drawn, late, next_skip, resync;
+} PerfTraceFrame;
+
+static struct {
+    const char *path;
+    PerfTraceFrame *frames, *previous;
+    size_t count;
+    Uint64 present_end, swap_ticks;
+    unsigned swap_calls;
+    int initialized, full;
+} frame_trace;
+
+static void Perf_WriteFrameTrace(void)
+{
+    FILE *out = fopen(frame_trace.path, "w");
+    size_t i;
+
+    if (out == NULL) {
+        fprintf(stderr, "Cannot open frame trace %s\n", frame_trace.path);
+    } else {
+        fputs("frame,screen,drawn,logic_ms,draw_ms,wait_ms,present_ms,gl_swap_ms,gl_swaps,"
+              "period_ms,after_present_ms,budget_ms,late_frames,next_skip,resync\n", out);
+        for (i = 0; i < frame_trace.count; i++) {
+            const PerfTraceFrame *f = &frame_trace.frames[i];
+
+            fprintf(out, "%u,%d,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%u,",
+                    (unsigned)i + 1, f->screen, f->drawn, f->logic_ms, f->draw_ms, f->wait_ms,
+                    f->present_ms, Perf_Since(0, f->swap_ticks), f->swap_calls);
+            if (f->next_start != 0) {
+                fprintf(out, "%.4f,%.4f", Perf_Since(f->start, f->next_start),
+                        Perf_Since(f->present_end, f->next_start));
+            } else {
+                fputc(',', out);
+            }
+            fprintf(out, ",%.4f,%d,%d,%d\n", f->budget_ms, f->late, f->next_skip, f->resync);
+        }
+        {
+            int failed = ferror(out);
+
+            if (fclose(out) != 0 || failed) {
+                fprintf(stderr, "Could not finish writing frame trace %s\n", frame_trace.path);
+            }
+        }
+    }
+    if (frame_trace.full) {
+        fprintf(stderr, "Frame trace limited to the first %d complete frames\n", FRAME_TRACE_CAPACITY);
+    }
+    SDL_free(frame_trace.frames);
+}
+
+static void Perf_InitFrameTrace(void)
+{
+    frame_trace.initialized = 1;
+    frame_trace.path = getenv("MUGEN_FRAME_TRACE");
+    if (frame_trace.path == NULL || frame_trace.path[0] == '\0') return;
+
+    frame_trace.frames = SDL_calloc(FRAME_TRACE_CAPACITY, sizeof(*frame_trace.frames));
+    if (frame_trace.frames == NULL || atexit(Perf_WriteFrameTrace) != 0) {
+        fprintf(stderr, "Cannot initialize frame trace %s\n", frame_trace.path);
+        SDL_free(frame_trace.frames);
+        frame_trace.frames = NULL;
+    }
+}
+
+unsigned long long Perf_TraceSwapBegin(void)
+{
+    return frame_trace.frames != NULL && !frame_trace.full ? SDL_GetPerformanceCounter() : 0;
+}
+
+void Perf_TraceSwapEnd(unsigned long long start)
+{
+    if (start != 0) {
+        frame_trace.swap_ticks += SDL_GetPerformanceCounter() - start;
+        frame_trace.swap_calls++;
+    }
+}
+
+void Perf_TraceSkip(int drawn, int late, int next_skip, int resync)
+{
+    PerfTraceFrame *f;
+
+    if (frame_trace.frames == NULL || frame_trace.present_end == 0) return;
+    if (frame_trace.count == FRAME_TRACE_CAPACITY) {
+        frame_trace.full = 1;
+        return;
+    }
+    f = &frame_trace.frames[frame_trace.count++];
+    f->start = perf_begin;
+    f->present_end = frame_trace.present_end;
+    f->logic_ms = perf_logic_ms;
+    f->draw_ms = perf_draw_ms;
+    f->wait_ms = perf_wait_ms;
+    f->present_ms = perf_present_ms;
+    f->budget_ms = 1000.0 * (double)g_timerFrameTicks / (double)g_timerFrequency;
+    f->swap_ticks = frame_trace.swap_ticks;
+    f->swap_calls = frame_trace.swap_calls;
+    f->screen = g_game->screen_kind;
+    f->drawn = drawn;
+    f->late = late;
+    f->next_skip = next_skip;
+    f->resync = resync;
+    frame_trace.previous = f;
+    frame_trace.present_end = 0;
+}
+
 void Perf_VitaSpan(int phase, unsigned long long start)
 {
 #ifdef MUGEN_VITA_GL
@@ -95,7 +211,21 @@ void Perf_VitaSpan(int phase, unsigned long long start)
 
 void Perf_BeginFrame(void)
 {
-    perf_begin = SDL_GetPerformanceCounter();
+    Uint64 now;
+
+    if (!frame_trace.initialized) Perf_InitFrameTrace();
+    now = SDL_GetPerformanceCounter();
+    if (frame_trace.frames != NULL && !frame_trace.full) {
+        /* Link only adjacent loop iterations on the same kind of screen. */
+        if (frame_trace.previous != NULL && frame_trace.previous->screen == g_game->screen_kind) {
+            frame_trace.previous->next_start = now;
+        }
+        frame_trace.previous = NULL;
+        frame_trace.present_end = 0;
+        frame_trace.swap_ticks = 0;
+        frame_trace.swap_calls = 0;
+    }
+    perf_begin = now;
     perf_marks = 0;
     perf_calls = 0.0;
     perf_triangles = 0.0;
@@ -140,8 +270,13 @@ void Perf_WaitDone(void)
 void Perf_PresentDone(void)
 {
     if ((perf_marks & PERF_MARK_WAIT) != 0) {
-        perf_present_ms = Perf_Since(perf_mark, SDL_GetPerformanceCounter());
+        Uint64 now = SDL_GetPerformanceCounter();
+
+        perf_present_ms = Perf_Since(perf_mark, now);
         perf_marks |= PERF_MARK_PRESENT;
+        if (perf_marks == PERF_MARK_ALL && frame_trace.frames != NULL && !frame_trace.full) {
+            frame_trace.present_end = now;
+        }
     }
     if (perf_marks == PERF_MARK_ALL) {
         perf_sum_logic += perf_logic_ms;

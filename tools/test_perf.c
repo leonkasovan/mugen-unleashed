@@ -45,9 +45,10 @@ void SoundCache_Tick(void) {}
 
 static int swaps, uploads, desktop_presents, fail_upload;
 static GameVars game;
+static int timer_late;
 
 int Timer_WaitFrame(void) { clock_ticks += 3; return 1; }
-int64_t Timer_GetFrame(void) { return g_timerFrame; }
+int64_t Timer_GetFrame(void) { return g_timerFrame + timer_late; }
 void Timer_ResetFrame(void) {}
 void Sdl2_PresentFrame(void) { desktop_presents++; clock_ticks += 7; }
 #if TEST_ANDROID
@@ -135,9 +136,69 @@ static void check_primitives(void)
     assert(Perf_TakeAverages(&a) && a.frames == 1 && a.calls == 0 && a.triangles == 0);
 }
 
+static void check_trace(void)
+{
+    PerfTraceFrame fixture[2] = {{0}};
+    int uses_fixture = frame_trace.frames == NULL;
+    size_t first = frame_trace.count;
+    Uint64 start, swap;
+    PerfTraceFrame *drawn, *skipped;
+
+    if (uses_fixture) frame_trace.frames = fixture;
+    memset(&game, 0, sizeof(game));
+    game.frame_skip = -1;
+    game.screen_kind = 4;
+    g_timerFrequency = 1000;
+    g_timerFrameTicks = 17;
+
+    start = clock_ticks;
+    Perf_BeginFrame();
+    clock_ticks += 2;
+    Perf_LogicDone();
+    clock_ticks += 3;
+    Perf_DrawDone();
+    clock_ticks += 1;
+    Perf_WaitDone();
+    swap = Perf_TraceSwapBegin();
+    clock_ticks += 7;
+    Perf_TraceSwapEnd(swap);
+    clock_ticks += 1;
+    Perf_PresentDone();
+    timer_late = 2;
+    Frame_UpdateSkip();
+    drawn = &frame_trace.frames[first];
+    assert(frame_trace.count == first + 1 && drawn->screen == 4 && drawn->drawn);
+    assert(drawn->late == 2 && drawn->next_skip && !drawn->resync);
+    assert(drawn->present_ms == 8 && drawn->swap_ticks == 7 && drawn->swap_calls == 1);
+    assert(drawn->budget_ms == 17 && drawn->present_end == start + 14);
+
+    clock_ticks += 4;
+    Perf_BeginFrame();
+    assert(drawn->next_start == start + 18);
+    Perf_LogicDone();
+    Perf_DrawDone();
+    Perf_WaitDone();
+    Perf_PresentDone();
+    timer_late = 5;
+    Frame_UpdateSkip();
+    skipped = &frame_trace.frames[first + 1];
+    assert(frame_trace.count == first + 2 && !skipped->drawn && skipped->swap_calls == 0);
+    assert(skipped->late == 5 && !skipped->next_skip && skipped->resync);
+    assert(skipped->next_start == 0);
+    timer_late = 0;
+
+    if (uses_fixture) {
+        frame_trace.frames = NULL;
+        frame_trace.previous = NULL;
+        frame_trace.count = first;
+    }
+}
+
 int main(void)
 {
     printf("abi: %d-bit build\n", (int)(sizeof(void *) * 8));
+    g_timerFrequency = 1000;
+    g_timerFrameTicks = 17;
     check_frame(RENDER_SYSTEM, 0, 0, 0);
     check_frame(RENDER_OPENGL, 0, 0, 0);
     check_frame(RENDER_OPENGL_SCREEN, 0, 0, 0);
@@ -148,6 +209,7 @@ int main(void)
     check_frame(RENDER_SYSTEM, 0, 0, 1);
 #endif
     check_primitives();
-    puts("ok: frame phases include presentation; skips, speedup, failures and primitive counts");
+    check_trace();
+    puts("ok: frame phases include presentation; skips, speedup, failures, primitive counts and frame trace");
     return 0;
 }

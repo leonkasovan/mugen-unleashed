@@ -2150,7 +2150,10 @@ void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
     /* Everything the present blit issues to the GPU has been submitted. */
     GpuTime_EndPresent();
     if ((g_videoFlags & VIDEO_HWBLIT) && (g_videoSdlFlags & DISPLAY_DOUBLEBUF)) {
+        unsigned long long swap_start = Perf_TraceSwapBegin();
+
         Video_SwapBuffers();
+        Perf_TraceSwapEnd(swap_start);
     } else {
         /*
          * Unreachable today: config.c forces VIDEO_HWBLIT for RENDER_OPENGL and

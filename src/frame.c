@@ -212,12 +212,13 @@ void Frame_UpdateSkip(void)
 {
     GameVars *g;
     __int64 lag;
-    int late;
+    int late, drawn, resync = 0;
 
     g_timerFrame++;
     lag = Timer_GetFrame() - g_timerFrame;
     late = lag < 0 ? 0 : (int)lag;
     g = g_game;
+    drawn = g->skip_draw == 0;
     g->skip_draw = 0;
     if (g->frame_skip != -1) {
         g->frame_skip_count++;
@@ -230,6 +231,7 @@ void Frame_UpdateSkip(void)
         g->frame_skip_count = 0;
         if (late > 4) {
             Timer_ResetFrame();
+            resync = 1;
             g = g_game;
         } else if (late > 1) {
             g->frame_skip_count = 1;
@@ -238,6 +240,7 @@ void Frame_UpdateSkip(void)
     if (g->frame_skip_count > 0) {
         g->skip_draw = 1;
     }
+    Perf_TraceSkip(drawn, late, g->skip_draw, resync);
 }
 
 /*

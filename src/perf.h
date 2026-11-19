@@ -65,6 +65,12 @@ void Perf_DrawDone(void);
 void Perf_WaitDone(void);
 void Perf_PresentDone(void);
 
+/* MUGEN_FRAME_TRACE=<csv> captures complete frames and skip decisions.
+ * Swap hooks time the synchronous GLES swap call, a subset of presentation. */
+unsigned long long Perf_TraceSwapBegin(void);
+void Perf_TraceSwapEnd(unsigned long long start);
+void Perf_TraceSkip(int drawn, int late, int next_skip, int resync);
+
 /* One GL draw: n triangles, counted for the frame in progress. */
 void Perf_CountDraw(unsigned int triangles);
 
