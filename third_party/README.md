@@ -17,7 +17,9 @@ SDL2_mixer and SDL2_ttf come from the selected platform dependency tree.
 | `sdk/include/pthread.h`, `sched.h` | pthreads-win32 2.8.0 headers | GNU LGPL 2.1 |
 | `sdk/include/libresample.h` | declarations for the game's `libresample.dll` (libresample 0.1.3), written for this project from the calls in `mugen.exe`. historical ABI reference only; builds use `libresample/include` | — |
 | `libresample/` | libresample 0.1.3 by Dominic Mazzoni, vendored and ported to multi-channel to match Elecbyte's ABI. See `libresample/VENDORED.md` | BSD / LGPL |
+| `ffmpeg-7.1.5/` | [FFmpeg n7.1.5](https://github.com/FFmpeg/FFmpeg/tree/n7.1.5), pinned as a submodule for WebM backgrounds | See `LICENSE.md` and `COPYING.*` |
 
+Initialize the FFmpeg source with `git submodule update --init third_party/ffmpeg-7.1.5`.
 
 SDL1 SDK headers and game-DLL import definitions are removed. Static Windows
 builds do not need `Elecbyte.MUGEN.libs`. The remaining `sdk/include` contains

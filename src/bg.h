@@ -13,6 +13,7 @@
 #define BG_TYPE_PARALLAX    1       /* "parallax" */
 #define BG_TYPE_H           2       /* any type starting with 'h': loaded and updated, never drawn */
 #define BG_TYPE_ANIM        3       /* "anim" */
+#define BG_TYPE_VIDEO      11      /* mugen-unleashed */
 #define BG_TYPE_DUMMY       10      /* "dummy" */
 
 /* BgCtrl.type */
@@ -110,7 +111,10 @@ typedef struct BgElem {
     float width_ratio;          /* 0x0BC parallax: bottom / top width */
     int centered;               /* 0x0C0 parallax: "width" or "xscale" (axis in the middle), 0 for "paralwidth" */
     int *row_widths;            /* 0x0C4 parallax, software: width of each row */
-    unsigned char **rows;       /* 0x0C8 parallax, software: the pixels of each row */
+    union {
+        unsigned char **rows;   /* 0x0C8 parallax, software: the pixels of each row */
+        struct VideoBgLayer *video; /* video elements only */
+    };
     int rows_filled;            /* 0x0CC rows holds allocated rows */
     unsigned char **rows2;      /* 0x0D0 freed like rows, never allocated */
     int rows2_filled;           /* 0x0D4 */

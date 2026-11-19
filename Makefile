@@ -734,6 +734,32 @@ CPPFLAGS += $(CROSS_CPPFLAGS) \
             -I$(TP_DIR)/minizip-0.15 \
             $(PKG_CFLAGS) $(SDL_CFLAGS)
 
+# mugen-unleashed: local WebM backgrounds in the Linux GLES build.
+MUGEN_VIDEO_BG ?= $(if $(and $(filter linux-arm64,$(MUGEN_TARGET)),$(filter 1,$(MUGEN_GLES))),1,0)
+ifeq ($(MUGEN_VIDEO_BG),1)
+  ifneq ($(MUGEN_GLES),1)
+    $(error MUGEN_VIDEO_BG=1 requires MUGEN_GLES=1)
+  endif
+  ifeq ($(filter linux-%,$(MUGEN_TARGET)),)
+    $(error MUGEN_VIDEO_BG=1 requires Linux)
+  endif
+  FFMPEG_SRC := $(abspath $(TP_DIR)/ffmpeg-7.1.5)
+  FFMPEG_BUILD := $(abspath $(BUILD)/ffmpeg)
+  FFMPEG_STAMP := $(FFMPEG_BUILD)/built
+  FFMPEG_LIBS := $(foreach lib,avformat avcodec swscale avutil,$(FFMPEG_BUILD)/lib$(lib)/lib$(lib).a)
+  ifneq ($(strip $(CROSS_COMPILE)),)
+    ifneq ($(MUGEN_TARGET),linux-arm64)
+      $(error Cross-building video backgrounds requires the ARM64 toolchain)
+    endif
+    FFMPEG_ARCH_FLAGS := --enable-cross-compile --arch=aarch64 --target-os=linux --cross-prefix="$(CROSS_COMPILE)"
+  else ifneq ($(filter linux-x64 linux-x86,$(MUGEN_TARGET)),)
+    FFMPEG_ARCH_FLAGS := --disable-x86asm
+  endif
+  ENGINE_DEFS += -DMUGEN_VIDEO_BG
+  CPPFLAGS += -I$(FFMPEG_BUILD) -I$(FFMPEG_SRC)
+endif
+CONFIG_ID += video_bg=$(MUGEN_VIDEO_BG)
+
 # FORCE_INCLUDE stays out of COMMONFLAGS: it supplies Windows type names
 # (BOOL, WORD, ...) that clash with the same names in the X11 headers a
 # third-party GL library can pull in. Only the engine needs it.
@@ -847,14 +873,14 @@ all: $(ALL_DEPS)
 # --exclude-all-symbols: SDL's main library asks the linker to export every
 # symbol, which for a static link would export the entire engine (~600 names)
 # and a few hundred KB of names with it. The engine exports nothing.
-$(TARGET): $(ENGINE_OBJS) $(RC_OBJ) $(TP_LIBS)
+$(TARGET): $(ENGINE_OBJS) $(RC_OBJ) $(TP_LIBS) $(FFMPEG_STAMP)
 	@echo "  LD      $@"
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(CC) $(ARCHFLAGS) -o $@ $(ENGINE_OBJS) $(RC_OBJ) \
 	    $(PLAT_LDFLAGS) $(CROSS_LDFLAGS) \
 	    -L$(LIB_DIR) -llua -lresample \
 	    $(GLAD_OBJ) $(MINIZIP_OBJ) $(MODEL_TP_OBJS) \
-	    $(PKG_LIBS) $(SYS_LIBS) \
+	    $(FFMPEG_LIBS) $(if $(FFMPEG_LIBS),-lm) $(PKG_LIBS) $(SYS_LIBS) \
 	    $(LINK_MODE)
 
 # --- the engine -------------------------------------------------------------
@@ -888,6 +914,25 @@ $(OBJ_DIR)/src/%.o: $(SRC_DIR)/%.c $(CONFIG_STAMP)
 	@echo "  CC      $<"
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(CC) $(ENGINE_CFLAGS) $(CPPFLAGS) -c $< -o $@
+
+ifeq ($(MUGEN_VIDEO_BG),1)
+$(OBJ_DIR)/src/video_bg.o: $(FFMPEG_STAMP)
+
+$(FFMPEG_STAMP): $(CONFIG_STAMP) $(wildcard $(FFMPEG_SRC)/configure) Makefile
+	$(Q)test -f "$(FFMPEG_SRC)/configure" || { echo "Run git submodule update --init third_party/ffmpeg-7.1.5"; exit 1; }
+	@echo "  BUILD   FFmpeg (WebM)"
+	$(Q)rm -rf "$(FFMPEG_BUILD)"
+	$(Q)mkdir -p "$(FFMPEG_BUILD)"
+	$(Q)cd "$(FFMPEG_BUILD)" && "$(FFMPEG_SRC)/configure" $(FFMPEG_ARCH_FLAGS) \
+	    --cc="$(CC)" --extra-cflags="$(ARCHFLAGS)" --disable-everything \
+	    --disable-autodetect --disable-programs --disable-doc --disable-network \
+	    --disable-avdevice --disable-avfilter --disable-swresample --disable-postproc \
+	    --disable-shared --enable-static --disable-debug \
+	    --enable-protocol=file --enable-demuxer=matroska --enable-decoder=vp8,vp9 \
+	    --enable-parser=vp8,vp9
+	$(Q)$(MAKE) -C "$(FFMPEG_BUILD)"
+	$(Q)touch "$@"
+endif
 
 ifeq ($(MUGEN_MODEL3D),1)
 $(OBJ_DIR)/src/model.o: $(SRC_DIR)/model.c $(MODEL_SHADER_HEADERS)

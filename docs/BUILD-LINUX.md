@@ -965,3 +965,18 @@ backend, automatic trace-derived prefetch, real-device audio qualification, and
 default rollout remain gated as described in
 [the design plan](LAZY_SOUND_DECODING_PLAN.md). No new codec dependency or audio
 callback decoding was introduced.
+
+## WebM backgrounds
+
+Linux ARM64 GLES builds include VP8 and VP9 video background support. Initialize
+the pinned source before building.
+
+```sh
+git submodule update --init third_party/ffmpeg-7.1.5
+```
+
+Use `RenderMode = OpenGL`. Other Linux GLES builds can opt in with
+`MUGEN_VIDEO_BG=1`. Configure `type = video` and `path = filename.webm` in a
+background element. Paths are relative to the DEF. Video-only storyboards may
+omit the SFF and BGDef. The player fits the video to the existing viewport,
+supports `loop = 1`, and follows the storyboard timer. Video audio is ignored.

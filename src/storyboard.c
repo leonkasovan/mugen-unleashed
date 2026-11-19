@@ -22,6 +22,9 @@
  * touch the array's iteration cursor).
  */
 #include "mugen.h"
+#ifdef MUGEN_VIDEO_BG
+#include "video_bg_render.h"
+#endif
 
 /* Storyboard kind: "<kind>def" is the definition group, "[<kind> ...]" / "[<kind>]" the scenes. */
 #define STORYBOARD_KIND "scene"
@@ -159,7 +162,15 @@ void Storyboard_PlayFile(const char *path)
             cs->storyboard->pos_y = (float)y;
         }
     }
-    Gfx_SetClipRect(x, y, (int)((double)local_w * scale + x), (int)((double)local_h * scale + y));
+#ifdef MUGEN_VIDEO_BG
+    if (cs->type == CUTSCENE_STORYBOARD && cs->storyboard->sprites == NULL) {
+        /* A video-only storyboard fits the render target in pixel coordinates. */
+        Gfx_SetClipRect(0, 0, g_targetWidth, g_targetHeight);
+    } else
+#endif
+    {
+        Gfx_SetClipRect(x, y, (int)((double)local_w * scale + x), (int)((double)local_h * scale + y));
+    }
     Storyboard_SetupScreen(&screen, cs);
     Screen_Run(&screen);
     Storyboard_Close(cs);
@@ -219,14 +230,8 @@ Cutscene *Storyboard_Load(const char *path)
 /* 0x00474E40: a Cutscene for the storyboard in ini (files relative to dir), or NULL. */
 Cutscene *Storyboard_Create(const char *dir, Ini *ini)
 {
-    char group[0x100];
     Cutscene *cs;
 
-    strcpy(group, STORYBOARD_KIND "def");
-    if (Ini_SelectGroup(ini, group) == -1) {
-        sprintf(g_libraryErrorText, "Can't access group %s", group);
-        return NULL;
-    }
     cs = calloc(1, sizeof(Cutscene));
     if (cs == NULL) {
         g_outOfMemory = 1;
@@ -274,13 +279,24 @@ Storyboard *Storyboard_Parse(const char *dir, Ini *ini)
     const char *line;
     int kind_len;
     int count;
-    int i, j, k;
+    int i, j, k, has_definition;
+    int video_storyboard = 0;
 
     dirs[0] = NULL;
     dirs[1] = NULL;
     dirs[2] = NULL;
+#ifdef MUGEN_VIDEO_BG
+    ini->group = -1;
+    for (line = Ini_NextGroup(ini); line != NULL; line = Ini_NextGroup(ini)) {
+        if (VideoBgLayer_IsType(Ini_GetValue(ini, "type"))) {
+            video_storyboard = 1;
+            break;
+        }
+    }
+#endif
     strcpy(buf.path, STORYBOARD_KIND "def");
-    if (Ini_SelectGroup(ini, buf.path) == -1) {
+    has_definition = Ini_SelectGroup(ini, buf.path) != -1;
+    if (!has_definition && !video_storyboard) {
         sprintf(g_libraryErrorText, "Can't access group %s", buf.path);
         return NULL;
     }
@@ -292,58 +308,54 @@ Storyboard *Storyboard_Parse(const char *dir, Ini *ini)
     sb->scale_y = 1.0f;
     sb->scale_x = 1.0f;
     strcpy(sb->dir, dir);
-    if (Ini_SelectGroup(ini, buf.path) == -1) {
-        sprintf(g_libraryErrorText, "Can't access group %s", buf.path);
-        goto fail;
-    }
 
-    /* [SceneDef] */
-    value = Ini_GetValue(ini, "spr");
-    if (value == NULL) {
-        strcpy(g_libraryErrorText, "Error: sff file must be specified");
-        goto fail;
-    }
-    Path_Join(value, dir, buf.path);
-    sb->sprites = Sff_Load(buf.path);
-    if (sb->sprites == NULL) {
-        sprintf(g_libraryErrorText, "Error reading sprite %s", value);
-        goto fail;
-    }
-    sb->owns_sprites = 1;
-    value = Ini_GetValue(ini, "snd");
-    if (value != NULL) {
-        Path_Join(value, dir, buf.path);
-        sb->snd = Snd_Load(buf.path);
-        if (sb->snd == NULL) {
-            sprintf(g_libraryErrorText, "Error reading sound %s", value);
+    if (has_definition) {
+        /* [SceneDef] */
+        value = Ini_GetValue(ini, "spr");
+        if (value != NULL) {
+            Path_Join(value, dir, buf.path);
+            sb->sprites = Sff_Load(buf.path);
+            if (sb->sprites == NULL) {
+                sprintf(g_libraryErrorText, "Error reading sprite %s", value);
+                goto fail;
+            }
+            sb->owns_sprites = 1;
+        } else if (!video_storyboard) {
+            strcpy(g_libraryErrorText, "Error: sff file must be specified");
             goto fail;
         }
-        sb->owns_snd = 1;
-    }
-    /* mugen-unleashed: the 3D model of the scene backgrounds, [SceneDef] model (bg3d.c) */
-    value = Ini_GetValue(ini, "model");
-    Bg3D_SetModel(value != NULL && value[0] != '\0' ? Bg3D_LoadModel(value, dir) : NULL);
-    dirs[0] = dir;
-    dirs[1] = g_storyboardFontDir;
-    Fonts_Load(ini, sb->fonts, dirs);
-    for (i = 0; i < STORYBOARD_FONTS; i++) {
-        if (sb->fonts[i] != NULL) {
-            sb->owns_fonts[i] = 1;
+        value = Ini_GetValue(ini, "snd");
+        if (value != NULL) {
+            Path_Join(value, dir, buf.path);
+            sb->snd = Snd_Load(buf.path);
+            if (sb->snd == NULL) {
+                sprintf(g_libraryErrorText, "Error reading sound %s", value);
+                goto fail;
+            }
+            sb->owns_snd = 1;
         }
-    }
-    value = Ini_GetValue(ini, "startscene");
-    if (value != NULL) {
-        sb->start_scene = atoi(value);
+        /* mugen-unleashed: the 3D model of the scene backgrounds, [SceneDef] model (bg3d.c) */
+        value = Ini_GetValue(ini, "model");
+        Bg3D_SetModel(value != NULL && value[0] != '\0' ? Bg3D_LoadModel(value, dir) : NULL);
+        dirs[0] = dir;
+        dirs[1] = g_storyboardFontDir;
+        Fonts_Load(ini, sb->fonts, dirs);
+        for (i = 0; i < STORYBOARD_FONTS; i++) {
+            if (sb->fonts[i] != NULL) {
+                sb->owns_fonts[i] = 1;
+            }
+        }
+        value = Ini_GetValue(ini, "startscene");
+        if (value != NULL) {
+            sb->start_scene = atoi(value);
+        }
     }
 
     /* The first "[Begin Action n]" group, if any, starts the animations. */
     ini->group = -1;
     line = Ini_NextGroup(ini);
-    while (!Str_StartsWithI(line + 1, "begin action ")) {     /* no NULL check before the first test */
+    while (line != NULL && !Str_StartsWithI(line + 1, "begin action ")) {
         line = Ini_NextGroup(ini);
-        if (line == NULL) {
-            break;
-        }
     }
     if (line != NULL) {
         sb->anims = Anim_Parse(ini);
@@ -854,8 +866,15 @@ void Storyboard_Draw(Storyboard *sb)
             g_gfxClear(Video_MapRGB(scene->clear_color[0], scene->clear_color[1], scene->clear_color[2]));
         }
         if (scene->bg != NULL) {
+            float offset_y = sb->pos_y / scale_y;
+#ifdef MUGEN_VIDEO_BG
+            if (sb->sprites == NULL) {
+                /* The video element centers itself in the pixel viewport. */
+                offset_y = 0.0f;
+            }
+#endif
             Bg_SetScale(scene->bg, scale_x, scale_y);
-            Bg_SetCamera(scene->bg, 0.0f, 0.0f, 0.0f, sb->pos_y / scale_y, 1.0f, 0.0f, 0.0f);
+            Bg_SetCamera(scene->bg, 0.0f, 0.0f, 0.0f, offset_y, 1.0f, 0.0f, 0.0f);
             scene->bg->unused_14 = (int)(sb->pos_x / scale_x);
         }
         if (scene->window_on != 0) {
