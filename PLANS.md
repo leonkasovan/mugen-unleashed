@@ -1055,6 +1055,24 @@ better on game rate (54.35 vs 44.71), because it is still over budget. And
 frames are drawn, so less logic fits in the same wall time. The combination —
 GLES plus the fix — is the only cell that is best on both.
 
+**Sprite atlas + instanced batching: still no, now measured at this operating
+point.** The earlier rejection was made with the baseline binary, well over
+budget; with logic fixed the frame sits at the 16.67 ms edge, so the atlas was
+re-tested on top of the fix under `RenderMode = OpenGL`, 10 alternating pairs,
+15 s each:
+
+| | logic | draw | present | draw+present | drawn fps | calls |
+|---|---|---|---|---|---|---|
+| fix | 10.56 | 3.99 | 2.29 | 6.29 | 10.34 | 11.25 |
+| fix + atlas | 10.51 | **3.36** | **2.96** | 6.32 | 9.78 | 10.13 |
+
+Batching does what it says on draw: −0.63 ms (t=9.69) and calls 11.25 -> 10.13.
+But `present` rises by exactly the same 0.67 ms (t=−12.63), so the full frame is
+**16.84 vs 16.83 ms — a wash**, and drawn fps is 5 % *worse* (t=−2.67). The atlas
+moves sprite-submission cost from the draw span into the present span; it does
+not remove it. That is the same mechanism recorded in docs/BUILD-LINUX.md for the
+original rejection, now confirmed at a second, much tighter operating point.
+
 It is still **not** 60 drawn fps: 9.46 means ~84 % of frames are still skipped,
 because `Frame_UpdateSkip` skips after a single late frame. 16.90 ms is only
 marginally over budget, so the remaining gap is small but real. Re-profiling the changed build shows `Explods_Count` gone from the top
