@@ -815,10 +815,15 @@ inconsistent `count` must make them diverge (otherwise the test proves nothing).
 Validated on the RG351MP: five scenarios with `-sessionseed 424242` produce
 byte-identical logs before/after (excluding timing lines), and over 8 alternating
 15 s pairs logic fell 14.92 -> 10.38 ms (t=12.41) with drawn fps 5.35 -> 8.82
-(t=8.72). It does not reach 60: ~10.4 ms of logic still exceeds the 16.67 ms
-budget, and the remaining in-match cost is the software scaler (`Soft_Scale`
-18.6 %, `Blend_Scale` 11.8 %) plus `Expr_EvalCtx` 17.9 % and `Trigger_EvalCtx`
-11.2 %. Full record in PLANS.md.
+(t=8.72). It does not reach 60, and **the renderer changes how much the fix is worth**:
++74 % drawn frames under the System renderer but +161 % under
+`RenderMode = OpenGL`, because GL leaves draw+present at ~2.5 ms rather than
+~10.5 ms, so the logic saving is what takes the frame to the 16.67 ms budget
+(18.07 -> 16.90 ms). Note OpenGL alone is *not* an improvement over System for
+drawn frames, and System + fix trades game rate for draw rate. The remaining
+in-match cost is the software scaler (`Soft_Scale` 18.6 %, `Blend_Scale` 11.8 %)
+plus `Expr_EvalCtx` 17.9 % and `Trigger_EvalCtx` 11.2 %. Full matrix in
+PLANS.md.
 
 ## Changing code
 

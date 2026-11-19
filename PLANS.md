@@ -1029,8 +1029,35 @@ default config (OpenGLScreen -> System fallback), first perf sample dropped:**
 All three are significant at p<0.05 (|t|>2.36). The prediction was ~5 ms from a
 33.7 % share of a ~15 ms span; the measured drop is 4.5 ms.
 
-It is **not** 60 fps: ~10.4 ms logic still leaves the frame over the 16.67 ms
-budget. Re-profiling the changed build shows `Explods_Count` gone from the top
+**The renderer matters as much as the fix, and the two interact.** The A/B above
+used the default config, where the pack's own `RenderMode = OpenGLScreen` cannot
+be presented by this build and silently falls back to System. Forcing
+`RenderMode = OpenGL` (GLES) changes the answer substantially — 3 runs per cell,
+same 15 s command:
+
+| config | logic | draw | present | total | drawn fps | game fps |
+|---|---|---|---|---|---|---|
+| System, baseline | 14.98 | 4.12 | 3.07 | 22.17 | 5.09 | 44.71 |
+| System, +fix | 10.43 | 7.43 | 5.51 | 23.37 | **8.84** | 42.50 |
+| OpenGL, baseline | 15.53 | 1.69 | 0.85 | 18.07 | 3.63 | 54.35 |
+| OpenGL, +fix | 11.12 | 3.70 | 2.08 | **16.90** | **9.46** | **57.95** |
+
+The fix is worth +74 % drawn frames under System but **+161 % under OpenGL**,
+because GL leaves draw+present at ~2.5 ms instead of ~10.5 ms: cutting logic
+then takes the frame from 18.1 to 16.9 ms, right at the 16.67 ms budget, and
+many more frames get drawn. Under System the same saving still leaves 23.4 ms,
+far over.
+
+Two things this makes clear. **OpenGL alone is not an improvement** — baseline GL
+is *worse* for drawn frames than baseline System (3.63 vs 5.09) and only looks
+better on game rate (54.35 vs 44.71), because it is still over budget. And
+**System + fix trades game rate for draw rate** (game fps 44.71 -> 42.50): more
+frames are drawn, so less logic fits in the same wall time. The combination —
+GLES plus the fix — is the only cell that is best on both.
+
+It is still **not** 60 drawn fps: 9.46 means ~84 % of frames are still skipped,
+because `Frame_UpdateSkip` skips after a single late frame. 16.90 ms is only
+marginally over budget, so the remaining gap is small but real. Re-profiling the changed build shows `Explods_Count` gone from the top
 entries, with the remaining in-match cost now `Soft_Scale` 18.6 %,
 `Expr_EvalCtx` 17.9 %, `Blend_Scale` 11.8 %, `Trigger_EvalCtx` 11.2 % — i.e. the
 software scaler and the trigger/expression engine, both original cost models.
