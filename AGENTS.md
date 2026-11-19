@@ -636,7 +636,6 @@ line), and its Lua build has no `io.popen`. A C tool needs no Lua, no engine and
 no display, and runs on a build box.
 
 **1. Differential tests — does the port match the original?**
-**1. Differential tests — does the port match the original?**
 
 `tools/test_zoomdiff.sh` checks 21 SDL2 scaling cases against committed
 synthetic outputs recorded at `6753f6b`. `test_render_baseline.sh` checks three
@@ -773,6 +772,53 @@ dedicated VAO) changed nothing measurable, one real cost (a sprite re-uploaded
 per draw) was worth 3.5 -> 58 fps on one screen, and two larger ones (a sprite
 atlas, instanced batching) were measured, implemented, and rejected on evidence.
 That directory is the pristine game tree; leave it as you found it.
+
+**A profiler line does not say *when* it ran.** `tools/test_memprof_buckets.sh`
+(`make check-memprof-buckets`) is the cautionary case, kept because the lesson
+cost real time to learn twice. A cross-pack profile put
+`Memprof_FindEntryLocked` at 12.2 % of all samples, and the table is provably
+costly: `MEMPROF_BUCKETS` is 1024, an explod-heavy pack holds ~99k live
+allocations, and the benchmark shows teardown-time frees going from 2263 ms to
+105 ms on the device as buckets rise (21x; `drain` is the metric, not `churn`,
+because an alloc+free pair lands on the chain head and is O(1) either way).
+
+But 7 paired frame-rate runs could not resolve the change at all (t=1.85, well
+under the 2.45 needed at p<0.05), and the reason is in the stacks: **100 % of
+those samples are during teardown** (`Expr_Free`, `StateCtrl_Free` at match
+unload) and none during gameplay. The same pack allocates ~38 objects and frees
+~42 in 15 s of steady state. So the bucket count is an exit-time knob, never a
+frame-rate one, and no amount of paired fps runs was going to show it. Attribute
+samples to a phase (teardown / load / in-match) before choosing a metric.
+
+The in-match profile of that pack, which is the answer the fps runs could not
+give:
+
+| share of in-match CPU | function | note |
+|---|---|---|
+| 33.7 % | `Explods_Count` | O(`ExplodMax`=500) scan per `numexplod`; faithful to 0x00411790 |
+| 24.4 % | `Expr_EvalCtx` | expression evaluation |
+| 14.0 % | `Trigger_EvalCtx` | trigger dispatch |
+| 6.6 % | `KeyedArray_Find` | |
+
+No Lua appears in the top entries: this is the engine's own cost model, not a
+pack's scripts. Optimising any of it is a fidelity decision, not a free win.
+
+**`Explods_Count` (0x00411790) was the one case where a change costs nothing in
+behaviour.** It scanned all `ExplodMax` slots per `numexplod` poll; it now stops
+once it has seen `list->count` live items, but only when `count * 2 <=
+capacity` — the bookkeeping is not free, and on a nearly full list the early exit
+measured 0.6x (a regression). Gated, the worst case is 1.04x and the normal case
+is 10-745x. `make check-explods-count` pins it: exhaustive, randomised and
+boundary layouts must match the original scan exactly, and a deliberately
+inconsistent `count` must make them diverge (otherwise the test proves nothing).
+
+Validated on the RG351MP: five scenarios with `-sessionseed 424242` produce
+byte-identical logs before/after (excluding timing lines), and over 8 alternating
+15 s pairs logic fell 14.92 -> 10.38 ms (t=12.41) with drawn fps 5.35 -> 8.82
+(t=8.72). It does not reach 60: ~10.4 ms of logic still exceeds the 16.67 ms
+budget, and the remaining in-match cost is the software scaler (`Soft_Scale`
+18.6 %, `Blend_Scale` 11.8 %) plus `Expr_EvalCtx` 17.9 % and `Trigger_EvalCtx`
+11.2 %. Full record in PLANS.md.
 
 ## Changing code
 

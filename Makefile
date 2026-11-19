@@ -828,7 +828,7 @@ endif
 # --------------------------------------------------------------------- rules
 
 .PHONY: all clean distclean check-toolchain check-libs check-pkgconfig help install perf \
-        validate validate-run
+        validate validate-run check-memprof-buckets check-explods-count
 .DELETE_ON_ERROR:
 
 # check-pkgconfig runs first so a missing .pc file is reported as such instead
@@ -1150,6 +1150,42 @@ validate-run: $(VALIDATE_BIN)
 	@cd '$(VALIDATE_DIR)' && '$(abspath $(VALIDATE_BIN))' $(VALIDATE_ARGS)
 
 .PHONY: validate validate-run
+
+# --- memprof side-table benchmark -------------------------------------------
+# Times src/memprof.c's pointer side table at several bucket counts, using
+# tools/test_memprof_buckets.c. Read its header first: the interesting metric is
+# `drain` (frees at full occupancy, i.e. the chain walk), NOT `churn` (an
+# alloc+free pair lands on the chain head and is O(1) either way).
+#
+# Why this exists: an on-device profile put Memprof_FindEntryLocked at 12.2% of
+# all samples on a heavy pack. Chasing that with 7 paired fps runs could not
+# resolve it (t=1.85), and the reason turned out to be that every one of those
+# samples is during TEARDOWN -- Expr_Free/StateCtrl_Free at match unload -- and
+# none during gameplay, where this pack allocates ~38 objects per 15 s. So the
+# bucket count is an exit-time knob, not a frame-rate one, and measuring it in
+# frames was the wrong instrument. This target measures it directly.
+#
+#   make check-memprof-buckets
+#   BUCKETS="1024 262144" make check-memprof-buckets
+check-memprof-buckets:
+	@sh tools/test_memprof_buckets.sh
+
+.PHONY: check-memprof-buckets
+
+# --- Explods_Count equivalence ----------------------------------------------
+# Explods_Count (0x00411790) no longer scans all `capacity` slots: it stops once
+# it has seen `list->count` live items, because a character polling `numexplod`
+# every tick made the original O(ExplodMax) scan 33.7% of in-match CPU on a heavy
+# pack. That is only exact while `count` equals the number of used slots, so this
+# gate checks the fast path against the original scan over exhaustive, randomised
+# and boundary layouts -- and separately proves the invariant is load-bearing
+# (an inconsistent count must make the two diverge, or the test proves nothing).
+#
+#   make check-explods-count
+check-explods-count:
+	@sh tools/test_explods_count.sh
+
+.PHONY: check-explods-count
 
 # --- toolchain and dependency checks ----------------------------------------
 # The two platforms need different things, and these targets say which is

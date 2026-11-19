@@ -1000,3 +1000,37 @@ to `g_gfx*`, then implement GL2 against it. That refactor is worth doing on its
 own merits, and it is the prerequisite for *any* other backend, including
 Vulkan.
 
+
+## Explods_Count fast path — validated on device
+
+`src/explod.c` `Explods_Count` (0x00411790) stops once it has seen
+`list->count` live items when `count * 2 <= capacity` (see AGENTS.md, "Testing").
+Host-side it is proven exact by `make check-explods-count`; this is the device
+record.
+
+**Behaviour: identical.** Five scenarios on the HyperDBZ pack with
+`-sessionseed 424242`, baseline (`936a2155`, original scan) vs the change
+(`6b674e8c`), 20 s each: `ball_c18`, `ball_c18_ai`, `ball_buu_ai`,
+`kamehouse_ai`, `grav_ai`. After excluding only timing-dependent lines
+(`perf`/`mem`/`soundcache`/`batch`/`gput`, `Load time`, the `Command line` path
+and the end-of-run frame statistics) the logs are **byte-identical**, 128-189
+lines each. `tools/compare_logs.py` agrees, reporting only per-second
+`soundcache` counts, which vary with elapsed time.
+
+**Speed: 8 alternating pairs, 15 s, `-p1 C18Z2 -p2 C18Z2 -s hdbz_ball`,
+default config (OpenGLScreen -> System fallback), first perf sample dropped:**
+
+| | before | after | delta | paired t (df=7) |
+|---|---|---|---|---|
+| logic | 14.92 ms | **10.38 ms** | −4.53 ms (−30 %) | 12.41 |
+| drawn fps | 5.35 | **8.82** | +65 % | 8.72 |
+| frames skipped | 449 | 397 | −52 | 4.52 |
+
+All three are significant at p<0.05 (|t|>2.36). The prediction was ~5 ms from a
+33.7 % share of a ~15 ms span; the measured drop is 4.5 ms.
+
+It is **not** 60 fps: ~10.4 ms logic still leaves the frame over the 16.67 ms
+budget. Re-profiling the changed build shows `Explods_Count` gone from the top
+entries, with the remaining in-match cost now `Soft_Scale` 18.6 %,
+`Expr_EvalCtx` 17.9 %, `Blend_Scale` 11.8 %, `Trigger_EvalCtx` 11.2 % — i.e. the
+software scaler and the trigger/expression engine, both original cost models.

@@ -1028,14 +1028,59 @@ void Explods_SetBindTime(SysDrawList *list, int owner_id, int id, int time)
     }
 }
 
-/* 0x00411790: NumExplod: the explods of a player with the ID (-1: all). */
+/*
+ * 0x00411790: NumExplod: the explods of a player with the ID (-1: all).
+ *
+ * Port optimisation (no behaviour change): the original walks all `capacity`
+ * slots even when almost none are in use, and a character that polls
+ * `numexplod` every tick makes that O(ExplodMax) per call -- measured at 33.7%
+ * of in-match CPU on a heavy pack, which is ~5 ms of a ~15 ms logic frame.
+ *
+ * `list->count` is the exact number of live items (Explods_Create zeroes it;
+ * every insert increments it; SysDraw_Remove, SysDrawItem_Free's callers and
+ * SysDraw_Clear decrement or reset it together with clearing `used`). Once
+ * `count` live items have been seen, every remaining slot is provably unused
+ * and the result cannot change, so the sparse case stops there.
+ *
+ * The sparse path is gated on `count * 2 <= capacity` because the bookkeeping
+ * is not free: on a nearly full list it would run on every slot and buy
+ * nothing, which measured 0.6x (a regression). With the gate the worst case is
+ * 1.04x and the normal case is 10-745x; see tools/test_explods_count.sh, which
+ * pins the equivalence of both paths against the original scan.
+ *
+ * This is not a new assumption either way: Explods_DrawShadows already bounds
+ * its own walk by `list->count`.
+ */
 int Explods_Count(SysDrawList *list, int owner_id, int id)
 {
     int n = 0;
     int i;
 
+    if (list->count == 0) {
+        return 0;
+    }
+    if (list->count * 2 <= list->capacity) {
+        int seen = 0;
+
+        for (i = 0; i < list->capacity; i++) {
+            SysDrawItem *e = &list->items[i];
+
+            if (!e->used) {
+                continue;
+            }
+            seen++;
+            if ((e->id == id || id == -1) && e->owner_id == owner_id) {
+                n++;
+            }
+            if (seen == list->count) {
+                break;  /* every live item accounted for */
+            }
+        }
+        return n;
+    }
     for (i = 0; i < list->capacity; i++) {
         SysDrawItem *e = &list->items[i];
+
         if (e->used && (e->id == id || id == -1) && e->owner_id == owner_id) {
             n++;
         }
