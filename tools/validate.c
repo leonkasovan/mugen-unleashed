@@ -1159,7 +1159,7 @@ static void fix_select(const char *path)
 
 /* ------------------------------------------------------------- char def pass */
 
-static void check_character_defs(const char *select_path)
+static void check_character_defs(const char *select_path, const char *motif_dir)
 {
     char *content = read_file(select_path, NULL);
     char *line, *next;
@@ -1240,10 +1240,23 @@ static void check_character_defs(const char *select_path)
         if (slash != NULL) slash[1] = '\0';
         else cdir[0] = '\0';
         {
-            const char *bases[] = { cdir };
+            /*
+             * A character's [Files] are joined onto the character's own
+             * directory first, then fall back to the engine's File_Find chain
+             * (src/file.c): motif dir, "./", "data/". stcommon depends on that
+             * -- it is documented in src/char.c as "next to the character, else
+             * wherever File_Find finds them", and packs normally keep
+             * common1.cns in data/. Restricting the search to cdir alone reports
+             * every such stcommon as missing.
+             *
+             * Rewrites stay character-relative when the file is beside the
+             * character (the engine's Path_Join form) and fall back to the
+             * spelling relative to whichever base matched otherwise.
+             */
+            const char *bases[] = { cdir, motif_dir, "", "data/" };
 
             fprintf(g_report, "character: %s\n", r.matched);
-            validate_file(r.matched, bases, 1, &keys, "Files");
+            validate_file(r.matched, bases, 4, &keys, "Files");
         }
     }
     fprintf(g_report, "  %d character def(s) inspected\n", seen_count);
@@ -1550,7 +1563,7 @@ int main(int argc, char **argv)
     }
 
     printf("=== [character defs] ===\n");
-    if (select_path[0] != '\0') check_character_defs(select_path);
+    if (select_path[0] != '\0') check_character_defs(select_path, motif_dir);
 
     bad = (int)(g_count.case_mismatch + g_count.backslash + g_count.missing);
     fprintf(g_report, "\n=== summary ===\n");
