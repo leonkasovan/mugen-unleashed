@@ -1105,20 +1105,14 @@ static void fix_select(const char *path)
         } else if (strcmp(section, "extrastages") == 0) {
             char work[PATH_MAX * 2];
             char stage_out[PATH_MAX * 2];
-            char *comma = strchr(line, ',');
             const char *raw;
             size_t raw_len, lead = 0, trail = 0;
             Resolved r;
 
             snprintf(work, sizeof(work), "%s", line);
             strip_cr(work);
-            /* Keep everything from the first comma on (order=.../unlock=...). */
-            {
-                char *c = strchr(work, ',');
-                if (c != NULL) *c = '\0';
-            }
             raw = work;
-            raw_len = strlen(raw);
+            raw_len = strcspn(raw, ",;");
             while (lead < raw_len && (raw[lead] == ' ' || raw[lead] == '\t')) lead++;
             while (trail + lead < raw_len &&
                    (raw[raw_len - 1 - trail] == ' ' || raw[raw_len - 1 - trail] == '\t')) {
@@ -1140,7 +1134,7 @@ static void fix_select(const char *path)
                 if (changed_here) {
                     fprintf(out_file, "%.*s%s%.*s", (int)lead, raw, stage_out,
                             (int)trail, raw + raw_len - trail);
-                    if (comma != NULL) fputs(comma, out_file);
+                    fputs(raw + raw_len, out_file);
                     if (crlf) fputc('\r', out_file);
                     if (had_nl) fputc('\n', out_file);
                     g_count.fixed++;
