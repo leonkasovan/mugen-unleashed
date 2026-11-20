@@ -6,6 +6,7 @@
  * stay in double; float to int conversions truncate like __ftol2.
  */
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "mugen.h"
 #include "soundcache.h"
@@ -107,13 +108,26 @@ static void Frame_ResetPalFx(void)
  * 0x0040F9E0: saves the screen as the first free mugen%03i.png (in the
  * working directory; screens of less than 24 bits go through a 32-bit copy).
  */
+/* Port addition: the tick to embed in the next screenshot's name, or -1. */
+static long g_shotNameTick = -1;
+
+void Screen_SetShotName(long tick)
+{
+    g_shotNameTick = tick;
+}
+
 void Screen_SaveShot(void)
 {
     char path[0x200];
     SDL_Surface *s, *copy;
     FILE *fp;
 
-    sprintf(path, "mugen%03i.png", g_screenshotNumber++);
+    if (g_shotNameTick >= 0) {
+        sprintf(path, "shot-t%05li.png", g_shotNameTick);
+        g_shotNameTick = -1;
+    } else {
+        sprintf(path, "mugen%03i.png", g_screenshotNumber++);
+    }
     for (fp = fopen(path, "rb"); fp != NULL; fp = fopen(path, "rb")) {
         fclose(fp);
         sprintf(path, "mugen%03i.png", g_screenshotNumber++);
@@ -156,6 +170,50 @@ void Screen_Present(void)
     GameVars *g = g_game;
     int x, y, w, h;
 
+    /*
+     * Port addition: MUGEN_SHOT_FRAME=<n> takes one screenshot on the n-th
+     * *drawn* frame and exits nothing else. Counting drawn frames rather than
+     * loop iterations is what makes two runs comparable: the skip heuristics
+     * change with frame cost, so the same loop count can land on a different
+     * game frame in each. Comparing the atlas against standalone sprites needs
+     * the identical frame out of both.
+     */
+    if (g->screenshot_requested == 0) {
+        /*
+         * Port addition: MUGEN_SHOT_RANGE=<from>-<to> writes shot-t<tick>.png
+         * for every drawn fight frame whose round_ticks falls in that window,
+         * then asks the game to quit.
+         *
+         * Keyed on round_ticks rather than a frame index because the skip
+         * heuristic decides which ticks reach the screen: run the same seed
+         * twice and the n-th drawn frame is a different game state each time.
+         * round_ticks advances with the simulation, so two runs that produce
+         * tick T hand the comparator the same frame. That is what makes an
+         * atlas-vs-standalone pixel diff meaningful.
+         *
+         * A bounded window, not "every frame": a PNG per frame on exFAT stalls
+         * the game badly enough to change what it captures.
+         */
+        const char *range = getenv("MUGEN_SHOT_RANGE");
+
+        if (range != NULL && g->match_loaded != 0) {
+            static long from = -1, to = -1;
+
+            if (from < 0) {
+                const char *dash = strchr(range, '-');
+
+                from = atol(range);
+                to = (dash != NULL) ? atol(dash + 1) : from;
+            }
+            if (g->skip_draw == 0 && g->round_ticks >= from && g->round_ticks <= to) {
+                extern void Screen_SetShotName(long tick);
+
+                Screen_SetShotName(g->round_ticks);
+                g->screenshot_requested = 1;
+            }
+            if (g->round_ticks > to) g_quitRequested = 1;
+        }
+    }
     if (g->screenshot_requested != 0) {
         Screen_SaveShot();
         g = g_game;
