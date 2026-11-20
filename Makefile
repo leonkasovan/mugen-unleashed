@@ -866,19 +866,29 @@ $(OBJ_DIR)/src/%.o: $(SRC_DIR)/%.c $(CONFIG_STAMP)
 ifeq ($(MUGEN_VIDEO_BG),1)
 $(OBJ_DIR)/src/video_bg.o: $(FFMPEG_STAMP)
 
+# FFmpeg's configure probes create temporary symlinks and compile tests via
+# mktemp. With TMPDIR unset that is the Windows user temp directory, which this
+# project must not write to (AGENTS.md, "keep temporary files inside the
+# project") -- and on this host the probe symlink is refused outright, printing
+# "ln: .../Temp/name_XXXX: Permission denied" on every configure. Pointing
+# TMPDIR at $(BUILD)/tmp keeps them inside the repository and silences the
+# noise. It is created here because configure runs before anything else does.
+FFMPEG_TMP := $(abspath $(BUILD)/tmp/ffmpeg)
+
 $(FFMPEG_STAMP): $(CONFIG_STAMP) $(wildcard $(FFMPEG_SRC)/configure) Makefile
 	$(Q)test -f "$(FFMPEG_SRC)/configure" || { echo "Run git submodule update --init third_party/ffmpeg-7.1.5"; exit 1; }
 	@echo "  BUILD   FFmpeg (WebM)"
 	$(Q)rm -rf "$(FFMPEG_BUILD)"
-	$(Q)mkdir -p "$(FFMPEG_BUILD)"
-	$(Q)cd "$(FFMPEG_BUILD)" && "$(FFMPEG_SRC)/configure" $(FFMPEG_ARCH_FLAGS) \
+	$(Q)mkdir -p "$(FFMPEG_BUILD)" "$(FFMPEG_TMP)"
+	$(Q)cd "$(FFMPEG_BUILD)" && TMPDIR="$(FFMPEG_TMP)" TMP="$(FFMPEG_TMP)" TEMP="$(FFMPEG_TMP)" \
+	    "$(FFMPEG_SRC)/configure" $(FFMPEG_ARCH_FLAGS) \
 	    --cc="$(CC)" --extra-cflags="$(ARCHFLAGS)" --disable-everything \
 	    --disable-autodetect --disable-programs --disable-doc --disable-network \
 	    --disable-avdevice --disable-avfilter --disable-swresample --disable-postproc \
 	    --disable-shared --enable-static --disable-debug \
 	    --enable-protocol=file --enable-demuxer=matroska --enable-decoder=vp8,vp9 \
 	    --enable-parser=vp8,vp9
-	$(Q)$(MAKE) -C "$(FFMPEG_BUILD)"
+	$(Q)$(MAKE) -C "$(FFMPEG_BUILD)" TMPDIR="$(FFMPEG_TMP)" TMP="$(FFMPEG_TMP)" TEMP="$(FFMPEG_TMP)"
 	$(Q)touch "$@"
 endif
 
