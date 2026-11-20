@@ -18,7 +18,8 @@
  *   - character [Files] values are joined onto the character's directory
  *     (src/char.c Char_OpenFile -> Path_Join(name, dir, path)), so the correct
  *     spelling for a character is "files/c18.sff", not "C18Z2/files/c18.sff";
- *   - src/char.c reads cmd, cns, anim, stcommon, sprite, sound and st0..st9;
+ *   - src/char.c reads cmd, cns, anim, stcommon, sprite, sound, st0..st9 and
+ *     pal1..pal12. External palettes use Char_OpenFile's character directory;
  *   - src/select.c resolves a bare "kfm" cell as chars/kfm/kfm.def.
  *
  * Modes:
@@ -533,6 +534,7 @@ fail:
 typedef struct {
     const char *const *keys;
     int count;
+    int character_files;
 } KeySet;
 
 static const char *const k_system_keys[] = {
@@ -543,18 +545,11 @@ static const char *const k_fight_keys[] = {
     "spr", "snd", "anim", "font", "font0", "font1", "font2", "font3",
     "font4", "font5", "font6", "font7", "font8", "font9"
 };
-/* src/char.c: cmd, cns, anim, stcommon, sprite, sound, and the st0..st9 loop. */
-/*
- * src/char.c reads cmd, cns, anim, stcommon, sprite, sound and the st0..st9
- * loop; pal1..pal12 are external .act palettes for the slots the SFF does not
- * carry (char.c: "palettes 1..12 missing from the sprite file"). They were
- * missing from this list, so a pack whose palettes differ only in case --
- * "palettes\TeamZ2-Default.act" for a file called Palettes/... -- validated
- * clean and then failed at load with "Can't open palettes\TeamZ2-Default.act".
- */
 static const char *const k_char_keys[] = {
     "cmd", "cns", "anim", "stcommon", "sprite", "sound",
-    "st", "st0", "st1", "st2", "st3", "st4", "st5", "st6", "st7", "st8", "st9",
+    "st", "st0", "st1", "st2", "st3", "st4", "st5", "st6", "st7", "st8", "st9"
+};
+static const char *const k_char_palette_keys[] = {
     "pal1", "pal2", "pal3", "pal4", "pal5", "pal6",
     "pal7", "pal8", "pal9", "pal10", "pal11", "pal12"
 };
@@ -567,6 +562,43 @@ static int key_wanted(const KeySet *set, const char *key)
         if (strcmp(set->keys[i], key) == 0) return 1;
     }
     return 0;
+}
+
+/* Char_OpenFile uses Path_Join and opens the result directly. Keep rooted
+ * paths rooted and resolve relative palettes only beside the character DEF. */
+static void resolve_palette_path(const char *value, const char *character_dir, Resolved *out)
+{
+    if (value[0] == '/' || value[0] == '\\') {
+        const char *root = "/";
+
+        resolve(value + 1, &root, 1, out);
+        out->base[0] = '\0';
+        if (value[0] == '\\' && out->status != RES_MISSING) out->status = RES_SEP;
+    } else if (value[1] == ':') {
+        memset(out, 0, sizeof(*out));
+        out->status = is_file(value) ? RES_OK : RES_MISSING;
+        if (out->status == RES_OK) snprintf(out->matched, sizeof(out->matched), "%s", value);
+    } else {
+        resolve(value, &character_dir, 1, out);
+    }
+}
+
+static int resolve_def_path(const KeySet *keys, const char *key, const char *value,
+                            const char *const *bases, int base_count, Resolved *out)
+{
+    static const KeySet palette_keys = {
+        .keys = k_char_palette_keys,
+        .count = sizeof(k_char_palette_keys) / sizeof(k_char_palette_keys[0])
+    };
+
+    if (keys->character_files && key_wanted(&palette_keys, key)) {
+        resolve_palette_path(value, bases[0], out);
+    } else if (key_wanted(keys, key)) {
+        resolve(value, bases, base_count, out);
+    } else {
+        return 0;
+    }
+    return 1;
 }
 
 /*
@@ -606,9 +638,8 @@ static void validate_file(const char *path, const char *const *bases, int base_c
         strip_cr(code);
         strip_comment(code);
         if (!parse_assignment(code, key, sizeof(key), value, sizeof(value))) continue;
-        if (!key_wanted(keys, key)) continue;
+        if (!resolve_def_path(keys, key, value, bases, base_count, &r)) continue;
 
-        resolve(value, bases, base_count, &r);
         if (r.status == RES_OK) {
             g_count.ok++;
             if (!g_quiet) fprintf(g_report, "  [%s] %s = %s [OK]\n", label, key, value);
@@ -652,6 +683,7 @@ static void validate_file(const char *path, const char *const *bases, int base_c
             char code[PATH_MAX * 2];
             char key[128], value[PATH_MAX];
             int crlf, had_nl = 0;
+            Resolved r;
 
             nx = strchr(l, '\n');
             /* had_nl: the file really ended this line with '\n'. A final line
@@ -665,9 +697,7 @@ static void validate_file(const char *path, const char *const *bases, int base_c
             strip_cr(code);
             strip_comment(code);   /* or ";comment" becomes part of the value */
             if (parse_assignment(code, key, sizeof(key), value, sizeof(value)) &&
-                key_wanted(keys, key)) {
-                Resolved r;
-                resolve(value, bases, base_count, &r);
+                resolve_def_path(keys, key, value, bases, base_count, &r)) {
                 if (r.status == RES_CASE || r.status == RES_SEP) {
                     char rewrite[PATH_MAX];
                     char *eq = strchr(l, '=');
@@ -1219,13 +1249,14 @@ static void check_character_defs(const char *select_path, const char *motif_dir)
     char *line, *next;
     char section[64] = "";
     static const char *const char_bases[] = { "", "chars/" };
-    KeySet keys;
+    static const KeySet keys = {
+        .keys = k_char_keys,
+        .count = sizeof(k_char_keys) / sizeof(k_char_keys[0]),
+        .character_files = 1
+    };
     char seen[256][PATH_MAX];
     int seen_count = 0;
     int i;
-
-    keys.keys = k_char_keys;
-    keys.count = (int)(sizeof(k_char_keys) / sizeof(k_char_keys[0]));
 
     if (content == NULL) return;
     for (line = content; line != NULL && *line != '\0'; line = next) {
@@ -1295,17 +1326,9 @@ static void check_character_defs(const char *select_path, const char *motif_dir)
         else cdir[0] = '\0';
         {
             /*
-             * A character's [Files] are joined onto the character's own
-             * directory first, then fall back to the engine's File_Find chain
-             * (src/file.c): motif dir, "./", "data/". stcommon depends on that
-             * -- it is documented in src/char.c as "next to the character, else
-             * wherever File_Find finds them", and packs normally keep
-             * common1.cns in data/. Restricting the search to cdir alone reports
-             * every such stcommon as missing.
-             *
-             * Rewrites stay character-relative when the file is beside the
-             * character (the engine's Path_Join form) and fall back to the
-             * spelling relative to whichever base matched otherwise.
+             * Keep the File_Find fallbacks for the general [Files] scan.
+             * stcommon uses them for common1.cns in data/. Palette keys use
+             * the character directory at bases[0].
              */
             const char *bases[] = { cdir, motif_dir, "", "data/" };
 
@@ -1492,9 +1515,10 @@ int main(int argc, char **argv)
         bases[3] = "font/";
         bases[4] = NULL;
         {
-            KeySet keys;
-            keys.keys = k_system_keys;
-            keys.count = (int)(sizeof(k_system_keys) / sizeof(k_system_keys[0]));
+            static const KeySet keys = {
+                .keys = k_system_keys,
+                .count = sizeof(k_system_keys) / sizeof(k_system_keys[0])
+            };
             validate_file(motif, bases, 4, &keys, "system.def");
         }
         /* The fight definition named by system.def has its own [Files]. */
@@ -1549,15 +1573,16 @@ int main(int argc, char **argv)
                     }
                     {
                         const char *fbases[5];
-                        KeySet keys;
+                        static const KeySet keys = {
+                            .keys = k_fight_keys,
+                            .count = sizeof(k_fight_keys) / sizeof(k_fight_keys[0])
+                        };
 
                         fbases[0] = "";
                         fbases[1] = fdir;
                         fbases[2] = "data/";
                         fbases[3] = "font/";
                         fbases[4] = NULL;
-                        keys.keys = k_fight_keys;
-                        keys.count = (int)(sizeof(k_fight_keys) / sizeof(k_fight_keys[0]));
                         validate_file(r.matched, fbases, 4, &keys, "fight.def");
                     }
                 }

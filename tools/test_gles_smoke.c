@@ -29,13 +29,80 @@ static void overlay(SpriteSet *set,int sprite)
 
 /* Fixture supplies the exact same CPU bytes to standalone and atlas textures. */
 static int sprite_reads;
+static Palette sprite_palette;
 
-void *Sprite_GetPixels(SpriteSet *set, int sprite)
+void *__wrap_Sprite_GetPixels(SpriteSet *set, int sprite)
 {
     Sprite *sprites = (Sprite *)set->sprites->data;
 
     sprite_reads++;
     return sprites[sprite].pixels;
+}
+
+Palette *__wrap_SpriteSet_GetPaletteConverted(SpriteSet *set, int index)
+{
+    assert(sprite_palette.data != NULL);
+    return &sprite_palette;
+}
+
+PalFx *PalFx_GetApplied(void)
+{
+    static PalFx fx = { .color = 256, .mul = { 256, 256, 256 } };
+
+    return &fx;
+}
+
+static const DrawParams sprite_draw_params = {
+    .width_ratio = 1.0f, .width_anchor = 0.5f, .x = 20.25f, .y = 20.25f,
+    .scale_x = 1.0f, .scale_y = 1.0f, .scale2_x = 1.0f, .scale2_y = 1.0f,
+    .top_stretch = 1.0f, .bottom_stretch = 1.0f, .alpha_src = 1.0f
+};
+
+static void check_sprite_placement(SpriteSet *set, GlTex *standalone, unsigned char *colors)
+{
+    Sprite sprite = *(const Sprite *)set->sprites->data;
+    KeyedArray list = { .count = 1, .capacity = 1, .elem_size = sizeof(Sprite), .data = (void *)&sprite };
+    SpriteSet standalone_set = { .sprites = &list };
+    unsigned char *expected, *actual;
+
+    sprite.format = SPRITE_FORMAT_TEXTURE;
+    sprite.pixels = standalone;
+    sprite_palette.count = 256;
+    sprite_palette.data = colors;
+
+    glClearColor(0, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    Gl_DrawSprite(0, &sprite_draw_params, &standalone_set);
+    expected = Gl_Capture();
+    assert(expected != NULL && expected[(22 * 640 + 22) * 4] != 0);
+
+    glClear(GL_COLOR_BUFFER_BIT);
+    Gl_DrawSprite(0, &sprite_draw_params, set);
+    actual = Gl_Capture();
+    assert(actual != NULL && memcmp(actual, expected, 640 * 480 * 4) == 0);
+    free(actual);
+    free(expected);
+    sprite_palette.data = NULL;
+}
+
+static void check_raw_sprite(void)
+{
+    unsigned char rgba[4 * 4 * 4];
+    Sprite sprite = { .w = 4, .h = 4, .bpp = 32, .format = SPRITE_FORMAT_RAW,
+                      .pixels = rgba, .pixels_size = sizeof(rgba) };
+    KeyedArray list = { .count = 1, .capacity = 1, .elem_size = sizeof(Sprite), .data = (void *)&sprite };
+    SpriteSet set = { .sprites = &list };
+    unsigned char *capture;
+    int reads = sprite_reads;
+
+    memset(rgba, 255, sizeof(rgba));
+    glClearColor(0, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    Gl_DrawSprite(0, &sprite_draw_params, &set);
+    assert(sprite_reads == reads + 1);
+    capture = Gl_Capture();
+    assert(capture != NULL && capture[(22 * 640 + 22) * 4] == 255);
+    free(capture);
 }
 
 static PFNGLDRAWARRAYSINSTANCEDPROC draw_instanced;
@@ -121,6 +188,7 @@ static void check_atlas(void)
     GlTex *page, *standalone[2], *palette;
     float rects[8], linked[4];
     unsigned char *expected, *actual;
+    DrawParams offscreen = sprite_draw_params;
     unsigned int i;
     int reads = sprite_reads;
 
@@ -136,6 +204,13 @@ static void check_atlas(void)
 
     Gles_AtlasPlan(&set);
     assert(g_atlasResidentPages == 0 && sprite_reads == reads);
+    assert(Gfx_SetRenderTarget(NULL, 0));
+    assert(Gl_SetupView());
+    Gfx_SetClipRect(0, 0, 640, 480);
+    offscreen.x = 2000.0f;
+    Gl_DrawSprite(0, &offscreen, &set);
+    assert(g_atlasResidentPages == 0 && sprite_reads == reads);
+
     page = gles_atlas_texture(&set, 0, &sprites[0], rects);
     assert(page != NULL && page->id != 0);
     assert(gles_atlas_texture(&set, 1, &sprites[1], rects + 4) == page);
@@ -150,8 +225,6 @@ static void check_atlas(void)
     palette = GlTex_Create();
     assert(GlTex_UploadRGBA(1, 256, palette, colors));
 
-    assert(Gfx_SetRenderTarget(NULL, 0));
-    assert(Gl_SetupView());
     atlas_fixture(&set, palette, standalone, page, rects, 0);
     expected = Gl_Capture();
     assert(expected != NULL);
@@ -164,6 +237,7 @@ static void check_atlas(void)
     glad_glDrawArraysInstanced = draw_instanced;
     assert(actual != NULL && memcmp(actual, expected, 640 * 480 * 4) == 0);
     assert(instances_drawn == 3 && batches_drawn == 2);
+    check_sprite_placement(&set, standalone[0], colors);
 
     /* A loaded archive survives loss of every GL object. Its page is
      * populated again from the source, once per linked image. */
@@ -233,6 +307,7 @@ int main(void)
         assert(Gl_Init(1));
         assert(g_batch_enabled);
         check_atlas();
+        check_raw_sprite();
         tex=GlVbuf_Alloc(32,640,480);assert(tex);
         spr.w=640;spr.h=480;spr.bpp=32;spr.format=SPRITE_FORMAT_TEXTURE;spr.pixels=tex;
         sprites.data=(void *)&spr;sprites.capacity=1;sprites.elem_size=sizeof(spr);set.sprites=&sprites;
@@ -258,6 +333,6 @@ int main(void)
     free(g_glesTextures);free(g_glesBacking);
     eglMakeCurrent(display,EGL_NO_SURFACE,EGL_NO_SURFACE,EGL_NO_CONTEXT);
     eglDestroyContext(display,context);eglDestroySurface(display,surface);eglTerminate(display);
-    puts("ok: real GLES shaders, FBO, indexed atlas parity and batch counts, present overlay pixels, capture and context recreation");
+    puts("ok: GLES sprite fallback, atlas placement and culling, batch counts, FBO, capture and context recreation");
     return 0;
 }

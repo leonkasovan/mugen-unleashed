@@ -5,6 +5,7 @@ cd "$(dirname "$0")/.."
 . tools/lib_target.sh
 out="${OUT:-$PWD/build/tmp/perf-test/$TARGET}"
 mkdir -p "$out/tmp"
+out="$(cd "$out" && pwd)"
 export TMPDIR="$out/tmp"
 flags="$ARCHFLAGS ${CFLAGS:-} -std=gnu11 -O1 -g -UNDEBUG -Wall -Wextra -Wno-unused-parameter"
 flags="$flags -ffunction-sections -fdata-sections -DSDL_MAIN_HANDLED -Isrc"
@@ -23,3 +24,22 @@ for platform in 0 1 2; do
     echo "frame profile $platform (desktop, Android software, Android GLES)"
     run_harness "$out/test-$platform"
 done
+
+(
+    captures="$(mktemp -d "$out/captures.XXXXXX")"
+    trap 'rm -rf "$captures"' 0
+    cd "$captures"
+    MUGEN_SHOT_RANGE=10-12 run_harness "$out/test-0" capture
+    MUGEN_SHOT_RANGE=10-12 run_harness "$out/test-0" capture
+    MUGEN_SHOT_RANGE=10-12 run_harness "$out/test-0" early-end
+    MUGEN_SHOT_RANGE=10-12 run_harness "$out/test-0" reset
+    for run in shots-001 shots-002; do
+        for tick in 00010 00011 00012; do test -s "$run/shot-t$tick.png"; done
+    done
+    for run in shots-003 shots-004; do
+        test -s "$run/shot-t00010.png"
+        test ! -e "$run/shot-t00011.png"
+    done
+    test -s mugen000.png
+    test -s mugen001.png
+)
