@@ -544,9 +544,19 @@ static const char *const k_fight_keys[] = {
     "font4", "font5", "font6", "font7", "font8", "font9"
 };
 /* src/char.c: cmd, cns, anim, stcommon, sprite, sound, and the st0..st9 loop. */
+/*
+ * src/char.c reads cmd, cns, anim, stcommon, sprite, sound and the st0..st9
+ * loop; pal1..pal12 are external .act palettes for the slots the SFF does not
+ * carry (char.c: "palettes 1..12 missing from the sprite file"). They were
+ * missing from this list, so a pack whose palettes differ only in case --
+ * "palettes\TeamZ2-Default.act" for a file called Palettes/... -- validated
+ * clean and then failed at load with "Can't open palettes\TeamZ2-Default.act".
+ */
 static const char *const k_char_keys[] = {
     "cmd", "cns", "anim", "stcommon", "sprite", "sound",
-    "st", "st0", "st1", "st2", "st3", "st4", "st5", "st6", "st7", "st8", "st9"
+    "st", "st0", "st1", "st2", "st3", "st4", "st5", "st6", "st7", "st8", "st9",
+    "pal1", "pal2", "pal3", "pal4", "pal5", "pal6",
+    "pal7", "pal8", "pal9", "pal10", "pal11", "pal12"
 };
 
 static int key_wanted(const KeySet *set, const char *key)
