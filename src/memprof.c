@@ -26,6 +26,9 @@
 typedef struct MemprofEntry {
     void *ptr;
     size_t size;
+#ifdef MUGEN_ROLLBACK
+    uint64_t allocation_id;
+#endif
     void *pc;
     unsigned char missing_site; /* attribution failed while profiling */
     struct MemprofEntry *next;
@@ -33,6 +36,9 @@ typedef struct MemprofEntry {
 
 #define MEMPROF_BUCKETS 1024
 static MemprofEntry *memprof_buckets[MEMPROF_BUCKETS];
+#ifdef MUGEN_ROLLBACK
+static uint64_t memprof_next_id;
+#endif
 static volatile int memprof_lock; /* 0 free, 1 held */
 
 static uint64_t memprof_heap_live, memprof_heap_peak;
@@ -74,6 +80,21 @@ static MemprofEntry **Memprof_FindEntryLocked(void *ptr)
     }
     return NULL;
 }
+
+#ifdef MUGEN_ROLLBACK
+int Memprof_BlockInfo(const void *ptr, size_t *size, uint64_t *id)
+{
+    Memprof_Lock();
+    MemprofEntry **entry = Memprof_FindEntryLocked((void *)ptr);
+    int found = entry != NULL;
+    if (found) {
+        *size = (*entry)->size;
+        *id = (*entry)->allocation_id;
+    }
+    Memprof_Unlock();
+    return found;
+}
+#endif
 
 /*
  * Detach the entry for `ptr` but keep the node itself. realloc reuses it, so
@@ -128,6 +149,9 @@ static MemprofEntry *Memprof_EntryNewLocked(void *ptr, size_t size, void *pc)
     }
     entry->ptr = ptr;
     entry->size = size;
+#ifdef MUGEN_ROLLBACK
+    entry->allocation_id = ++memprof_next_id;
+#endif
     entry->pc = pc;
     entry->missing_site = 0;
     Memprof_EntryAttachLocked(entry);
@@ -727,6 +751,9 @@ void *Memprof_Realloc(void *ptr, size_t size)
     Memprof_DebitEntryLocked(entry);
     entry->ptr = fresh;
     entry->size = size;
+#ifdef MUGEN_ROLLBACK
+    entry->allocation_id = ++memprof_next_id;
+#endif
     Memprof_CreditEntryLocked(entry, pc);
     Memprof_EntryAttachLocked(entry);
     Memprof_Unlock();

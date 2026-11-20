@@ -49,6 +49,9 @@ The x86-64 output is `build/linux-x64-sdl2/mugen-linux-x64`. ARM64 defaults to
 GLES; `MUGEN_GLES=0|1` selects the desktop/GLES renderer. See
 [the Linux guide](docs/BUILD-LINUX.md) and [ARM64 setup](port/arm64/README.md).
 
+Use `make MUGEN_ROLLBACK=1` to enable experimental 1v1 GGPO rollback on Linux.
+See [rollback setup and testing](docs/ROLLBACK.md).
+
 ## Android and PS Vita
 
 Use [Android instructions](port/android/README.md) or

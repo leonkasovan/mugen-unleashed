@@ -109,6 +109,7 @@ port\arm64\build.bat --jobs N        parallel make jobs (default: CPU count)
 port\arm64\build.bat --gles 0 or 1   renderer; 1 = GLES 3.0 (the arm64 default)
 port\arm64\build.bat --model3d       3D stage models ([BGdef] model = *.glb); on by default
 port\arm64\build.bat --no-model3d    compile model support out
+port\arm64\build.bat --rollback      enable GGPO rollback in a separate build tree
 port\arm64\build.bat --debug         -O0 -g3 -DMUGEN_DEBUG into a separate tree, and
                                      turns on the batch-rendering profiler (`batch:`
                                      line in mugen.log, next to `perf:`)
@@ -135,6 +136,37 @@ Environment overrides:
 `--setup` is the only thing that writes outside the repository, and only into
 `TOOLCHAIN_DIR`. The download is cached at
 `build/downloads/`, so a re-run does not transfer it again.
+
+## GGPO rollback on RG351MP
+
+Use the Arm GNU 9.2 toolchain for ArkOS and build the rollback variant from
+`cmd.exe`.
+
+```bat
+set ARM64_TOOLCHAIN=9.2
+git submodule update --init -- third_party/ffmpeg-7.1.5
+port\arm64\build.bat --rollback
+```
+
+The output is `build/linux-arm64-aarch64-none-linux-gnu-sdl2-rollback/mugen-linux-arm64-aarch64-none-linux-gnu`.
+The PowerShell equivalent is `./port/arm64/build.ps1 -Rollback`. The build
+links the toolchain's C++ runtime statically and uses the device's SDL libraries.
+
+To keep both variants on the handheld, give the rollback upload its own name.
+
+```bat
+port\arm64\build.bat --rollback --upload --device-bin mugen-linux-arm64-rollback
+```
+
+From the handheld's game directory, use your existing 640×480 configuration.
+
+```sh
+./mugen-linux-arm64-rollback -p1 kfm -p2 kfm -s kfm -rollbacktest 720
+```
+
+`mugen.log` should report `Rollback test passed: 720/720 frames, 720 resimulated`.
+For a live match, use the same binary and game data on both handhelds and follow
+the [direct UDP setup](../../docs/ROLLBACK.md#direct-udp-match).
 
 ## Uploading to the device
 

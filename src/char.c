@@ -12,6 +12,7 @@
  * CharData.consts, which every player copies.
  */
 #include "mugen.h"
+#include "rollback.h"
 #include "zss_assert.h"
 #include "zss_binding.h"
 #include "zss_map.h"
@@ -191,7 +192,10 @@ void Player_UpdateInput(Player *p)
     }
     if (p->no_keyctrl == 0 && g->input_blocked == 0) {
         if (p->input_cleared != 0) {
-            Input_Resync(&p->input, p->input_keys);
+#ifdef MUGEN_ROLLBACK
+            if (!Rollback_ApplyInput(p))
+#endif
+                Input_Resync(&p->input, p->input_keys);
             p->input_cleared = 0;
         }
     } else {
@@ -385,6 +389,10 @@ static void PlayerCache_SaveAi(CharInfo *entry, char *path)
 {
     CharData *c = entry->data;
 
+#ifdef MUGEN_ROLLBACK
+    if (Rollback_Requested())
+        return;
+#endif
     if (g_game->cwd_writable && c->ai_file[0] != '\0' && c->ai.tables[0] != NULL) {
         Path_Join(c->ai_file, entry->dir, path);
         if (!Ai_Save(path, &entry->data->ai)) {

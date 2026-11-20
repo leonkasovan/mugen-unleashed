@@ -82,6 +82,7 @@ param(
     [int]$Jobs = 0,
     [ValidateSet('0', '1')][string]$Gles,
     [switch]$NoModel3d,
+    [switch]$Rollback,
     [switch]$Debug,
     [switch]$Upload,
     [string]$Device,
@@ -108,6 +109,7 @@ if ($NoSysroot)  { $argv.Add('--no-sysroot') }
 if ($Jobs -gt 0) { $argv.Add('--jobs'); $argv.Add("$Jobs") }
 if ($Gles)       { $argv.Add('--gles'); $argv.Add($Gles) }
 if ($NoModel3d)  { $argv.Add('--no-model3d') }
+if ($Rollback)   { $argv.Add('--rollback') }
 if ($Debug)      { $argv.Add('--debug') }
 if ($Upload)     { $argv.Add('--upload') }
 if ($Device)     { $argv.Add('--device'); $argv.Add($Device) }

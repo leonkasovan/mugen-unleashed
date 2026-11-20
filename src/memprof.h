@@ -34,6 +34,11 @@ void *Memprof_Calloc(size_t count, size_t size);
 void *Memprof_Realloc(void *ptr, size_t size);
 void Memprof_Free(void *ptr);
 
+#ifdef MUGEN_ROLLBACK
+/* Identifies a live allocation by its base address and allocation generation. */
+int Memprof_BlockInfo(const void *ptr, size_t *size, uint64_t *id);
+#endif
+
 /* lua_Alloc compatible: nsize == 0 frees, osize is the previous payload. */
 void *Memprof_LuaAlloc(void *ud, void *ptr, size_t osize, size_t nsize);
 

@@ -11,6 +11,7 @@
 #include <float.h>
 
 #include "mugen.h"
+#include "rollback.h"
 #include "selectupdate.h"
 
 #define SELECT_MAX_MATCHES      30      /* entries of [Options] arcade/team.maxmatches */
@@ -107,6 +108,10 @@ int Select_InitCharInfo(void)
         Error_OutOfMemory();
         return 0;
     }
+#ifdef MUGEN_ROLLBACK
+    if (Rollback_Requested())
+        return Precache_Init(0) != 0;
+#endif
     return Precache_Init(g->precache) != 0;
 }
 

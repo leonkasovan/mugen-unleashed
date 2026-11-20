@@ -20,6 +20,7 @@ rem    port\arm64\build.bat --gles N       renderer: 1 = GLES 3.0 (default
 rem                                         for linux-arm64), 0 = desktop GL
 rem    port\arm64\build.bat --model3d       3D stage models (default on)
 rem    port\arm64\build.bat --no-model3d    turn model support off
+rem    port\arm64\build.bat --rollback      build with GGPO rollback in its own output tree
 rem    port\arm64\build.bat --debug         -O0 -g3 -DMUGEN_DEBUG, own tree
 rem    port\arm64\build.bat --upload        build, then copy to DEVICE
 rem    port\arm64\build.bat --device U@H --device-dir DIR --no-keep-old
@@ -60,6 +61,7 @@ set "JOBS=%NUMBER_OF_PROCESSORS%"
 if "%JOBS%"=="" set "JOBS=4"
 set "GLES=1"
 set "MODEL3D=1"
+set "ROLLBACK=0"
 set "DEBUG_BUILD=0"
 if not defined DEVICE set "DEVICE=ark@192.168.7.2"
 if not defined DEVICE_DIR set "DEVICE_DIR=mugen"
@@ -80,6 +82,7 @@ if /I "!ARG!"=="--clean"    ( set "CLEAN=1" & shift & goto parse )
 if /I "!ARG!"=="--offline"  ( set "OFFLINE=1" & shift & goto parse )
 if /I "!ARG!"=="--model3d"  ( set "MODEL3D=1" & shift & goto parse )
 if /I "!ARG!"=="--no-model3d" ( set "MODEL3D=0" & shift & goto parse )
+if /I "!ARG!"=="--rollback" ( set "ROLLBACK=1" & shift & goto parse )
 if /I "!ARG!"=="--debug"    ( set "DEBUG_BUILD=1" & shift & goto parse )
 if /I "!ARG!"=="--upload"   ( set "DO_UPLOAD=1" & shift & goto parse )
 if /I "!ARG!"=="--no-keep-old" ( set "KEEP_OLD=0" & shift & goto parse )
@@ -142,6 +145,7 @@ goto tc_done
 rem One directory per version, so switching never has to destroy the other.
 if not defined TOOLCHAIN_DIR set "TOOLCHAIN_DIR=C:\arm-gnu-toolchain-%TOOLCHAIN_TAG%"
 set "CC_BIN=%TOOLCHAIN_DIR%\bin\%CROSS%gcc.exe"
+set "CXX_BIN=%TOOLCHAIN_DIR%\bin\%CROSS%g++.exe"
 set "XSYSROOT=%ROOT%\build\sysroots\arm64-sysroot"
 set "DOWNLOADS=%ROOT%\build\downloads"
 set "SCRATCH=%ROOT%\build\tmp"
@@ -160,6 +164,7 @@ if "%DEBUG_BUILD%"=="1" (
     set "DEBUG_VALUE=0"
     set "BUILD_TYPE=Release"
 )
+if "%ROLLBACK%"=="1" set "OUT_NAME=%OUT_NAME%-rollback"
 set "OUT=%ROOT%\%OUT_NAME%"
 
 rem ------------------------------------------------------------------- kit
@@ -226,6 +231,8 @@ if "%DO_SETUP%"=="1" (
 )
 
 if "%CHECK_TOOLS%"=="1" goto report
+call :check_rollback_toolchain
+if errorlevel 1 goto fail
 
 rem Never reach the build with no cross compiler: without this, a failed or
 rem incomplete install shows up as "aarch64-none-linux-gnu-gcc: not found" from
@@ -257,6 +264,7 @@ echo     output    %OUT%
 echo     jobs      %JOBS%
 echo     gles      %GLES%
 echo     model3d   %MODEL3D%
+echo     rollback  %ROLLBACK%
 echo     build     %BUILD_TYPE%
 echo.
 
@@ -274,6 +282,8 @@ make.exe -C "%ROOT%" -j%JOBS% ^
     DEBUG=%DEBUG_VALUE% ^
     MUGEN_GLES=%GLES% ^
     MUGEN_MODEL3D=%MODEL3D% ^
+    MUGEN_ROLLBACK=%ROLLBACK% ^
+    CXX=%CROSS%g++ ^
     SHELL=%KITBIN_FWD%/sh.exe
 if errorlevel 1 goto build_failed
 
@@ -346,6 +356,16 @@ if "%~1"=="1" (
 :check_toolchain_end
 exit /b %TC_RC%
 
+:check_rollback_toolchain
+if "%ROLLBACK%"=="0" exit /b 0
+if not exist "%CXX_BIN%" (
+    echo error: --rollback requires "%CXX_BIN%".
+    echo        run: port\arm64\build.bat --setup
+    exit /b 1
+)
+if "%~1"=="1" echo   GGPO C++   ok       %CXX_BIN%
+exit /b 0
+
 rem :check_sysroot [verbose] -> errorlevel 1 when unusable
 :check_sysroot
 if exist "%XSYSROOT%\usr\lib\pkgconfig\sdl2.pc" (
@@ -366,6 +386,8 @@ call :check_toolchain 1
 set "RC=0"
 if errorlevel 1 set "RC=1"
 call :check_sysroot 1
+if errorlevel 1 set "RC=1"
+call :check_rollback_toolchain 1
 if errorlevel 1 set "RC=1"
 where pkg-config.exe >nul 2>&1 && (
     for /f "usebackq delims=" %%P in (`pkg-config.exe --version 2^>nul`) do echo   pkg-config ok       %%P

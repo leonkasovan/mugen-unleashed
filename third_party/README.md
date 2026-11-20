@@ -18,6 +18,7 @@ SDL2_mixer and SDL2_ttf come from the selected platform dependency tree.
 | `sdk/include/libresample.h` | declarations for the game's `libresample.dll` (libresample 0.1.3), written for this project from the calls in `mugen.exe`. historical ABI reference only; builds use `libresample/include` | — |
 | `libresample/` | libresample 0.1.3 by Dominic Mazzoni, vendored and ported to multi-channel to match Elecbyte's ABI. See `libresample/VENDORED.md` | BSD / LGPL |
 | `ffmpeg-7.1.5/` | [FFmpeg n7.1.5](https://github.com/FFmpeg/FFmpeg/tree/n7.1.5), pinned as a submodule for WebM backgrounds | See `LICENSE.md` and `COPYING.*` |
+| `ggpo/` | Native GGPO SDK with POSIX support for Linux rollback. See `ggpo/README.mugen.md` | MIT (`LICENSE`) |
 
 Initialize the FFmpeg source with `git submodule update --init third_party/ffmpeg-7.1.5`.
 

@@ -12,6 +12,15 @@ typedef struct ScriptAssertions {
 static ScriptAssertions assertions[ZSS_ASSERT_PLAYERS_MAX];
 static SDL_SpinLock assertion_lock;
 
+#ifdef MUGEN_ROLLBACK
+/* Rollback runs the match and all assertion updates on the same thread. */
+void *ZssAssert_RollbackStorage(size_t *size)
+{
+    *size = sizeof(assertions);
+    return assertions;
+}
+#endif
+
 static ScriptAssertions *assertion_slot(Player *p, int create)
 {
     ScriptAssertions *empty=NULL;

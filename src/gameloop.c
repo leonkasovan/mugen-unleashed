@@ -14,6 +14,7 @@
 #include <pthread.h>
 
 #include "mugen.h"
+#include "rollback.h"
 #include "memprof.h"
 #ifdef MUGEN_GLES
 #include "gles_render.h"
@@ -454,7 +455,10 @@ int Game_Draw(ScreenLoop *screen)
                 Fight_DrawHud(0);
             }
         }
-        Lifebars_Tick();
+#ifdef MUGEN_ROLLBACK
+        if (!Rollback_Active())
+#endif
+            Lifebars_Tick();
         g = g_game;
     }
     if (g->skip_draw == 0) {
@@ -600,7 +604,11 @@ int Game_Draw(ScreenLoop *screen)
             g = g_game;
         }
     }
-    if (g->defocus_paused == 0 && g->slow_counter == 0) {
+    if (g->defocus_paused == 0 && g->slow_counter == 0
+#ifdef MUGEN_ROLLBACK
+        && !Rollback_Active()
+#endif
+    ) {
         /* team 1 is inlined as well */
         Combo_Tick(1);
         Combo_Tick(2);
@@ -974,6 +982,29 @@ static void Gl_ClearQueue(SpriteQueue *q)
     a->cache_pos = 0;
 }
 
+#ifdef MUGEN_ROLLBACK
+/* Presentation is called only for a forward frame, never by GGPO replay. */
+void Rollback_DrawFrame(ScreenLoop *screen)
+{
+    BatchProf_FrameBegin();
+    Gl_ClearQueue(g_game->sprite_layer1);
+    Perf_LogicDone();
+#ifdef MUGEN_GLES
+    GpuTime_BeginDraw();
+#endif
+    Game_Draw(screen);
+    if (!g_game->skip_draw && g_game->fade.type == FADE_BARS)
+        Fade_DrawBars(&g_game->fade);
+#ifdef MUGEN_GLES
+    GlesBatch_Flush();
+    GpuTime_EndDraw();
+#endif
+    Perf_DrawDone();
+    BatchProf_FrameEnd();
+    Screen_EndFrame();
+}
+#endif
+
 /*
  * 0x0040E7C0: runs a screen until it fades out: one frame per iteration
  * (input, update, tick, drawing between the background layers, the frame
@@ -995,6 +1026,12 @@ int Screen_Run(ScreenLoop *screen)
     }
     Screen_Start(screen);
     screen->start_ticks = (int)Timer_GetTicks();
+#ifdef MUGEN_ROLLBACK
+    if (screen->kind == 4 && screen->loads_match && Rollback_Requested()) {
+        Rollback_Run(screen);
+        goto end;
+    }
+#endif
     if (screen->bgm != NULL && !Bgm_Play(screen->bgm)) {
         Log_Printf("Could not load BGM %s\n", (const char *)screen->bgm);
     }

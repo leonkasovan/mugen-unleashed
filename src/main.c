@@ -5,6 +5,7 @@
  * RNG.
  */
 #include "mugen.h"
+#include "rollback.h"
 #include "memprof.h"
 #include "profiler.h"
 
@@ -99,6 +100,13 @@ int main(int argc, char *argv[])
 #endif
     Log_Printf("Parsing command line...\n");
     CmdLine_Parse(argc, argv);
+#ifdef MUGEN_ROLLBACK
+    if (!Rollback_Configure(g_cmdline)) {
+        free(g_cmdline);
+        Log_Close();
+        return EXIT_FAILURE;
+    }
+#endif
     Log_Printf("Parse command line OK\n");
     /* Port addition: allocate in the counter's lifetime, not before it. */
     Memprof_Start();
@@ -179,7 +187,11 @@ int main(int argc, char *argv[])
      * Android_VideoQuit runs inside Video_Deinit (before System_Deinit's
      * SDL_Quit), not here: SDL_Destroy* after SDL_Quit is a use-after-shutdown.
      */
+#ifdef MUGEN_ROLLBACK
+    return Rollback_ExitCode();
+#else
     return 0;
+#endif
 }
 
 /* ------------------------------------------------------------------ helpers */

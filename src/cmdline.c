@@ -2,6 +2,7 @@
  * Command line parsing (original module 0x40B070-0x40B9C9).
  */
 #include "mugen.h"
+#include "rollback.h"
 
 #define CMDLINE_DEFAULT_ROUNDS   1000000
 #define CMDLINE_DEFAULT_SPEED    999
@@ -26,6 +27,10 @@ static const char cmdline_usage[] =
     " -nojoy              Disables joysticks\n"
     " -nomusic            Disables music\n"
     " -nosound            Disables all sound effects and music\n"
+#ifdef MUGEN_ROLLBACK
+    " -rollback <1|2> <port> <peer-ip> <peer-port>   Play direct UDP quick VS\n"
+    " -rollbacktest <n>   Checks rollback determinism for n quick VS frames\n"
+#endif
     "\n";
 
 /* 0x0040B960: shows the usage in the error dialog and quits. */
@@ -76,6 +81,31 @@ void CmdLine_Parse(int argc, char **argv)
         int has_value = i + 1 < argc;
 
         Log_Printf(" %s", arg);
+        if (strcmp(arg, "-rollback") == 0) {
+#ifdef MUGEN_ROLLBACK
+            if (i + 4 >= argc || !Rollback_ParsePeer(argv[i + 1], argv[i + 2], argv[i + 3], argv[i + 4])) {
+                fputs("Usage: -rollback <1|2> <local-port> <peer-IPv4> <peer-port>\n", stderr);
+                exit(EXIT_FAILURE);
+            }
+            i += 4;
+            continue;
+#else
+            fputs("-rollback requires a build with MUGEN_ROLLBACK=1.\n", stderr);
+            exit(EXIT_FAILURE);
+#endif
+        }
+        if (strcmp(arg, "-rollbacktest") == 0) {
+#ifdef MUGEN_ROLLBACK
+            if (!has_value || !Rollback_ParseFrames(argv[++i])) {
+                fputs("-rollbacktest expects a frame count in 1..100000.\n", stderr);
+                exit(EXIT_FAILURE);
+            }
+            continue;
+#else
+            fputs("-rollbacktest requires a build with MUGEN_ROLLBACK=1.\n", stderr);
+            exit(EXIT_FAILURE);
+#endif
+        }
         if (arg[0] != '-') {
             if (positional == 0) {
                 CmdLine_Copy(args->player[0], arg);

@@ -9,6 +9,7 @@
  * joystick button; Input_KeyCode turns them into the codes of g_inputState.
  */
 #include "mugen.h"
+#include "rollback.h"
 
 #define INPUT_CODE_RELEASE  0x10
 #define INPUT_CODE_AUTO     0x20
@@ -103,6 +104,30 @@ void Input_Resync(InputBuf *buf, const int *keys)
         }
     }
 }
+
+#ifdef MUGEN_ROLLBACK
+uint16_t PlayerInput_ReadHeldBits(const int *keys)
+{
+    uint16_t bits = 0;
+    for (unsigned int key = KEY_JUMP; key < KEY_COUNT; ++key) {
+        unsigned int code = Input_KeyCode((unsigned int)keys[key]);
+        if (code < INPUT_CODE_COUNT && g_inputState[code])
+            bits |= (uint16_t)(1u << key);
+    }
+    return bits;
+}
+
+/* Apply absolute held buttons in stable key order, using the engine's facing flip. */
+void PlayerInput_ApplyHeldBits(InputBuf *buf, uint16_t buttons)
+{
+    for (unsigned int key = KEY_JUMP; key < KEY_COUNT; ++key) {
+        unsigned int relative = buf->flipped ? Input_FlipCode(key) : key;
+        int held = (buttons >> key) & 1;
+        if (held != (buf->keys[relative] != 0))
+            PlayerInput_Push(buf, (int)(relative | (held ? 0 : INPUT_CODE_RELEASE)));
+    }
+}
+#endif
 
 /*
  * 0x00477C40: sets the facing flip of the buffer. A held left or right

@@ -9,6 +9,7 @@
  * stay in double and are rounded to float where the original stores a float.
  */
 #include "mugen.h"
+#include "rollback.h"
 #include "zss_assert.h"
 #include "zss_binding.h"
 
@@ -786,6 +787,9 @@ int Round_Tick(ScreenLoop *screen)
             flip = p->facing == -1;
         }
         Input_SetFlipped(&p->input, flip);
+#ifdef MUGEN_ROLLBACK
+        Rollback_ApplyInput(p);
+#endif
     }
     /* the input codes of the frame go to the human players */
     for (;;) {

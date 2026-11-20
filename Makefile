@@ -760,6 +760,33 @@ ifeq ($(MUGEN_VIDEO_BG),1)
 endif
 CONFIG_ID += video_bg=$(MUGEN_VIDEO_BG)
 
+# Opt-in GGPO rollback sessions and determinism diagnostic.
+MUGEN_ROLLBACK ?= 0
+ifeq ($(MUGEN_ROLLBACK),1)
+  ifeq ($(filter linux-%,$(MUGEN_TARGET)),)
+    $(error MUGEN_ROLLBACK=1 currently requires Linux)
+  endif
+  ifneq ($(filter default undefined,$(origin CXX)),)
+    CXX := $(CROSS_COMPILE)g++
+  endif
+  GGPO_DIR := $(TP_DIR)/ggpo/src
+  GGPO_CORE := $(GGPO_DIR)/lib/ggpo
+  GGPO_SRC := $(filter-out $(GGPO_CORE)/platform_windows.cpp,$(wildcard \
+      $(GGPO_CORE)/*.cpp $(GGPO_CORE)/network/*.cpp $(GGPO_CORE)/backends/*.cpp))
+  GGPO_OBJS := $(patsubst $(GGPO_CORE)/%.cpp,$(OBJ_DIR)/ggpo/%.o,$(GGPO_SRC))
+  GGPO_LIB := $(LIB_DIR)/libggpo.a
+  CPPFLAGS += -I$(GGPO_DIR)/include
+  ENGINE_DEFS += -DMUGEN_ROLLBACK=1
+  ifeq ($(MUGEN_TARGET),linux-arm64)
+    # Use the toolchain's C++ runtime on handhelds with older system libraries.
+    SYS_LIBS += -Wl,-Bstatic -lstdc++ -Wl,-Bdynamic
+  else
+    SYS_LIBS += -lstdc++
+  endif
+  CONFIG_ID += cxx=$(CXX) cxxver=$(shell $(CXX) -dumpfullversion -dumpversion 2>/dev/null)
+endif
+CONFIG_ID += rollback=$(MUGEN_ROLLBACK)
+
 # FORCE_INCLUDE stays out of COMMONFLAGS: it supplies Windows type names
 # (BOOL, WORD, ...) that clash with the same names in the X11 headers a
 # third-party GL library can pull in. Only the engine needs it.
@@ -873,14 +900,14 @@ all: $(ALL_DEPS)
 # --exclude-all-symbols: SDL's main library asks the linker to export every
 # symbol, which for a static link would export the entire engine (~600 names)
 # and a few hundred KB of names with it. The engine exports nothing.
-$(TARGET): $(ENGINE_OBJS) $(RC_OBJ) $(TP_LIBS) $(FFMPEG_STAMP)
+$(TARGET): $(ENGINE_OBJS) $(RC_OBJ) $(TP_LIBS) $(FFMPEG_STAMP) $(GGPO_LIB)
 	@echo "  LD      $@"
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(CC) $(ARCHFLAGS) -o $@ $(ENGINE_OBJS) $(RC_OBJ) \
 	    $(PLAT_LDFLAGS) $(CROSS_LDFLAGS) \
 	    -L$(LIB_DIR) -llua -lresample \
 	    $(GLAD_OBJ) $(MINIZIP_OBJ) $(MODEL_TP_OBJS) \
-	    $(FFMPEG_LIBS) $(if $(FFMPEG_LIBS),-lm) $(PKG_LIBS) $(SYS_LIBS) \
+	    $(FFMPEG_LIBS) $(if $(FFMPEG_LIBS),-lm) $(GGPO_LIB) $(PKG_LIBS) $(SYS_LIBS) \
 	    $(LINK_MODE)
 
 # --- the engine -------------------------------------------------------------
@@ -914,6 +941,35 @@ $(OBJ_DIR)/src/%.o: $(SRC_DIR)/%.c $(CONFIG_STAMP)
 	@echo "  CC      $<"
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(CC) $(ENGINE_CFLAGS) $(CPPFLAGS) -c $< -o $@
+
+ifeq ($(MUGEN_ROLLBACK),1)
+check-toolchain: check-rollback-toolchain
+
+.PHONY: check-rollback-toolchain
+check-rollback-toolchain:
+	@cxx_triple=$$($(CXX) -dumpmachine 2>/dev/null); \
+	if [ -z "$$cxx_triple" ]; then \
+	  echo "error: '$(CXX) -dumpmachine' produced nothing; rollback requires a C++ compiler"; exit 1; \
+	fi; \
+	if ! printf '%s\n' "$$cxx_triple" | grep -q '$(TRIPLE_RE).*linux'; then \
+	  echo "error: $(CXX) targets '$$cxx_triple'; GGPO needs a C++ compiler for $(MUGEN_TARGET)"; exit 1; \
+	fi
+
+$(GGPO_OBJS): | check-rollback-toolchain
+
+$(OBJ_DIR)/ggpo/%.o: $(GGPO_CORE)/%.cpp $(CONFIG_STAMP)
+	@echo "  CXX     $<"
+	$(Q)mkdir -p $(dir $@)
+	$(Q)$(CXX) $(ARCHFLAGS) $(OPT) $(CROSS_CPPFLAGS) -std=c++11 -MMD -MP \
+	    -I$(GGPO_DIR)/include -I$(GGPO_CORE) -c $< -o $@
+
+$(GGPO_LIB): $(GGPO_OBJS)
+	@echo "  AR      $@"
+	$(Q)mkdir -p $(dir $@)
+	$(Q)$(AR) rcs $@ $^
+
+-include $(GGPO_OBJS:.o=.d)
+endif
 
 ifeq ($(MUGEN_VIDEO_BG),1)
 $(OBJ_DIR)/src/video_bg.o: $(FFMPEG_STAMP)

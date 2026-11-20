@@ -20,4 +20,8 @@ void ZssAssert_ClearPlayer(Player *player);
  * on a running tick, as in the supported MUGEN-1.x profile. */
 void ZssAssert_BeginTick(Player *player, int running);
 
+#ifdef MUGEN_ROLLBACK
+void *ZssAssert_RollbackStorage(size_t *size);
+#endif
+
 #endif
