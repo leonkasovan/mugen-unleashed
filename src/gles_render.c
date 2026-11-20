@@ -1250,9 +1250,16 @@ static int gles_build_programs(void)
         return 0;
     }
     if (gles_sprite_option("MUGEN_SPRITEATLAS", g_spriteAtlasDefault)) {
+        /*
+         * A usable atlas program needs every entry point *and* a resolved
+         * u_mvp. glGetUniformLocation returns -1 on failure, so the test is
+         * >= 0; the original wrote < 0, which demanded a failed lookup before
+         * the atlas counted as enabled -- it could never link on a driver that
+         * worked, so MUGEN_SPRITEATLAS always logged "unavailable".
+         */
         if (glDrawArraysInstanced != NULL && glVertexAttribDivisor != NULL &&
             gles_load_es_program(&g_glesProgramAtlas, "indexed", 1) &&
-            g_glesProgramAtlas.u_mvp < 0) {
+            g_glesProgramAtlas.u_mvp >= 0) {
             Log_Printf("\nGLES: indexed sprite atlas enabled\n");
         } else {
             GlesDraw_FreeProgram(&g_glesProgramAtlas);
