@@ -35,6 +35,7 @@
  *     fragment shaders run without PREMUL -- the two agree with each other.
  */
 #include "mugen.h"
+#include "sprite_shader.h"
 
 #ifdef MUGEN_GLES
 
@@ -795,13 +796,81 @@ static int gles_load_es_program(GlesProgram *prog, const char *name)
     return ok;
 }
 
+typedef struct GlesEffectProgram {
+    unsigned id;
+    int indexed;
+    GlesProgram program;
+    GLint params, time, elapsed, resolution, aspect, textures[2], grab;
+} GlesEffectProgram;
+static GlesEffectProgram effect_programs[32];
+static unsigned effect_cursor;
+
+static const GlesEffectProgram *Gles_SelectEffect(int indexed)
+{
+    if (!g_spriteShaderDraw)
+        return NULL;
+    const SpriteShaderAsset *asset = SpriteShader_DrawAsset();
+    unsigned id = SpriteShader_ProgramId(asset);
+    for (unsigned i = 0; i < sizeof(effect_programs) / sizeof(*effect_programs); ++i) {
+        GlesEffectProgram *entry = &effect_programs[i];
+        if (entry->id == id && entry->indexed == indexed)
+            return entry->program.program ? entry : NULL;
+    }
+
+    GlesEffectProgram *entry = &effect_programs[effect_cursor++ % (sizeof(effect_programs) / sizeof(*effect_programs))];
+    GlesDraw_FreeProgram(&entry->program);
+    entry->id = id;
+    entry->indexed = indexed;
+    char *vert = gles_read_shader(indexed ? "indexed.vert" : "rgba.vert");
+    char *base = gles_read_shader(indexed ? "indexed.frag" : "rgba.frag");
+    char *frag = base ? SpriteShader_Fragment(base, asset, "v_texcoord") : NULL;
+    char defines[256];
+    gles_build_defines(defines, sizeof(defines));
+    int ok = vert && frag && GlesDraw_LoadProgram(&entry->program, vert, frag,
+                                                  SpriteShader_AssetPath(asset), defines);
+    free(vert);
+    free(frag);
+    free(base);
+    if (!ok) {
+        Log_Printf("ShaderSet: GLES effect failed for %s, using stock shader\n", SpriteShader_AssetPath(asset));
+        return NULL;
+    }
+    GLuint program = entry->program.program;
+    entry->params = glGetUniformLocation(program, "param[0]");
+    entry->textures[0] = glGetUniformLocation(program, "tex1");
+    entry->textures[1] = glGetUniformLocation(program, "tex2");
+    entry->grab = glGetUniformLocation(program, "bgl_RenderedTexture");
+    entry->time = glGetUniformLocation(program, "iTime");
+    entry->elapsed = glGetUniformLocation(program, "sTime");
+    entry->resolution = glGetUniformLocation(program, "iResolution");
+    entry->aspect = glGetUniformLocation(program, "aspectRatio");
+    Log_Printf("ShaderSet: GLES effect ready for %s\n", SpriteShader_AssetPath(asset));
+    return entry;
+}
+
+static void Gles_EffectUniforms(const GlesEffectProgram *effect)
+{
+    glUseProgram(effect->program.program);
+    GlesDraw_InvalidateState();
+    glUniform1fv(effect->params, 16, g_spriteShaderDraw->params);
+    SpriteShader_BindResources(effect->textures, effect->grab);
+    glUniform1f(effect->time, (float)g_game->frames / 60.0f);
+    glUniform1f(effect->elapsed, (float)g_spriteShaderDraw->elapsed);
+    glUniform2f(effect->resolution, (float)g_targetWidth, (float)g_targetHeight);
+    glUniform1f(effect->aspect, SpriteShader_Aspect());
+}
+
 /* Deletes the sprite textures and the programs. */
 static void gles_free_programs(void)
 {
+    for (unsigned i = 0; i < sizeof(effect_programs) / sizeof(*effect_programs); ++i)
+        GlesDraw_FreeProgram(&effect_programs[i].program);
+    memset(effect_programs, 0, sizeof(effect_programs));
     GlesDraw_FreeProgram(&g_glesProgramIndexed);
     GlesDraw_FreeProgram(&g_glesProgramRgba);
     GlesDraw_FreeProgram(&g_glesProgramSolid);
     GlesDraw_FreeBuffer(&g_glesBuffer);
+    SpriteShader_FreeTextures();
 }
 
 int Gl_Deinit(void)
@@ -842,6 +911,7 @@ void Gles_OnContextLost(void)
      * event that did not happen, and it lands on the end of the "video: vsync"
      * line, which does not end with a newline.
      */
+    memset(effect_programs, 0, sizeof(effect_programs));
     int was_ready = g_glesReady;
     int tracked = g_glesTextureCount;
 #ifdef MUGEN_MODEL3D
@@ -1698,7 +1768,7 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
     int special;
     PalFx *fx;
     GlMvp mvp;
-    GlesProgram *prog;
+    const GlesProgram *prog;
     int paletted;
     int blend_enabled = 0;
     unsigned int blend_src = 0, blend_dst = 0, blend_eq = 0;
@@ -1964,7 +2034,10 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
         }
     }
     fx = PalFx_GetApplied();
-    prog = paletted ? &g_glesProgramIndexed : &g_glesProgramRgba;
+    if (g_spriteShaderDraw)
+        GlesBatch_Flush();
+    const GlesEffectProgram *effect = Gles_SelectEffect(paletted);
+    prog = effect ? &effect->program : paletted ? &g_glesProgramIndexed : &g_glesProgramRgba;
 
     /*
      * Blend state. The factors come from GlesBlend_ResolveOp (src/gles_blend.h),
@@ -1999,7 +2072,7 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
      * merge neighbours into one instanced draw. Same values either way; with
      * batching off this is exactly the old straight-through submission.
      */
-    if (gles_batch_enabled()) {
+    if (!effect && gles_batch_enabled()) {
         /* PalFX scalars exactly as Glr_FxTerms computes them: add is 0..255 and
          * mul / color are fixed point with 256 = 1.0. */
         GlesBatch_Record(prog, blend_enabled, blend_src, blend_dst, blend_eq, dp->masked,
@@ -2022,6 +2095,7 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
         glActiveTexture(GL_TEXTURE0);
     }
 
+    if (effect) Gles_EffectUniforms(effect);
     GlesDraw_Quad(&g_glesBuffer, prog, mvp.m, positions, texcoords, paletted, dp->masked, (float)fx->add[0] / 255.0f,
                   (float)fx->add[1] / 255.0f, (float)fx->add[2] / 255.0f, (float)fx->mul[0] * (1.0f / 256.0f),
                   (float)fx->mul[1] * (1.0f / 256.0f), (float)fx->mul[2] * (1.0f / 256.0f), fx->invertall,

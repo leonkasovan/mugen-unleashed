@@ -27,6 +27,7 @@
 #define BGCTRL_ANIM         8
 #define BGCTRL_SINX         11
 #define BGCTRL_SINY         12
+#define BGCTRL_SHADERSET    21      /* port addition */
 #define BGCTRL_DUMMY        20
 #define BGCTRL_TYPE_LIMIT   100     /* controllers of this type or above never run */
 

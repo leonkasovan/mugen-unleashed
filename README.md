@@ -64,6 +64,8 @@ The engine requires a compatible game tree in `install/`; existing assets and
 empty installation. Keyboard/gamepad binding numbers and resolution settings
 are unchanged by the SDL2-only transition.
 
+See [ShaderSet](docs/SHADERSET.md) to add per-sprite shaders to characters and stages.
+
 ## Validation and migration record
 
 [SDL2_ONLY_PLAN.md](docs/SDL2_ONLY_PLAN.md) records the implementation order,

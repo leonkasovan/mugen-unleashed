@@ -9,6 +9,7 @@
  * stay in double and are rounded to float where the original stores a float.
  */
 #include "mugen.h"
+#include "sprite_shader.h"
 #include "zss_assert.h"
 #include "zss_binding.h"
 
@@ -235,6 +236,7 @@ int Round_RunState(void)
                             (pe->afterimage)->anim = NULL;
                             pe->afterimage = NULL;
                         }
+                        SpriteShader_Clear(pe);
                         KeyedArray_Remove(cur->iter, cur);
                     }
                 }
@@ -1019,7 +1021,8 @@ int Round_Tick(ScreenLoop *screen)
         }
         ai = p->afterimage;
         if (p->suspended == 0 && ai != NULL) {
-            if (!AfterImage_Update(&p->draw, ai, p->remap, p->hitpause_time == 0)) {
+            if (!AfterImage_UpdateEffect(&p->draw, ai, p->remap, p->hitpause_time == 0,
+                                         SpriteShader_Pass(p, SPRITE_SHADER_AFTERIMAGE))) {
                 ai->anim = NULL;
                 p->afterimage = NULL;
             }

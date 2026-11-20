@@ -16,6 +16,7 @@
  * float to int conversions truncate like __ftol2.
  */
 #include "mugen.h"
+#include "sprite_shader.h"
 
 /* x * scale rounded as the original does: through float, floor(x + 0.5), float again, then __ftol2. */
 static int Ex_Round(double x)
@@ -146,6 +147,8 @@ void Explods_Free(void *list_)
             }
             SpriteSet_Free(e->sprites);
         }
+        for (int i = 0; i < list->capacity; ++i)
+            SpriteShader_Clear(&list->items[i]);
         free(list->items);
     }
     free(list);
@@ -221,6 +224,7 @@ void SysDrawItem_Free(SysDrawItem *e)
     if (!e->used) {
         return;
     }
+    SpriteShader_Clear(e);
     if (e->sprites != NULL) {
         SpriteSet_Free(e->sprites);
     }
@@ -237,6 +241,7 @@ void SysDraw_Remove(int index, SysDrawList *list)
     if (!e->used) {
         return;
     }
+    SpriteShader_Clear(e);
     if (e->sprites != NULL) {
         SpriteSet_Free(e->sprites);
     }
@@ -254,6 +259,7 @@ void SysDraw_Clear(SysDrawList *list)
     for (i = 0; i < list->capacity; i++) {
         SysDrawItem *e = &list->items[i];
         if (e->used) {
+            SpriteShader_Clear(e);
             if (e->sprites != NULL) {
                 SpriteSet_Free(e->sprites);
             }
@@ -418,6 +424,7 @@ void SysDraw_Start(SysDrawList *list, int index)
         list->count--;
         return;
     }
+    if (e->started > 0) SpriteShader_Tick(e);
     if (e->kind == SYSDRAW_ANIM) {
         Anim_Step(e->anim);
     }
@@ -547,7 +554,7 @@ void SysDraw_Update(SysDrawItem *e)
     g_palFxCur = &e->palfx_own;
     switch (e->kind) {
     case SYSDRAW_ANIM:
-        Anim_Draw(e->anim, &dp, 1.0f, 1.0f);
+        Anim_DrawEffect(e->anim, &dp, 1.0f, 1.0f, SpriteShader_Get(e));
         break;
     case SYSDRAW_SPRITE:
 #if !defined(ANDROID_PORT) || defined(MUGEN_GLES)
@@ -586,7 +593,7 @@ void SysDraw_DrawShadow(const SysDrawItem *e, const int *a, const int *b)
 
     SysDraw_MakeParams(&dp, e);
     y = (float)e->pos.y;
-    Shadow_Draw(e->anim, &dp, y, 0.0f, 1.0f, 1.0f, a, b);
+    Shadow_DrawEffect(e->anim, &dp, y, 0.0f, 1.0f, 1.0f, a, b, e);
 }
 
 /*
@@ -647,6 +654,8 @@ void Explod_SetParams(Player *p, SysDrawItem *e, const ExplodParams *ep, StateRu
 void Explod_SetParamsCtx(Player *p, SysDrawItem *e, const ExplodParams *ep, StateRunCtx *ctx, int modify,
                       const StateCtrl *sc, ExprEvalCtx *frame)
 {
+    SpriteShader_ApplyObject(e, p, ((const ExplodShaderParams *)ep)->effect, frame);
+
     int v, r, gg, b;
     float f;
 

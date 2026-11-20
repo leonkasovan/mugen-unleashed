@@ -7,6 +7,7 @@
  * gameflow.c, round.c and camera.c.
  */
 #include "mugen.h"
+#include "sprite_shader.h"
 
 /*
  * 0x00418CD0: the life shown by the life bar of p (Player.lifebar_life) goes
@@ -581,7 +582,8 @@ void Projectiles_UpdateAfterImages(ProjectileList *pl)
     for (e = KeyedArray_First(list); e != NULL; e = KeyedArray_Next(list)) {
         AfterImage *ai = e->afterimage;
         if (e->paused == 0 && ai != NULL) {
-            if (!AfterImage_Update(&e->draw, ai, e->remap, e->hitpause_time == 0)) {
+            if (!AfterImage_UpdateEffect(&e->draw, ai, e->remap, e->hitpause_time == 0,
+                                         SpriteShader_Pass(e, SPRITE_SHADER_AFTERIMAGE))) {
                 ai->anim = NULL;
                 e->afterimage = NULL;
             }

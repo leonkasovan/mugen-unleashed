@@ -100,6 +100,7 @@ enum {
     SCTRL_TAGOUT = 552,             /* run only */
     SCTRL_NOP = 1000,               /* run only: does nothing */
     SCTRL_ZSS_BODY = 1001,          /* port-private: installed ZSS program body */
+    SCTRL_SHADERSET = 1005,         /* port addition: sprite fragment effect */
     SCTRL_ZSS_MAP = 1002,           /* port-private: numeric map set/add/reset */
     SCTRL_ZSS_DIALOGUE = 1003,      /* optional Ikemen UI: disabled in MUGEN motif profile */
     SCTRL_ZSS_PRINT = 1004          /* context-aware console text */

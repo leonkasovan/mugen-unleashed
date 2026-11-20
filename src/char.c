@@ -12,6 +12,7 @@
  * CharData.consts, which every player copies.
  */
 #include "mugen.h"
+#include "sprite_shader.h"
 #include "zss_assert.h"
 #include "zss_binding.h"
 #include "zss_map.h"
@@ -1099,6 +1100,7 @@ CharData *Char_LoadDef(const char *dir, Stream *s)
             Ini_Free(def);Char_Free(c);return NULL;
         }
     }
+    SpriteShader_Load(c, def, dir, is_zip ? s : NULL);
     Ini_Free(def);
     Stream_Seek(s, tell, SEEK_SET);
     return c;
@@ -2033,6 +2035,7 @@ void Char_Free(CharData *c)
     if (c == NULL) {
         return;
     }
+    SpriteShader_FreeAssets(c);
     ZssMap_FreeDefaults(c);
     Log_Printf("Freeing player RC %s...", c->name);
     Ai_Free(&c->ai);
@@ -2223,6 +2226,7 @@ void Player_Free(Player *p)
     if (p == NULL) {
         return;
     }
+    SpriteShader_Clear(p);
     ZssAssert_ClearPlayer(p);
     ZssMap_ResetPlayer(p);
     if (p->ai_learn) {
@@ -2517,6 +2521,7 @@ void Player_Reset(Player *p)
 
     /* Port addition: round reset and Helper_Create's reset start fresh flags;
      * numeric maps deliberately have a different persistence lifecycle. */
+    SpriteShader_Clear(p);
     ZssAssert_ClearPlayer(p);
     if (p->data == NULL) {
         return;

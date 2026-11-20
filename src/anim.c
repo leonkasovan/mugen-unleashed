@@ -12,6 +12,7 @@
  * in the match log.
  */
 #include "mugen.h"
+#include "sprite_shader.h"
 
 #ifdef MUGEN_VITA_GL
 /*
@@ -744,6 +745,11 @@ int Anim_SetElem(AnimState *st, int elem)
  */
 void Anim_Draw(AnimState *st, const DrawParams *dp, float sx, float sy)
 {
+    Anim_DrawEffect(st, dp, sx, sy, NULL);
+}
+
+void Anim_DrawEffect(AnimState *st, const DrawParams *dp, float sx, float sy, const SpriteShaderState *effect)
+{
     AnimAction *action = Anim_CurAction(st);
     int t = st->time - 1;
     int i;
@@ -770,15 +776,7 @@ void Anim_Draw(AnimState *st, const DrawParams *dp, float sx, float sy)
 #endif
             if (st->sprite != -1) {
                 if (st->queue == NULL) {
-#if !defined(ANDROID_PORT) || defined(MUGEN_GLES)
-        /* M8: with the GLES backend the GL drawer exists on Android too. */
-                    if (g_renderMode == RENDER_MODE_GL) {
-                        Sprite_DrawGL(st->sprites, st->sprite, &local);
-                    } else
-#endif
-                    {
-                        Sprite_DrawSoft(st->sprites, st->sprite, &local);
-                    }
+                    SpriteShader_Draw(st->sprites, st->sprite, &local, effect);
                 } else {
                     SpriteQueueItem item;
 
@@ -799,7 +797,7 @@ void Anim_Draw(AnimState *st, const DrawParams *dp, float sx, float sy)
                         item.remap = (struct PalRemap *)item.remap_copy;
                     }
                     item.dp = local;
-                    SpriteQueue_Add(&item, st->queue);
+                    SpriteQueue_AddEffect(&item, st->queue, effect);
                 }
             }
         }
@@ -916,7 +914,7 @@ SpriteQueue *SpriteQueue_Create(int capacity)
     if (q == NULL) {
         return NULL;
     }
-    q->items = KeyedArray_Create(capacity, sizeof(SpriteQueueItem));
+    q->items = KeyedArray_Create(capacity, sizeof(SpriteShaderQueueItem));
     if (q->items == NULL) {
         sprintf(g_libraryErrorText, "Out of memory.");
         SpriteQueue_Free(q);
@@ -946,12 +944,20 @@ void SpriteQueue_Free(SpriteQueue *q)
 /* 0x00464D70: inserts item, keeping order sorted by layer (after equal layers). */
 int SpriteQueue_Add(const SpriteQueueItem *item, SpriteQueue *q)
 {
+    return SpriteQueue_AddEffect(item, q, NULL);
+}
+
+int SpriteQueue_AddEffect(const SpriteQueueItem *item, SpriteQueue *q, const SpriteShaderState *effect)
+{
     int layer = item->layer;
     KeyedArray *items = q->items;
     int *order = q->order;
     int slot, n, i;
 
-    slot = KeyedArray_Add(items, item, 0, layer);
+    SpriteShaderQueueItem draw = {0};
+    draw.item = *item;
+    if (effect) draw.effect = *effect;
+    slot = KeyedArray_Add(items, &draw, 0, layer);
     if (slot == -1) {
         return 0;
     }

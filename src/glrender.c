@@ -34,6 +34,7 @@
  */
 
 #include "mugen.h"
+#include "sprite_shader.h"
 #ifdef MUGEN_VITA_GL
 #include "vita_diagnostics.h"
 #include "vita_vertex_interface.h"
@@ -47,6 +48,96 @@ static void Glr_ForgetFormat(const GlTex *tex);
 static int *Glr_FormatSlot(const GlTex *tex);
 static void Glr_FreeProgram(GlProgram *prog);
 static int Glr_LogObject(unsigned int obj, int is_shader);
+static int Glr_LoadShaderEffect(const char **defines, GlProgram *prog, const char *name,
+                               const SpriteShaderAsset *asset);
+typedef struct GlrEffectProgram {
+    unsigned id;
+    unsigned variant;
+    GlProgram program;
+    int params[16], time, elapsed, resolution, aspect, textures[2], grab;
+} GlrEffectProgram;
+static GlrEffectProgram effect_programs[32];
+static unsigned effect_cursor;
+
+static const GlrEffectProgram *Glr_SelectEffect(int indexed, int special)
+{
+    if (!g_spriteShaderDraw)
+        return NULL;
+    const SpriteShaderAsset *asset = SpriteShader_DrawAsset();
+    unsigned id = SpriteShader_ProgramId(asset);
+    unsigned variant = (unsigned)(indexed * 2 + special);
+    for (unsigned i = 0; i < sizeof(effect_programs) / sizeof(*effect_programs); ++i) {
+        GlrEffectProgram *entry = &effect_programs[i];
+        if (entry->id == id && entry->variant == variant)
+            return entry->program.program ? entry : NULL;
+    }
+    GlrEffectProgram *entry = &effect_programs[effect_cursor++ % (sizeof(effect_programs) / sizeof(*effect_programs))];
+    Glr_FreeProgram(&entry->program);
+    entry->id = id;
+    entry->variant = variant;
+    const char *defines[] = {
+        g_glIndexMode == 0 ? "INDEX_STANDARD" : g_glIndexMode == 1 ? "INDEX_GEFORCE7" : "INDEX_SAFE",
+        special ? "PERSPECTIVE_EVEN" : "PERSPECTIVE_NONE",
+        NULL
+    };
+    if (!Glr_LoadShaderEffect(defines, &entry->program, indexed ? "indexed" : "rgba", asset)) {
+        Log_Printf("ShaderSet: GL effect failed for %s, using stock shader\n", SpriteShader_AssetPath(asset));
+        return NULL;
+    }
+    unsigned program = entry->program.program;
+#ifdef MUGEN_VITA_GL
+    for (int i = 0; i < 4; ++i) {
+        char name[24];
+        snprintf(name, sizeof(name), "mugenParams%d", i);
+        entry->params[i] = g_glewGetUniformLocation(program, name);
+    }
+#else
+    for (int i = 0; i < 16; ++i) {
+        char name[24];
+        snprintf(name, sizeof(name), "param[%d]", i);
+        entry->params[i] = g_glewGetUniformLocation(program, name);
+    }
+#endif
+    entry->textures[0] = g_glewGetUniformLocation(program, "tex1");
+    entry->textures[1] = g_glewGetUniformLocation(program, "tex2");
+    entry->grab = g_glewGetUniformLocation(program, "bgl_RenderedTexture");
+#ifdef MUGEN_VITA_GL
+    if (entry->grab != -1) {
+        Glr_FreeProgram(&entry->program);
+        Log_Printf("ShaderSet: framebuffer sampling is disabled on VitaGL\n");
+        return NULL;
+    }
+#endif
+    entry->time = g_glewGetUniformLocation(program, "iTime");
+    entry->elapsed = g_glewGetUniformLocation(program, "sTime");
+    entry->resolution = g_glewGetUniformLocation(program, "iResolution");
+    entry->aspect = g_glewGetUniformLocation(program, "aspectRatio");
+    Log_Printf("ShaderSet: GL effect ready for %s\n", SpriteShader_AssetPath(asset));
+    return entry;
+}
+
+static void Glr_EffectUniforms(const GlrEffectProgram *effect)
+{
+#ifdef MUGEN_VITA_GL
+    for (int i = 0; i < 4; ++i)
+        if (effect->params[i] != -1)
+            glUniform4fv(effect->params[i], 1, g_spriteShaderDraw->params + i * 4);
+#else
+    for (int i = 0; i < 16; ++i)
+        if (effect->params[i] >= 0)
+            g_glewUniform1f(effect->params[i], g_spriteShaderDraw->params[i]);
+#endif
+    SpriteShader_BindResources(effect->textures, effect->grab);
+    if (effect->time != -1)
+        g_glewUniform1f(effect->time, (float)g_game->frames / 60.0f);
+    if (effect->elapsed != -1)
+        g_glewUniform1f(effect->elapsed, (float)g_spriteShaderDraw->elapsed);
+    if (effect->resolution != -1)
+        g_glewUniform2f(effect->resolution, (float)g_targetWidth, (float)g_targetHeight);
+    if (effect->aspect != -1)
+        g_glewUniform1f(effect->aspect, SpriteShader_Aspect());
+}
+
 /* Streaming sprite texture cache (defined with Gl_DrawSprite below). */
 static size_t Glr_StreamBudget(void);
 static void Glr_StreamDropAll(int delete_gl);
@@ -1149,8 +1240,10 @@ void Gl_DrawQuadRgba(const PalFx *fx, GlTex *tex, float x0, float y0, float x1, 
 #endif
 
     Glr_FxTerms(fx, &t);
-    prog = &g_glProgramsRgba[Glr_Variant(fx, &t, special)];
+    const GlrEffectProgram *effect = Glr_SelectEffect(0, special != 0);
+    prog = effect ? &effect->program : &g_glProgramsRgba[Glr_Variant(fx, &t, special)];
     Glr_UseProgram(prog->program);
+    if (effect) Glr_EffectUniforms(effect);
     g_glewActiveTexture(GLR_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tex->id);
     GlTex_SetParameter(tex, GL_TEXTURE_WRAP_S, special ? GL_REPEAT : GLR_CLAMP_TO_EDGE);
@@ -1201,8 +1294,10 @@ void Gl_DrawQuadIndexed(const PalFx *fx, GlTex *tex, GlTex *pal, float x0, float
 #endif
 
     Glr_FxTerms(fx, &t);
-    prog = &g_glProgramsIndexed[Glr_Variant(fx, &t, special)];
+    const GlrEffectProgram *effect = Glr_SelectEffect(1, special != 0);
+    prog = effect ? &effect->program : &g_glProgramsIndexed[Glr_Variant(fx, &t, special)];
     Glr_UseProgram(prog->program);
+    if (effect) Glr_EffectUniforms(effect);
     g_glewActiveTexture(GLR_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tex->id);
     GlTex_SetParameter(tex, GL_TEXTURE_WRAP_S, special ? GL_REPEAT : GL_CLAMP);
@@ -1828,7 +1923,10 @@ void Sprite_DrawGL(SpriteSet *set, int sprite, const DrawParams *dp)
         spr->scale_x = 1.0f;
         first.x = (float)spr->x;
         first.y = (float)spr->y;
+        const SpriteShaderState *effect = g_spriteShaderDraw;
+        g_spriteShaderDraw = NULL;
         Gl_DrawSprite(sprite, &first, set);
+        g_spriteShaderDraw = effect;
         Gfx_SetRenderTarget(target, target_sprite);
         Gfx_SetClipRect(cx1, cy1, cx2, cy2);
         spr->scale_x = saved_sx;
@@ -2151,6 +2249,12 @@ static unsigned int Glr_CompileShader(unsigned int type, char *src)
 /* 0x0047C580: port fix: transactional read/compile/link, including cleanup. */
 int Gl_LoadShader(const char **defines, GlProgram *prog, const char *name)
 {
+    return Glr_LoadShaderEffect(defines, prog, name, NULL);
+}
+
+static int Glr_LoadShaderEffect(const char **defines, GlProgram *prog, const char *name,
+                               const SpriteShaderAsset *asset)
+{
     char defs[GLR_DEFINES_SIZE], path[MAX_PATH];
     size_t n = 0;
     int wrote;
@@ -2194,6 +2298,17 @@ int Gl_LoadShader(const char **defines, GlProgram *prog, const char *name)
     if (f == NULL) goto fail;
     text = Gl_ReadFile(f);
     if (text == NULL) goto fail;
+    if (asset) {
+#ifdef MUGEN_VITA_GL
+        const char *coord = "vTexCoord";
+#else
+        const char *coord = "gl_TexCoord[0]";
+#endif
+        char *fragment = SpriteShader_Fragment(text, asset, coord);
+        free(text);
+        text = fragment;
+        if (!text) goto fail;
+    }
     src = Gl_InsertDefines(text, defs); free(text);
     if (src == NULL) goto fail;
     built.frag = Glr_CompileShader(GLR_FRAGMENT_SHADER, src);
@@ -2313,6 +2428,11 @@ int Gl_FreeShaders(void)
     int i;
     if (g_glCurrentProgram != 0) g_glewUseProgram(0);
     g_glCurrentProgram = 0;
+
+    for (unsigned slot = 0; slot < sizeof(effect_programs) / sizeof(*effect_programs); ++slot)
+        Glr_FreeProgram(&effect_programs[slot].program);
+    memset(effect_programs, 0, sizeof(effect_programs));
+    SpriteShader_FreeTextures();
 
     for (i = 0; i < GL_PROGRAM_COUNT; i++) {
         Glr_FreeProgram(&g_glProgramsIndexed[i]);

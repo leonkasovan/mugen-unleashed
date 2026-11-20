@@ -28,6 +28,7 @@
 #include <pthread.h>
 
 #include "mugen.h"
+#include "sprite_shader.h"
 
 #define WINDOW_ICON_ID 101     /* icon resource in mugen.exe */
 
@@ -1849,6 +1850,7 @@ void AfterImages_Free(KeyedArray *list)
 
             if (ai != NULL) {
                 if (ai->frames != NULL) {
+                    SpriteShader_ClearAfterImages(ai);
                     free(ai->frames);
                 }
                 memset(ai, 0, sizeof(*ai));

@@ -10,6 +10,7 @@
  * ticks since the afterimage started and running says it is running.
  */
 #include "mugen.h"
+#include "sprite_shader.h"
 
 /* A recorded frame (0x114 bytes; AfterImage.frames holds AFTERIMAGE_FRAMES of them). */
 typedef struct AfterImageFrame {
@@ -63,6 +64,18 @@ int AfterImage_Init(AfterImage *ai)
  */
 int AfterImage_Update(const DrawParams *dp, AfterImage *ai, const PalRemap *remap, int active)
 {
+    return AfterImage_UpdateEffect(dp, ai, remap, active, NULL);
+}
+
+void SpriteShader_ClearAfterImages(AfterImage *ai)
+{
+    for (int i = 0; ai->frames && i < ai->max_length; ++i)
+        SpriteShader_Clear((AfterImageFrame *)ai->frames + i);
+}
+
+int AfterImage_UpdateEffect(const DrawParams *dp, AfterImage *ai, const PalRemap *remap, int active,
+                            const SpriteShaderState *effect)
+{
     AfterImageSettings *s = &ai->settings;
 
     if (!ai->running || ai->anim == NULL) {
@@ -78,6 +91,7 @@ int AfterImage_Update(const DrawParams *dp, AfterImage *ai, const PalRemap *rema
         Coord c1, c2;
         const Coord *pc;
 
+        SpriteShader_Inherit(f, effect);
         f->sprite = ai->anim->sprite;
         tmp = ai->anim->dp;
         f->dp = *DrawParams_Combine(dp, DrawParams_ScalePos(dp, &tmp));
@@ -275,7 +289,7 @@ void AfterImage_Draw(AfterImage *ai, int layer)
         item.dp.scale_x = f->dp.scale_x * g_game->camera_zoom;
         item.dp.scale_y = f->dp.scale_y * g_game->camera_zoom;
         DrawParams_SetBlend(s->trans, &item.dp, s->alpha[0], s->alpha[1]);
-        SpriteQueue_Add(&item, ai->anim->queue);
+        SpriteQueue_AddEffect(&item, ai->anim->queue, SpriteShader_Get(f));
         key_offset--;
     }
 }
