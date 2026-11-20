@@ -11,15 +11,28 @@
  * position + texcoord per vertex. Perspective modes are preserved through
  * the Q component of the texcoord (PERSPECTIVE_* defines work the same).
  */
+////*EB_DEFINES*////
+
 attribute vec4 a_position;
-attribute vec4 a_texcoord;
-uniform mat4 u_mvp;
 varying vec4 v_texcoord;
 
-////*EB_DEFINES*////
+#ifdef SPRITE_ATLAS
+attribute mat4 a_instance_mvp;
+attribute vec4 a_atlas_rect;
+varying highp vec4 v_atlas_rect;
+#else
+attribute vec4 a_texcoord;
+uniform mat4 u_mvp;
+#endif
 
 void main()
 {
+#ifdef SPRITE_ATLAS
+    v_texcoord = vec4(a_position.xy, 0.0, 1.0);
+    v_atlas_rect = a_atlas_rect;
+    gl_Position = a_instance_mvp * vec4(a_position.xy * a_atlas_rect.zw, 0.0, 1.0);
+#else
     v_texcoord = a_texcoord;
     gl_Position = u_mvp * a_position;
+#endif
 }

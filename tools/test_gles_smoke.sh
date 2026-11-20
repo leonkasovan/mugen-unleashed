@@ -21,4 +21,4 @@ $CC $FLAGS -c src/globals.c -o "$OUT/globals.o"
 $CC $FLAGS tools/test_gles_smoke.c src/perf.c src/gl_mvp.c src/gputime.c third_party/glad-es-3.0/glad.c \
     "$OUT/globals.o" -Wl,--gc-sections ${LDFLAGS:-} $EGL_LIBS $SDL2_LIBS -lm -ldl -o "$OUT/test_gles_smoke"
 cp res/shaders/gles/* "$OUT/data/gles/"
-(cd "$OUT"; ./test_gles_smoke)
+(cd "$OUT"; MUGEN_SPRITEATLAS=1 ./test_gles_smoke)
