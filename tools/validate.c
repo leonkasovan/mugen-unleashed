@@ -35,6 +35,11 @@
 #include <dirent.h>
 #include <errno.h>
 #include <limits.h>
+#include <fcntl.h>
+#include <unistd.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -401,6 +406,85 @@ static char *read_file(const char *path, size_t *size)
     return buf;
 }
 
+/* Stage replacements beside the original so the final rename is atomic. */
+static FILE *open_rewrite(const char *path, char *temp, size_t capacity)
+{
+    unsigned attempt;
+    struct stat original;
+
+    if (stat(path, &original) != 0) return NULL;
+    for (attempt = 0; attempt < 100; attempt++) {
+        int fd, flags = O_WRONLY | O_CREAT | O_EXCL;
+        FILE *out;
+
+#ifdef _WIN32
+        flags |= O_BINARY;
+#endif
+        if (snprintf(temp, capacity, "%s.validate-%ld-%u", path, (long)getpid(), attempt)
+            >= (int)capacity) return NULL;
+        fd = open(temp, flags, original.st_mode & 0777);
+        if (fd < 0 && errno == EEXIST) continue;
+        if (fd < 0) return NULL;
+        out = fdopen(fd, "wb");
+        if (out == NULL) {
+            close(fd);
+            remove(temp);
+        }
+        return out;
+    }
+    return NULL;
+}
+
+static int replace_file(const char *source, const char *destination)
+{
+#ifdef _WIN32
+    return MoveFileExA(source, destination, MOVEFILE_REPLACE_EXISTING) != 0;
+#else
+    return rename(source, destination) == 0;
+#endif
+}
+
+static int close_rewrite(FILE *out)
+{
+    int ok = !ferror(out);
+
+    return fclose(out) == 0 && ok;
+}
+
+static void finish_rewrite(const char *path, const char *temp, FILE *out, unsigned fixed_before)
+{
+    char backup[PATH_MAX + 8], backup_temp[PATH_MAX + 64];
+    char *original = NULL;
+    size_t size;
+    FILE *copy;
+
+    if (!close_rewrite(out)) goto fail;
+    if (snprintf(backup, sizeof(backup), "%s.bak", path) >= (int)sizeof(backup)) goto fail;
+    original = read_file(path, &size);
+    if (original == NULL) goto fail;
+    copy = open_rewrite(path, backup_temp, sizeof(backup_temp));
+    if (copy == NULL) goto fail;
+    {
+        int written = fwrite(original, 1, size, copy) == size;
+
+        if (!close_rewrite(copy) || !written || !replace_file(backup_temp, backup)) {
+            remove(backup_temp);
+            goto fail;
+        }
+    }
+    if (!replace_file(temp, path)) goto fail;
+    fprintf(g_report, "[FIXED] %s (backup %s)\n", path, backup);
+    free(original);
+    return;
+
+fail:
+    free(original);
+    remove(temp);
+    g_count.fixed = fixed_before;
+    g_count.missing++;
+    fprintf(g_report, "[ERROR] could not rewrite %s\n", path);
+}
+
 /* ------------------------------------------------------------- file checking */
 
 /* The keys the engine reads out of a given def group. */
@@ -501,24 +585,14 @@ static void validate_file(const char *path, const char *const *bases, int base_c
     content = read_file(path, &size);
     if (content == NULL) return;
     {
-        char backup[PATH_MAX];
-        FILE *in, *out_file;
+        char temp[PATH_MAX + 64];
+        unsigned fixed_before = g_count.fixed;
+        FILE *out_file = open_rewrite(path, temp, sizeof(temp));
         char *l, *nx;
 
-        snprintf(backup, sizeof(backup), "%s.bak", path);
-        remove(backup);
-        if (rename(path, backup) != 0) {
-            fprintf(g_report, "[ERROR] could not back up %s: %s\n", path, strerror(errno));
-            free(content);
-            return;
-        }
-        in = fopen(backup, "rb");
-        out_file = fopen(path, "wb");
-        if (in == NULL || out_file == NULL) {
-            if (in != NULL) fclose(in);
-            if (out_file != NULL) fclose(out_file);
-            rename(backup, path);
-            fprintf(g_report, "[ERROR] could not rewrite %s\n", path);
+        if (out_file == NULL) {
+            fprintf(g_report, "[ERROR] could not stage %s\n", path);
+            g_count.missing++;
             free(content);
             return;
         }
@@ -605,9 +679,7 @@ static void validate_file(const char *path, const char *const *bases, int base_c
             if (crlf) fputc('\r', out_file);
             if (had_nl) fputc('\n', out_file);
         }
-        fclose(in);
-        fclose(out_file);
-        fprintf(g_report, "[FIXED] %s (backup %s)\n", path, backup);
+        finish_rewrite(path, temp, out_file, fixed_before);
     }
     free(content);
 }
@@ -814,6 +886,8 @@ static void fix_select(const char *path)
     char section[64] = "";
     int changed = 0;
     FILE *out_file;
+    char temp[PATH_MAX + 64];
+    unsigned fixed_before = g_count.fixed;
 
     content = read_file(path, NULL);
     if (content == NULL) return;
@@ -850,7 +924,16 @@ static void fix_select(const char *path)
                 char *comma = strchr(code, ',');
                 Resolved r;
 
-                if (comma != NULL) *comma = '\0';
+                if (comma != NULL) {
+                    char *stage = comma + 1;
+                    char *end = strchr(stage, ',');
+
+                    if (end != NULL) *end = '\0';
+                    trim(stage);
+                    resolve(stage, stage_bases, 2, &r);
+                    if (r.status == RES_CASE || r.status == RES_SEP) changed = 1;
+                    *comma = '\0';
+                }
                 snprintf(first, sizeof(first), "%s", code);
                 trim(first);
                 if (first[0] == '\0' || is_random(first)) continue;
@@ -884,22 +967,12 @@ static void fix_select(const char *path)
     content = read_file(path, NULL);
     if (content == NULL) return;
 
-    {
-        char backup[PATH_MAX + 8];
-
-        snprintf(backup, sizeof(backup), "%s.bak", path);
-        remove(backup);
-        if (rename(path, backup) != 0) {
-            fprintf(g_report, "[ERROR] could not back up %s: %s\n", path, strerror(errno));
-            free(content);
-            return;
-        }
-        out_file = fopen(path, "wb");
-        if (out_file == NULL) {
-            rename(backup, path);
-            free(content);
-            return;
-        }
+    out_file = open_rewrite(path, temp, sizeof(temp));
+    if (out_file == NULL) {
+        fprintf(g_report, "[ERROR] could not stage %s\n", path);
+        g_count.missing++;
+        free(content);
+        return;
     }
 
     for (line = content; line != NULL; line = next) {
@@ -939,10 +1012,13 @@ static void fix_select(const char *path)
             char *cols[16];
             int ncols = 0, k, rewritten = 0;
             char *c;
+            const char *comment;
             size_t used = 0;
 
             snprintf(work, sizeof(work), "%s", line);
             strip_cr(work);
+            strip_comment(work);
+            comment = line + strlen(work);
             cols[ncols++] = work;
             for (c = work; *c != '\0' && ncols < 16; c++) {
                 if (*c == ',') {
@@ -1017,6 +1093,10 @@ static void fix_select(const char *path)
 
             if (rewritten) {
                 fputs(out_line, out_file);
+                if (*comment == ';') {
+                    size_t length = strlen(comment);
+                    fwrite(comment, 1, length - (size_t)crlf, out_file);
+                }
                 if (crlf) fputc('\r', out_file);
                 if (had_nl) fputc('\n', out_file);
                 g_count.fixed++;
@@ -1079,8 +1159,7 @@ static void fix_select(const char *path)
         if (crlf) fputc('\r', out_file);
         if (had_nl) fputc('\n', out_file);
     }
-    fclose(out_file);
-    fprintf(g_report, "[FIXED] %s (backup %s.bak)\n", path, path);
+    finish_rewrite(path, temp, out_file, fixed_before);
     free(content);
 }
 
@@ -1165,15 +1244,12 @@ static void check_character_defs(const char *select_path)
         snprintf(cdir, sizeof(cdir), "%s", r.matched);
         slash = strrchr(cdir, '/');
         if (slash != NULL) slash[1] = '\0';
+        else cdir[0] = '\0';
         {
-            const char *bases[5];
+            const char *bases[] = { cdir };
 
-            bases[0] = cdir;
-            bases[1] = "";
-            bases[2] = "chars/";
-            bases[3] = "data/";
             fprintf(g_report, "character: %s\n", r.matched);
-            validate_file(r.matched, bases, 4, &keys, "Files");
+            validate_file(r.matched, bases, 1, &keys, "Files");
         }
     }
     fprintf(g_report, "  %d character def(s) inspected\n", seen_count);
@@ -1429,14 +1505,44 @@ int main(int argc, char **argv)
         fprintf(g_report, "system.def %s [NOT FOUND]\n", motif);
     }
 
-    /* select.def lives next to system.def (or in data/). */
+    /* Match Motif_Load's [Files] select and Select_OpenDef's File_Find order. */
     {
-        char candidate[PATH_MAX + 16];
+        char *content = read_file(motif, NULL);
+        char *line, *next;
+        int in_files = 0;
 
-        snprintf(candidate, sizeof(candidate), "%sselect.def", motif_dir);
-        if (is_file(candidate)) snprintf(select_path, sizeof(select_path), "%.*s",
-                                          (int)(sizeof(select_path) - 1), candidate);
-        else if (is_file("data/select.def")) snprintf(select_path, sizeof(select_path), "data/select.def");
+        for (line = content; line != NULL; line = next) {
+            char key[128], value[PATH_MAX];
+
+            next = strchr(line, '\n');
+            if (next != NULL) *next++ = '\0';
+            strip_comment(line);
+            trim(line);
+            if (line[0] == '[') {
+                char *end = strchr(line, ']');
+
+                in_files = 0;
+                if (end != NULL) {
+                    *end = '\0';
+                    trim(line + 1);
+                    in_files = ieq(line + 1, "files");
+                }
+            } else if (in_files && parse_assignment(line, key, sizeof(key), value, sizeof(value))
+                       && strcmp(key, "select") == 0) {
+                const char *bases[] = { motif_dir, "./", "data/" };
+                Resolved r;
+
+                resolve(value, bases, 3, &r);
+                if (r.status == RES_OK) {
+                    snprintf(select_path, sizeof(select_path), "%s", r.matched);
+                } else {
+                    fprintf(g_report, "  [Files] select = %s [%s]\n", value,
+                            r.status == RES_MISSING ? "NOT FOUND" : "PATH NEEDS CORRECTION");
+                }
+                break;
+            }
+        }
+        free(content);
     }
 
     printf("=== [select.def] ===\n");
