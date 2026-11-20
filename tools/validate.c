@@ -28,6 +28,9 @@
  *   --out FILE     write the report to FILE instead of validation<TIME>.txt
  *
  * Exit status: 0 everything resolves, 1 problems found, 2 usage error.
+ * With --fix, the exit status reflects what is left after the rewrite: a
+ * case mismatch or a backslash path that was repaired is not a failure, but
+ * a missing file -- or a rewrite that could not be applied -- is.
  *
  * Build: make validate   (or cc -O2 -o validate tools/validate.c)
  */
@@ -451,26 +454,51 @@ static int close_rewrite(FILE *out)
     return fclose(out) == 0 && ok;
 }
 
+/*
+ * Removes a temporary created by open_rewrite.
+ *
+ * open_rewrite gives the temporary the original file's mode, so that the final
+ * rename preserves permissions. When the original is read-only the temporary is
+ * read-only too, and Windows refuses to unlink it -- so a failed rewrite left
+ * .validate-<pid>-<n> files beside the def it could not repair. Making it
+ * writable first is what lets the cleanup finish.
+ */
+static void remove_temp(const char *path)
+{
+    if (path == NULL || path[0] == '\0') return;
+    if (remove(path) == 0) return;
+    (void)chmod(path, 0600);
+    (void)remove(path);
+}
+
 static void finish_rewrite(const char *path, const char *temp, FILE *out, unsigned fixed_before)
 {
     char backup[PATH_MAX + 8], backup_temp[PATH_MAX + 64];
     char *original = NULL;
     size_t size;
     FILE *copy;
+    int have_backup_temp = 0;
+    int have_backup = 0;
 
+    /* Cleared so the fail path knows whether backup_temp names a real file. */
+    backup_temp[0] = '\0';
     if (!close_rewrite(out)) goto fail;
     if (snprintf(backup, sizeof(backup), "%s.bak", path) >= (int)sizeof(backup)) goto fail;
     original = read_file(path, &size);
     if (original == NULL) goto fail;
     copy = open_rewrite(path, backup_temp, sizeof(backup_temp));
     if (copy == NULL) goto fail;
+    have_backup_temp = 1;
     {
         int written = fwrite(original, 1, size, copy) == size;
 
         if (!close_rewrite(copy) || !written || !replace_file(backup_temp, backup)) {
-            remove(backup_temp);
+            remove_temp(backup_temp);
+            have_backup_temp = 0;
             goto fail;
         }
+        have_backup_temp = 0;   /* renamed into place */
+        have_backup = 1;
     }
     if (!replace_file(temp, path)) goto fail;
     fprintf(g_report, "[FIXED] %s (backup %s)\n", path, backup);
@@ -478,8 +506,22 @@ static void finish_rewrite(const char *path, const char *temp, FILE *out, unsign
     return;
 
 fail:
+    /*
+     * Both temporaries have to go, or a failed rewrite leaves .validate-<pid>-<n>
+     * files in the game tree. On a read-only file remove() can itself fail --
+     * that is the condition that got us here -- so this is best effort, but it
+     * covers the ordinary case (a full disk, a permission error on the target
+     * only).
+     */
     free(original);
-    remove(temp);
+    remove_temp(temp);
+    if (have_backup_temp) remove_temp(backup_temp);
+    /*
+     * The original is still in place -- replace_file(temp, path) is what failed
+     * -- so a backup taken in this call is a copy of the file as it stands.
+     * Leaving it would just litter the game tree after a failed repair.
+     */
+    if (have_backup) remove_temp(backup);
     g_count.fixed = fixed_before;
     g_count.missing++;
     fprintf(g_report, "[ERROR] could not rewrite %s\n", path);
@@ -1010,7 +1052,7 @@ static void fix_select(const char *path)
             char work[PATH_MAX * 2];
             char out_line[PATH_MAX * 4];
             char *cols[16];
-            int ncols = 0, k, rewritten = 0;
+            int ncols = 0, k, rewritten = 0, columns_fixed = 0;
             char *c;
             const char *comment;
             size_t used = 0;
@@ -1073,6 +1115,7 @@ static void fix_select(const char *path)
                                 }
                                 snprintf(cell_out, sizeof(cell_out), "%s", full);
                                 rewritten = 1;
+                                columns_fixed++;
                             }
                         }
                     } else {
@@ -1080,6 +1123,7 @@ static void fix_select(const char *path)
                         if (r.status == RES_CASE || r.status == RES_SEP) {
                             relative_to(&r, cell_out, sizeof(cell_out));
                             rewritten = 1;
+                            columns_fixed++;
                         }
                     }
                 }
@@ -1099,7 +1143,7 @@ static void fix_select(const char *path)
                 }
                 if (crlf) fputc('\r', out_file);
                 if (had_nl) fputc('\n', out_file);
-                g_count.fixed++;
+                g_count.fixed += (unsigned)columns_fixed;
                 continue;
             }
         } else if (strcmp(section, "extrastages") == 0) {
@@ -1335,7 +1379,9 @@ static void usage(FILE *out, const char *argv0)
             "  -h, --help     this text\n"
             "  -V, --version  version\n"
             "\n"
-            "Exit status: 0 all paths resolve, 1 problems found, 2 usage error.\n",
+            "Exit status: 0 all paths resolve, 1 problems found, 2 usage error.\n"
+            "With --fix the status counts what is left after the rewrite, so a\n"
+            "repaired path is not a failure; a missing file still is.\n",
             argv0);
 }
 
@@ -1565,19 +1611,49 @@ int main(int argc, char **argv)
     printf("=== [character defs] ===\n");
     if (select_path[0] != '\0') check_character_defs(select_path, motif_dir);
 
-    bad = (int)(g_count.case_mismatch + g_count.backslash + g_count.missing);
-    fprintf(g_report, "\n=== summary ===\n");
-    fprintf(g_report, "  ok         %u\n", g_count.ok);
-    fprintf(g_report, "  case       %u  (on disk with different case)\n", g_count.case_mismatch);
-    fprintf(g_report, "  backslash  %u  (Windows path separators)\n", g_count.backslash);
-    fprintf(g_report, "  missing    %u\n", g_count.missing);
-    if (g_fix) fprintf(g_report, "  fixed      %u  (files rewritten, .bak backups made)\n", g_count.fixed);
-    fclose(g_report);
+    /*
+     * What counts as a problem depends on whether the run repaired anything.
+     *
+     * Without --fix, every finding is a problem: a case mismatch or a backslash
+     * path is a path this filesystem will not resolve, even though it is
+     * fixable.
+     *
+     * With --fix, the case and backslash findings were rewritten, so what
+     * matters is what is left. `fixed` counts values actually substituted, so
+     * `rewritable - fixed` is the part a rewrite could not repair -- a file
+     * that could not be backed up or reopened, say. `missing` is never
+     * fixable: nothing on disk matches it.
+     *
+     * Deriving it from the counters rather than re-scanning keeps one pass, and
+     * still reports a failed rewrite instead of exiting 0 over it.
+     */
+    {
+        unsigned rewritable = g_count.case_mismatch + g_count.backslash;
+        unsigned unfixed = (g_count.fixed >= rewritable) ? 0u : rewritable - g_count.fixed;
 
-    printf("validate: %u ok, %u case, %u backslash, %u missing -> %s\n",
-           g_count.ok, g_count.case_mismatch, g_count.backslash, g_count.missing, report_path);
-    if (g_count.fixed > 0) printf("validate: %u value(s) rewritten.\n", g_count.fixed);
-    if (bad == 0) printf("validate: all asset paths resolve on this filesystem.\n");
-    else if (!g_fix) printf("validate: re-run with --fix to rewrite the def files.\n");
-    return bad == 0 ? 0 : 1;
+        bad = (int)(g_count.missing + unfixed);
+        fprintf(g_report, "\n=== summary ===\n");
+        fprintf(g_report, "  ok         %u\n", g_count.ok);
+        fprintf(g_report, "  case       %u  (on disk with different case)\n", g_count.case_mismatch);
+        fprintf(g_report, "  backslash  %u  (Windows path separators)\n", g_count.backslash);
+        fprintf(g_report, "  missing    %u\n", g_count.missing);
+        if (g_fix) {
+            fprintf(g_report, "  fixed      %u  (files rewritten, .bak backups made)\n", g_count.fixed);
+            if (unfixed > 0) fprintf(g_report, "  unfixed    %u  (detected but not rewritten)\n", unfixed);
+            fprintf(g_report, "  remaining  %d  (what still fails to resolve)\n", bad);
+        }
+        fclose(g_report);
+
+        printf("validate: %u ok, %u case, %u backslash, %u missing -> %s\n",
+               g_count.ok, g_count.case_mismatch, g_count.backslash, g_count.missing, report_path);
+        if (g_count.fixed > 0) printf("validate: %u value(s) rewritten.\n", g_count.fixed);
+        if (bad == 0) {
+            printf("validate: all asset paths resolve on this filesystem.\n");
+        } else if (!g_fix) {
+            printf("validate: re-run with --fix to rewrite the def files.\n");
+        } else {
+            printf("validate: %d path(s) still do not resolve after --fix.\n", bad);
+        }
+        return bad == 0 ? 0 : 1;
+    }
 }
