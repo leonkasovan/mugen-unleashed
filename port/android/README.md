@@ -6,17 +6,12 @@ There is no Android SDL1 API shim or SDL1 library dependency. The desktop
 `android_main.h`, `android_gfx.c` and `android_glstub.c` have been removed.
 
 Current target: **arm64-v8a**, minimum API 21, compile SDK 34, target SDK 29.
-The engine's **System/software renderer** draws CPU pixels; a native SDL2
-window, renderer and streaming texture present them. SDL2 may use GLES
-internally. MUGEN's desktop `OpenGL`/`OpenGLScreen` sprite renderers remain
-unavailable on Android; selecting either logs a fallback to System before
-renderer tables or sprites are initialized.
+The default build uses the **System/software renderer** and presents through
+SDL2. The `--gles` build supports `RenderMode = OpenGL` through GLES 3.0.
+`OpenGLScreen` falls back to System.
 
-The implementation and host tests are complete for the native API boundary.
-**An NDK/APK rebuild and device qualification have not been run for this change.**
-Asset-extraction device recovery tests, audible output, Android graphics/lifecycle,
-performance and additional codecs remain qualification work.
-See [REVIEW.md](REVIEW.md) for evidence and [PLAN.md](PLAN.md) for acceptance gates.
+See [REVIEW.md](REVIEW.md) for the native SDL2 migration evidence and
+[PLAN.md](PLAN.md) for device qualification.
 
 ## Build entry points and layout
 
@@ -143,6 +138,7 @@ SDK. A custom incomplete NDK path is rejected instead of being overwritten.
 | `SDL2_DEPS_DIR` | SDL2 prefix; default `build/android/sdl2/arm64-v8a` |
 | `SDL2_VER` | SDL2 release to build when the prefix is absent; default `2.32.10` |
 | `SDL2_COMPANION_DIR` | Mixer/TTF prefix; default `build/android/android-deps/arm64-v8a` |
+| `FFMPEG_DEPS_DIR` | FFmpeg prefix for `--video-bg`; default `build/android/ffmpeg/arm64-v8a` |
 | `GAME_DATA_DIR` | Game tree to copy; default repository `install/`, which is fetched from the release assets when a clone has none |
 
 The script normalizes its exported SDK roots so Gradle and sdkmanager use the
@@ -240,6 +236,41 @@ port\android\build.bat --download-tools --debug --no-assets
 `--no-assets` really clears the generated asset staging. It does not provide
 game data at runtime: use it only for a previously provisioned data directory
 or diagnostic builds. The first-run extraction/update limitations still apply.
+
+### WebM backgrounds
+
+The Android build follows [ikemen-droid’s per-ABI native-library workflow](https://github.com/satan-1412/ikemen-droid/blob/502b72cd29ca8e926467f867582f0ef9bddadf24/README.md).
+Build the FFmpeg libraries separately, then let the Android Gradle Plugin
+package the four shared libraries imported by CMake into the arm64-v8a APK.
+
+From the repository root on Linux, WSL or macOS, with the host's Android NDK
+and GNU Make available:
+
+```sh
+git submodule update --init third_party/ffmpeg-7.1.5
+export ANDROID_NDK_HOME=/path/to/ndk/27.1.12297006
+sh port/android/tools/build_ffmpeg.sh
+```
+
+The script builds FFmpeg 7.1.5 for API 21 and installs headers and libraries
+under `build/android/ffmpeg/arm64-v8a`. Use that prefix from the Windows checkout
+or set `FFMPEG_DEPS_DIR` to the path where you copied it.
+
+```bat
+set "GAME_DATA_DIR=C:\Projects\mugen-data"
+port\android\build.bat --debug --video-bg
+```
+
+The PowerShell equivalent is `.\port\android\build.ps1 -Debug -VideoBg`.
+Both switches enable GLES. In a direct Gradle invocation, pass
+`-PmugenGles=ON -PmugenVideoBg=ON -PffmpegDepsDir=<prefix>` along with the usual
+SDL2 paths. CMake supplies the FFmpeg binaries to Gradle, so keep the prefix
+outside `app/src/main/jniLibs`.
+
+Use `RenderMode = OpenGL` and place the `.webm` beside the DEF that declares
+`type = video` and its relative `path`. The regular asset manifest includes
+the video when it is in the packaged game tree. Supported video codecs are VP8
+and VP9. Video plays silently and fits the existing render target.
 
 ### The launcher icon
 
