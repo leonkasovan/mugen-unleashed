@@ -372,7 +372,7 @@ int GlTex_Upload2D(int h, int bpp, GlTex *tex, const void *pixels, int w)
 }
 
 /*
- * Scratch buffer for Gl_Premultiply (not in the original; see PLANS.md,
+ * Scratch buffer for premultiplied uploads (see PLANS.md,
  * rendering optimization step 3): the streaming path converts one sprite at a
  * time, so a single buffer that grows as needed replaces a malloc and a free
  * of up to 4 MB per sprite draw. Freed at exit by Glr_FreePremultiply.
@@ -387,7 +387,7 @@ static void Glr_FreePremultiply(void)
     g_premulScratchSize = 0;
 }
 
-/* bytes / 4 RGBA pixels with the colours multiplied by alpha, in the scratch buffer. */
+/* 0x0047A640: premultiply RGBA pixels into reused scratch storage. */
 static unsigned char *Gl_PremultiplyScratch(int bytes, const unsigned char *src)
 {
     unsigned char *dst;
@@ -717,29 +717,6 @@ unsigned int Gl_TexBytes(unsigned int pixels, int format)
         return pixels * 2;
     }
     return pixels;
-}
-
-/* 0x0047A640: a malloc'ed copy of bytes / 4 RGBA pixels with the colours multiplied by alpha. */
-unsigned char *Gl_Premultiply(int bytes, const unsigned char *src)
-{
-    unsigned char *out;
-    unsigned char *dst;
-    int n;
-
-    if (bytes <= 0 || bytes % 4 != 0 || src == NULL) return NULL;
-    out = malloc((size_t)bytes);
-    if (out == NULL) return NULL;
-    dst = out;
-    for (n = bytes / 4; n > 0; n--) {
-        unsigned int a = src[3];
-        dst[0] = (unsigned char)(src[0] * a / 255);
-        dst[1] = (unsigned char)(src[1] * a / 255);
-        dst[2] = (unsigned char)(src[2] * a / 255);
-        dst[3] = (unsigned char)a;
-        src += 4;
-        dst += 4;
-    }
-    return out;
 }
 
 /* ---- set-up ---- */
@@ -2023,7 +2000,7 @@ void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
             if (g_renderMode == RENDER_OPENGL || g_renderMode == RENDER_OPENGL_SCREEN) {
                 Video_SwapBuffers();
             } else {
-                Sdl2_Flip(g_videoSurface);
+                Sdl2_Flip();
             }
         }
         glClearColor(0.0f, 0.0f, 0.0f, 0.0f);

@@ -2,15 +2,18 @@
  * They cannot validate GXM, the runtime shader compiler or displayed pixels. */
 #include <assert.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "perf.h"
 
 #define MUGEN_H /* Supply only the adapter's dependencies, without a Vita SDK. */
 typedef unsigned GLuint;
 typedef unsigned char GLboolean;
 typedef int GLint, SDL_GLattr;
 typedef float GLfloat;
+typedef uint64_t Uint64;
 typedef struct { int w, h; } SDL_Surface;
 typedef struct DrawParams { float top_offset, bottom_offset, width_ratio; } DrawParams;
 enum { GL_FALSE, GL_TRUE, GL_PROJECTION_MATRIX, GL_MODELVIEW_MATRIX,
@@ -23,6 +26,8 @@ static int allocation_failure, invalid_viewport, resolution_fallback, last_vsync
 static int splash_active, clears;
 static int presentation_failure, smoke_failure, game_presents;
 static void glFinish(void) {}
+static Uint64 SDL_GetPerformanceCounter(void) { return 1; }
+void Perf_VitaSpan(int phase, unsigned long long start) { assert(phase == PERF_VITA_SWAP && start == 1); }
 int VitaDiag_CheckPresentation(int w,int h,const char *phase) { (void)w;(void)h;(void)phase;return !presentation_failure; }
 int VitaDiag_StartupSmoke(int w,int h) { (void)w;(void)h;return !smoke_failure; }
 void VitaDiag_GamePresent(int w,int h) { assert(w==640 && h==480);game_presents++; }

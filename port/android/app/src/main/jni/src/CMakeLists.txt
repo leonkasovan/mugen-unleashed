@@ -27,55 +27,21 @@ endif()
 message(STATUS "mugen-unleashed source: ${MUGEN_ROOT}")
 
 # ---------------------------------------------------------------------------
-# Engine sources — every module except the three desktop entry points and the
-# OpenGL loader, which cannot work on Android (no GLEW, and the Android GLES
-# context is not what glrender.c was written against).
-#
-# The default build uses System; the optional GLES renderer is a separate
-# backend. Desktop GL files are never compiled into this platform.
+# Shared engine sources. Android owns the window and entry point, with System
+# by default and an optional GLES renderer. main.c also provides shared
+# engine functions and exposes Mugen_Main on Android.
 # ---------------------------------------------------------------------------
-file(GLOB MUGEN_ENGINE_SOURCES CONFIGURE_DEPENDS "${MUGEN_ROOT}/src/*.c")
-
-# Entry points and platform back ends that must not be compiled here.
-# Excluded: platform_main_win32.c/main.c are the desktop entry points (android_main.c
-# supplies main here), and glrender.c/gldetect.c are the desktop-GL renderer,
-# which cannot exist on Android.
-#
-# M8 GLES backend (RENDERING_PLAN.md section 12, opt-in, default OFF):
-# -DMUGEN_GLES=1 compiles the GLES capability probe (src/gles_probe.c) and
-# the vendored GLES 3.0 loader (third_party/glad-es-3.0) INSTEAD of the
-# desktop GL files. The desktop glrender.c/gldetect.c stay excluded either
-# way: the GLES draw path is a separate backend, not a recompile of the
-# fixed-function desktop renderer (plan section 12.1). Until the GLES/model
-# paths are qualified on device, both remain opt-in. The draw path is implemented;
-# build success is not device qualification.
-#
-# NOT excluded: compat_linux.c. It is the Win32-over-POSIX shim the Linux and
-# PS Vita builds use (FreeLibrary, InterlockedExchangeAdd, FontsDir, ...), and
-# the engine calls those unconditionally.
-# main.c stays in: it holds Screen_IsSpecial, Camera_GetX/Y, Version_Parse and
-# Rng_Seed as well as the entry point; its main() is renamed Mugen_Main for this
-# target (see src/main.c) and android_main.c calls it.
-list(FILTER MUGEN_ENGINE_SOURCES EXCLUDE REGEX ".*/(platform_main_win32|glrender|gldetect|sdl2video)\\.c$")
 option(MUGEN_GLES "Opt-in GLES 3.0 sprite renderer" OFF)
 option(MUGEN_MODEL3D "Opt-in GLES glTF model renderer (device qualification required)" OFF)
 if(MUGEN_MODEL3D AND NOT MUGEN_GLES)
     message(FATAL_ERROR "MUGEN_MODEL3D requires MUGEN_GLES=ON on Android")
 endif()
+file(GLOB MUGEN_ENGINE_SOURCES CONFIGURE_DEPENDS "${MUGEN_ROOT}/src/*.c")
+list(FILTER MUGEN_ENGINE_SOURCES EXCLUDE REGEX ".*/(platform_main_win32|glrender|gldetect|sdl2video)\\.c$")
 if(MUGEN_GLES)
-    list(APPEND MUGEN_ENGINE_SOURCES "${MUGEN_ROOT}/src/gles_probe.c")
-    # MVP/quad CPU math the GLES vertex shader consumes (no fixed-function
-    # matrix stack on GLES). Unit-tested on the host by tools/test_gl_mvp.sh.
-    list(APPEND MUGEN_ENGINE_SOURCES "${MUGEN_ROOT}/src/gl_mvp.c")
-    # GLES program loading + VBO quad submission (thin layer over gl_mvp.c).
-    list(APPEND MUGEN_ENGINE_SOURCES "${MUGEN_ROOT}/src/gles_draw.c")
-    # The renderer itself: GlTex_* over GLES, the ES programs, the sprite path
-    # and the Gfx_Gl* dispatch entries Gfx_SelectRenderer(RENDER_OPENGL) uses.
-    list(APPEND MUGEN_ENGINE_SOURCES "${MUGEN_ROOT}/src/gles_render.c")
     list(APPEND MUGEN_ENGINE_SOURCES "${MUGEN_ROOT}/third_party/glad-es-3.0/glad.c")
 endif()
 
-# Native SDL2 backend; no SDL 1.2 compatibility translation units.
 list(APPEND MUGEN_ENGINE_SOURCES
      "${CMAKE_CURRENT_SOURCE_DIR}/android_video.c"
      "${CMAKE_CURRENT_SOURCE_DIR}/android_main.c"
@@ -149,16 +115,10 @@ endif()
 if(NOT DEFINED sdl2MixerTtfDir OR sdl2MixerTtfDir STREQUAL "")
     message(FATAL_ERROR "Native SDL2_mixer and SDL2_ttf prefix is required (sdl2MixerTtfDir)")
 endif()
-if(DEFINED sdl2MixerTtfDir AND NOT sdl2MixerTtfDir STREQUAL "")
-    list(APPEND ANDROID_INCLUDES "${sdl2MixerTtfDir}/include" "${sdl2MixerTtfDir}/include/SDL2")
-    link_directories("${sdl2MixerTtfDir}/lib")
-    message(STATUS "SDL2_mixer/SDL2_ttf: ${sdl2MixerTtfDir}/lib")
-endif()
+list(APPEND ANDROID_INCLUDES "${sdl2MixerTtfDir}/include" "${sdl2MixerTtfDir}/include/SDL2")
+message(STATUS "SDL2_mixer/SDL2_ttf: ${sdl2MixerTtfDir}/lib")
 
-# glrender.c is excluded above, so the GL loader is not referenced at all.
-# The engine's software renderer is the only draw path on this target.
-
-# SDL2 headers come from the cross-compiled SDL2 staged by build.sh (they are
+# SDL2 headers come from the cross-compiled SDL2 staged by build.bat (they are
 # not in the NDK). Passed as -Psdl2IncludeDir=... by the Gradle invocation.
 if(NOT DEFINED sdl2IncludeDir OR sdl2IncludeDir STREQUAL "")
     if(DEFINED ENV{MUGEN_ANDROID_SDL2_INCLUDE})
@@ -173,7 +133,7 @@ if(DEFINED sdl2IncludeDir AND NOT sdl2IncludeDir STREQUAL "")
 else()
     message(FATAL_ERROR
         "SDL2 include directory not set.\n"
-        "Pass -Dsdl2IncludeDir=<path containing SDL.h> (build.sh sets it).")
+        "Pass -Dsdl2IncludeDir=<path containing SDL.h> (build.bat sets it).")
 endif()
 
 list(APPEND ANDROID_INCLUDES "${MUGEN_ROOT}/src" "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -193,7 +153,6 @@ target_include_directories(main PRIVATE ${ANDROID_INCLUDES})
 target_compile_definitions(main PRIVATE
     ANDROID_PORT=1
     SDL_MAIN_HANDLED
-    MUGEN_ANDROID_SW=1
     LIBRESAMPLE_STATIC=1
     PNG_ARM_NEON_OPT=0
     PNG_ARM_NEON_CHECK_SUPPORTED=0
@@ -231,19 +190,14 @@ target_compile_options(main PRIVATE
 # Why: they are cross-compiled outside this project (Android has no vendored
 # copies), so there is no stable library directory for the linker to search --
 # CMAKE_LIBRARY_PATH is ignored by the NDK toolchain file for this purpose. The
-# paths come from the two variables build.sh passes; the .so files are also
-# copied into jniLibs by build.sh so the APK packages them.
-if(NOT DEFINED sdl2IncludeDir OR sdl2IncludeDir STREQUAL "")
-    message(FATAL_ERROR "sdl2IncludeDir must be set to locate libSDL2.so")
-endif()
+# paths come from the two variables build.bat passes. It also stages the
+# libraries under jniLibs for APK packaging.
 get_filename_component(SDL2_LIBDIR "${sdl2IncludeDir}/../lib" ABSOLUTE)
 
-set(MUGEN_ANDROID_SHARED_LIBS "${SDL2_LIBDIR}/libSDL2.so")
-if(DEFINED sdl2MixerTtfDir AND NOT sdl2MixerTtfDir STREQUAL "")
-    list(APPEND MUGEN_ANDROID_SHARED_LIBS
-         "${sdl2MixerTtfDir}/lib/libSDL2_mixer.so"
-         "${sdl2MixerTtfDir}/lib/libSDL2_ttf.so")
-endif()
+set(MUGEN_ANDROID_SHARED_LIBS
+    "${SDL2_LIBDIR}/libSDL2.so"
+    "${sdl2MixerTtfDir}/lib/libSDL2_mixer.so"
+    "${sdl2MixerTtfDir}/lib/libSDL2_ttf.so")
 foreach(lib ${MUGEN_ANDROID_SHARED_LIBS})
     if(NOT EXISTS "${lib}")
         message(FATAL_ERROR "required shared library not found: ${lib}")

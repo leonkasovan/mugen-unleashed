@@ -10,7 +10,7 @@
  *   (sctrl.h) parsed by the per-type helpers further down;
  * - StateCtrl_Parse reads the triggers, persistent and ignorehitpause of the
  *   group and adds the controller to its statedef;
- * - StateCtrl_Run / StateCtrl_Apply run a controller on a player;
+ * - StateCtrl_Run / StateCtrl_ApplyCtx run a controller on a player;
  * - StateCtrl_Free and the per-type free helpers.
  *
  * Quirks kept from the original:
@@ -266,19 +266,11 @@ static int compile_key_ctx(Ini *ini, const char *key, Expr *e, CharData *owner, 
 {
     return compile_expr_ctx(Ini_GetValue(ini,key),e,owner,want,ctx);
 }
-static __inline int compile_key(Ini *ini, const char *key, Expr *e, CharData *owner, int want)
-{
-    return compile_key_ctx(ini,key,e,owner,want,NULL);
-}
 /* Compiles the value of key into e; 0 when it is missing. */
 static int compile_required_ctx(Ini *ini, const char *key, Expr *e, CharData *owner, int want, ExprCompileCtx *ctx)
 {
     const char *s=Ini_GetValue(ini,key);
     return s!=NULL && compile_expr_ctx(s,e,owner,want,ctx);
-}
-static __inline int compile_required(Ini *ini, const char *key, Expr *e, CharData *owner, int want)
-{
-    return compile_required_ctx(ini,key,e,owner,want,NULL);
 }
 
 /*
@@ -288,12 +280,6 @@ static __inline int compile_required(Ini *ini, const char *key, Expr *e, CharDat
  * (arg[0]). The kind is taken from the case-sensitive first letters while the
  * names match in any case ("Var(1)" reads as a sysfvar).
  */
-static int parse_var_lineCtx(Ini *ini, StateCtrl *sc, CharData *owner, int sys, ExprCompileCtx *ctx);
-static __inline int parse_var_line(Ini *ini, StateCtrl *sc, CharData *owner, int sys)
-{
-    return parse_var_lineCtx(ini, sc, owner, sys, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 static int parse_var_lineCtx(Ini *ini, StateCtrl *sc, CharData *owner, int sys, ExprCompileCtx *ctx)
 {
     const char *s = Ini_FirstLine(ini);
@@ -355,12 +341,6 @@ static int parse_var_lineCtx(Ini *ini, StateCtrl *sc, CharData *owner, int sys, 
  * float value with the index in fv (arg[2] set to 1). Neither v nor fv: the
  * value is not even compiled.
  */
-static int parse_var_valueCtx(Ini *ini, const char *value, StateCtrl *sc, CharData *owner, ExprCompileCtx *ctx);
-static __inline int parse_var_value(Ini *ini, const char *value, StateCtrl *sc, CharData *owner)
-{
-    return parse_var_valueCtx(ini, value, sc, owner, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 static int parse_var_valueCtx(Ini *ini, const char *value, StateCtrl *sc, CharData *owner, ExprCompileCtx *ctx)
 {
     const char *s = Ini_GetValue(ini, "v");
@@ -386,12 +366,6 @@ static int parse_var_valueCtx(Ini *ini, const char *value, StateCtrl *sc, CharDa
 }
 
 /* "x, y" (ParseValues "ff") into two Exprs; a missing value is fine, trailing text is not. */
-static int parse_pairCtx(Ini *ini, const char *key, const char *fmt, Expr *a, Expr *b, CharData *owner, ExprCompileCtx *ctx);
-static __inline int parse_pair(Ini *ini, const char *key, const char *fmt, Expr *a, Expr *b, CharData *owner)
-{
-    return parse_pairCtx(ini, key, fmt, a, b, owner, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 static int parse_pairCtx(Ini *ini, const char *key, const char *fmt, Expr *a, Expr *b, CharData *owner, ExprCompileCtx *ctx)
 {
     const char *s = Ini_GetValue(ini, key);
@@ -402,12 +376,6 @@ static int parse_pairCtx(Ini *ini, const char *key, const char *fmt, Expr *a, Ex
 }
 
 /* "x, y" into two Exprs: a missing value is fine; a value must give at least one Expr and end there. */
-static int parse_pair_checkedCtx(Ini *ini, const char *key, const char *fmt, Expr *a, Expr *b, CharData *owner, ExprCompileCtx *ctx);
-static __inline int parse_pair_checked(Ini *ini, const char *key, const char *fmt, Expr *a, Expr *b, CharData *owner)
-{
-    return parse_pair_checkedCtx(ini, key, fmt, a, b, owner, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 static int parse_pair_checkedCtx(Ini *ini, const char *key, const char *fmt, Expr *a, Expr *b, CharData *owner, ExprCompileCtx *ctx)
 {
     const char *s = Ini_GetValue(ini, key);
@@ -422,13 +390,7 @@ static int parse_pair_checkedCtx(Ini *ini, const char *key, const char *fmt, Exp
     return *end == '\0';
 }
 
-/* As parse_pair_checked, testing the end of the text before the count. */
-static int parse_pair_end_firstCtx(Ini *ini, const char *key, const char *fmt, Expr *a, Expr *b, CharData *owner, ExprCompileCtx *ctx);
-static __inline int parse_pair_end_first(Ini *ini, const char *key, const char *fmt, Expr *a, Expr *b, CharData *owner)
-{
-    return parse_pair_end_firstCtx(ini, key, fmt, a, b, owner, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+/* As parse_pair_checkedCtx, testing the end of the text before the count. */
 static int parse_pair_end_firstCtx(Ini *ini, const char *key, const char *fmt, Expr *a, Expr *b, CharData *owner, ExprCompileCtx *ctx)
 {
     const char *s = Ini_GetValue(ini, key);
@@ -1514,7 +1476,7 @@ static int target_matches(const TargetEntry *e, int id)
 }
 
 /*
- * 0x00448F50: runs a controller of p's states (StateCtrl_Apply), returning its
+ * 0x00448F50: runs a controller of p's states (StateCtrl_ApplyCtx), returning its
  * STATECTRL_* bits. The state, state type, move type and control from before
  * are kept; when a controller of the player's own states changes the state of
  * an active player that used commands this tick, the AI records the move.
@@ -1795,12 +1757,6 @@ static void run_clipboard(Player *p, StateCtrl *sc, ExprEvalCtx *frame)
 }
 
 /* BindToParent / BindToRoot (helpers only). */
-static int run_bindCtx(Player *p, StateCtrl *sc, Player *to, ExprEvalCtx *frame);
-static __inline int run_bind(Player *p, StateCtrl *sc, Player *to)
-{
-    return run_bindCtx(p, sc, to, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 static int run_bindCtx(Player *p, StateCtrl *sc, Player *to, ExprEvalCtx *frame)
 {
     if (p->helper != 1) {
@@ -1834,13 +1790,7 @@ static int run_bindCtx(Player *p, StateCtrl *sc, Player *to, ExprEvalCtx *frame)
     return 0;
 }
 
-/* SuperPause (Pause_Apply for the SuperPause kind, then darken, spark, p2defmul, poweradd, unhittable, sound). */
-static int run_superpauseCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *frame);
-static __inline int run_superpause(Player *p, StateCtrl *sc, StateRunCtx *ctx)
-{
-    return run_superpauseCtx(p, sc, ctx, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
+/* SuperPause (Pause_ApplyCtx for the SuperPause kind, then darken, spark, p2defmul, poweradd, unhittable, sound). */
 static int run_superpauseCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *frame)
 {
     GameVars *g = g_game;
@@ -1909,12 +1859,6 @@ static int run_superpauseCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEva
 }
 
 /* MakeDust: a cloud at pos (ints) every spacing ticks of the round state, and one at pos2 (floats) unless its z is 0. */
-static int run_makedustCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame);
-static __inline int run_makedust(Player *p, StateCtrl *sc)
-{
-    return run_makedustCtx(p, sc, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 static int run_makedustCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame)
 {
     int spacing = Expr_EvalIntCtx(p, &sc->arg[2], 1, frame);
@@ -1946,12 +1890,6 @@ static int run_makedustCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame)
 }
 
 /* GameMakeAnim: a fightfx animation at pos (from the draw position) with a random offset. */
-static int run_gamemakeanimCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame);
-static __inline int run_gamemakeanim(Player *p, StateCtrl *sc)
-{
-    return run_gamemakeanimCtx(p, sc, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 static int run_gamemakeanimCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame)
 {
     GameVars *g = g_game;
@@ -1998,12 +1936,6 @@ static int run_gamemakeanimCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame)
 }
 
 /* RemapPal: source -1 clears every remap (the entry is still added, with source -1,0). */
-static int run_remappalCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame);
-static __inline int run_remappal(Player *p, StateCtrl *sc)
-{
-    return run_remappalCtx(p, sc, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 static int run_remappalCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame)
 {
     PalRemapEntry entry;
@@ -2054,12 +1986,6 @@ static int assert_flag_ctx(Player *p, StateCtrl *sc, int i, ExprEvalCtx *frame)
 }
 
 /* Zoom (mugenversion 1.1). */
-static int run_zoomCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame);
-static __inline int run_zoom(Player *p, StateCtrl *sc)
-{
-    return run_zoomCtx(p, sc, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 static int run_zoomCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame)
 {
     GameVars *g = g_game;
@@ -2080,12 +2006,6 @@ static int run_zoomCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame)
 }
 
 /* BindToTarget: to the first target matching the ID, at its foot (0), mid (1) or head (2) position plus pos. */
-static int run_bindtotargetCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame);
-static __inline int run_bindtotarget(Player *p, StateCtrl *sc)
-{
-    return run_bindtotargetCtx(p, sc, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 static int run_bindtotargetCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame)
 {
     TargetEntry *e = KeyedArray_First(p->targets);
@@ -2139,12 +2059,6 @@ static int run_bindtotargetCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame)
 }
 
 /* The Target* controllers that act on every target matching the ID (TargetBind ... TargetDrop). */
-static int run_targetsCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame);
-static __inline int run_targets(Player *p, StateCtrl *sc)
-{
-    return run_targetsCtx(p, sc, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 static int run_targetsCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame)
 {
     TargetEntry *e;
@@ -2259,12 +2173,6 @@ static int run_targetsCtx(Player *p, StateCtrl *sc, ExprEvalCtx *frame)
 }
 
 /* ChangeState of the partner (an unused tag-in type, 551): state arg[0] for p, arg[1] for the partner. */
-static int run_taginCtx(Player *p, StateCtrl *sc, Player *partner, ExprEvalCtx *frame);
-static __inline int run_tagin(Player *p, StateCtrl *sc, Player *partner)
-{
-    return run_taginCtx(p, sc, partner, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 static int run_taginCtx(Player *p, StateCtrl *sc, Player *partner, ExprEvalCtx *frame)
 {
     int v;
@@ -2294,10 +2202,6 @@ static int run_taginCtx(Player *p, StateCtrl *sc, Player *partner, ExprEvalCtx *
  * STATECTRL_* bits: 5 when the state changed, 2 when the helper destroyed
  * itself, else 0. Unknown types (the parsed "tag", 550) are fatal.
  */
-int StateCtrl_Apply(Player *p, StateCtrl *sc, StateRunCtx *ctx)
-{
-    return StateCtrl_ApplyCtx(p,sc,ctx,NULL);
-}
 int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *frame)
 {
     GameVars *g = g_game;
@@ -2921,11 +2825,6 @@ char *Ini_GetValuePrefixed(const char *key, const char *prefix, Ini *ini)
  * "afterimage." for a projectile). The alpha is read only with a valid
  * trans; an invalid trans leaves -2 and is not an error.
  */
-int AfterImage_ParseParams(AfterImageParams *ai, Ini *ini, CharData *owner, const char *prefix)
-{
-    return AfterImage_ParseParamsCtx(ai, ini, owner, prefix, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 int AfterImage_ParseParamsCtx(AfterImageParams *ai, Ini *ini, CharData *owner, const char *prefix, ExprCompileCtx *ctx)
 {
     char key[0x40];
@@ -3153,11 +3052,6 @@ void AfterImageParams_Free(AfterImageParams *ai)
  * "envshake." / "fall.envshake." for a HitDef). Always succeeds unless an
  * expression is bad.
  */
-int EnvShake_ParseParams(const char *prefix, EnvShakeParams *es, Ini *ini, CharData *owner)
-{
-    return EnvShake_ParseParamsCtx(prefix, es, ini, owner, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 int EnvShake_ParseParamsCtx(const char *prefix, EnvShakeParams *es, Ini *ini, CharData *owner, ExprCompileCtx *ctx)
 {
     char key[0x40];
@@ -3203,11 +3097,6 @@ int EnvShake_ParseParamsCtx(const char *prefix, EnvShakeParams *es, Ini *ini, Ch
  * made positive (with a warning); without a phase, freq 90 or more gives
  * phase 90. dir is never evaluated (0).
  */
-int EnvShake_Apply(EnvShake *out, EnvShakeParams *es, Player *p, StateCtrl *sc)
-{
-    return EnvShake_ApplyCtx(out, es, p, sc, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 int EnvShake_ApplyCtx(EnvShake *out, EnvShakeParams *es, Player *p, StateCtrl *sc, ExprEvalCtx *frame)
 {
     float ampl, freq;
@@ -3247,11 +3136,6 @@ void EnvShakeParams_Free(EnvShakeParams *es)
  * 0x0044D580: the Explod (modify 0) or ModifyExplod (modify 1) parameters.
  * ModifyExplod leaves INT_MIN / -FLT_MAX in the values that are not given.
  */
-int Explod_ParseParams(ExplodParams *ep, Ini *ini, CharData *owner, int modify)
-{
-    return Explod_ParseParamsCtx(ep, ini, owner, modify, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 int Explod_ParseParamsCtx(ExplodParams *ep, Ini *ini, CharData *owner, int modify, ExprCompileCtx *ctx)
 {
     const char *s;
@@ -3478,10 +3362,6 @@ void ExplodParams_Free(ExplodParams *ep)
 }
 
 /* 0x0044DF00: PalFX parameters; hitdef selects the "palfx." names of a HitDef. kind is set by the caller. */
-int PalFx_ParseParams(PalFxParams *pf, Ini *ini, CharData *owner, int hitdef)
-{
-    return PalFx_ParseParamsCtx(pf,ini,owner,hitdef,NULL);
-}
 /* Port addition: reject a missing optional fourth sinadd expression in ZSS.
  * The legacy list reader accepts '1,2,3,'; keep that CNS behavior unchanged. */
 static int palfx_list_complete(const char *s, const char *end, ExprCompileCtx *ctx)
@@ -3606,10 +3486,6 @@ void PalFxParams_Free(PalFxParams *pf)
 }
 
 /* 0x0044E3C0: PlaySnd parameters; the value is required. */
-int PlaySnd_ParseParams(PlaySndParams *ps, Ini *ini, CharData *owner)
-{
-    return PlaySnd_ParseParamsCtx(ps,ini,owner,NULL);
-}
 int PlaySnd_ParseParamsCtx(PlaySndParams *ps, Ini *ini, CharData *owner, ExprCompileCtx *ctx)
 {
     const char *value = Ini_GetValue(ini, "value");
@@ -3755,11 +3631,6 @@ void PlaySndParams_Free(PlaySndParams *ps)
 }
 
 /* 0x0044E8F0: HitOverride parameters (attr stays 0 when not given). */
-int HitOverride_ParseParams(Ini *ini, CharData *owner, HitOverrideParams *ho)
-{
-    return HitOverride_ParseParamsCtx(ini, owner, ho, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 int HitOverride_ParseParamsCtx(Ini *ini, CharData *owner, HitOverrideParams *ho, ExprCompileCtx *ctx)
 {
     const char *s;
@@ -3789,11 +3660,6 @@ int HitOverride_ParseParamsCtx(Ini *ini, CharData *owner, HitOverrideParams *ho,
 }
 
 /* 0x0044EA20: sets HitOverride slot ho (stateno below -1: -1; time below -1: 1). */
-int HitOverride_Apply(HitOverride *ho, Player *p, HitOverrideParams *params, StateCtrl *sc)
-{
-    return HitOverride_ApplyCtx(ho, p, params, sc, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 int HitOverride_ApplyCtx(HitOverride *ho, Player *p, HitOverrideParams *params, StateCtrl *sc, ExprEvalCtx *frame)
 {
     int v;
@@ -3855,12 +3721,6 @@ static int hittype_of(int c)
 }
 
 /* A spark number with an optional S prefix (the character's own sprites). */
-static int parse_sparkCtx(Ini *ini, const char *key, Expr *e, int *own, CharData *owner, ExprCompileCtx *ctx);
-static __inline int parse_spark(Ini *ini, const char *key, Expr *e, int *own, CharData *owner)
-{
-    return parse_sparkCtx(ini, key, e, own, owner, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 static int parse_sparkCtx(Ini *ini, const char *key, Expr *e, int *own, CharData *owner, ExprCompileCtx *ctx)
 {
     const char *s = Ini_GetValue(ini, key);
@@ -3879,12 +3739,6 @@ static int parse_sparkCtx(Ini *ini, const char *key, Expr *e, int *own, CharData
 }
 
 /* Compiles key into e if given, else e becomes a copy of def. */
-static int compile_or_cloneCtx(Ini *ini, const char *key, Expr *e, const Expr *def, CharData *owner, int want, ExprCompileCtx *ctx);
-static __inline int compile_or_clone(Ini *ini, const char *key, Expr *e, const Expr *def, CharData *owner, int want)
-{
-    return compile_or_cloneCtx(ini, key, e, def, owner, want, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 static int compile_or_cloneCtx(Ini *ini, const char *key, Expr *e, const Expr *def, CharData *owner, int want, ExprCompileCtx *ctx)
 {
     const char *s = Ini_GetValue(ini, key);
@@ -3901,11 +3755,6 @@ static int compile_or_cloneCtx(Ini *ini, const char *key, Expr *e, const Expr *d
  * Many defaults are copies of other parameters, so the order matters. An
  * invalid attr fails without a message.
  */
-int HitDef_ParseParams(Ini *ini, HitDefParams *hd, CharData *owner)
-{
-    return HitDef_ParseParamsCtx(ini, hd, owner, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 int HitDef_ParseParamsCtx(Ini *ini, HitDefParams *hd, CharData *owner, ExprCompileCtx *ctx)
 {
     const char *s;
@@ -4378,12 +4227,6 @@ int HitDef_ParseParamsCtx(Ini *ini, HitDefParams *hd, CharData *owner, ExprCompi
 }
 
 /* An int parameter of a HitDef: below min it becomes repl, with the warning msg. */
-static int hd_evalCtx(Player *p, StateCtrl *sc, const Expr *e, int min, int repl, const char *msg, ExprEvalCtx *frame);
-static __inline int hd_eval(Player *p, StateCtrl *sc, const Expr *e, int min, int repl, const char *msg)
-{
-    return hd_evalCtx(p, sc, e, min, repl, msg, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 static int hd_evalCtx(Player *p, StateCtrl *sc, const Expr *e, int min, int repl, const char *msg, ExprEvalCtx *frame)
 {
     int v = Expr_EvalIntCtx(p, e, 1, frame);
@@ -4627,12 +4470,6 @@ void HitDefParams_Free(HitDefParams *hd)
 }
 
 /* A parameter with a single value: present means one value and nothing after it. */
-static int parse_oneCtx(Ini *ini, const char *key, const char *fmt, Expr *e, CharData *owner, ExprCompileCtx *ctx);
-static __inline int parse_one(Ini *ini, const char *key, const char *fmt, Expr *e, CharData *owner)
-{
-    return parse_oneCtx(ini, key, fmt, e, owner, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 static int parse_oneCtx(Ini *ini, const char *key, const char *fmt, Expr *e, CharData *owner, ExprCompileCtx *ctx)
 {
     const char *s = Ini_GetValue(ini, key);
@@ -4652,11 +4489,6 @@ static int proj_bound(double value320, CharData *owner, int scaled)
 }
 
 /* 0x00451370: Projectile parameters, with its HitDef and optional afterimage. */
-int Projectile_ParseParams(ProjectileParams *pp, CharData *owner, Ini *ini)
-{
-    return Projectile_ParseParamsCtx(pp, owner, ini, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 int Projectile_ParseParamsCtx(ProjectileParams *pp, CharData *owner, Ini *ini, ExprCompileCtx *ctx)
 {
     const char *s;
@@ -5047,11 +4879,6 @@ void ProjectileParams_Free(ProjectileParams *pp)
 }
 
 /* 0x00452C70: Helper parameters; the size.* values not given stay INT_MIN / -FLT_MAX. */
-int Helper_ParseParams(HelperParams *hp, Ini *ini, CharData *owner)
-{
-    return Helper_ParseParamsCtx(hp, ini, owner, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 int Helper_ParseParamsCtx(HelperParams *hp, Ini *ini, CharData *owner, ExprCompileCtx *ctx)
 {
     const char *s;
@@ -5179,11 +5006,6 @@ void HelperParams_Free(HelperParams *hp)
 }
 
 /* 0x00453290: Pause parameters. */
-int Pause_ParseParams(PauseParams *pp, Ini *ini, CharData *owner)
-{
-    return Pause_ParseParamsCtx(pp, ini, owner, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 int Pause_ParseParamsCtx(PauseParams *pp, Ini *ini, CharData *owner, ExprCompileCtx *ctx)
 {
     const char *s;
@@ -5216,11 +5038,6 @@ int Pause_ParseParamsCtx(PauseParams *pp, Ini *ini, CharData *owner, ExprCompile
  * movetime (Player.pause_movetime[kind]), pausebg and endcmdbuftime into
  * GameVars.pauses[kind]; illegal values become 0.
  */
-int Pause_Apply(int kind, Player *p, PauseParams *pp, StateCtrl *sc)
-{
-    return Pause_ApplyCtx(kind, p, pp, sc, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 int Pause_ApplyCtx(int kind, Player *p, PauseParams *pp, StateCtrl *sc, ExprEvalCtx *frame)
 {
     int *t = g_game->pauses[kind];
@@ -5255,11 +5072,6 @@ void PauseParams_Free(PauseParams *pp)
 }
 
 /* 0x00453550: SuperPause parameters (the Pause ones first, whatever their result). */
-int SuperPause_ParseParams(Ini *ini, CharData *owner, SuperPauseParams *sp)
-{
-    return SuperPause_ParseParamsCtx(ini, owner, sp, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 int SuperPause_ParseParamsCtx(Ini *ini, CharData *owner, SuperPauseParams *sp, ExprCompileCtx *ctx)
 {
     const char *s;

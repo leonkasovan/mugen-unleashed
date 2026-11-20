@@ -5,6 +5,12 @@
 #include <stdarg.h>
 /* ModelGpu_Ensure: the basic-profile case asserts the upload refuses to rebuild. */
 #include "model_backend.h"
+#ifdef MUGEN_GLES
+#include "gles_render.h"
+
+/* This harness submits models directly with no queued sprites. */
+void GlesBatch_Flush(void) {}
+#endif
 
 /* The probe owns a native SDL2 context rather than an engine display. */
 #undef SDL_GL_SetAttribute

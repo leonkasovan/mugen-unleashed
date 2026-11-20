@@ -46,7 +46,6 @@ port/android/
   tests/CMakeLists.txt              host build of the actual Android engine paths
   tests/test_native_sdl2.c           native SDL2 runtime tests
   tests/test_present_host.c          present/capture host harness
-  tests/test_manifest_hash.c         FNV-1a vectors (not wired into the build)
 ```
 
 ## 1. Toolchain setup
@@ -438,8 +437,9 @@ SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./test_native_sdl2 /path/font.ttf /p
 ```
 
 The Android CMake build checks companion header major versions and scans
-`libmain.so` plus imported SDL libraries for SDL1 `DT_NEEDED` entries. Compile
-errors reject SDL1 function aliases and accidental desktop/Vita backend flags.
+`libmain.so` plus imported SDL libraries for SDL1 `DT_NEEDED` entries.
+`tools/check_sdl2_only.py` checks for legacy SDL includes, calls and aliases in
+the engine and native port sources.
 For release qualification inspect the **whole APK dependency closure**, not
 only the directly imported libraries. A caller-supplied prebuilt must also
 match arm64-v8a/API 21 and the pinned SDL Java/native integration.

@@ -8,7 +8,7 @@
  * labels and the formatted text of DisplayToClipboard/AppendToClipboard.
  */
 
-/* Cns_ParseValues / Cns_ParseArgs format: 'n' any value, 'i' int, 'f' float, then ':' and the accepted terminators. */
+/* Cns_ParseValues / Cns_ParseArgsCtx format: 'n' any value, 'i' int, 'f' float, then ':' and the accepted terminators. */
 
 /* GetHitVar_Lookup indices (Trigger.value of gethitvar). */
 #define GETHITVAR_XVELADD               0

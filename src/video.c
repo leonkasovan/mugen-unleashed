@@ -336,7 +336,7 @@ android_surface_ready:
          * memory that was never presented: the log ran all the way to
          * "Mode select init", the frame loop paced itself correctly, and the
          * panel stayed black. A software surface has ordinary pixels and
-         * Sdl2_UpdateRect (which Gfx_Present already calls) uploads them.
+         * Gfx_Present marks them for the frame-boundary upload.
          */
         sdl_flags = DISPLAY_SOFTWARE;
 #else
@@ -708,7 +708,7 @@ int Video_SetFullscreen(int fullscreen)
     /* Port fix: SDL owns fullscreen on every SDL2 desktop. Mixing native
      * Win32 styles with an SDL exclusive-fullscreen window leaves its flags,
      * saved placement and display mode inconsistent on later switches. */
-    if (!Sdl2_SetFullscreen(g_screenSurface, fullscreen)) {
+    if (!Sdl2_SetFullscreen(fullscreen)) {
         Log_Printf("fullscreen: SDL refused mode %d (%s)\n", fullscreen, SDL_GetError());
         return 0;
     }

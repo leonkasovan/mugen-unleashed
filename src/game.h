@@ -364,7 +364,7 @@ typedef struct GameVars {
     int demo_ticks;                        /* 0x126D4 ticks of the running demo, cleared when one starts */
     int demo_cycles;                       /* 0x126D8 demo fights since the intro storyboard played (Demo_TickFight) */
     int pause_kind;                        /* 0x126DC the pause running: 0 Pause, 1 SuperPause, -1 none */
-    int pauses[2][9];                      /* 0x126E0 [0] Pause, [1] SuperPause (Pause_Apply): [0..4] palette group masks
+    int pauses[2][9];                      /* 0x126E0 [0] Pause, [1] SuperPause (Pause_ApplyCtx): [0..4] palette group masks
                                               darkened, [5] darken, [6] time, [7] pausebg, [8] endcmdbuftime; [6] < [8]:
                                               command timers stop at 2 */
     int round_no;                          /* 0x12728 round number (survival: match number) */

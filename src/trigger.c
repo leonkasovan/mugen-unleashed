@@ -2,17 +2,17 @@
  * CNS triggers: parser, evaluator and the expression stack helpers
  * (original module 0x453810-0x458C2F).
  *
- * Trigger_Parse reads one trigger call for Expr_Parse: an optional
+ * Trigger_ParseCtx reads one trigger call for Expr_Parse: an optional
  * redirection ("parent, ", "helper(ID), "...), the name, the arguments of
  * function triggers (compiled as postfix tokens placed before the trigger
  * token) and, for the few triggers that compare by themselves (command,
  * animelem, statetype, string triggers...), their "= value" part.
- * Trigger_Eval resolves the redirection, pops the arguments from the
+ * Trigger_EvalCtx resolves the redirection, pops the arguments from the
  * evaluation stack and pushes the value; when something is missing it pushes
  * "bottom" (EXPR_BOTTOM).
  *
  * The module ends with the expression stack underflow helper: the code from
- * 0x458C30 on (compile-a-parameter helpers, Cns_ParseArgs, the AssertSpecial
+ * 0x458C30 on (compile-a-parameter helpers, Cns_ParseArgsCtx, the AssertSpecial
  * flag names...) belongs to the next unit, the CNS parse helpers shared with
  * the state controller parser (its string literals follow ours in .rdata).
  *
@@ -27,7 +27,7 @@
  * - ifelse tests its operands' types against 3 and 2 instead of EXPR_BOTTOM and
  *   EXPR_FLOAT: a float condition is tested by its bits, bottom is not propagated.
  * - Redirected life/power read the team leader of the caller when GameType is
- *   not "VS"; pos z of 1.0 characters is 0; Trigger_Parse accepts "z" only for
+ *   not "VS"; pos z of 1.0 characters is 0; Trigger_ParseCtx accepts "z" only for
  *   pre-1.0 characters.
  * - const() and stagevar() accept anything but the end of the string where the
  *   closing parenthesis should be.
@@ -498,10 +498,6 @@ static int read_word(const char *s, int pos, char *out, int cap, int with_dot, i
  */
 static void Trigger_FreeOwned(Trigger *t);
 
-int Trigger_Parse(const char *s, CharData *owner, ExprValue *tokens, char *types, int max, const char **end)
-{
-    return Trigger_ParseCtx(s,owner,tokens,types,max,end,NULL);
-}
 int Trigger_ParseCtx(const char *s, CharData *owner, ExprValue *tokens, char *types, int max, const char **end, ExprCompileCtx *ctx)
 {
     char name[0x100];
@@ -1617,10 +1613,6 @@ static int Trigger_EvalZssNumeric(Player *target, const Trigger *t)
  * popped first). Missing players, out of range indices and math errors push
  * bottom, mostly with a warning.
  */
-void Trigger_Eval(Player *p, const Trigger *t)
-{
-    Trigger_EvalCtx(p,t,NULL);
-}
 void Trigger_EvalCtx(Player *p, const Trigger *t, ExprEvalCtx *ctx)
 {
     GameVars *g;

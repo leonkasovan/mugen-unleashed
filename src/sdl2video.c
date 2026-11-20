@@ -31,12 +31,6 @@
  */
 #include "mugen.h"
 #ifndef ANDROID_PORT
-#include "sdl2keys.h"
-#include "sdl2surface.h"
-
-#include <math.h>
-/* SDL_syswm.h for Sdl2_GetWindowHandle's SDL_GetWindowWMInfo. The engine's own
- * modules include it separately; it has a proper include guard. */
 #ifdef _WIN32
 #include <SDL_syswm.h>
 #endif
@@ -49,20 +43,10 @@ typedef struct Sdl2Video {
     SDL_Surface *surface;       /* what the engine draws into (System) */
     SDL_Surface *placeholder;   /* what the engine sees in GL modes */
     Uint32 texture_format;
-    int texture_w;
-    int texture_h;
-    /*
-     * Size of the storage pair the texture must match -- the surface the
-     * engine actually draws into. Not the window size: after a refused resize
-     * the window has already moved while the old pair survives.
-     */
-    int storage_w;
-    int storage_h;
     int logical_w;
     int logical_h;
     int width;
     int height;
-    int bpp;
     int is_gl;
     int swap_interval;          /* -1 = SDL default, set by Sdl2_SetSwapInterval */
     int vsync_applied;
@@ -71,44 +55,12 @@ typedef struct Sdl2Video {
 
 static Sdl2Video g_sdl2Video;
 
-/*
- * Placeholder lifetime identity (R02).
- *
- * These live outside MUGEN_SDL2_DIAG because the placeholder allocation itself
- * maintains them: the gate then reads them from a test build, but an engine
- * build must still keep the counts correct rather than compiling the
- * bookkeeping away.
- */
+#ifdef MUGEN_SDL2_DIAG
 static int g_sdl2PlaceholderSerial;
 static int g_sdl2PlaceholderLiveSerial;
 static unsigned long g_sdl2PlaceholderAllocs;
 static unsigned long g_sdl2PlaceholderFrees;
 
-#define SDL2_PLACEHOLDER_KNOWN 8
-static const void *g_sdl2PlaceholderAddr[SDL2_PLACEHOLDER_KNOWN];
-static int g_sdl2PlaceholderAddrSerial[SDL2_PLACEHOLDER_KNOWN];
-
-static void Sdl2_DiagNotePlaceholderSerial(const void *surface, int serial)
-{
-    int i;
-
-    for (i = 0; i < SDL2_PLACEHOLDER_KNOWN; i++) {
-        if (g_sdl2PlaceholderAddr[i] == surface) {
-            g_sdl2PlaceholderAddrSerial[i] = serial;
-            return;
-        }
-        if (g_sdl2PlaceholderAddr[i] == NULL) {
-            g_sdl2PlaceholderAddr[i] = surface;
-            g_sdl2PlaceholderAddrSerial[i] = serial;
-            return;
-        }
-    }
-    /* Table full: overwrite slot 0. The tests use a handful of placeholders. */
-    g_sdl2PlaceholderAddr[0] = surface;
-    g_sdl2PlaceholderAddrSerial[0] = serial;
-}
-
-#ifdef MUGEN_SDL2_DIAG
 /*
  * Diagnostic counters for the M0/M3 regression harness (RENDERING_PLAN.md
  * section 4.5): linked only into test builds via -DMUGEN_SDL2_DIAG. They
@@ -129,12 +81,8 @@ static int g_sdl2DiagTextureDestroy;
  * must also fail on a plain build, where freeing early leaves the pointer
  * unchanged and the surface's w/h still readable.
  *
- * So each allocation gets a serial number and every published surface records
- * the serial it was created with. If a surface's serial is no longer the one
- * belonging to its address, or no allocation owns it any more, the surface has
- * been freed and the test says so without needing a sanitizer. A serial (not
- * just the pointer) is what makes an address reuse visible: the second
- * allocation at the same address gets a different, higher serial.
+ * The diagnostic build tracks the live placeholder and its serial so it can
+ * detect address reuse without dereferencing a freed surface.
  */
 
 void Sdl2_DiagReset(void)
@@ -163,15 +111,6 @@ void Sdl2_DiagPlaceholderCounts(unsigned long *allocs, unsigned long *frees)
         *frees = g_sdl2PlaceholderFrees;
     }
 }
-
-/*
- * Serial per placeholder address.
- *
- * Keeping it beside the surface (rather than in it) means the check reads only
- * a table this file owns: a stale surface pointer is never dereferenced, which
- * is what lets the gate work without AddressSanitizer.
- */
-
 
 /* 1 when `surface` is the live placeholder of serial `serial`. */
 int Sdl2_DiagSurfaceIsLive(const void *surface, int serial)
@@ -331,7 +270,7 @@ static int Sdl2_FormatForDepth(int bpp, Uint32 *rmask, Uint32 *gmask, Uint32 *bm
     }
 }
 
-static void Sdl2_DestroyVideo(void)
+static void Sdl2_DestroyRenderer(void)
 {
     if (g_sdl2Video.texture != NULL) {
         SDL_DestroyTexture(g_sdl2Video.texture);
@@ -341,6 +280,11 @@ static void Sdl2_DestroyVideo(void)
         SDL_DestroyRenderer(g_sdl2Video.renderer);
         g_sdl2Video.renderer = NULL;
     }
+}
+
+static void Sdl2_DestroyVideo(void)
+{
+    Sdl2_DestroyRenderer();
     if (g_sdl2Video.gl != NULL) {
         SDL_GL_DeleteContext(g_sdl2Video.gl);
         g_sdl2Video.gl = NULL;
@@ -356,8 +300,10 @@ static void Sdl2_DestroyVideo(void)
     if (g_sdl2Video.placeholder != NULL) {
         SDL_FreeSurface(g_sdl2Video.placeholder);
         g_sdl2Video.placeholder = NULL;
+#ifdef MUGEN_SDL2_DIAG
         g_sdl2PlaceholderFrees++;
         g_sdl2PlaceholderLiveSerial = 0;
+#endif
     }
     g_sdl2Video.texture_format = 0;
     g_sdl2Video.vsync_applied = 0;
@@ -393,63 +339,56 @@ static void Sdl2_ApplySwapInterval(int interval)
 
 /* -------------------------------------------------------------------- video */
 
-/*
- * Creates the renderer and the streaming texture the System backend presents
- * through, if they are not there yet. Split out of Sdl2_SetVideoMode so
- * Sdl2_ResetRenderer() can rebuild them after SDL invalidates the device: the
- * sizes and the pixel format come from the state Sdl2_SetVideoMode already
- * recorded, so no caller has to repeat that arithmetic. Returns 0 on success,
- * -1 when the renderer or the texture cannot be created.
- */
-static int Sdl2_CreateRendererAndTexture(void)
+static int Sdl2_EnsureRenderer(void)
 {
+    if (g_sdl2Video.renderer != NULL) {
+        return 0;
+    }
+    g_sdl2Video.renderer = SDL_CreateRenderer(g_sdl2Video.window, -1, SDL_RENDERER_ACCELERATED);
     if (g_sdl2Video.renderer == NULL) {
-        g_sdl2Video.renderer = SDL_CreateRenderer(g_sdl2Video.window, -1, SDL_RENDERER_ACCELERATED);
-        if (g_sdl2Video.renderer == NULL) {
-            g_sdl2Video.renderer = SDL_CreateRenderer(g_sdl2Video.window, -1, 0);
-        }
-        if (g_sdl2Video.renderer == NULL) {
-            return -1;
-        }
-        /* Logical size: the engine's coordinates stay at the game size whatever
-         * the window does, exactly as SDL 1.2's surface size did. */
-        SDL_RenderSetLogicalSize(g_sdl2Video.renderer, g_sdl2Video.width, g_sdl2Video.height);
-        SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");   /* nearest: pixel art */
-        SDL_RenderSetIntegerScale(g_sdl2Video.renderer, SDL_FALSE);
-        g_sdl2Video.logical_w = g_sdl2Video.width;
-        g_sdl2Video.logical_h = g_sdl2Video.height;
+        g_sdl2Video.renderer = SDL_CreateRenderer(g_sdl2Video.window, -1, 0);
     }
+    if (g_sdl2Video.renderer == NULL) {
+        return -1;
+    }
+    SDL_RenderSetLogicalSize(g_sdl2Video.renderer, g_sdl2Video.width, g_sdl2Video.height);
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");   /* nearest: pixel art */
+    SDL_RenderSetIntegerScale(g_sdl2Video.renderer, SDL_FALSE);
+    g_sdl2Video.logical_w = g_sdl2Video.width;
+    g_sdl2Video.logical_h = g_sdl2Video.height;
+    return 0;
+}
+
+/* Rebuild the streaming texture using the live surface. A failed resize can
+ * change the window size while leaving the existing surface in place. */
+static int Sdl2_RebuildPresentation(void)
+{
+    SDL_Surface *surface = g_sdl2Video.surface;
+
+    if (Sdl2_EnsureRenderer() != 0) {
+        return -1;
+    }
+    if (g_sdl2Video.texture != NULL) {
+        return 0;
+    }
+    if (surface == NULL || g_sdl2Video.texture_format == 0) {
+        return -1;
+    }
+    g_sdl2Video.texture = SDL_CreateTexture(g_sdl2Video.renderer, g_sdl2Video.texture_format,
+                                            SDL_TEXTUREACCESS_STREAMING, surface->w, surface->h);
     if (g_sdl2Video.texture == NULL) {
-        if (g_sdl2Video.texture_format == 0 || g_sdl2Video.storage_w <= 0 ||
-            g_sdl2Video.storage_h <= 0) {
-            return -1;      /* nothing was ever set up to rebuild from */
-        }
-        /*
-         * Fix (port change): the texture is rebuilt at the size of the storage
-         * that survived, not the window's. When a resize failed its allocation
-         * the old surface stayed (say 640x480) while g_sdl2Video.width/height
-         * had already taken the requested 800x600; a device reset then made an
-         * 800x600 texture for a 640x480 surface and the next upload read past
-         * the buffer. So the rebuild size is the pair's, not the window's.
-         */
-        g_sdl2Video.texture = SDL_CreateTexture(g_sdl2Video.renderer, g_sdl2Video.texture_format,
-                                                SDL_TEXTUREACCESS_STREAMING, g_sdl2Video.storage_w,
-                                                g_sdl2Video.storage_h);
-        if (g_sdl2Video.texture == NULL) {
-            return -1;
-        }
-#ifdef MUGEN_SDL2_DIAG
-        g_sdl2DiagTextureCreate++;
-#endif
-        g_sdl2Video.texture_w = g_sdl2Video.storage_w;
-        g_sdl2Video.texture_h = g_sdl2Video.storage_h;
+        return -1;
     }
+#ifdef MUGEN_SDL2_DIAG
+    g_sdl2DiagTextureCreate++;
+#endif
     return 0;
 }
 
 SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
 {
     Uint32 rmask, gmask, bmask, amask, format;
+    Uint32 fullscreen = flags & DISPLAY_FULLSCREEN ? SDL_WINDOW_FULLSCREEN : 0;
     int is_gl = (flags & DISPLAY_OPENGL) ? 1 : 0;
     /* M1 step 2 (plan section 5.2): validate before mutating anything. A
      * minimized/zero-size request must not become a 1x1 game buffer -- the
@@ -517,9 +456,8 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
         }
         g_sdl2Video.width = want_w;
         g_sdl2Video.height = want_h;
-        g_sdl2Video.bpp = bpp;
         g_sdl2Video.is_gl = is_gl;
-    } else if (g_sdl2Video.window != NULL && (width != g_sdl2Video.width || height != g_sdl2Video.height)) {
+    } else if (width != g_sdl2Video.width || height != g_sdl2Video.height) {
         /* M1 step 1 (plan section 5.2): the physical window and the storage
          * buffer are separate sizes. The window follows the OS request
          * immediately; the texture + surface below follow only if their
@@ -543,14 +481,8 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
             return NULL;
         }
     }
-    if (flags & DISPLAY_FULLSCREEN) {
-        if (SDL_GetWindowFlags(g_sdl2Video.window) & SDL_WINDOW_FULLSCREEN) {
-            /* already fullscreen */
-        } else {
-            SDL_SetWindowFullscreen(g_sdl2Video.window, SDL_WINDOW_FULLSCREEN);
-        }
-    } else if (SDL_GetWindowFlags(g_sdl2Video.window) & SDL_WINDOW_FULLSCREEN) {
-        SDL_SetWindowFullscreen(g_sdl2Video.window, 0);
+    if ((SDL_GetWindowFlags(g_sdl2Video.window) & SDL_WINDOW_FULLSCREEN) != fullscreen) {
+        SDL_SetWindowFullscreen(g_sdl2Video.window, fullscreen);
     }
 
     if (is_gl) {
@@ -588,7 +520,7 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
 #endif
         }
         /* The swap-interval request arrives before the context exists, so it is
-         * recorded by Sdl2_GL_SetAttribute and applied here. */
+         * recorded by Sdl2_SetSwapInterval and applied here. */
         if (!g_sdl2Video.vsync_applied && g_sdl2Video.swap_interval >= 0) {
             Sdl2_ApplySwapInterval(g_sdl2Video.swap_interval);
             g_sdl2Video.vsync_applied = 1;
@@ -621,38 +553,24 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
             }
             if (g_sdl2Video.placeholder != NULL) {
                 SDL_FreeSurface(g_sdl2Video.placeholder);
+#ifdef MUGEN_SDL2_DIAG
                 g_sdl2PlaceholderFrees++;
+#endif
             }
             g_sdl2Video.placeholder = new_placeholder;
-            {
-                /* New identity, strictly greater than any before it, so an
-                 * address reused by this allocation cannot look like the old
-                 * surface. */
-                int serial = ++g_sdl2PlaceholderSerial;
-
-                g_sdl2PlaceholderLiveSerial = serial;
-                g_sdl2PlaceholderAllocs++;
-                Sdl2_DiagNotePlaceholderSerial(new_placeholder, serial);
-            }
+#ifdef MUGEN_SDL2_DIAG
+            g_sdl2PlaceholderLiveSerial = ++g_sdl2PlaceholderSerial;
+            g_sdl2PlaceholderAllocs++;
+#endif
         }
         return g_sdl2Video.placeholder;
     }
 
-    if (g_sdl2Video.renderer == NULL) {
-        g_sdl2Video.renderer = SDL_CreateRenderer(g_sdl2Video.window, -1, SDL_RENDERER_ACCELERATED);
-        if (g_sdl2Video.renderer == NULL) {
-            g_sdl2Video.renderer = SDL_CreateRenderer(g_sdl2Video.window, -1, 0);
-        }
-        if (g_sdl2Video.renderer == NULL) {
-            Log_Printf("video: SDL_CreateRenderer failed: %s\n", SDL_GetError());
-            return NULL;
-        }
-        /* Logical size: the engine's coordinates stay at the game size whatever
-         * the window does, exactly as SDL 1.2's surface size did. */
-        SDL_RenderSetLogicalSize(g_sdl2Video.renderer, g_sdl2Video.width, g_sdl2Video.height);
-        SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");   /* nearest: pixel art */
-        SDL_RenderSetIntegerScale(g_sdl2Video.renderer, SDL_FALSE);
-    } else if (g_sdl2Video.logical_w != g_sdl2Video.width || g_sdl2Video.logical_h != g_sdl2Video.height) {
+    if (Sdl2_EnsureRenderer() != 0) {
+        Log_Printf("video: SDL_CreateRenderer failed: %s\n", SDL_GetError());
+        return NULL;
+    }
+    if (g_sdl2Video.logical_w != g_sdl2Video.width || g_sdl2Video.logical_h != g_sdl2Video.height) {
         /* The window changed size, so the logical size has to follow or the
          * new image would be stretched by the old ratio -- with no error. */
         SDL_RenderSetLogicalSize(g_sdl2Video.renderer, g_sdl2Video.width, g_sdl2Video.height);
@@ -661,22 +579,14 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
     g_sdl2Video.logical_h = g_sdl2Video.height;
 
     /*
-     * Texture and surface are replaced as one transaction. A failed resize
-     * must leave the pair consistent: if the texture kept its old size while
-     * the surface was swapped to the new one, Sdl2_Present would upload
-     * surface->pixels with a pitch the surviving texture does not match
-     * (reads past the allocation -- SIGSEGV on stock SDL2), and a later retry
-     * at the same size would see matching texture_w/texture_h metadata and
-     * never rebuild. Build both replacements first; commit both only when
-     * both succeeded, leaving the old pair untouched on any failure.
+     * Commit texture and surface replacements together. A live texture always
+     * matches the surface dimensions. After a failed resize both keep their
+     * old dimensions, so presenting and retrying can use the live surface.
      */
-    int want_texture = (g_sdl2Video.texture == NULL || g_sdl2Video.texture_format != format ||
-                        g_sdl2Video.texture_w != g_sdl2Video.width ||
-                        g_sdl2Video.texture_h != g_sdl2Video.height);
-    int want_surface = (g_sdl2Video.surface == NULL ||
-                        g_sdl2Video.surface->w != g_sdl2Video.width ||
-                        g_sdl2Video.surface->h != g_sdl2Video.height ||
-                        g_sdl2Video.surface->format->BitsPerPixel != bpp);
+    SDL_Surface *surface = g_sdl2Video.surface;
+    int resize = surface == NULL || surface->w != g_sdl2Video.width || surface->h != g_sdl2Video.height;
+    int want_texture = resize || g_sdl2Video.texture == NULL || g_sdl2Video.texture_format != format;
+    int want_surface = resize || surface->format->BitsPerPixel != bpp;
     if (want_texture || want_surface) {
         SDL_Texture *new_texture = g_sdl2Video.texture;
         SDL_Surface *new_surface = g_sdl2Video.surface;
@@ -716,63 +626,20 @@ SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags)
             SDL_SetSurfaceBlendMode(g_sdl2Video.surface, SDL_BLENDMODE_NONE);
         }
     }
-    /*
-     * Record what the pair really is. Only reached after both replacements
-     * succeeded, so this is the storage a later reset must rebuild from --
-     * equal to the window size here, but not after a refused resize.
-     */
-    if (g_sdl2Video.surface != NULL) {
-        g_sdl2Video.storage_w = g_sdl2Video.surface->w;
-        g_sdl2Video.storage_h = g_sdl2Video.surface->h;
-    }
-    g_sdl2Video.texture_w = g_sdl2Video.width;
-    g_sdl2Video.texture_h = g_sdl2Video.height;
     return g_sdl2Video.surface;
 }
 
-/* Uploads the engine's framebuffer into the texture and draws it.
- *
- * M3 frame boundary (RENDERING_PLAN.md section 7): Sdl2_UpdateRect only marks
- * the display dirty; the actual upload + present happens in Sdl2_PresentFrame
- * at the frame boundary (Screen_Present) or in Sdl2_Flip (the PageFlip path).
- * A thousand offscreen pixel updates therefore present nothing, and one
- * composed frame presents exactly once. SDL 1.2 presented in UpdateRect
- * itself; the shim splits the two so the engine's call pattern (UpdateRect
- * per primitive, Flip per page-flipped frame) maps onto one present each. */
-/*
- * Port addition: SDL_RENDER_DEVICE_RESET / SDL_RENDER_TARGETS_RESET mean the
- * renderer's backing store is gone and every texture must be recreated. Android
- * already handles this (Android_ResetRenderer); the desktop SDL2 backend kept
- * using its cached texture and drew into a dead handle.
- *
- * The resources are recreated here rather than dropped for the next
- * Sdl2_Present() to rebuild: Sdl2_Present returns as soon as the renderer or
- * the texture is NULL, so leaving them NULL froze the window until the next
- * video-mode change -- which on a desktop that never changes mode means
- * forever. Rebuilding immediately also keeps the logical size and scaling
- * hints that Sdl2_SetVideoMode installs.
- */
+/* SDL reset events invalidate GPU-side resources. Rebuild them from the live
+ * surface. Presentation retries if the driver cannot rebuild immediately. */
 void Sdl2_ResetRenderer(void)
 {
     if (g_sdl2Video.is_gl) {
         /* The GL renderer owns its context; nothing SDL2-side to rebuild. */
         return;
     }
-    if (g_sdl2Video.texture != NULL) {
-        SDL_DestroyTexture(g_sdl2Video.texture);
-        g_sdl2Video.texture = NULL;
-    }
-    if (g_sdl2Video.renderer != NULL) {
-        SDL_DestroyRenderer(g_sdl2Video.renderer);
-        g_sdl2Video.renderer = NULL;
-    }
-    /* texture_format is deliberately KEPT: it is what the replacement texture
-     * must be created with. Zeroing it here made Sdl2_CreateRendererAndTexture()
-     * bail out and left the window frozen -- the very failure this function
-     * exists to prevent. Only the size markers are invalidated. */
-    g_sdl2Video.texture_w = 0;
-    g_sdl2Video.texture_h = 0;
-    if (Sdl2_CreateRendererAndTexture() != 0) {
+    Sdl2_DestroyRenderer();
+    /* Keep the surface and texture format for the replacement texture. */
+    if (Sdl2_RebuildPresentation() != 0) {
         Log_Printf("video: renderer reset failed: %s\n", SDL_GetError());
     }
 }
@@ -780,9 +647,7 @@ void Sdl2_ResetRenderer(void)
 static void Sdl2_Present(void)
 {
     if (g_sdl2Video.is_gl) {
-        if (g_sdl2Video.window != NULL) {
-            SDL_GL_SwapWindow(g_sdl2Video.window);
-        }
+        Sdl2_GL_SwapBuffers();
         return;
     }
     /*
@@ -792,7 +657,7 @@ static void Sdl2_Present(void)
      * succeeds; the cost of a failed attempt is one SDL call pair.
      */
     if (g_sdl2Video.renderer == NULL || g_sdl2Video.texture == NULL) {
-        if (Sdl2_CreateRendererAndTexture() != 0) {
+        if (Sdl2_RebuildPresentation() != 0) {
             return;
         }
     }
@@ -811,114 +676,68 @@ static void Sdl2_Present(void)
 #endif
 }
 
-void Sdl2_Flip(SDL_Surface *surface)
+void Sdl2_Flip(void)
 {
-    (void)surface;      /* there is exactly one window; the argument is implicit */
     Sdl2_Present();
-    g_sdl2Video.display_dirty = 0;  /* flushed */
+    g_sdl2Video.display_dirty = 0;
 }
 
-/*
- * Marks the display dirty without presenting. Offscreen render-target
- * updates (prim.c pixel primitives) land here hundreds of times per frame;
- * presenting each one doubled the upload work and broke the one-present-per-
- * frame contract. The frame boundary (Sdl2_PresentFrame, called from
- * Screen_Present on SDL2 desktop builds) does the single upload+present.
- *
- * Only the display surface dirties the display: UpdateRect on any other
- * surface is a no-op for presentation (its pixels reach the screen through
- * the framebuffer composition in Gfx_Present, which targets the display).
- */
-void Sdl2_UpdateRect(SDL_Surface *surface, Sint32 x, Sint32 y, Uint32 w, Uint32 h)
+/* Pixel primitives also write to offscreen surfaces. Only updates to the
+ * display surface schedule a frame-boundary upload. */
+void Sdl2_MarkDisplayDirty(SDL_Surface *surface)
 {
-    (void)x;
-    (void)y;
-    (void)w;
-    (void)h;
     if (!g_sdl2Video.is_gl && surface != NULL && surface == g_sdl2Video.surface) {
         g_sdl2Video.display_dirty = 1;
     }
 }
 
-/*
- * Presents the frame if UpdateRect marked the display dirty since the last
- * present. Called once per Screen_Present on SDL2 desktop builds (see
- * frame.c) so Normal and PageFlip both produce exactly one upload+present
- * for the final frame: Normal via UpdateRect-dirty + this flush, PageFlip
- * via Flip (UpdateRect only dirties, Flip presents and clears).
- */
+/* Normal presentation flushes once at frame end. PageFlip presents earlier
+ * and clears the dirty flag. */
 void Sdl2_PresentFrame(void)
 {
-    if (!g_sdl2Video.display_dirty) {
-        return;
-    }
-    Sdl2_Present();
-    g_sdl2Video.display_dirty = 0;
-}
-
-/*
- * Explicit dirty mark for diagnostics that draw outside the frame loop
- * (plan section 7.8): marks the display without presenting, so the next
- * frame-boundary flush shows it. Not used by the engine itself.
- */
-void Sdl2_MarkDisplayDirty(void)
-{
-    if (!g_sdl2Video.is_gl && g_sdl2Video.surface != NULL) {
-        g_sdl2Video.display_dirty = 1;
+    if (g_sdl2Video.display_dirty) {
+        Sdl2_Flip();
     }
 }
 
-/* Test hook: is a present pending? */
+#ifdef MUGEN_SDL2_DIAG
 int Sdl2_DiagIsDirty(void)
 {
     return g_sdl2Video.display_dirty;
 }
+#endif
 
+#ifdef MUGEN_VITA_GL
 int Sdl2_HasWindow(void)
 {
     return g_sdl2Video.window != NULL;
 }
+#endif
 
 void Sdl2_VideoQuit(void)
 {
-
     Sdl2_DestroyVideo();
 }
-/* Note (plan section 5.2 step 10): the engine never calls this on its normal
- * exit path -- cleanup() in platform_main_win32.c calls SDL_Quit() directly, as the
- * original did, and the OS reclaims the display surface. Sdl2_VideoQuit
- * exists for the test harness and for any future explicit teardown; the
- * borrowed g_videoSurface/g_screenSurface aliases must not be dereferenced
- * after either path runs. */
 
-void Sdl2_SetCaption(const char *title, const char *icon)
+void Sdl2_SetWindowTitle(const char *title)
 {
-    (void)icon;
     if (g_sdl2Video.window != NULL && title != NULL) {
         SDL_SetWindowTitle(g_sdl2Video.window, title);
     }
 }
 
 /* Explicit, idempotent SDL2 state transition, shared by Windows and Linux. */
-int Sdl2_SetFullscreen(SDL_Surface *screen, int fullscreen)
+int Sdl2_SetFullscreen(int fullscreen)
 {
-    (void)screen;
     if (g_sdl2Video.window == NULL) {
         SDL_SetError("No SDL2 window for fullscreen transition");
         return 0;
     }
-    if (SDL_SetWindowFullscreen(g_sdl2Video.window, fullscreen ? SDL_WINDOW_FULLSCREEN : 0) != 0) return 0;
-    return 1;
-}
-
-int Sdl2_ToggleFullScreen(SDL_Surface *screen)
-{
-    if (g_sdl2Video.window == NULL) return 0;
-    return Sdl2_SetFullscreen(screen, (SDL_GetWindowFlags(g_sdl2Video.window) & SDL_WINDOW_FULLSCREEN) == 0);
+    return SDL_SetWindowFullscreen(g_sdl2Video.window, fullscreen ? SDL_WINDOW_FULLSCREEN : 0) == 0;
 }
 
 /* Port change: vsync is an SDL2 context property, not a fake SDL_GLattr. */
-int Sdl2_SetSwapInterval(int interval)
+void Sdl2_SetSwapInterval(int interval)
 {
     g_sdl2Video.swap_interval = interval;
     g_sdl2Video.vsync_applied = 0;
@@ -926,7 +745,6 @@ int Sdl2_SetSwapInterval(int interval)
         Sdl2_ApplySwapInterval(interval != 0);
         g_sdl2Video.vsync_applied = 1;
     }
-    return 0;
 }
 
 /* Unlike SDL_GL_SetAttribute, this engine operation also initializes video
@@ -961,9 +779,9 @@ void Sdl2_GLDrawableSize(int *w, int *h)
     }
 }
 
+#ifdef _WIN32
 void *Sdl2_GetWindowHandle(void)
 {
-#ifdef _WIN32
     SDL_SysWMinfo info;
 
     if (g_sdl2Video.window == NULL) {
@@ -974,12 +792,7 @@ void *Sdl2_GetWindowHandle(void)
         return NULL;
     }
     return (void *)info.info.win.window;
-#else
-    return (void *)g_sdl2Video.window;
-#endif
 }
-
-/* -------------------------------------------------------------------- misc */
-
+#endif
 
 #endif /* !ANDROID_PORT */

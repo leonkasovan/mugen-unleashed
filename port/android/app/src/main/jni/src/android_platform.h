@@ -8,13 +8,8 @@
 #if SDL_MAJOR_VERSION != 2
 #error Android requires the native SDL2 headers
 #endif
-#if defined(MUGEN_SDL2) || defined(MUGEN_VITA_GL)
-#error Android must not compile the desktop SDL compatibility layer or the Vita backend
-#endif
-#if defined(Sdl2_SetVideoMode) || defined(Sdl2_Flip) || defined(Sdl2_UpdateRect) || \
-    defined(SDL_GetKeyboardState) || defined(Sdl2_AudioDriverName) || defined(Sdl2_SetCaption) || \
-    defined(SDL_EnableUNICODE) || defined(SDL_EnableKeyRepeat) || defined(SDL_putenv)
-#error SDL 1.2 compatibility aliases must not be active on Android
+#ifdef MUGEN_VITA_GL
+#error Android cannot use the Vita renderer
 #endif
 
 /* Native SDL2 engine operations; no SDL 1.2 aliases, flags or fake types.

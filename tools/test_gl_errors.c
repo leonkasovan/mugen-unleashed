@@ -138,6 +138,7 @@ void Log_Printf(const char *fmt, ...)
     (void)fmt;
 }
 void MatchLog_Printf(int level, const char *fmt, ...) { (void)level; (void)fmt; }
+Uint64 SDLCALL SDL_GetPerformanceCounter(void) { return 0; }
 static GLenum APIENTRY error_get(void) { GLenum e = pending; pending = 0; return e; }
 static void APIENTRY gen(GLsizei n, GLuint *p)
 { while (n--) { gen_calls++; *p++ = gen_calls == fail_gen_at ? 0 : next_id++; } }

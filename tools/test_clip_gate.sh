@@ -78,10 +78,10 @@ build_and_run() {
 build_and_run desktop -DCLIP_GATE_EXPECT_GL
 
 # Android without the GLES backend: there is no GL renderer to notify.
-build_and_run android -DANDROID_PORT -DMUGEN_ANDROID_SW
+build_and_run android -DANDROID_PORT
 
 # Android with GLES: the configuration the title-screen regression ran in.
-build_and_run android-gles -DANDROID_PORT -DMUGEN_ANDROID_SW -DMUGEN_GLES -DCLIP_GATE_EXPECT_GL
+build_and_run android-gles -DANDROID_PORT -DMUGEN_GLES -DCLIP_GATE_EXPECT_GL
 
 if [ "$fails" -ne 0 ]; then
     echo "clip-gate: $fails FAILURES"

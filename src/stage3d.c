@@ -542,6 +542,7 @@ static void Stage3D_DrawLayers(int layer, const Stage3D *s3, const float *proj, 
     BatchProf_ModelLayerEnd();
 }
 
+#ifdef MUGEN_VITA_GL
 /*
  * Whether the draws Stage3D_DrawLayers would issue for `layer` blend against
  * the destination. The (scene, model layer, default layer) triples are the ones
@@ -559,6 +560,7 @@ static int Stage3D_LayerBlendsDestination(const Stage3D *s3, int layer)
     }
     return 0;
 }
+#endif
 
 /* Draws the model's part of stage background layer `layer` (0 back, 1 front), from Bg_Draw. */
 void Stage3D_Draw(int layer)

@@ -10,18 +10,27 @@
 #include <limits.h>
 #include <stdint.h>
 
+/* Match png_malloc_ptr and png_free_ptr in the headers for each port. */
+#ifdef PNGCBAPI
+#define MUGEN_PNG_CALLBACK PNGCBAPI
+typedef png_alloc_size_t PngAllocSize;
+#else
+#define MUGEN_PNG_CALLBACK
+typedef png_size_t PngAllocSize;
+#endif
+
 /*
  * Count libpng's transient decode allocations in the engine heap too, so the
  * PNG SFF decoders are visible in the counter rather than silently using the
  * raw CRT.
  */
-static PNGCBAPI png_voidp Png_MemAlloc(png_structp png, png_alloc_size_t size)
+static png_voidp MUGEN_PNG_CALLBACK Png_MemAlloc(png_structp png, PngAllocSize size)
 {
     (void)png;
     return Memprof_Malloc((size_t)size);
 }
 
-static PNGCBAPI void Png_MemFree(png_structp png, png_voidp ptr)
+static void MUGEN_PNG_CALLBACK Png_MemFree(png_structp png, png_voidp ptr)
 {
     (void)png;
     Memprof_Free(ptr);

@@ -77,7 +77,9 @@ void Perf_CountDraw(unsigned int triangles);
 /* Port fix: assembled triangles for a GL primitive mode and element count.
  * Lines/points contribute draw calls but no triangles. Degenerate triangles
  * are included: this measures submitted work, not visible pixels. */
+#if !defined(ANDROID_PORT) || defined(MUGEN_GLES)
 unsigned int Perf_TriangleCount(unsigned int mode, unsigned int count);
+#endif
 
 /* Means over the last whole second, and starts a new one. 0 when the samples
  * are incomplete or too few to be worth printing. */

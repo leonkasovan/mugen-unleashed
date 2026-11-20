@@ -26,9 +26,6 @@
 /* 1 when the renderer has a context and its programs are linked. */
 int Gles_IsReady(void);
 
-/* Capability bits the last probe resolved (GLES_CAP_* in gles_probe.h). */
-unsigned int Gles_LastCaps(void);
-
 /*
  * Called after the client context has gone away, before it is deleted.
  *

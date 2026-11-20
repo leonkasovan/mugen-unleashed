@@ -386,10 +386,11 @@ static uintptr_t Memprof_ModuleBase(void)
      * PIC source flags do not determine whether the executable is PIE.
      * Read e_type from its in-memory ELF header, valid on both ELF32 and
      * ELF64 (offset 16). ET_DYN=3 needs a load bias; ET_EXEC=2 does not.
-     * This also handles an -fPIC -no-pie executable correctly.
+     * __ehdr_start is also available when the engine is linked as an ELF
+     * shared library, as it is on Android.
      */
-    extern const unsigned char __executable_start[];
-    const unsigned char *image = __executable_start;
+    extern const unsigned char __ehdr_start[];
+    const unsigned char *image = __ehdr_start;
     uint16_t elf_type;
 
     if (image[0] != 0x7f || image[1] != 'E' ||

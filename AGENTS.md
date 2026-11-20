@@ -56,7 +56,7 @@ src/            83 .c + 52 .h — the engine, one file per original module
   sdl2surface.c shared SDL2 scaler, proven against SDL_gfx by test_zoomdiff
   mugen.rc      error dialog (200), version info, icon 101 from res/icons
 third_party/    Lua 5.1.4, libpng 1.2.38, glad 2.1, minizip 0.15, sdk,
-                libresample, glew-1.5.4 (reference only, no longer built), vitagl,
+                libresample, vitagl,
                 cgltf-1.14 and stb (upstream desktop 3D model support)
 port/*/cmake/   platform-only CMake helpers; no root MSVC build
 build.bat       installs the two Windows devkits + dependency trees, then builds
@@ -647,11 +647,9 @@ The Android port has a host suite under `port/android/tests/`: its own
 CMakeLists compiles `src/` except the Windows entry point, the desktop GL
 renderer and the desktop SDL2 video backend, plus Lua/libpng/libresample/
 minizip and the Android platform files other than `android_main.c`, and runs
-`test_native_sdl2` under ctest. It needs a Linux host with native
-SDL2/SDL2_mixer/SDL2_ttf (commands in `docs/BUILD-ANDROID.md`); on Windows it
-does not compile, because `src/perf.c` includes `GLES2/gl2.h` and neither devkit
-ships GLES headers. `tests/test_manifest_hash.c` is in that directory but
-nothing builds or runs it. The Vita port has `port/psvita/validation/`.
+`test_native_sdl2` under ctest. It uses Linux with native
+SDL2/SDL2_mixer/SDL2_ttf (commands in `docs/BUILD-ANDROID.md`). The Vita port
+has `port/psvita/validation/`.
 Those cover pieces the desktop build cannot reach.
 
 **2. Log comparison — does it behave like the original?**

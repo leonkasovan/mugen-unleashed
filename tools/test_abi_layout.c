@@ -15,8 +15,7 @@
 #include <stdio.h>
 #include <stddef.h>
 
-/* Full engine header: needs SDL headers (SDL 1.2 on the 32-bit kit, SDL2
- * on the 64-bit kit) plus glad/minizip/lua includes like any engine unit. */
+/* Uses the SDL2, glad, minizip and Lua declarations from the engine build. */
 #include "mugen.h"
 
 #ifdef main

@@ -155,7 +155,7 @@ int Title_Init(ScreenLoop *screen, TitleState *st)
                 "non-commercial use only.\nPlease read the license in readme.txt before using this software.\n",
                 sizeof(st->text) - 1 - len);
     }
-#if defined(MUGEN_VITA_GL) || defined(MUGEN_ANDROID_SW)
+#if defined(MUGEN_VITA_GL) || defined(ANDROID_PORT)
     /*
      * PS Vita port (port/psvita): size the info box to the screen.
      *

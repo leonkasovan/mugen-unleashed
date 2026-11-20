@@ -467,32 +467,6 @@ endif
 ICON_DIR  := $(BUILD)/icon
 # TARGET is set per platform in the detection block above.
 
-# The static SDL stack comes from the x86devkit through pkg-config, which also
-# pulls each library's own static dependencies (freetype, bz2, ogg, vorbis,
-# FLAC, opus, wavpack, gme, mpg123, zlib, pthread, stdc++ ...). Asking
-# pkg-config for --libs --static is what makes this link close: hand-listing
-# -lSDL2_mixer -lSDL2_ttf would miss transitive codec archives.
-# SDL_image is deliberately absent: the engine loads PNG itself (src/pngio.c
-# via <png.h> in mugen.h) and never calls IMG_*, so nothing needs it. It was
-# only ever there because SDL_image.pc happens to list libpng16, which used to
-# collide with the vendored libpng 1.2.38. zlib and libpng16 are now asked for
-# directly instead of arriving as someone else's transitive dependency.
-STATIC_PKGS := sdl2 SDL2_mixer SDL2_ttf zlib libpng16
-# -mwindows is stripped from the pkg-config output and added once at the end of
-# the link line rather than repeated per package.
-#
-# Note: the resulting exe still exports the SDL/Mixer/TTF function names. That
-# comes from .drectve sections inside libSDL.a asking for them, and a command
-# line --exclude-all-symbols does not override a .drectve. Only library names
-# are exported, never engine symbols, so it is harmless; removing them would
-# mean rebuilding SDL without its export directives.
-PKG_LIBS    := $(filter-out -mwindows,$(shell $(PKG_CONFIG) --libs --static $(STATIC_PKGS) 2>/dev/null))
-PKG_CFLAGS  := $(shell $(PKG_CONFIG) --cflags $(STATIC_PKGS) 2>/dev/null)
-SDK_LIB_DIR ?= $(shell $(PKG_CONFIG) --variable=libdir $(firstword $(STATIC_PKGS)) 2>/dev/null)
-
-# Required static SDL2 archives. Codecs are pulled in by SDL2_mixer metadata.
-CHECK_LIBS := SDL2 SDL2_mixer SDL2_ttf z mpg123
-
 # ------------------------------------------------------------- compile flags
 
 # The engine was reconstructed from a 32-bit MSVC 2008 binary that runs the
@@ -555,10 +529,6 @@ ifeq ($(MUGEN_FAMILY),win32)
     PLAT_CPPFLAGS := -I$(SDK_DIR)/include
   endif
   LINK_MODE   := -mwindows
-  STATIC_PKGS := sdl2 SDL2_mixer SDL2_ttf zlib libpng16
-  PKG_LIBS    := $(filter-out -mwindows,$(shell $(PKG_CONFIG) --libs --static $(STATIC_PKGS) 2>/dev/null))
-  PKG_CFLAGS  := $(shell $(PKG_CONFIG) --cflags $(STATIC_PKGS) 2>/dev/null)
-  SDL_CFLAGS  :=
   FORCE_INCLUDE :=
   PLAT_LDFLAGS  :=
 else
@@ -570,21 +540,6 @@ else
   endif
   ENGINE_DEFS := -D_CRT_SECURE_NO_WARNINGS $(LRS_DEFS)
   LINK_MODE   :=
-  # No --static on Linux: the distro's shared SDL is the normal thing to link
-  # against, and SDL_mixer.so already carries its own codec dependencies.
-  STATIC_PKGS := sdl2 SDL2_mixer SDL2_ttf zlib libpng
-  # Cross-compiling (CROSS_COMPILE=... XSYSROOT=...): the sd2 branch below
-  # replaces STATIC_PKGS/PKG_LIBS anyway, and MUGEN_CROSS_STATIC decides
-  # --static. Here the only difference is that -lGL/-lGLU (which a GLES cross
-  # target has none of) are added below only when MUGEN_CROSS is unset.
-  ifneq ($(strip $(MUGEN_CROSS_SYSROOT)),)
-    PKG_LIBS  := $(shell $(PKG_CONFIG) --libs --static $(STATIC_PKGS) 2>/dev/null)
-  else
-    PKG_LIBS  := $(shell $(PKG_CONFIG) --libs $(STATIC_PKGS) 2>/dev/null) -lGL -lGLU -ldl -lm
-  endif
-  PKG_CFLAGS  := $(shell $(PKG_CONFIG) --cflags $(STATIC_PKGS) 2>/dev/null)
-  # SDL 1.2 headers live in /usr/include/SDL for the distro package.
-  SDL_CFLAGS  := $(shell $(PKG_CONFIG) --cflags sdl2 2>/dev/null)
   SYS_LIBS    := -lpthread
   # The reference Win32 pthread/zlib headers must not be on this path.
   PLAT_CPPFLAGS :=
@@ -619,33 +574,26 @@ else
 endif
 
 # --- SDL2 dependencies ------------------------------------------------------
-# Keep the engine's entry point; SDL2main would add a conflicting WinMain.
-  ifeq ($(MUGEN_FAMILY),win32)
-    STATIC_PKGS := sdl2 SDL2_mixer SDL2_ttf zlib libpng16
-    PKG_LIBS    := $(filter-out -mwindows -lSDL2main,$(shell $(PKG_CONFIG) --libs --static $(STATIC_PKGS) 2>/dev/null))
-  else
-    STATIC_PKGS := sdl2 SDL2_mixer SDL2_ttf zlib libpng
-    # GLES targets link no desktop GL: the Mali/EGL stack has no GLX, and
-    # -lGL here is what made the failure look like a missing driver instead of
-    # a wrong backend (PROBLEMS.md P1). EGL comes in through SDL2 itself.
-    #
-    # A cross build asks pkg-config for the static close (--static), because
-    # the dependency tree holds archives: there is no target sysroot at run
-    # time to resolve shared objects from, and SDL2's own link line
-    # (-pthread -lm) has to be carried along. A GLES cross target still has no
-    # -lGL: the tree ships no desktop GL at all.
-    ifeq ($(MUGEN_GLES),1)
-      PKG_LIBS := $(shell $(PKG_CONFIG) --libs $(MUGEN_CROSS_STATIC) $(STATIC_PKGS) 2>/dev/null) -ldl -lm
-    else
-      PKG_LIBS := $(shell $(PKG_CONFIG) --libs $(MUGEN_CROSS_STATIC) $(STATIC_PKGS) 2>/dev/null) -lGL -lGLU -ldl -lm
-    endif
-  endif
-  PKG_CFLAGS := $(filter-out -Dmain=SDL_main,$(shell $(PKG_CONFIG) --cflags $(STATIC_PKGS) 2>/dev/null))
-  SDL_CFLAGS := $(shell $(PKG_CONFIG) --cflags sdl2 2>/dev/null)
-  # SDL_MAIN_HANDLED: told before <SDL.h>, so SDL2 leaves main() alone. The
-  # engine keeps its own entry points (src/platform_main_win32.c on Windows, src/main.c on
-  # Linux) exactly as the SDL 1.2 build does.
-  ENGINE_DEFS += -DSDL_MAIN_HANDLED
+# pkg-config resolves the codec and font dependencies of the static kits.
+# The engine loads PNG through libpng directly.
+SDL2_PKGS := sdl2 SDL2_mixer SDL2_ttf
+ifeq ($(MUGEN_FAMILY),win32)
+  STATIC_PKGS := $(SDL2_PKGS) zlib libpng16
+  # The engine owns WinMain and adds -mwindows via LINK_MODE.
+  PKG_LIBS := $(filter-out -mwindows -lSDL2main,$(shell $(PKG_CONFIG) --libs --static $(STATIC_PKGS) 2>/dev/null))
+  SDK_LIB_DIR ?= $(shell $(PKG_CONFIG) --variable=libdir $(firstword $(STATIC_PKGS)) 2>/dev/null)
+  CHECK_LIBS := SDL2 SDL2_mixer SDL2_ttf z mpg123
+else
+  STATIC_PKGS := $(SDL2_PKGS) zlib libpng
+  # On GLES targets SDL2 loads EGL. Only the desktop renderer links GL/GLU.
+  PKG_LIBS := $(shell $(PKG_CONFIG) --libs $(MUGEN_CROSS_STATIC) $(STATIC_PKGS) 2>/dev/null) $(if $(filter 1,$(MUGEN_GLES)),,-lGL -lGLU) -ldl -lm
+endif
+PKG_CFLAGS := $(filter-out -Dmain=SDL_main,$(shell $(PKG_CONFIG) --cflags $(STATIC_PKGS) 2>/dev/null))
+ifeq ($(origin PKG_CFLAGS),command line)
+  # Retain SDL2's header path for callers overriding the other package flags.
+  SDL_CFLAGS ?= $(filter-out -Dmain=SDL_main,$(shell $(PKG_CONFIG) --cflags sdl2 2>/dev/null))
+endif
+ENGINE_DEFS += -DSDL_MAIN_HANDLED
 
 # --- GLES backend selection -------------------------------------------------
 #
@@ -1296,9 +1244,8 @@ check-pkgconfig:
 # distro's shared libraries, so on that target there is nothing to look for and
 # the target says so rather than reporting SDL archives as "missing".
 #
-# The archive names follow the SDL backend and the pointer width: SDL 1.2 is
-# libSDL.a, SDL2 is libSDL2.a, and a 64-bit kit may keep them under a different
-# libdir. The names are checked exactly so a half-installed kit fails here.
+# Check the SDL2 archive names in the selected kit's libdir so a half-installed
+# kit fails here.
 check-libs:
 ifneq ($(MUGEN_FAMILY),win32)
 	@echo "check-libs: Windows static build only; $(MUGEN_TARGET) links shared libraries"
