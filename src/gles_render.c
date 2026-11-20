@@ -1251,15 +1251,22 @@ static int gles_build_programs(void)
     }
     if (gles_sprite_option("MUGEN_SPRITEATLAS", g_spriteAtlasDefault)) {
         /*
-         * A usable atlas program needs every entry point *and* a resolved
-         * u_mvp. glGetUniformLocation returns -1 on failure, so the test is
-         * >= 0; the original wrote < 0, which demanded a failed lookup before
-         * the atlas counted as enabled -- it could never link on a driver that
-         * worked, so MUGEN_SPRITEATLAS always logged "unavailable".
+         * u_mvp < 0 is EXPECTED here, not a failure. Compiled with SPRITE_ATLAS
+         * (see the defines in gles_load_es_program), indexed.vert takes its
+         * transform from the a_instance_mvp attribute and puts u_mvp inside the
+         * #else, so the atlas program has no u_mvp uniform and
+         * glGetUniformLocation returns -1 for it.
+         *
+         * The real validation is in GlesDraw_LoadProgram (gles_draw.c), which
+         * accepts a program with no MVP only when a_instance_mvp and
+         * a_atlas_rect are bound to the expected attribute slots and texsize
+         * resolved. Testing u_mvp >= 0 here instead would reject the shipped
+         * atlas shader and accept a pre-atlas shader that has u_mvp but no
+         * per-instance inputs.
          */
         if (glDrawArraysInstanced != NULL && glVertexAttribDivisor != NULL &&
             gles_load_es_program(&g_glesProgramAtlas, "indexed", 1) &&
-            g_glesProgramAtlas.u_mvp >= 0) {
+            g_glesProgramAtlas.u_mvp < 0) {
             Log_Printf("\nGLES: indexed sprite atlas enabled\n");
         } else {
             GlesDraw_FreeProgram(&g_glesProgramAtlas);
