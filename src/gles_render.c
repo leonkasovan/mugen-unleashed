@@ -2013,10 +2013,31 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
     if (!(0.0f < c1)) {
         c1 = 1.0f;
     }
+    /*
+     * Decide atlas eligibility before the modelview, because it changes one of
+     * its terms.
+     *
+     * g_glPalOffset is the probed half-texel shift that puts a standalone
+     * paletted sprite's texels on pixel centres under GL_NEAREST: the shader
+     * samples the sprite's own texture at the interpolated uv and relies on the
+     * geometry being nudged. The atlas shader instead computes the texel itself
+     * and reads page_uv = (rect.xy + texel + 0.5) / texsize, i.e. it already
+     * targets texel centres. Applying the half-texel nudge on top double-counts
+     * it, and the sprite lands one pixel off -- measured as the atlas frame
+     * matching the standalone frame at dy = +1 for 98% of pixels.
+     *
+     * Only the paletted offset is affected: a true-colour sprite never takes
+     * the atlas path, so rgba_offset_* stay as they are.
+     */
+    if (paletted && !special) {
+        tex = gles_atlas_texture(set, sprite, spr, atlas_rect);
+        atlased = tex != NULL;
+    }
+
     /* Modelview: the same terms, in the same order, as Gl_DrawSprite. */
     memset(&mv, 0, sizeof(mv));
-    mv.paletted = paletted;
-    mv.pal_offset = g_glPalOffset;
+    mv.paletted = paletted && !atlased;
+    mv.pal_offset = atlased ? 0.0f : g_glPalOffset;
     mv.rgba_offset_x = g_glRgbaOffsetX;
     mv.rgba_offset_y = g_glRgbaOffsetY;
     mv.x = dp->x;
@@ -2103,11 +2124,6 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
         if (culled != 0) {
             return;
         }
-    }
-    tex = NULL;
-    if (paletted && !special) {
-        tex = gles_atlas_texture(set, sprite, spr, atlas_rect);
-        atlased = tex != NULL;
     }
     if (!atlased && spr->format == SPRITE_FORMAT_TEXTURE) tex = spr->pixels;
     if (tex != NULL && tex->id == 0) {
