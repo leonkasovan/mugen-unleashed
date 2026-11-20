@@ -28,6 +28,11 @@ typedef struct SpriteSet SpriteSet;
 /* 1 when the renderer has a context and its programs are linked. */
 int Gles_IsReady(void);
 
+/* Port addition: [Video] defaults for the next GLES initialization.
+ * Atlas is 0/1, and batch is 0/1 or -1 to follow atlas availability.
+ * MUGEN_SPRITEATLAS and MUGEN_SPRITEBATCH override the configured values. */
+void Gles_ConfigureSprites(int atlas, int batch);
+
 /*
  * Called after the client context has gone away, before it is deleted.
  *

@@ -220,11 +220,8 @@ closure when doing a real build.
 
 ## 3. Build and install
 
-Prepare a copy of the game tree with `[Video] RenderMode=System`. The current
-native config path does not reliably reject unsupported GL modes, and the build
-script does not rewrite the cfg. Do not change game dimensions to work around
-the known forced-Vita-panel bug; fix the native policy as described in PLAN.md.
-Reference `install/` data is copied, not modified by the build script.
+The default APK uses the System renderer. Build with `--gles` for OpenGL.
+The build stages a copy of the game data and the Android config overlay.
 
 ```sh
 port\android\build.bat --check-tools
@@ -236,6 +233,32 @@ port\android\build.bat --download-tools --debug --no-assets
 `--no-assets` really clears the generated asset staging. It does not provide
 game data at runtime: use it only for a previously provisioned data directory
 or diagnostic builds. The first-run extraction/update limitations still apply.
+
+### GLES sprite atlas and batching
+
+Build the Android GLES APK with `port\android\build.bat --gles`. In the
+installed game's `data/mugen.cfg`, set these keys in the existing `[Video]`
+section and restart the app.
+
+```ini
+[Video]
+RenderMode = OpenGL
+SpriteAtlas = 1
+SpriteBatch = 1
+```
+
+The config is under `Android/data/org.mugen_unleashed.mugen/files/mugen/` on
+app-specific external storage. For a fresh install, the same settings can be
+staged using `GAME_CFG`. APK updates preserve an existing edited `mugen.cfg`.
+
+`SpriteAtlas` packs eligible indexed SFF sprites into shared textures.
+`SpriteBatch` combines compatible consecutive atlas draws while preserving
+draw order. The atlas is off by default, and omitting `SpriteBatch` (or setting
+it to `-1`) enables batching only when the atlas program is available. To
+compare against the original GLES path, set both keys to `0` and run the same
+scene at the same resolution. With `[Debug] ShowFPS = 1`, compare `calls` and
+`draw` in the `perf:` lines of `mugen.log`. When both settings take effect, look for
+`GLES: indexed sprite atlas enabled` and `GLES: sprite batching enabled`.
 
 ### WebM backgrounds
 
@@ -355,8 +378,8 @@ SDLActivity's `SDL_main` entry. The upstream B6 changes are retained: sibling
 preservation of user-edited `data/mugen.cfg`. Storage failures, interrupted
 upgrades and user-data recovery still need device tests; see [REVIEW.md](REVIEW.md).
 
-Use `RenderMode = System`. Android preserves the configured game resolution
-(default 640x480), rather than requesting the Vita's 960x544 panel. `KeepAspect`
+The software renderer uses `RenderMode = System`. Android preserves the
+configured game resolution. `KeepAspect`
 uses SDL2 logical sizing/letterboxing; disabling it fills the physical output.
 The System rasterizer expects RGB565 and tightly packed rows. Android display
 creation rejects unsupported depths and incompatible pitch instead of uploading

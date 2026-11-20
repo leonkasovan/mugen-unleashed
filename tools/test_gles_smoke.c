@@ -48,6 +48,33 @@ static void APIENTRY count_instances(GLenum mode, GLint first, GLsizei count, GL
     draw_instanced(mode, first, count, instances);
 }
 
+static void check_sprite_modes(void)
+{
+    assert(unsetenv("MUGEN_SPRITEATLAS") == 0);
+    assert(unsetenv("MUGEN_SPRITEBATCH") == 0);
+    assert(Gl_Init(1));
+    assert(g_glesProgramAtlas.program == 0 && !g_batch_enabled);
+    assert(Gl_Deinit());
+
+    Gles_ConfigureSprites(1, 0);
+    assert(Gl_Init(1));
+    assert(g_glesProgramAtlas.program != 0 && !g_batch_enabled);
+    assert(Gl_Deinit());
+
+    Gles_ConfigureSprites(0, 1);
+    assert(Gl_Init(1));
+    assert(g_glesProgramAtlas.program == 0 && g_batch_enabled);
+    assert(Gl_Deinit());
+
+    assert(setenv("MUGEN_SPRITEATLAS", "1", 1) == 0);
+    assert(setenv("MUGEN_SPRITEBATCH", "0", 1) == 0);
+    assert(Gl_Init(1));
+    assert(g_glesProgramAtlas.program != 0 && !g_batch_enabled);
+    assert(Gl_Deinit());
+    assert(unsetenv("MUGEN_SPRITEATLAS") == 0);
+    assert(unsetenv("MUGEN_SPRITEBATCH") == 0);
+}
+
 static void atlas_fixture(SpriteSet *set, GlTex *palette, GlTex *standalone[2],
                           GlTex *page, float *regions, int atlas)
 {
@@ -143,6 +170,7 @@ static void check_atlas(void)
     assert(Gl_Deinit());
     assert(g_atlasResidentPages == 0 && page->id == 0);
     assert(Gles_OnContextRestore(640, 480));
+    assert(g_glesProgramAtlas.program != 0 && g_batch_enabled);
     assert(Gl_SetupView());
     assert(gles_atlas_texture(&set, 0, &sprites[0], rects) == page);
     assert(gles_atlas_texture(&set, 1, &sprites[1], rects + 4) == page);
@@ -199,8 +227,11 @@ int main(void)
     printf("abi: %u-bit build\n",(unsigned)(sizeof(void *)*8));
     g_videoWidth=g_targetWidth=640;g_videoHeight=g_targetHeight=480;
     g_videoDepth=g_targetBpp=32;g_renderMode=RENDER_MODE_GL;
+    check_sprite_modes();
     for (pass=0;pass<2;pass++) {
+        Gles_ConfigureSprites(1, pass == 0 ? -1 : 1);
         assert(Gl_Init(1));
+        assert(g_batch_enabled);
         check_atlas();
         tex=GlVbuf_Alloc(32,640,480);assert(tex);
         spr.w=640;spr.h=480;spr.bpp=32;spr.format=SPRITE_FORMAT_TEXTURE;spr.pixels=tex;

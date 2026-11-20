@@ -60,14 +60,23 @@
  * texture and view entry points test it before the renderer proper. */
 static int g_glesReady;
 static int g_batch_count;
+static int g_batch_enabled;
 static int g_atlasResidentPages;
 static GlesProgram g_glesProgramAtlas;
+static int g_spriteAtlasDefault;
+static int g_spriteBatchDefault = -1;
 
-static int gles_atlas_requested(void)
+void Gles_ConfigureSprites(int atlas, int batch)
 {
-    const char *value = getenv("MUGEN_SPRITEATLAS");
+    g_spriteAtlasDefault = atlas == 1;
+    g_spriteBatchDefault = (batch == 0 || batch == 1) ? batch : -1;
+}
 
-    return value != NULL && strcmp(value, "1") == 0;
+static int gles_sprite_option(const char *env, int fallback)
+{
+    const char *value = getenv(env);
+
+    return value != NULL ? strcmp(value, "1") == 0 : fallback;
 }
 
 static GlMvp g_glesProjection;
@@ -1240,7 +1249,7 @@ static int gles_build_programs(void)
         gles_free_programs();
         return 0;
     }
-    if (gles_atlas_requested()) {
+    if (gles_sprite_option("MUGEN_SPRITEATLAS", g_spriteAtlasDefault)) {
         if (glDrawArraysInstanced != NULL && glVertexAttribDivisor != NULL &&
             gles_load_es_program(&g_glesProgramAtlas, "indexed", 1) &&
             g_glesProgramAtlas.u_mvp < 0) {
@@ -1250,6 +1259,11 @@ static int gles_build_programs(void)
             Log_Printf("\nGLES: indexed sprite atlas unavailable; using standalone sprites\n");
         }
     }
+    /* Automatic batching follows a usable atlas program, including after a
+     * context restore. Resolve once here instead of during each sprite draw. */
+    g_batch_enabled = gles_sprite_option("MUGEN_SPRITEBATCH",
+        g_spriteBatchDefault < 0 ? g_glesProgramAtlas.program != 0 : g_spriteBatchDefault);
+    if (g_batch_enabled) Log_Printf("\nGLES: sprite batching enabled\n");
     glEnable(GL_BLEND);
     glBlendEquation(GL_FUNC_ADD);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -1729,21 +1743,8 @@ typedef struct GlesSpriteCall {
 } GlesSpriteCall;
 
 static GlesSpriteCall g_batch[GLES_BATCH_MAX];
-static int g_batch_enabled = -2;    /* -2 unread, -1 use renderer default */
 /* Re-entrancy guard: the replay calls Gl_ApplyClipRect, which itself flushes. */
 static int g_batch_flushing;
-
-static int gles_batch_enabled(void)
-{
-    if (g_batch_enabled == -2) {
-        const char *v = getenv("MUGEN_SPRITEBATCH");
-
-        /* The experimental atlas uses the FIFO by default. The legacy
-         * renderer remains immediate unless explicitly enabled. */
-        g_batch_enabled = v != NULL ? strcmp(v, "1") == 0 : -1;
-    }
-    return g_batch_enabled >= 0 ? g_batch_enabled : g_glesProgramAtlas.program != 0;
-}
 
 static int gles_atlas_can_join(const GlesSpriteCall *first, const GlesSpriteCall *next)
 {
@@ -2237,7 +2238,7 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
 
     fx = PalFx_GetApplied();
     prog = atlased ? &g_glesProgramAtlas : (paletted ? &g_glesProgramIndexed : &g_glesProgramRgba);
-    defer = gles_batch_enabled();
+    defer = g_batch_enabled;
 
     /*
      * Blend state. The factors come from GlesBlend_ResolveOp (src/gles_blend.h),

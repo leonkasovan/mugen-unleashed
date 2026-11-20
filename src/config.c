@@ -6,6 +6,7 @@
  */
 #include "mugen.h"
 #include "configmerge.h"
+#include "gles_render.h"
 #include "render_policy.h"
 #include "soundcache.h"
 #include "selectupdate.h"
@@ -441,6 +442,16 @@ int Config_Load(void)
     Ini_GetInt(ini, "keepaspect", &g_game->keep_aspect);
     Ini_GetInt(ini, "filterindexed", &g_game->filter_indexed);
     Ini_GetInt(ini, "fullscreen", &g_game->fullscreen);
+#ifdef MUGEN_GLES
+    /* Port addition: runtime opt-in also works for APK launches. */
+    {
+        int atlas, batch;
+
+        Ini_GetIntDef(ini, "SpriteAtlas", &atlas, 0);
+        Ini_GetIntDef(ini, "SpriteBatch", &batch, -1);
+        Gles_ConfigureSprites(atlas, batch);
+    }
+#endif
     /* mugen-unleashed: shadows of the lights of 3D stages, as Ikemen GO's option (model.c) */
     Ini_GetInt(ini, "enablemodelshadow", &g_modelShadows);
     /*
