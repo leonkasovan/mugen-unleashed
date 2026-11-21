@@ -69,6 +69,7 @@ res/shaders/    project-owned shader dialects: gles/ (staged as data/gles by the
                 shaders are the game installation's own data/*.{vert,frag}
 tools/          extract_icon.py, iconpack.py, compare_logs.py,
                 validate.c (asset-path checker, `make validate`),
+                sffcli.c (standalone SFF inspector/exporter/optimizer, `make sffcli`),
                 test_*.sh                     (make_win_sysroot.sh was removed
                                               with the MSYS2 entry points)
 port/           android/, psvita/ and arm64/ — the platform ports, each with a
@@ -634,6 +635,32 @@ This replaced an earlier `res/validate.lua`: the engine has no way to run a
 script (only `data/init.lua` is loaded, and the console's `lexec` takes one
 line), and its Lua build has no `io.popen`. A C tool needs no Lua, no engine and
 no display, and runs on a build box.
+
+**0b. Inspecting SFF archives with `make sffcli`**
+
+`tools/sffcli.c` is a standalone C11 program for Windows and Linux. It follows
+the engine's `Sff_Load` behavior for SFF 1.01, 2.00 and 2.01. It builds without
+engine headers, SDL, or image libraries. `make sffcli` writes
+`build/<target>/sffcli[.exe]`. You can also compile it directly with
+`cc -std=c11 -O2 tools/sffcli.c -o build/tmp/sffcli` after creating
+`build/tmp/` (use `sffcli.exe` on Windows).
+
+```sh
+make sffcli
+mkdir -p build/tmp
+cp install/chars/kfm/kfm.sff build/tmp/kfm.sff
+./build/mingw-sdl2/sffcli
+./build/mingw-sdl2/sffcli build/tmp/kfm.sff
+./build/mingw-sdl2/sffcli --export build/tmp/kfm.sff
+./build/mingw-sdl2/sffcli --optimize build/tmp/kfm.sff
+```
+
+Export creates `build/tmp/kfm/` and writes one RGBA PNG per sprite. Optimize
+creates `build/tmp/opt.kfm.sff` as SFF 2.01. It tries RLE8 on indexed images,
+chooses the smallest payload, and links identical palettes while keeping their
+IDs and slots. Both commands require a new destination. Converting an SFF 1.01
+character carries over its embedded palettes. External ACT palettes and
+character definitions are handled separately.
 
 **1. Differential tests — does the port match the original?**
 

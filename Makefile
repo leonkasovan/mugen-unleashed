@@ -35,6 +35,7 @@
 #   make check-toolchain   verify the compiler and the libraries this target needs
 #   make validate     build tools/validate, the asset-path checker (see below);
 #                     it has its own section with the cross-compile line
+#   make sffcli       build the standalone SFF inspector, PNG exporter and optimizer
 #
 # The window icon comes from res/icons/*.ico (see "the window icon" below).
 #
@@ -511,9 +512,17 @@ CHECK_LIBS := SDL2 SDL2_mixer SDL2_ttf z mpg123
 # -Wno-stringop-truncation: the reconstruction copies into fixed-size fields
 # with strncpy/strncat exactly as the original did (the original relies on the
 # zero-filled struct, not on NUL termination).
+#
+# -Wno-format-truncation: the same reason one level up. Where the original
+# built a path or an error message with sprintf into a fixed buffer that the
+# longest possible input cannot fit, the reconstruction uses snprintf and
+# truncates, because the original's behaviour there is a stack or .data overrun
+# (see the "Port fix" notes in src/select.c and src/storyboard.c). This warning
+# fires on exactly those deliberate truncations; -Wformat-overflow, which fires
+# on the unbounded sprintf, is still enabled and must stay clean.
 
 ENGINE_WARN := -Wall -Wno-unused-parameter -Wno-unused-result \
-               -Wno-stringop-truncation
+               -Wno-stringop-truncation -Wno-format-truncation
 
 ifeq ($(DEBUG),1)
   OPT     := -O0 -g3
@@ -828,7 +837,7 @@ endif
 # --------------------------------------------------------------------- rules
 
 .PHONY: all clean distclean check-toolchain check-libs check-pkgconfig help install perf \
-        validate validate-run check-memprof-buckets check-explods-count
+        validate validate-run sffcli check-memprof-buckets check-explods-count
 .DELETE_ON_ERROR:
 
 # check-pkgconfig runs first so a missing .pc file is reported as such instead
@@ -1151,6 +1160,17 @@ validate-run: $(VALIDATE_BIN)
 
 .PHONY: validate validate-run
 
+# --- Standalone SFF inspection, PNG export and repacking ----------------------
+SFFCLI_BIN := $(BUILD)/sffcli$(if $(filter win32,$(MUGEN_FAMILY)),.exe)
+
+$(SFFCLI_BIN): tools/sffcli.c Makefile
+	@echo "  CC      $@"
+	$(Q)mkdir -p "$(dir $@)"
+	$(Q)$(CC) $(ARCHFLAGS) -std=c11 $(OPT) -Wall -Wextra $(SFFCLI_CFLAGS_EXTRA) -o "$@" "$<"
+
+sffcli: $(SFFCLI_BIN)
+.PHONY: sffcli
+
 # --- memprof side-table benchmark -------------------------------------------
 # Times src/memprof.c's pointer side table at several bucket counts, using
 # tools/test_memprof_buckets.c. Read its header first: the interesting metric is
@@ -1270,7 +1290,7 @@ endif
 # --- housekeeping -----------------------------------------------------------
 
 clean:
-	rm -rf $(OBJ_DIR) $(LIB_DIR) $(ICON_DIR) $(TARGET) $(STRIPPED)
+	rm -rf $(OBJ_DIR) $(LIB_DIR) $(ICON_DIR) $(TARGET) $(STRIPPED) $(SFFCLI_BIN)
 
 distclean:
 	rm -rf $(BUILD)
