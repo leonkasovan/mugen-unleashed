@@ -481,7 +481,10 @@ int Select_LoadDef(void)
         if (is_zip) {
             if (zip[0] != '/' && zip[0] != '\\' && !(zip[0] != '\0' && zip[1] == ':')) {
                 strncpy(tmp, zip, 0x1FF);
-                sprintf(zip, "chars/%s", tmp);
+                /* Port fix: snprintf, not sprintf. "chars/" plus a 511-byte
+                 * name does not fit the 512-byte buffer, and the original's
+                 * sprintf smashes the stack there. Truncated instead. */
+                snprintf(zip, sizeof(zip), "chars/%s", tmp);
             }
             strncpy(file, name, 0x1FF);
             zs = Mem_Calloc(1, sizeof(Stream));
@@ -518,15 +521,20 @@ int Select_LoadDef(void)
                 goto failed;
             }
         } else {
+            /* Port fix: snprintf for the same reason as the zip path above;
+             * a name that does not fit is truncated, not overflowed. */
             if (dir[0] == '\0') {
-                sprintf(dir, "chars/%s/", name);
+                snprintf(dir, sizeof(dir), "chars/%s/", name);
                 strncpy(file, name, 0x1FF);
             } else if (dir[0] != '/' && dir[0] != '\\' && dir[1] != ':') {
                 strncpy(tmp, dir, 0x1FF);
-                sprintf(dir, "chars/%s", tmp);
+                snprintf(dir, sizeof(dir), "chars/%s", tmp);
             }
             if (strlen(file) <= 4 || _stricmp(file + strlen(file) - 4, ".def") != 0) {
-                strcat(file, ".def");
+                /* Port fix: append within the buffer. A full 511-byte name
+                 * leaves no room for ".def"; the original's strcat overflows. */
+                size_t used = strlen(file);
+                snprintf(file + used, sizeof(file) - used, ".def");
             }
             Path_Join(file, dir, tmp);
             def = Select_OpenIni(tmp);
@@ -626,7 +634,7 @@ int Select_LoadDef(void)
         cell->char_index = g_game->char_count;
         if (ci->pal_mask == 0) {
             for (k = 0; k < SELECT_PAL_COUNT; k++) {
-                sprintf(word, "pal%i", k + 1);
+                snprintf(word, sizeof(word), "pal%i", k + 1);
                 if (Ini_GetValue(def, word) != NULL) {
                     ci->pal_mask |= 1u << k;
                 }
@@ -642,23 +650,9 @@ int Select_LoadDef(void)
         memcpy(select, sprite_select, sizeof(select));
         cell->sprites = NULL;
         if (!is_zip) {
-            FILE *fp = fopen(sprite_path, "rb");
-            if (fp != NULL) {
-                SpriteSet *set = NULL;
-                Stream *s;
-                fclose(fp);
-                g_bufferedRead = 0;
-                s = Stream_OpenFile(sprite_path, "rb");
-                if (s != NULL) {
-                    set = Sff_LoadSelected(s, select);
-                    Stream_Close(s);
-                }
-                cell->sprites = set;
-                g_bufferedRead = g_game->buffered_read;
-            }
+            cell->sprites = Sff_LoadSelectedFile(sprite_path, select);
         } else {
-            Stream_ZipLoad(zs, tmp);
-            cell->sprites = Sff_LoadSelected(zs, select);
+            cell->sprites = Sff_LoadZipMember(zs, tmp, select);
         }
         Ini_Free(def);
         goto next;
@@ -1515,7 +1509,7 @@ int Charsel_Draw(ScreenLoop *screen, CharselState *st)
     g = g_game;
     if (st->stage_select_shown && g->skip_draw == 0) {
         if (st->stage == -1) {
-            sprintf(text, "Stage: Random");
+            snprintf(text, sizeof(text), "Stage: Random");
         } else {
             /* Port fix: even a valid stage name can exceed the display buffer. */
             snprintf(text, sizeof(text), "Stage %i: %s", st->stage + 1, g->select_screen[st->stage].name);
@@ -2106,36 +2100,36 @@ int Select_LoadLayout(Ini *ini)
         info->cell_random_switchtime = 1;
     }
     for (p = 1; p <= 2; p++) {
-        sprintf(key, "p%i.cursor.active", p);
+        snprintf(key, sizeof(key), "p%i.cursor.active", p);
         SysElem_Read(&info->cursor_active[p - 1], key, ini);
-        sprintf(key, "p%i.cursor.done", p);
+        snprintf(key, sizeof(key), "p%i.cursor.done", p);
         SysElem_Read(&info->cursor_done[p - 1], key, ini);
     }
     for (p = 1; p <= 2; p++) {
         FaceLayout *f = &info->faces[p - 1];
-        sprintf(key, "p%i.face", p);
+        snprintf(key, sizeof(key), "p%i.face", p);
         SysElem_Read(&f->face, key, ini);
         if (f->face.type == SYSELEM_NONE) {
             f->face.scale_y = 1.0f;
             f->face.scale_x = 1.0f;
             f->face.facing = p == 1 ? 1 : -1;
-            sprintf(key, "p%i.face.offset", p);
+            snprintf(key, sizeof(key), "p%i.face.offset", p);
             f->face.group = 9000;
             f->face.number = 1;
             f->face.type = SYSELEM_SPRITE;
             Ini_Scanf(ini, key, "%f,%f", &f->face.x, &f->face.y);
-            sprintf(key, "p%i.face.scale", p);
+            snprintf(key, sizeof(key), "p%i.face.scale", p);
             Ini_Scanf(ini, key, "%f,%f", &f->face.scale_x, &f->face.scale_y);
-            sprintf(key, "p%i.face.facing", p);
+            snprintf(key, sizeof(key), "p%i.face.facing", p);
             Ini_Scanf(ini, key, "%i", &f->face.facing);
         }
         f->name_spacing[0] = 0;
         f->name_spacing[1] = 14;
-        sprintf(key, "p%i.name.offset", p);
+        snprintf(key, sizeof(key), "p%i.name.offset", p);
         Ini_Scanf(ini, key, "%i,%i", &f->name_offset[0], &f->name_offset[1]);
-        sprintf(key, "p%i.name.font", p);
+        snprintf(key, sizeof(key), "p%i.name.font", p);
         FontSpec_Read(&f->name_font, ini, key);
-        sprintf(key, "p%i.name.spacing", p);
+        snprintf(key, sizeof(key), "p%i.name.spacing", p);
         Ini_Scanf(ini, key, "%i,%i", &f->name_spacing[0], &f->name_spacing[1]);
     }
     Ini_Scanf(ini, "stage.pos", "%i,%i", &info->stage_pos[0], &info->stage_pos[1]);
@@ -2145,37 +2139,37 @@ int Select_LoadLayout(Ini *ini)
     Select_ReadInt(ini, "teammenu.move.wrapping", &info->teammenu_wrapping);
     for (p = 1; p <= 2; p++) {
         TeamMenuLayout *t = &info->teammenu[p - 1];
-        sprintf(key, "p%i.teammenu.pos", p);
+        snprintf(key, sizeof(key), "p%i.teammenu.pos", p);
         Ini_Scanf(ini, key, "%i,%i", &t->pos_x, &t->pos_y);
-        sprintf(key, "p%i.teammenu.bg", p);
+        snprintf(key, sizeof(key), "p%i.teammenu.bg", p);
         SysElem_Read(&t->bg, key, ini);
-        sprintf(key, "p%i.teammenu.selftitle", p);
+        snprintf(key, sizeof(key), "p%i.teammenu.selftitle", p);
         SysElem_Read(&t->self_title, key, ini);
-        sprintf(key, "p%i.teammenu.enemytitle", p);
+        snprintf(key, sizeof(key), "p%i.teammenu.enemytitle", p);
         SysElem_Read(&t->enemy_title, key, ini);
-        sprintf(key, "p%i.teammenu.move.snd", p);
+        snprintf(key, sizeof(key), "p%i.teammenu.move.snd", p);
         Select_ReadSnd(ini, key, &t->move_snd[0], &t->move_snd[1]);
-        sprintf(key, "p%i.teammenu.value.snd", p);
+        snprintf(key, sizeof(key), "p%i.teammenu.value.snd", p);
         Select_ReadSnd(ini, key, &t->value_snd[0], &t->value_snd[1]);
-        sprintf(key, "p%i.teammenu.done.snd", p);
+        snprintf(key, sizeof(key), "p%i.teammenu.done.snd", p);
         Select_ReadSnd(ini, key, &t->done_snd[0], &t->done_snd[1]);
-        sprintf(key, "p%i.teammenu.item.font", p);
+        snprintf(key, sizeof(key), "p%i.teammenu.item.font", p);
         FontSpec_Read(&t->item_font, ini, key);
-        sprintf(key, "p%i.teammenu.item.active.font", p);
+        snprintf(key, sizeof(key), "p%i.teammenu.item.active.font", p);
         FontSpec_Read(&t->item_active_font[0], ini, key);
-        sprintf(key, "p%i.teammenu.item.active2.font", p);
+        snprintf(key, sizeof(key), "p%i.teammenu.item.active2.font", p);
         FontSpec_Read(&t->item_active_font[1], ini, key);
-        sprintf(key, "p%i.teammenu.item.offset", p);
+        snprintf(key, sizeof(key), "p%i.teammenu.item.offset", p);
         Ini_Scanf(ini, key, "%i,%i", &t->item_offset[0], &t->item_offset[1]);
-        sprintf(key, "p%i.teammenu.item.spacing", p);
+        snprintf(key, sizeof(key), "p%i.teammenu.item.spacing", p);
         Ini_Scanf(ini, key, "%i,%i", &t->item_spacing[0], &t->item_spacing[1]);
-        sprintf(key, "p%i.teammenu.item.cursor", p);
+        snprintf(key, sizeof(key), "p%i.teammenu.item.cursor", p);
         SysElem_Read(&t->item_cursor, key, ini);
-        sprintf(key, "p%i.teammenu.value.icon", p);
+        snprintf(key, sizeof(key), "p%i.teammenu.value.icon", p);
         SysElem_Read(&t->value_icon, key, ini);
-        sprintf(key, "p%i.teammenu.value.empty.icon", p);
+        snprintf(key, sizeof(key), "p%i.teammenu.value.empty.icon", p);
         SysElem_Read(&t->value_empty_icon, key, ini);
-        sprintf(key, "p%i.teammenu.value.spacing", p);
+        snprintf(key, sizeof(key), "p%i.teammenu.value.spacing", p);
         Ini_Scanf(ini, key, "%i,%i", &t->value_spacing[0], &t->value_spacing[1]);
     }
     SysElem_Read(&info->sysexplod0, "sysexplod0", ini);
