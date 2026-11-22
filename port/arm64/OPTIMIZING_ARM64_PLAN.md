@@ -81,6 +81,162 @@ overlay. Plain SFFs produced nearly identical stage, fighter, effects, and HUD
 counts in the four-run check; the seven-slot queue accounts for the reduction,
 whether its texture is a v3 page or an ordinary sprite.
 
+## FPS overlay and streamed textures
+
+The RG351MP's `font/f-4x6.sff` packs all 95 glyphs onto one 678 × 10
+indexed page. The engine loads the sibling `font/atlas.f-4x6.sff` when
+present. Generate it with `sffcli --atlas font/f-4x6.sff`. The 95 exported
+PNGs matched byte for byte on the device.
+
+With batching on, ShowFPS enabled, and the same seeded match, four short
+instrumented runs gave the following averages per rendered frame. The overlay
+column excludes the separate screen blit.
+
+| FPS font | Streamed texture slots | Frames | Overlay draws | Total draws | Stream cache misses |
+|---|---:|---:|---:|---:|---:|
+| Original | 8 | 147 | 9.09 | 23.37 | 11.69 |
+| Original | 32 | 156 | 2.51 | 14.96 | 1.56 |
+| Original | 64 | 158 | 2.25 | 14.54 | 0.80 |
+| One atlas page | 8 | 157 | 1.00 | 14.17 | 1.89 |
+
+Use 32 cache slots as a compromise for installations with ordinary bitmap
+fonts. It captured most of the measured draw savings from increasing the cache.
+For another workload, sweep slot counts with the same scenario and measure both
+misses and resident texture bytes. Choose the smallest count that keeps uploads
+within the frame budget. A cache slot holds a streamed texture across frames,
+while the seven texture pairs limit one instanced draw.
+
+## ARM64 presentation timing
+
+Two counterbalanced 25-second pairs with the same match seed reproduced the
+FPS regression. The stage and font fixes reduced GPU submissions from 29.81
+to 13.21 per rendered frame. CPU draw time fell from 8.41 to 5.45 ms and
+presentation work outside the buffer swap fell from 7.37 to 2.34 ms. Time
+inside the swap rose from 12.49 to 21.94 ms. Rendered FPS fell from 14.32
+to 13.82 while the game still advanced at about 60 ticks per second.
+
+The device uses SDL 2.30.10 with KMSDRM. SDL reported interval 1 for both
+requests even though both setter calls succeeded. A request for VSync off
+therefore did not establish an unsynchronized display mode.
+
+| Build | Requested interval | SDL reported | Rendered FPS | CPU draw (ms) | Present (ms) | Swap (ms) |
+|---|---:|---:|---:|---:|---:|---:|
+| Before | 0 | 1 | 14.12 | 8.37 | 19.88 | 12.78 |
+| Before | 1 | 1 | 14.08 | 8.39 | 19.85 | 12.57 |
+| Stage and font fixes | 0 | 1 | 13.48 | 5.43 | 24.31 | 21.96 |
+| Stage and font fixes | 1 | 1 | 13.52 | 5.51 | 24.27 | 21.92 |
+
+Waiting for rendering with `glFinish` immediately before the swap reduced
+time inside swap to 0.64 ms but left presentation at 24.64 ms and FPS at
+13.28. A flush immediately before swap also left FPS at 13.56. The swap
+timing includes a wait that largely moves earlier with explicit GPU
+synchronization. Neither synchronization call improves throughput.
+
+Calling EGL directly with interval 0 succeeded but did not materially change
+swap time (21.94 ms). Earlier submission before the screen composite gave
+13.80 FPS. Packing the stage into two SFF v3 pages gave 14.28 FPS with
+20.70 ms in swap. Splitting the stage batch at element boundaries while
+keeping the font atlas and 32-slot cache gave 15.88 FPS and 17.39 ms in
+swap. This isolates the regression to combining stage elements on the
+tested Mali-G31/KMSDRM stack. The measurements do not identify the
+specific shader or driver behavior that makes those draws slower.
+
+The first workaround preserved stage element boundaries on ARM64 Linux GLES
+with KMSDRM. Tiles within the same element could still batch.
+
+The final code reproduced the improvement in two 25-second device runs.
+`VRetrace=0` gave **15.88 FPS**, 5.98 ms CPU draw, 19.70 ms presentation,
+17.38 ms swap and 19.19 draws per rendered frame. `VRetrace=1` gave
+**15.64 FPS**, 6.14 ms CPU draw, 19.70 ms presentation, 17.39 ms swap
+and 19.18 draws per rendered frame. Both exceeded the original baseline
+of about 14.1 FPS. SDL still reported interval 1 for the off request.
+The device test used the one-page FPS font atlas in both final runs.
+
+[SDL 2.30.10's KMSDRM swap path](https://github.com/libsdl-org/SDL/blob/release-2.30.10/src/video/kmsdrm/SDL_kmsdrmopengles.c)
+waits for the previous page flip and calls EGL to swap the new buffer.
+The device timings include both parts of that path.
+
+### Stage texture pairs on Mali-G31
+
+The follow-up used 25 seconds from the first rendered match frame, with
+session seed 12345, the one-page FPS font, 32 streamed texture slots, and
+`VRetrace=0` (SDL reported 1). Only stage grouping and the indicated stage
+asset changed. All runs submitted an average of seven stage instances per
+rendered frame.
+
+| Stage policy | Rendered FPS | Stage draws/frame | Total draws/frame | CPU draw (ms) | Swap (ms) |
+|---|---:|---:|---:|---:|---:|
+| Element boundaries, first control | 15.92 | 7.00 | 19.19 | 6.24 | 17.42 |
+| Up to seven pairs | 13.76 | 1.01 | 13.21 | 5.45 | 21.97 |
+| Up to two pairs | 15.96 | 4.01 | 16.20 | 5.55 | 17.94 |
+| One pair, deferred | 16.08 | 7.00 | 19.18 | 5.67 | 17.39 |
+| Up to three pairs | 15.72 | 3.01 | 15.19 | 5.51 | 18.26 |
+| Native stage atlas, up to two pairs | 15.96 | 4.01 | 16.19 | 5.61 | 17.89 |
+| Native stage atlas, one pair | 16.16 | 7.00 | 19.18 | 5.74 | 17.43 |
+| Element boundaries, second control | 15.92 | 7.00 | 19.17 | 6.18 | 17.42 |
+
+Deferring one-pair draws recovered the throughput without element flushes.
+The two-page stage atlas still used seven distinct page/palette pairs in
+this run. The measurements isolate the regression to wider texture/palette
+groups, with their cost showing up at GPU completion. A trial fragment shader
+selected the image and palette together through one balanced selector instead
+of selecting them separately. Keeping the same seven-pair batches and scene,
+it reduced swap from 21.97 to 18.51 ms and recovered FPS from 13.76 to 15.64
+at 1.01 stage draws per frame. This points to fragment shader sampler
+selection as a major contributor. The trial shader was not adopted.
+
+The [Mali-G31 counter guide](https://arm-software.github.io/libGPUCounters/mali-g31_counter_reference.html)
+lists texture cache and shader counters that would distinguish the underlying
+costs. The device did not provide reliable GPU timer query results, so the
+exact shader or hardware mechanism remains unconfirmed.
+
+The two-pair workaround capped stage draws on the Mali-G31 KMSDRM backend
+on ARM64 Linux. Adjacent stage sprites still batched in painter's order.
+Other draws retained the seven-pair limit. Both 25-second runs measured
+15.84 FPS, 4.01 stage draws and 16.19 total draws per rendered frame.
+Average CPU draw time was 5.54 ms and average swap time was 17.92 ms.
+The two element-boundary controls each ran at 15.92 FPS, a difference of
+two rendered frames per 25-second window.
+
+### Recovering seven-pair stage batching
+
+The paired fragment shader selects the sprite and palette in the same
+branch. The matching vertex shader computes the reciprocal texture size,
+so indexed fragments multiply their sprite-local texel center by that
+reciprocal instead of dividing by the page size for each fragment.
+The shader still selects the same local texel and uses the existing
+palette lookup, mask, and PalFX logic.
+
+The following 25-second tests use the same seed, stage, font atlas, and
+device configuration as the texture-pair sweep.
+
+| Indexed shader and stage limit | Rendered FPS | Stage draws/frame | Total draws/frame | CPU draw (ms) | Swap (ms) |
+|---|---:|---:|---:|---:|---:|
+| Original shader, two pairs, first control | 15.68 | 4.01 | 16.20 | 5.61 | 17.95 |
+| Paired selector, seven pairs | 15.48 | 1.01 | 13.20 | 5.42 | 18.49 |
+| Paired selector with vertex reciprocal, seven pairs | 16.24 | 1.01 | 13.19 | 5.43 | 17.49 |
+| GLES 3 integer texel fetch, seven pairs | 15.32 | 1.01 | 13.20 | 5.48 | 18.91 |
+| Original shader, two pairs, second control | 15.72 | 4.01 | 16.19 | 5.63 | 17.90 |
+
+The engine enables the reciprocal path only when both installed indexed
+shaders declare support. Older or mixed installations keep the existing
+texture size convention and the Mali-G31 two-pair stage guard. The RGBA
+stage guard is unchanged. See [Building and testing ARM64](BUILDING.md)
+for the device workflow.
+
+With the integrated engine and shader files, both final runs rendered
+412 frames at **16.48 FPS**, with 1.01 stage draws and 13.20 total draws
+per rendered frame. Average CPU draw time was 5.38 ms, presentation
+19.84 ms, and swap 17.52 ms. The same engine with the older shader files
+fell back to 4.01 stage draws, 16.19 total draws, and **15.96 FPS**
+(399 rendered frames).
+
+Pixel parity was checked separately with frame skipping disabled. All
+30 final-window 640 × 480 RGBA frames at round ticks 60–89 matched the
+two-pair baseline byte for byte. The FPS overlay was enabled with the same
+fixed text in both captures. Capture and timing hooks were removed after
+verification.
+
 ## Implementation and next checks
 
 1. Keep the queue in submission order. Group only adjacent draws with the same

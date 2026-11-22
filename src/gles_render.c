@@ -61,6 +61,8 @@
  * texture and view entry points test it before the renderer proper. */
 static int g_glesReady;
 static int g_batch_count;
+static int g_limit_stage_pairs;
+static int g_indexed_atlas_inverse_size;
 static int g_atlasResidentPages;
 static GlesProgram g_glesProgramAtlas, g_glesProgramAtlasRgba;
 
@@ -190,7 +192,9 @@ static unsigned int gles_palette_hash(const unsigned char *bytes)
  * generation, which invalidates every slot's contents without touching the
  * names (those are dropped by Gles_OnContextLost).
  */
-#define GLES_STREAM_SLOTS 8
+/* Port addition: 32 slots keep most of the measured ARM64 match working set
+ * resident even with standalone font glyphs. See port/arm64/OPTIMIZING_ARM64_PLAN.md. */
+#define GLES_STREAM_SLOTS 32
 
 typedef struct GlesStreamSlot {
     GlTex tex;
@@ -1012,7 +1016,7 @@ static int gles_load_es_program(GlesProgram *prog, const char *name, int atlas)
     char *vert;
     char *frag;
     char defines[256];
-    int ok;
+    int ok, inverse_size = 0;
 
     snprintf(vert_name, sizeof(vert_name), "%s.vert", name);
     snprintf(frag_name, sizeof(frag_name), "%s.frag", name);
@@ -1046,10 +1050,15 @@ static int gles_load_es_program(GlesProgram *prog, const char *name, int atlas)
     }
     if (atlas) {
         size_t used = strlen(defines);
+        inverse_size = prog == &g_glesProgramAtlas &&
+                       strstr(vert, "#ifdef SPRITE_ATLAS_INVERSE_SIZE") &&
+                       strstr(frag, "#ifdef SPRITE_ATLAS_INVERSE_SIZE");
 
-        snprintf(defines + used, sizeof(defines) - used, "#define SPRITE_ATLAS\n");
+        snprintf(defines + used, sizeof(defines) - used, "#define SPRITE_ATLAS\n%s",
+                 inverse_size ? "#define SPRITE_ATLAS_INVERSE_SIZE\n" : "");
     }
     ok = GlesDraw_LoadProgram(prog, vert, frag, atlas ? "indexed atlas" : name, defines);
+    if (prog == &g_glesProgramAtlas) g_indexed_atlas_inverse_size = ok && inverse_size;
     free(vert);
     free(frag);
     return ok;
@@ -1241,6 +1250,14 @@ int Gles_IsReady(void)
  */
 static int gles_build_programs(void)
 {
+    g_indexed_atlas_inverse_size = 0;
+#if defined(__linux__) && defined(__aarch64__) && !defined(ANDROID_PORT)
+    const char *driver = SDL_GetCurrentVideoDriver();
+    const char *renderer = (const char *)glGetString(GL_RENDERER);
+
+    g_limit_stage_pairs = driver && strcmp(driver, "KMSDRM") == 0 &&
+                          renderer && strcmp(renderer, "Mali-G31") == 0;
+#endif
     if (!gles_load_es_program(&g_glesProgramIndexed, "indexed", 0) ||
         !gles_load_es_program(&g_glesProgramRgba, "rgba", 0) ||
         !GlesDraw_LoadProgram(&g_glesProgramSolid, gles_solid_vert_src, gles_solid_frag_src, "solid", NULL) ||
@@ -1725,6 +1742,7 @@ static GLenum gles_gl_factor(GlesBlendFactor f)
 typedef struct GlesSpriteCall {
     /* batch key */
     const GlesProgram *prog;
+    int limit_pairs;
     int blend_enabled;
     unsigned int blend_src, blend_dst, blend_eq;
     int mask;
@@ -1743,7 +1761,6 @@ typedef struct GlesSpriteCall {
     float atlas_rect[4];
     /* the clip rectangle in force when the call was recorded */
     int clip[4];
-    int probe_kind;
 } GlesSpriteCall;
 
 static GlesSpriteCall g_batch[GLES_BATCH_MAX];
@@ -1766,6 +1783,7 @@ static int gles_batch_enabled(int native_atlas)
 static int gles_atlas_can_join(const GlesSpriteCall *first, const GlesSpriteCall *next)
 {
     return next->prog == first->prog &&
+           next->limit_pairs == first->limit_pairs &&
            next->mask == first->mask && next->blend_enabled == first->blend_enabled &&
            next->blend_src == first->blend_src && next->blend_dst == first->blend_dst &&
            /* Source alpha is an instance shader value. The blend state only
@@ -1784,6 +1802,9 @@ static int gles_atlas_submit_run(int start)
     const GlTex *palettes[GLES_ATLAS_TEXTURE_SLOTS];
     int slots = 0;
     int end = start;
+    /* Keep the two-pair guard for older and RGBA stage shaders on Mali-G31. */
+    int fast_indexed = first->prog == &g_glesProgramAtlas && g_indexed_atlas_inverse_size;
+    int slot_limit = first->limit_pairs && !fast_indexed ? 2 : GLES_ATLAS_TEXTURE_SLOTS;
 
     memcpy(batch.corners, corners, sizeof(corners));
     while (end < g_batch_count) {
@@ -1794,7 +1815,7 @@ static int gles_atlas_submit_run(int start)
         for (slot = 0; slot < slots; ++slot)
             if (pages[slot] == call->tex && palettes[slot] == call->pal) break;
         if (slot == slots) {
-            if (slots == GLES_ATLAS_TEXTURE_SLOTS) break;
+            if (slots == slot_limit) break;
             pages[slots] = call->tex;
             palettes[slots] = call->pal;
             ++slots;
@@ -1834,15 +1855,6 @@ static int gles_atlas_submit_run(int start)
 
     GlesDraw_Atlas(&g_glesBuffer, first->prog, &batch, end - start, first->mask, first->add, first->mul,
                    first->invertall, first->colorbal, first->texsize[0], first->texsize[1], first->alphamul);
-    {
-        static int logged;
-        int stage = 0, font = 0;
-        for (int j = start; j < end; ++j) { stage += g_batch[j].probe_kind == 1; font += g_batch[j].probe_kind == 2; }
-        if ((stage || font) && g_game && g_game->match_loaded && logged++ < 120)
-            Log_Printf("PROBE batch n=%d stage=%d font=%d slots=%d kind=%d mask=%d clip=%d,%d,%d,%d\n",
-                       end-start, stage, font, slots, first->prog == &g_glesProgramAtlas ? 1 : 2,
-                       first->mask, first->clip[0], first->clip[1], first->clip[2], first->clip[3]);
-    }
     return end;
 }
 
@@ -1932,6 +1944,7 @@ static void gles_batch_record(const GlesProgram *prog, int blend_enabled, unsign
     }
     c = &g_batch[g_batch_count++];
     c->prog = prog;
+    c->limit_pairs = 0;
     c->blend_enabled = blend_enabled;
     c->blend_src = blend_src;
     c->blend_dst = blend_dst;
@@ -1955,7 +1968,6 @@ static void gles_batch_record(const GlesProgram *prog, int blend_enabled, unsign
     c->clip[1] = g_clipY1;
     c->clip[2] = g_clipX2;
     c->clip[3] = g_clipY2;
-    c->probe_kind = 0;
     if (atlas_rect != NULL) memcpy(c->atlas_rect, atlas_rect, sizeof(c->atlas_rect));
 }
 
@@ -2351,15 +2363,8 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
                          (float)fx->mul[2] * (1.0f / 256.0f), fx->invertall,
                          (float)fx->color * (1.0f / 256.0f), (float)tex->w, (float)tex->h,
                          dp->alpha_src, dp->alpha_dst, instanced ? atlas_rect : NULL);
-        if (g_game && g_game->stage_bg && set == g_game->stage_bg->sprites) {
-            static int logged;
-            g_batch[g_batch_count - 1].probe_kind = 1;
-            if (logged++ < 55) Log_Printf("PROBE stage sprite=%d special=%d atlas=%d instanced=%d tex=%u pal=%u clip=%d,%d,%d,%d\n",
-                                          sprite, special, atlased, instanced, tex->id,
-                                          pal_tex ? pal_tex->id : 0, g_clipX1, g_clipY1, g_clipX2, g_clipY2);
-        } else if (g_game && g_game->font_small && set == g_game->font_small->sprites) {
-            g_batch[g_batch_count - 1].probe_kind = 2;
-        }
+        g_batch[g_batch_count - 1].limit_pairs =
+            g_limit_stage_pairs && g_game && g_game->stage_bg && set == g_game->stage_bg->sprites;
         if (!defer) GlesBatch_Flush();
         return;
     }
@@ -2423,9 +2428,6 @@ static void Gles_DrawableSize(int *w, int *h)
  */
 void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
 {
-    extern unsigned int Probe_CurrentCalls(void);
-    unsigned int probe_start, probe_quad;
-    static int probe_logged;
     SpriteSet *saved_target = g_renderTarget;
     int saved_sprite = g_renderTargetSprite, saved_projection = g_glProjection;
     int cx1 = g_clipX1, cy1 = g_clipY1, cx2 = g_clipX2, cy2 = g_clipY2;
@@ -2465,7 +2467,6 @@ void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
     }
     /* Everything queued belongs to the frame being presented. */
     GlesBatch_Flush();
-    probe_start = Probe_CurrentCalls();
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
     g_glProjection = 0; /* Overlays and the screen quad use video coordinates. */
     if (!Gfx_SetRenderTarget(NULL, 0)) { g_glProjection = saved_projection; goto present_out; }
@@ -2487,12 +2488,8 @@ void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
                       (float)tex->w, (float)tex->h, 1);
     }
     /* Port fix: pause/training/debug/console overlays share the desktop hook. */
-    probe_quad = Probe_CurrentCalls();
     if (g_gfxPrePresent != NULL) g_gfxPrePresent(NULL, 0);
     GlesBatch_Flush();
-    if (g_game && g_game->match_loaded && probe_logged++ < 30)
-        Log_Printf("PROBE present quad=%u overlays=%u\n", probe_quad - probe_start,
-                   Probe_CurrentCalls() - probe_quad);
 #ifndef ANDROID_PORT
     /*
      * Present the frame that was just drawn.

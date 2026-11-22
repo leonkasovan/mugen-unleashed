@@ -38,7 +38,12 @@ void main()
 #ifdef SPRITE_ATLAS
     v_texcoord = vec4(a_position.xy, 0.0, 1.0);
     v_atlas_rect = a_atlas_rect;
+#ifdef SPRITE_ATLAS_INVERSE_SIZE
+    /* Share the reciprocal across fragments of an indexed sprite. */
+    v_atlas_params = vec4(1.0 / a_atlas_params.xy, a_atlas_params.zw);
+#else
     v_atlas_params = a_atlas_params;
+#endif
     v_atlas_add = a_atlas_add;
     v_atlas_mul = a_atlas_mul;
     v_atlas_fx = a_atlas_fx;

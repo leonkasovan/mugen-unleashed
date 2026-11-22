@@ -66,34 +66,6 @@ uniform vec2 texsize;
 #endif
 varying vec4 v_texcoord;
 
-#ifdef SPRITE_ATLAS
-/* GLES 3 hardware running this ES 1.00 dialect cannot dynamically index
- * sampler arrays. Every instance carries a pair slot; explicit branches keep
- * different atlas pages and palettes in the same ordered instanced draw. */
-vec4 atlas_index_sample(highp vec2 uv)
-{
-  highp float slot = v_atlas_params.z;
-  if (slot < 0.5) return texture2D(atlas_tex0, uv);
-  if (slot < 1.5) return texture2D(atlas_tex1, uv);
-  if (slot < 2.5) return texture2D(atlas_tex2, uv);
-  if (slot < 3.5) return texture2D(atlas_tex3, uv);
-  if (slot < 4.5) return texture2D(atlas_tex4, uv);
-  if (slot < 5.5) return texture2D(atlas_tex5, uv);
-  return texture2D(atlas_tex6, uv);
-}
-
-vec4 atlas_palette_sample(highp vec2 uv)
-{
-  highp float slot = v_atlas_params.z;
-  if (slot < 0.5) return texture2D(atlas_pal0, uv);
-  if (slot < 1.5) return texture2D(atlas_pal1, uv);
-  if (slot < 2.5) return texture2D(atlas_pal2, uv);
-  if (slot < 3.5) return texture2D(atlas_pal3, uv);
-  if (slot < 4.5) return texture2D(atlas_pal4, uv);
-  if (slot < 5.5) return texture2D(atlas_pal5, uv);
-  return texture2D(atlas_pal6, uv);
-}
-#endif
 
 #if defined(INDEX_STANDARD) // This works on Radeon Mobility 1400 and is faster
   #define index_correction(a)   (a)
@@ -101,6 +73,29 @@ vec4 atlas_palette_sample(highp vec2 uv)
   #define index_correction(a)   ((a) * 255.99 / 256.0)
 #else // INDEX_SAFE -- Radeon Mobility HD 3400
   #define index_correction(a)   ((a) * 255.1 / 256.0)
+#endif
+
+#ifdef SPRITE_ATLAS
+/* Select the image and palette together so each fragment dispatches once. */
+#define SAMPLE_PAIR(TEX, PAL) texture2D(PAL, vec2(index_correction(texture2D(TEX, uv).r), 0.5))
+vec4 atlas_sample(highp vec2 uv)
+{
+  highp float slot = v_atlas_params.z;
+  if (slot < 3.5) {
+    if (slot < 1.5) {
+      if (slot < 0.5) return SAMPLE_PAIR(atlas_tex0, atlas_pal0);
+      return SAMPLE_PAIR(atlas_tex1, atlas_pal1);
+    }
+    if (slot < 2.5) return SAMPLE_PAIR(atlas_tex2, atlas_pal2);
+    return SAMPLE_PAIR(atlas_tex3, atlas_pal3);
+  }
+  if (slot < 5.5) {
+    if (slot < 4.5) return SAMPLE_PAIR(atlas_tex4, atlas_pal4);
+    return SAMPLE_PAIR(atlas_tex5, atlas_pal5);
+  }
+  return SAMPLE_PAIR(atlas_tex6, atlas_pal6);
+}
+#undef SAMPLE_PAIR
 #endif
 
 /*
@@ -158,21 +153,21 @@ vec4 nearest()
 #if defined(SPRITE_ATLAS)
   highp vec2 texel = clamp(floor(v_texcoord.st * v_atlas_rect.zw),
                            vec2(0.0), v_atlas_rect.zw - vec2(1.0));
-  vec4 idxv = atlas_index_sample((v_atlas_rect.xy + texel + vec2(0.5)) / v_atlas_params.xy);
-#elif defined(PERSPECTIVE_NONE)
+  highp vec2 center = v_atlas_rect.xy + texel + vec2(0.5);
+#ifdef SPRITE_ATLAS_INVERSE_SIZE
+  vec4 color = atlas_sample(center * v_atlas_params.xy);
+#else
+  vec4 color = atlas_sample(center / v_atlas_params.xy);
+#endif
+#else
+#if defined(PERSPECTIVE_NONE)
   vec4 idxv = texture2D(texunit0, v_texcoord.st);
 #elif defined(PERSPECTIVE_STANDARD)
   vec4 idxv = texture2D(texunit0, v_texcoord.st / v_texcoord.q);
 #else // PERSPECTIVE_EVEN
   vec4 idxv = texture2D(texunit0, vec2(v_texcoord.s / v_texcoord.q, v_texcoord.t));
 #endif
-  float idx = idxv.r;
-
-  /* Palette is a 256x1 2D texture: row 0.5, column = corrected index. */
-#if defined(SPRITE_ATLAS)
-  vec4 color = atlas_palette_sample(vec2(index_correction(idx), 0.5));
-#else
-  vec4 color = texture2D(texunit1, vec2(index_correction(idx), 0.5));
+  vec4 color = texture2D(texunit1, vec2(index_correction(idxv.r), 0.5));
 #endif
 #if defined(PREMUL)
   if (mask)
