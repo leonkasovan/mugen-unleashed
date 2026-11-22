@@ -37,12 +37,21 @@ extern "C" {
 #define GLES_ATTR_TEXCOORD  1
 #define GLES_ATTR_ATLAS_MVP 2       /* a mat4 takes locations 2 through 5 */
 #define GLES_ATTR_ATLAS_RECT 6
+#define GLES_ATTR_ATLAS_PARAMS 7    /* texture size and sprite/palette pair slot */
+#define GLES_ATTR_ATLAS_ADD 8
+#define GLES_ATTR_ATLAS_MUL 9
+#define GLES_ATTR_ATLAS_FX 10
 
 #define GLES_MAX_ATLAS_INSTANCES 512
+#define GLES_ATLAS_TEXTURE_SLOTS 7 /* texture units 0..6, palette units 7..13 */
 
 typedef struct GlesAtlasInstance {
     float mvp[16];
-    float rect[4];                  /* x, y, width, height in page texels */
+    float rect[4];                  /* x, y, width, height in texture texels */
+    float params[4];                /* texture width, height, pair slot, unused */
+    float add[4];                   /* additive RGB and source alpha multiplier */
+    float mul[4];                   /* multiplicative RGB and saturation */
+    float fx[4];                    /* invertall, reserved */
 } GlesAtlasInstance;
 
 typedef struct GlesAtlasBatch {
@@ -95,7 +104,8 @@ void GlesDraw_Quad(GlesBuffer *buf, const GlesProgram *prog, const float *mvp16,
                    float mul_r, float mul_g, float mul_b, int invertall, float colorbal, float tex_w, float tex_h,
                    float src_alphamul);
 
-/* Draws a run of consecutive indexed sprites with common draw state. */
+/* Draws consecutive atlas sprites with shared state and up to seven bound
+ * sprite/palette texture pairs. Each instance chooses its own pair slot. */
 void GlesDraw_Atlas(GlesBuffer *buf, const GlesProgram *prog, const GlesAtlasBatch *batch,
                     int count, int mask, const float *add, const float *mul, int invertall,
                     float colorbal, float tex_w, float tex_h, float src_alphamul);

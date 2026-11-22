@@ -34,23 +34,66 @@
 precision mediump float;
 ////*EB_DEFINES*////
 
+#ifdef SPRITE_ATLAS
+uniform sampler2D atlas_tex0, atlas_tex1, atlas_tex2, atlas_tex3;
+uniform sampler2D atlas_tex4, atlas_tex5, atlas_tex6;
+uniform sampler2D atlas_pal0, atlas_pal1, atlas_pal2, atlas_pal3;
+uniform sampler2D atlas_pal4, atlas_pal5, atlas_pal6;
+#else
 uniform sampler2D texunit0;
 uniform sampler2D texunit1;
+#endif
 uniform bool mask;
 
+#ifdef SPRITE_ATLAS
+varying highp vec4 v_atlas_rect;
+varying highp vec4 v_atlas_params;
+varying highp vec4 v_atlas_add;
+varying highp vec4 v_atlas_mul;
+varying highp vec4 v_atlas_fx;
+#define add v_atlas_add.xyz
+#define mul v_atlas_mul.xyz
+#define invertall (v_atlas_fx.x > 0.5)
+#define colorbal v_atlas_mul.w
+#define src_alphamul v_atlas_add.w
+#else
 uniform vec3 add;
 uniform vec3 mul;
 uniform bool invertall;
 uniform float colorbal;
 uniform float src_alphamul;
-
-#ifdef SPRITE_ATLAS
-uniform highp vec2 texsize;
-varying highp vec4 v_atlas_rect;
-#else
 uniform vec2 texsize;
 #endif
 varying vec4 v_texcoord;
+
+#ifdef SPRITE_ATLAS
+/* GLES 3 hardware running this ES 1.00 dialect cannot dynamically index
+ * sampler arrays. Every instance carries a pair slot; explicit branches keep
+ * different atlas pages and palettes in the same ordered instanced draw. */
+vec4 atlas_index_sample(highp vec2 uv)
+{
+  highp float slot = v_atlas_params.z;
+  if (slot < 0.5) return texture2D(atlas_tex0, uv);
+  if (slot < 1.5) return texture2D(atlas_tex1, uv);
+  if (slot < 2.5) return texture2D(atlas_tex2, uv);
+  if (slot < 3.5) return texture2D(atlas_tex3, uv);
+  if (slot < 4.5) return texture2D(atlas_tex4, uv);
+  if (slot < 5.5) return texture2D(atlas_tex5, uv);
+  return texture2D(atlas_tex6, uv);
+}
+
+vec4 atlas_palette_sample(highp vec2 uv)
+{
+  highp float slot = v_atlas_params.z;
+  if (slot < 0.5) return texture2D(atlas_pal0, uv);
+  if (slot < 1.5) return texture2D(atlas_pal1, uv);
+  if (slot < 2.5) return texture2D(atlas_pal2, uv);
+  if (slot < 3.5) return texture2D(atlas_pal3, uv);
+  if (slot < 4.5) return texture2D(atlas_pal4, uv);
+  if (slot < 5.5) return texture2D(atlas_pal5, uv);
+  return texture2D(atlas_pal6, uv);
+}
+#endif
 
 #if defined(INDEX_STANDARD) // This works on Radeon Mobility 1400 and is faster
   #define index_correction(a)   (a)
@@ -113,13 +156,9 @@ void palfx(inout vec4 color)
 vec4 nearest()
 {
 #if defined(SPRITE_ATLAS)
-  // Select the original sprite's nearest texel before adding the page offset.
-  // Sampling its center also prevents reads from adjacent atlas regions.
-  highp vec2 local_uv = v_texcoord.st;
-  highp vec2 texel = clamp(floor(local_uv * v_atlas_rect.zw),
-                          vec2(0.0), v_atlas_rect.zw - vec2(1.0));
-  highp vec2 page_uv = (v_atlas_rect.xy + texel + vec2(0.5)) / texsize;
-  vec4 idxv = texture2D(texunit0, page_uv);
+  highp vec2 texel = clamp(floor(v_texcoord.st * v_atlas_rect.zw),
+                           vec2(0.0), v_atlas_rect.zw - vec2(1.0));
+  vec4 idxv = atlas_index_sample((v_atlas_rect.xy + texel + vec2(0.5)) / v_atlas_params.xy);
 #elif defined(PERSPECTIVE_NONE)
   vec4 idxv = texture2D(texunit0, v_texcoord.st);
 #elif defined(PERSPECTIVE_STANDARD)
@@ -130,7 +169,11 @@ vec4 nearest()
   float idx = idxv.r;
 
   /* Palette is a 256x1 2D texture: row 0.5, column = corrected index. */
+#if defined(SPRITE_ATLAS)
+  vec4 color = atlas_palette_sample(vec2(index_correction(idx), 0.5));
+#else
   vec4 color = texture2D(texunit1, vec2(index_correction(idx), 0.5));
+#endif
 #if defined(PREMUL)
   if (mask)
     color.rgb *= color.a;

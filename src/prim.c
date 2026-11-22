@@ -989,6 +989,7 @@ void Gfx_GlClear(unsigned int color)
     unsigned char src[4], dst[4];
     unsigned int mapped;
 
+    GlBatch_Flush();
     glDisable(GL_SCISSOR_TEST);
     src[0] = (unsigned char)color;
     src[1] = (unsigned char)(color >> 8);

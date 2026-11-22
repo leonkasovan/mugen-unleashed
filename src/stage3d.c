@@ -547,6 +547,9 @@ static void Stage3D_DrawLayers(int layer, const Stage3D *s3, const float *proj, 
  * Whether the draws Stage3D_DrawLayers would issue for `layer` blend against
  * the destination. The (scene, model layer, default layer) triples are the ones
  * Stage3D_DrawLayers passes to Model_Draw.
+ *
+ * Only the Vita half-resolution target path asks (a target cannot carry a
+ * destination blend), so the other builds do not compile it.
  */
 static int Stage3D_LayerBlendsDestination(const Stage3D *s3, int layer)
 {
@@ -654,6 +657,7 @@ void Stage3D_Draw(int layer)
      * read the colour behind them, and behind them in the target is transparent
      * black, not the stage. Such a layer keeps the direct full-size path.
      */
+    GlBatch_Flush();
     if (Stage3D_LayerBlendsDestination(s3, layer)) {
         Uint64 start = SDL_GetPerformanceCounter();
         Stage3D_DrawLayers(layer, s3, proj, view, &fx, outline);

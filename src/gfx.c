@@ -174,6 +174,8 @@ int Gfx_SetRenderTarget(SpriteSet *target, int index)
 
 #ifdef MUGEN_GLES
     if (changed) GlesBatch_Flush();
+#else
+    if (changed) GlBatch_Flush();
 #endif
     if (target == NULL) {
         g_targetWidth = g_videoWidth;
@@ -560,6 +562,7 @@ void Gfx_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
 #ifndef MUGEN_GLES
         /* GLES clears in Gl_Present. */
         if (g_renderMode == RENDER_OPENGL) {
+            GlBatch_Flush();
             glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
             glClearDepth(1.0);
             glDisable(GL_SCISSOR_TEST);
@@ -618,6 +621,8 @@ void Gfx_SetClipRect(int x1, int y1, int x2, int y2)
     if (y2 > g_targetHeight) {
         y2 = g_targetHeight;
     }
+    if (getenv("MUGEN_PROBE_CLIP_SKIP") != NULL && x1 == g_clipX1 && y1 == g_clipY1 &&
+        x2 == g_clipX2 && y2 == g_clipY2) return;
     g_clipX2 = x2;
     g_clipY2 = y2;
     g_clipX1 = x1;

@@ -73,6 +73,8 @@ void Perf_TraceSkip(int drawn, int late, int next_skip, int resync);
 
 /* One GL draw: n triangles, counted for the frame in progress. */
 void Perf_CountDraw(unsigned int triangles);
+/* Draw submissions in the last completed frame, for the ShowFPS overlay. */
+unsigned int Perf_LastDrawCount(void);
 
 /* Port fix: assembled triangles for a GL primitive mode and element count.
  * Lines/points contribute draw calls but no triangles. Degenerate triangles

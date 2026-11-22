@@ -1097,6 +1097,8 @@ int Screen_Run(ScreenLoop *screen)
 #ifdef MUGEN_GLES
             GlesBatch_Flush();
             GpuTime_EndDraw();
+#else
+            GlBatch_Flush();
 #endif
             Perf_DrawDone();
             /* MUGEN_DEBUG: the submission for this frame is complete here. */
@@ -1152,7 +1154,9 @@ void Game_DrawFps(void)
     if (!(fps > 0.0f)) {
         fps = 0.0f;
     }
-    _snprintf(text, sizeof(text), "%.1f", (double)fps);
+    /* Port addition: show submissions from the previous complete frame. */
+    snprintf(text, sizeof(text), "FPS %.1f  Draw %u", (double)fps,
+             Perf_LastDrawCount());
     Font_DrawText(text, g_game->font_small, g_targetWidth - 2, 7, -1, 0, 0x100, 0x100, 0x100);
 }
 
@@ -1172,7 +1176,7 @@ void Game_DrawFps(void)
  *
  * Lines of that shape are the input to tools/measure_perf.sh. `frames` is the
  * count since the previous line, so a reader can tell a real 60 from a sample
- * that covered a stall. It costs one sprintf and one log write per second,
+ * that covered a stall. It costs one snprintf and one log write per second,
  * none per frame.
  */
 static const char *Game_PerfRendererName(int mode)

@@ -71,6 +71,7 @@ int GpuTime_Init(void) { return 0; }
 void GpuTime_Reset(void) {}
 void GpuTime_BeginPresent(void) {}
 void GpuTime_EndPresent(void) {}
+Uint64 SDLCALL SDL_GetPerformanceCounter(void) { return 0; }
 #else
 int Test_LoadGL(void);
 #define gladLoadGL Test_LoadGL
@@ -96,6 +97,15 @@ void Test_DrawGL(SpriteSet *set,int s,const DrawParams *dp);
 #endif
 #include "../src/gfx.c"
 
+/* This mock covers runtime packing and GL failure boundaries. Native archive
+ * loading and page textures are exercised by the SFF3 integration probe. */
+GlTex *Sff3_Texture(const Sprite *sprite, float rect[4]) { return NULL; }
+void Sff3_ForgetTextures(void) {}
+#if defined(TEST_VITA) || defined(TEST_GLES)
+#ifndef GlBatch_Flush
+void GlBatch_Flush(void) {}
+#endif
+#endif
 static size_t review_gpu_limit;
 static GLenum pending;
 static unsigned next_id = 10, binding, color_attachment, depth_attachment;
@@ -343,6 +353,105 @@ static void test_sizes_uploads(void)
     assert(GlTex_Free(tex));
     puts("ok: checked sizes, failed upload/retry, depth allocation");
 }
+
+#ifdef TEST_GLES
+static void test_gles_atlas_overflow(void)
+{
+    enum { source_count = GLES_ATLAS_SET_PAGES + 2 };
+    unsigned char pixels[source_count][4] = {{0}};
+    Sprite sprites[source_count] = {{0}};
+    KeyedArraySlot slots[source_count] = {{0}};
+    KeyedArray list = { .count = source_count, .capacity = source_count, .elem_size = sizeof(Sprite),
+                        .data = (void *)sprites, .slots = slots };
+    SpriteSet set = { .sprites = &list };
+    GlTex *standalone[2] = {NULL, NULL};
+    float rect[4];
+    int overflow[2], count = 0;
+    int saved_limit = g_glMaxTextureSize;
+    int old_image_calls = image_calls, old_deleted = deleted_textures;
+    unsigned int saved_program = g_glesProgramAtlas.program;
+    int i;
+
+    for (i = 0; i < source_count; i++) {
+        sprites[i] = (Sprite){ .format = SPRITE_FORMAT_RAW, .w = 2, .h = 2, .bpp = 8,
+                              .pixels = pixels[i], .pixels_size = sizeof(pixels[i]) };
+        slots[i].used = 1;
+    }
+    g_glMaxTextureSize = 2;
+    g_glesProgramAtlas.program = 1;
+    Gles_AtlasPlan(&set);
+    assert(g_glesAtlases != NULL);
+    for (i = 0; i < source_count; i++) {
+        int region = g_glesAtlases->sprite_regions[i] - 1;
+
+        if (g_glesAtlases->regions[region].page < 0) {
+            assert(count < 2);
+            overflow[count++] = i;
+        }
+    }
+    assert(count == 2);
+    for (i = 0; i < count; i++) {
+        int n = overflow[i], atlased = 0;
+
+        standalone[i] = gles_atlas_texture(&set, n, &sprites[n], 1, rect, &atlased);
+        assert(!atlased && standalone[i] != NULL && standalone[i]->id != 0);
+    }
+    assert(standalone[0] != standalone[1] && image_calls == old_image_calls + 2);
+    for (i = 0; i < count; i++) {
+        int n = overflow[i], atlased = 0;
+
+        assert(gles_atlas_texture(&set, n, &sprites[n], 1, rect, &atlased) == standalone[i] && !atlased);
+    }
+    assert(image_calls == old_image_calls + 2);
+    Gles_OnSpriteSetFreed(&set);
+    assert(g_glesAtlases == NULL && deleted_textures == old_deleted + 2);
+    g_glMaxTextureSize = saved_limit;
+    g_glesProgramAtlas.program = saved_program;
+    puts("ok: atlas overflow keeps and frees one standalone texture per source");
+}
+
+static void test_gles_palette_cache(void)
+{
+    unsigned char palettes[GLES_PALETTE_SLOTS + 1][0x100 * 4] = {{0}};
+    GlTex *textures[GLES_PALETTE_SLOTS];
+    const int victim = GLES_PALETTE_SLOTS - 2;
+    int i;
+
+    /* The first two palettes occupied the same slot in the direct-mapped cache. */
+    palettes[1][0] = 32;
+    assert(gles_palette_hash(palettes[0]) % GLES_PALETTE_SLOTS ==
+           gles_palette_hash(palettes[1]) % GLES_PALETTE_SLOTS);
+    for (i = 2; i <= GLES_PALETTE_SLOTS; i++) {
+        palettes[i][1] = (unsigned char)i;
+    }
+    image_calls = sub_calls = 0;
+    for (i = 0; i < GLES_PALETTE_SLOTS; i++) {
+        textures[i] = gles_palette_texture(palettes[i]);
+        assert(textures[i] != NULL);
+    }
+    for (i = 0; i < GLES_PALETTE_SLOTS; i++) {
+        assert(gles_palette_texture(palettes[i]) == textures[i]);
+    }
+    assert(image_calls == GLES_PALETTE_SLOTS && sub_calls == 0);
+    /* Force reuse of a late texture whose format the eight-entry tracker lost. */
+    for (i = 0; i < GLES_PALETTE_SLOTS; i++) {
+        if (i != victim) {
+            assert(gles_palette_texture(palettes[i]) == textures[i]);
+        }
+    }
+    assert(gles_palette_texture(palettes[GLES_PALETTE_SLOTS]) == textures[victim]);
+    assert(image_calls == GLES_PALETTE_SLOTS && sub_calls == 1);
+    assert(gles_palette_texture(palettes[0]) == textures[0]);
+    assert(image_calls == GLES_PALETTE_SLOTS && sub_calls == 1);
+
+    for (i = 0; i < GLES_PALETTE_SLOTS; i++) {
+        assert(GlTex_Delete(textures[i]));
+        gles_unregister_tex(textures[i]);
+    }
+    gles_palette_slots_reset();
+    puts("ok: colliding GLES palettes hit independently and LRU reuses texture storage");
+}
+#endif
 
 static void test_targets_capture(void)
 {
@@ -736,8 +845,8 @@ static void test_vita_render_cache(void)
 }
 #endif
 
-#ifndef TEST_GLES
 void *Sprite_GetPixels(SpriteSet *set,int index) { return ((Sprite *)set->sprites->data)[index].pixels; }
+#ifndef TEST_GLES
 int SpriteTexKey_Matches(const void *a,int f,int w,int h,int b,const void *c,int g,int x,int y,int d)
 { return a==c && f==g && w==x && h==y && b==d; }
 int Sprite_TextureStep(int size,int max) { assert(0);return 1; }
@@ -775,6 +884,9 @@ int main(void)
     install();
 #ifndef TEST_GLES
     test_stream_reservation();
+#else
+    test_gles_palette_cache();
+    test_gles_atlas_overflow();
 #endif
     test_sizes_uploads();test_targets_capture();test_failed_restore_detaches();test_programs_lifetime();
 #ifdef TEST_VITA

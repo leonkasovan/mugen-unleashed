@@ -105,6 +105,10 @@ int GlesDraw_LoadProgram(GlesProgram *out, const char *vert_src, const char *fra
     glBindAttribLocation(p, GLES_ATTR_TEXCOORD, "a_texcoord");
     glBindAttribLocation(p, GLES_ATTR_ATLAS_MVP, "a_instance_mvp");
     glBindAttribLocation(p, GLES_ATTR_ATLAS_RECT, "a_atlas_rect");
+    glBindAttribLocation(p, GLES_ATTR_ATLAS_PARAMS, "a_atlas_params");
+    glBindAttribLocation(p, GLES_ATTR_ATLAS_ADD, "a_atlas_add");
+    glBindAttribLocation(p, GLES_ATTR_ATLAS_MUL, "a_atlas_mul");
+    glBindAttribLocation(p, GLES_ATTR_ATLAS_FX, "a_atlas_fx");
     glLinkProgram(p);
     glGetProgramiv(p, GL_LINK_STATUS, &ok);
     if (!ok) {
@@ -136,13 +140,37 @@ int GlesDraw_LoadProgram(GlesProgram *out, const char *vert_src, const char *fra
     if (out->u_mvp < 0 &&
         (glGetAttribLocation(p, "a_instance_mvp") != GLES_ATTR_ATLAS_MVP ||
          glGetAttribLocation(p, "a_atlas_rect") != GLES_ATTR_ATLAS_RECT ||
-         out->texsize < 0)) {
+         glGetAttribLocation(p, "a_atlas_params") != GLES_ATTR_ATLAS_PARAMS ||
+         glGetAttribLocation(p, "a_atlas_add") != GLES_ATTR_ATLAS_ADD ||
+         glGetAttribLocation(p, "a_atlas_mul") != GLES_ATTR_ATLAS_MUL ||
+         glGetAttribLocation(p, "a_atlas_fx") != GLES_ATTR_ATLAS_FX)) {
         /* Without the MVP the quad cannot be placed; treat it as a failure
          * rather than drawing at an undefined transform. */
         Log_Printf("GLES: %s has no usable sprite transform\n", label);
         glDeleteProgram(p);
         out->program = 0;
         return 0;
+    }
+    if (out->u_mvp < 0) {
+        /* Port addition: fixed sampler bindings for seven sprite/palette pairs.
+         * GLSL ES 1.00 cannot dynamically index sampler arrays, so the atlas
+         * shaders select named samplers with explicit branches. */
+        GLint previous = 0;
+        int i;
+        glGetIntegerv(GL_CURRENT_PROGRAM, &previous);
+        glUseProgram(p);
+        for (i = 0; i < GLES_ATLAS_TEXTURE_SLOTS; ++i) {
+            char name[24];
+            GLint location;
+            snprintf(name, sizeof(name), "atlas_tex%d", i);
+            location = glGetUniformLocation(p, name);
+            if (location >= 0) glUniform1i(location, i);
+            snprintf(name, sizeof(name), "atlas_pal%d", i);
+            location = glGetUniformLocation(p, name);
+            if (location >= 0) glUniform1i(location, GLES_ATLAS_TEXTURE_SLOTS + i);
+        }
+        glUseProgram((GLuint)previous);
+        GlesDraw_InvalidateState();
     }
     return 1;
 }
@@ -412,7 +440,7 @@ void GlesDraw_Atlas(GlesBuffer *buf, const GlesProgram *prog, const GlesAtlasBat
     glBindBuffer(GL_ARRAY_BUFFER, buf->vbo);
     glVertexAttribPointer(GLES_ATTR_POSITION, 2, GL_FLOAT, GL_FALSE, 0, NULL);
     glEnableVertexAttribArray(GLES_ATTR_POSITION);
-    for (attr = GLES_ATTR_ATLAS_MVP; attr <= GLES_ATTR_ATLAS_RECT; attr++) {
+    for (attr = GLES_ATTR_ATLAS_MVP; attr <= GLES_ATTR_ATLAS_FX; attr++) {
         size_t offset = sprite_offset + (attr - GLES_ATTR_ATLAS_MVP) * 4 * sizeof(float);
 
         glVertexAttribPointer(attr, 4, GL_FLOAT, GL_FALSE, sizeof(batch->sprites[0]), (const void *)offset);
@@ -431,7 +459,7 @@ void GlesDraw_Atlas(GlesBuffer *buf, const GlesProgram *prog, const GlesAtlasBat
     glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, count);
     Perf_CountDraw(2 * (unsigned int)count);
     BatchProf_Split(BATCHPROF_SPLIT_DRAW, BATCHPROF_NOW() - mark);
-    for (attr = GLES_ATTR_ATLAS_MVP; attr <= GLES_ATTR_ATLAS_RECT; attr++) {
+    for (attr = GLES_ATTR_ATLAS_MVP; attr <= GLES_ATTR_ATLAS_FX; attr++) {
         glVertexAttribDivisor(attr, 0);
         glDisableVertexAttribArray(attr);
     }

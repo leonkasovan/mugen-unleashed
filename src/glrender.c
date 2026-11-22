@@ -42,6 +42,11 @@
 #include "shader_src.h"
 #include "gl_size.h"
 #include "batchprof.h"
+#include "sffatlas.h"
+
+#ifndef MUGEN_VITA_GL
+static GlProgram atlas_indexed, atlas_rgba;
+#endif
 
 static void Glr_ForgetFormat(const GlTex *tex);
 static int *Glr_FormatSlot(const GlTex *tex);
@@ -52,15 +57,6 @@ static size_t Glr_StreamBudget(void);
 static void Glr_StreamDropAll(int delete_gl);
 static void Glr_StreamLog(void);
 static unsigned int g_attachedTexture, g_attachedDepth;
-
-/* Port-move placeholder: the desktop atlas batch queue arrives with the next
- * commit (the SFF3 GLES batch path). Until it exists nothing is ever queued,
- * so this no-op is behaviour-neutral; it is replaced there, not kept. */
-#if !defined(MUGEN_VITA_GL) && !defined(MUGEN_GLES) && !defined(ANDROID_PORT)
-void GlBatch_Flush(void)
-{
-}
-#endif
 
 /* Port fix: reject unsafe payloads and impossible storage before touching GL. */
 static int Glr_TextureSize(int w, int h)
@@ -293,7 +289,7 @@ int GlTex_Init(GlTex *tex)
     tex->id = 0;
     tex->w = 0;
     tex->h = 0;
-    tex->unused_0c = 0;
+    tex->gles_internal_format = 0;
     tex->depth = 0;
     tex->refs = 0;
     tex->size = 0;
@@ -307,6 +303,7 @@ int GlTex_Init(GlTex *tex)
  */
 int GlTex_Delete(GlTex *tex)
 {
+    GlBatch_Flush();
     if (tex == NULL) return 0;
     if (tex->refs > 0) {
         return 0;
@@ -339,6 +336,7 @@ int GlTex_Delete(GlTex *tex)
 /* 0x00479E00: allocates w x h RGBA texels for tex (no data). */
 int GlTex_Alloc(GlTex *tex, int w, int h)
 {
+    GlBatch_Flush();
     GLenum err;
 
     if (tex == NULL || tex->id == 0 || !Glr_TextureSize(w, h)) return 0;
@@ -505,6 +503,7 @@ static int *Glr_FormatSlot(const GlTex *tex)
  */
 int GlTex_Upload(GlTex *tex, int h, int internal_format, int w, int format, const void *pixels)
 {
+    GlBatch_Flush();
     int *stored;
     int reuse;
     GLenum err;
@@ -540,6 +539,7 @@ int GlTex_Upload(GlTex *tex, int h, int internal_format, int w, int format, cons
 /* 0x0047A0E0: uploads width RGBA pixels to tex as a 1D texture (palettes). */
 int GlTex_Upload1D(GlTex *tex, int width, const void *pixels)
 {
+    GlBatch_Flush();
     GLenum err;
 
     if (tex == NULL || tex->id == 0 || !Glr_TextureSize(width, 1)) return 0;
@@ -598,6 +598,7 @@ int GlTex_AllocDepth(GlTex *tex)
 /* 0x0047A260: uploads the w x h RGBA screen to the top left of g_glScreenTexCur. */
 int GlScreen_Upload(int h, int w, const void *pixels)
 {
+    GlBatch_Flush();
     GlTex *tex = g_glScreenTexCur;
     GLenum err;
 
@@ -617,6 +618,7 @@ int GlScreen_Upload(int h, int w, const void *pixels)
 /* 0x0047A320: draws the uploaded screen over w x h pixels of the window. */
 void GlScreen_Draw(int w, int h)
 {
+    GlBatch_Flush();
     GlTex *tex = g_glScreenTexCur;
     float u = (float)((double)g_glScreenUploadW / tex->w);
     float v = (float)((double)g_glScreenUploadH / tex->h);
@@ -887,6 +889,8 @@ int Gl_Deinit(void)
     g_glSysTex[0] = g_glSysTex[1] = NULL;
     /* Port addition (SFF memory plan, P3): cached stream textures belong to
      * this context. */
+    GlBatch_Flush();
+    Sff3_ForgetTextures();
     Glr_StreamDropAll(1);
     if (g_glFramebuffer != 0) {
         g_glewBindFramebufferEXT(GLR_FRAMEBUFFER, 0);
@@ -925,6 +929,7 @@ int Gl_Deinit(void)
  */
 int Gl_SetupView(void)
 {
+    GlBatch_Flush();
     int h = g_targetHeight;
     int w = g_targetWidth;
     int bottom, top;
@@ -960,6 +965,7 @@ int Gl_SetupView(void)
 /* 0x0047AB80: identity modelview moved by the detected sprite offset; no program in use. */
 void Gl_ResetModelview(void)
 {
+    GlBatch_Flush();
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
     glTranslatef(g_glOffsetX, g_glOffsetY, 0.0f);
@@ -1123,6 +1129,7 @@ static void Glr_UseProgram(unsigned int program)
 void Gl_DrawQuadRgba(const PalFx *fx, GlTex *tex, float x0, float y0, float x1, float y1, float x2, float y2,
                      float x3, float y3, const DrawParams *dp)
 {
+    GlBatch_Flush();
     float v[8] = { x0, y0, x1, y1, x2, y2, x3, y3 };
     float c0, c1;
     int mask = dp->masked;
@@ -1175,6 +1182,7 @@ void Gl_DrawQuadRgba(const PalFx *fx, GlTex *tex, float x0, float y0, float x1, 
 void Gl_DrawQuadIndexed(const PalFx *fx, GlTex *tex, GlTex *pal, float x0, float y0, float x1, float y1, float x2,
                         float y2, float x3, float y3, const DrawParams *dp)
 {
+    GlBatch_Flush();
     float v[8] = { x0, y0, x1, y1, x2, y2, x3, y3 };
     float c0, c1;
     int mask = dp->masked;
@@ -1355,7 +1363,7 @@ static int Glr_SetOwnsPixel(SpriteSet *set, const void *source)
     for (i = 0; i < sprites->count; i++) {
         const Sprite *spr = (const Sprite *)(sprites->data + sprites->elem_size * i);
 
-        if (spr->owns_pixels && spr->pixels == source) {
+        if ((spr->owns_pixels || spr->format == SPRITE_FORMAT_ATLAS) && spr->pixels == source) {
             return 1;
         }
     }
@@ -1370,6 +1378,7 @@ static int Glr_SetOwnsPixel(SpriteSet *set, const void *source)
  */
 void Gl_OnSpriteSetFreed(SpriteSet *set)
 {
+    GlBatch_Flush();
     const unsigned char *base = set != NULL ? (const unsigned char *)set->data : NULL;
     size_t bytes = SpriteSet_GetDataSourceSize(set);
     int i;
@@ -1567,6 +1576,128 @@ static GlTex *Glr_StreamTexture(SpriteSet *set, int sprite, Sprite *spr)
     return tex;
 }
 
+static void Glr_SpriteBlend(int blend, const DrawParams *dp)
+{
+    if (blend != 0) {
+        glEnable(GL_BLEND);
+#ifdef MUGEN_VITA_GL
+        /* Port approximation: vitaGL rejects GL_CONSTANT_ALPHA. Use the
+         * documented additive destination instead of retaining stale state. */
+        glBlendFunc(GL_ONE, GL_ONE);
+#else
+        glBlendFunc(GL_ONE, GLR_CONSTANT_ALPHA);
+#endif
+        g_glewBlendColor(dp->alpha_src, dp->alpha_src, dp->alpha_src, dp->alpha_dst);
+        if (blend == BLEND_ADD) {
+            double sum;
+            g_glewBlendEquation(GLR_FUNC_ADD);
+            sum = (double)dp->alpha_src + dp->alpha_dst;
+            if ((double)0.999f <= sum && sum <= (double)1.001f) {
+                glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+            }
+        } else if (blend == BLEND_SUB) {
+            g_glewBlendEquation(GLR_FUNC_REVERSE_SUBTRACT);
+        }
+    } else if (dp->masked != 0) {
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+        g_glewBlendEquation(GLR_FUNC_ADD);
+    }
+}
+
+#ifndef MUGEN_VITA_GL
+/* GL2 compatibility profile. Send one triangle list per consecutive run.
+ * Four secondary texture coordinate attributes carry each sprite's original
+ * modelview to the shader, so transforms can vary within the same draw. */
+typedef struct AtlasDraw {
+    float mv[16], rect[4];
+} AtlasDraw;
+
+static AtlasDraw pending[128];
+static int pending_count;
+static struct {
+    GlTex *page, *palette;
+    GlProgram *program;
+    GlrFx terms;
+    PalFx fx;
+    DrawParams dp;
+    int blend, depth;
+} material;
+
+void GlBatch_Flush(void)
+{
+    int count = pending_count;
+    if (!count) return;
+    pending_count = 0;
+    GlTex *tex = material.page;
+    Glr_UseProgram(material.program->program);
+    g_glewActiveTexture(GLR_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex->id);
+    int filter = material.palette ? GL_NEAREST : GL_LINEAR;
+    GlTex_SetParameter(tex, GL_TEXTURE_MIN_FILTER, filter);
+    GlTex_SetParameter(tex, GL_TEXTURE_MAG_FILTER, filter);
+    GlTex_SetParameter(tex, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    GlTex_SetParameter(tex, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    if (material.palette) {
+        g_glewActiveTexture(GLR_TEXTURE1);
+        glBindTexture(GL_TEXTURE_1D, material.palette->id);
+    }
+    Glr_SpriteBlend(material.blend, &material.dp);
+    Glr_SetUniforms(material.program, &material.fx, &material.terms, tex, &material.dp, material.dp.masked);
+    glBegin(GL_TRIANGLES);
+    for (int i = 0; i < count; ++i) {
+        const float *r = pending[i].rect;
+        static const unsigned corners[] = {0,1,2,2,1,3};
+        g_glewMultiTexCoord4f(GLR_TEXTURE1, r[0],r[1],r[2],r[3]);
+        for (int k = 0; k < 4; ++k) {
+            const float *v = pending[i].mv + 4*k;
+            g_glewMultiTexCoord4f(GLR_TEXTURE0+2+k, v[0],v[1],v[2],v[3]);
+        }
+        for (int j = 0; j < 6; ++j) {
+            float x = (float)(corners[j]&1), y = (float)(corners[j]>>1);
+            g_glewMultiTexCoord2f(GLR_TEXTURE0, x, y);
+            glVertex2f(x*r[2], y*r[3]);
+        }
+    }
+    glEnd();
+    if (!material.palette) glDisable(GL_TEXTURE_2D);
+    if (material.blend || material.depth == 32) glDisable(GL_BLEND);
+    Perf_CountDraw(2*count);
+    BatchProf_Program(material.program->program);
+    BatchProf_Texture(0, tex->id);
+    if (material.palette) BatchProf_Texture(1, material.palette->id);
+    BatchProf_Submit(count, 6*count, 0, 2*count, 0);
+}
+
+static void Glr_QueueAtlas(GlTex *tex, GlTex *pal, const float rect[4], const PalFx *fx,
+                           const DrawParams *dp, int blend, int depth)
+{
+    GlrFx terms;
+    Glr_FxTerms(fx, &terms);
+    if (pending_count && (pending_count == 128 || material.page != tex ||
+        material.palette != pal || material.blend != blend || material.dp.masked != dp->masked ||
+        material.dp.alpha_src != dp->alpha_src || material.dp.alpha_dst != dp->alpha_dst ||
+        material.fx.invertall != fx->invertall || memcmp(&terms, &material.terms, sizeof(terms))))
+        GlBatch_Flush();
+    if (!pending_count) {
+        material.page = tex; material.palette = pal;
+        material.program = pal ? &atlas_indexed : &atlas_rgba;
+        material.fx = *fx; material.terms = terms; material.dp = *dp;
+        material.depth = depth;
+        material.blend = blend;
+    }
+    memcpy(pending[pending_count].rect, rect, sizeof(pending[0].rect));
+    glGetFloatv(GL_MODELVIEW_MATRIX, pending[pending_count].mv);
+    ++pending_count;
+    static int batch = -1;
+    if (batch < 0) {
+        const char *v = getenv("MUGEN_SPRITEBATCH");
+        batch = !v || strcmp(v, "0") != 0;
+    }
+    if (!batch) GlBatch_Flush();
+}
+#endif
+
 /*
  * Reports the streaming cache at shutdown. Opt-in (MUGEN_SFFTEXLOG=1) because
  * a default mugen.log must stay comparable with the original's.
@@ -1612,6 +1743,15 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
     }
     w = spr->w;
     h = spr->h;
+#ifndef MUGEN_VITA_GL
+    float rect[4], c0, c1;
+    GlTex *page = NULL;
+    if (spr->format == SPRITE_FORMAT_ATLAS && (paletted ? atlas_indexed.program : atlas_rgba.program) &&
+        !Glr_QuadSpecial(dp, &c0, &c1))
+        page = Sff3_Texture(spr, rect);
+    if (page) tex = page;
+    else
+#endif
     if (spr->format == SPRITE_FORMAT_TEXTURE) {
         g_glStatSpriteTexture++;
         tex = spr->pixels;
@@ -1633,6 +1773,7 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
     }
     if (paletted) {
         Palette *pal = SpriteSet_GetPaletteConverted(set, spr->pal_index);
+        if (!pal) return;
         if (pal->is_texture == 1) {
             g_glStatPalTexture++;
             pal_tex = pal->data;
@@ -1706,31 +1847,14 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
     glScalef((float)((double)sx1 * dp->scale_x), (float)((double)sy1 * dp->scale_y), 1.0f);
     glTranslatef((float)-spr->x, (float)-spr->y, 0.0f);
 
-    if (blended) {
-        glEnable(GL_BLEND);
-#ifdef MUGEN_VITA_GL
-        /* Port approximation: vitaGL rejects GL_CONSTANT_ALPHA. Use the
-         * documented additive destination instead of retaining stale state. */
-        glBlendFunc(GL_ONE, GL_ONE);
-#else
-        glBlendFunc(GL_ONE, GLR_CONSTANT_ALPHA);
-#endif
-        g_glewBlendColor(dp->alpha_src, dp->alpha_src, dp->alpha_src, dp->alpha_dst);
-        if (blend == BLEND_ADD) {
-            double sum;
-            g_glewBlendEquation(GLR_FUNC_ADD);
-            sum = (double)dp->alpha_src + dp->alpha_dst;
-            if ((double)0.999f <= sum && sum <= (double)1.001f) {
-                glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-            }
-        } else if (blend == BLEND_SUB) {
-            g_glewBlendEquation(GLR_FUNC_REVERSE_SUBTRACT);
-        }
-    } else if (dp->masked != 0) {
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-        g_glewBlendEquation(GLR_FUNC_ADD);
+#ifndef MUGEN_VITA_GL
+    if (page) {
+        Glr_QueueAtlas(page, paletted ? pal_tex : NULL, rect, fx, dp, blend, spr->bpp);
+        return;
     }
+#endif
+    GlBatch_Flush();
+    Glr_SpriteBlend(blend, dp);
 
     /* The quad: the top edge squeezed by width_ratio around width_anchor. */
     fw = (float)w;
@@ -1841,6 +1965,7 @@ void Sprite_DrawGL(SpriteSet *set, int sprite, const DrawParams *dp)
 /* 0x0047BEE0: the clip rectangle as the scissor box (disabled for the whole target). */
 void Gl_ApplyClipRect(void)
 {
+    GlBatch_Flush();
     if (g_clipX1 == 0 && g_clipY1 == 0 && g_clipX2 == g_targetWidth && g_clipY2 == g_targetHeight) {
         glDisable(GL_SCISSOR_TEST);
         return;
@@ -1856,6 +1981,7 @@ void Gl_ApplyClipRect(void)
 /* 0x0047BF90: g_gfxCapture of the OpenGL renderer: the whole render target. */
 void *Gl_Capture(void)
 {
+    GlBatch_Flush();
     return Gl_ReadPixels(g_targetWidth, g_targetHeight);
 }
 
@@ -1928,6 +2054,7 @@ GlTex *GlVbuf_Alloc(int depth, int w, int h)
 /* 0x0047C1A0: renders to vbuf (NULL: the window), with the viewport and projection for it. */
 int GlVbuf_Bind(GlTex *vbuf)
 {
+    GlBatch_Flush();
     int w, h;
 
     if (vbuf == NULL) {
@@ -1952,6 +2079,7 @@ int GlVbuf_Bind(GlTex *vbuf)
  */
 void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
 {
+    GlBatch_Flush();
     if (set != NULL) {
         Sprite *spr = Glr_SpriteAt(set, sprite);
         SpriteSet *target;
@@ -2026,6 +2154,7 @@ void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
  */
 int Gl_AttachFramebuffer(unsigned int texture, unsigned int depth)
 {
+    GlBatch_Flush();
     GLint previous = 0;
     int previous_bound = g_glBoundFramebuffer;
     GLenum status;
@@ -2134,8 +2263,40 @@ static unsigned int Glr_CompileShader(unsigned int type, char *src)
     return shader;
 }
 
+#ifndef MUGEN_VITA_GL
+/* Only adapt the two stock GLSL 1.20 shader pairs. A replacement shader
+ * can use arbitrary coordinates, texture sizes or lookup functions. */
+static uint32_t shader_fingerprint(const char *text)
+{
+    uint32_t h = 2166136261u;
+    while (*text) {
+        unsigned char c = (unsigned char)*text++;
+        if (c != '\r') h = (h ^ c) * 16777619u;
+    }
+    return h;
+}
+
+static char *atlas_fragment(const char *src, int indexed)
+{
+    const char *sample = "texture2D(texunit0, gl_TexCoord[0].st)";
+    const char *replacement = indexed ?
+        "texture2D(texunit0, (gl_TexCoord[1].xy + clamp(floor(gl_TexCoord[0].st * gl_TexCoord[1].zw),"
+        "vec2(0.0), gl_TexCoord[1].zw - 1.0) + 0.5) / texsize)" :
+        "texture2D(texunit0, (gl_TexCoord[1].xy + clamp(gl_TexCoord[0].st, 0.0, 1.0) * gl_TexCoord[1].zw) / texsize)";
+    const char *at = strstr(src, sample);
+    if (!at) return NULL;
+    size_t prefix = (size_t)(at-src);
+    char *out = malloc(strlen(src) + strlen(replacement) + 1);
+    if (!out) return NULL;
+    memcpy(out, src, prefix);
+    strcpy(out + prefix, replacement);
+    strcat(out + prefix, at + strlen(sample));
+    return out;
+}
+#endif
+
 /* 0x0047C580: port fix: transactional read/compile/link, including cleanup. */
-int Gl_LoadShader(const char **defines, GlProgram *prog, const char *name)
+static int Glr_LoadShader(const char **defines, GlProgram *prog, const char *name, int atlas)
 {
     char defs[GLR_DEFINES_SIZE], path[MAX_PATH];
     size_t n = 0;
@@ -2171,7 +2332,17 @@ int Gl_LoadShader(const char **defines, GlProgram *prog, const char *name)
     if (f == NULL) goto fail;
     text = Gl_ReadFile(f);
     if (text == NULL) goto fail;
-    src = Gl_InsertDefines(text, defs); free(text);
+#ifndef MUGEN_VITA_GL
+    if (atlas) {
+        if (shader_fingerprint(text) != 0x6662101eu) { free(text); goto fail; }
+        src = Gl_InsertDefines("#version 120\nvoid main(){ gl_TexCoord[0]=gl_MultiTexCoord0;"
+                     "gl_TexCoord[1]=gl_MultiTexCoord1;"
+                     "mat4 mv=mat4(gl_MultiTexCoord2,gl_MultiTexCoord3,gl_MultiTexCoord4,gl_MultiTexCoord5);"
+                     "gl_Position=(gl_ProjectionMatrix*mv)*gl_Vertex; }\n", NULL);
+    } else
+#endif
+        src = Gl_InsertDefines(text, defs);
+    free(text);
     if (src == NULL) goto fail;
     built.vert = Glr_CompileShader(GLR_VERTEX_SHADER, src);
     if (built.vert == 0) goto fail;
@@ -2180,6 +2351,16 @@ int Gl_LoadShader(const char **defines, GlProgram *prog, const char *name)
     if (f == NULL) goto fail;
     text = Gl_ReadFile(f);
     if (text == NULL) goto fail;
+#ifndef MUGEN_VITA_GL
+    if (atlas) {
+        int indexed = strcmp(name, "indexed") == 0;
+        if (shader_fingerprint(text) != (indexed ? 0x2642cb61u : 0xf82838a0u)) { free(text); goto fail; }
+        char *adapted = atlas_fragment(text, indexed);
+        free(text);
+        text = adapted;
+        if (!text) goto fail;
+    }
+#endif
     src = Gl_InsertDefines(text, defs); free(text);
     if (src == NULL) goto fail;
     built.frag = Glr_CompileShader(GLR_FRAGMENT_SHADER, src);
@@ -2235,6 +2416,11 @@ fail:
     return 0;
 }
 
+int Gl_LoadShader(const char **defines, GlProgram *prog, const char *name)
+{
+    return Glr_LoadShader(defines, prog, name, 0);
+}
+
 /*
  * 0x0047C990: loads the 9 variants of the "indexed" and "rgba" programs,
  * with the palette lookup mode of g_glIndexMode. Port fix: fail atomically
@@ -2264,6 +2450,11 @@ int Gl_LoadShaders(void)
     Gl_FreeShaders();
     memcpy(g_glProgramsIndexed, indexed, sizeof(indexed));
     memcpy(g_glProgramsRgba, rgba, sizeof(rgba));
+#ifndef MUGEN_VITA_GL
+    const char *atlas_defs[] = {mode, "PERSPECTIVE_NONE", NULL};
+    Glr_LoadShader(atlas_defs, &atlas_indexed, "indexed", 1);
+    Glr_LoadShader(atlas_defs, &atlas_rgba, "rgba", 1);
+#endif
 #ifdef MUGEN_VITA_GL
     VitaDiag_Log("GAME SHADERS PASS %i/%i programs loaded by the real renderer\n",2*GL_PROGRAM_COUNT,2*GL_PROGRAM_COUNT);
 #endif
@@ -2297,6 +2488,11 @@ static void Glr_FreeProgram(GlProgram *prog)
 int Gl_FreeShaders(void)
 {
     int i;
+    GlBatch_Flush();
+#ifndef MUGEN_VITA_GL
+    Glr_FreeProgram(&atlas_indexed);
+    Glr_FreeProgram(&atlas_rgba);
+#endif
     if (g_glCurrentProgram != 0) g_glewUseProgram(0);
     g_glCurrentProgram = 0;
 

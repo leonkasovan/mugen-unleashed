@@ -3331,6 +3331,8 @@ void Model_Draw(Model *mdl, int scene, int layer, int default_layer, const float
     /* Port addition: a model draw rebinds the whole pipeline, so queued sprite
      * quads must be submitted first (gles_render.h). */
     GlesBatch_Flush();
+#else
+    GlBatch_Flush();
 #endif
     const ModelProgram *prog = &g_modelProgram;
     const ModelScene *sc;

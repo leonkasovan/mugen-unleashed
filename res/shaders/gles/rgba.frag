@@ -9,15 +9,47 @@
  */
 precision mediump float;
 ////*EB_DEFINES*////
+#ifdef SPRITE_ATLAS
+uniform sampler2D atlas_tex0, atlas_tex1, atlas_tex2, atlas_tex3;
+uniform sampler2D atlas_tex4, atlas_tex5, atlas_tex6;
+#else
 uniform sampler2D texunit0;
+#endif
 uniform bool mask;
+#ifdef SPRITE_ATLAS
+varying highp vec4 v_atlas_rect;
+varying highp vec4 v_atlas_params;
+varying highp vec4 v_atlas_add;
+varying highp vec4 v_atlas_mul;
+varying highp vec4 v_atlas_fx;
+#define add v_atlas_add.xyz
+#define mul v_atlas_mul.xyz
+#define invertall (v_atlas_fx.x > 0.5)
+#define colorbal v_atlas_mul.w
+#define src_alphamul v_atlas_add.w
+#else
 uniform vec3 add;
 uniform vec3 mul;
 uniform bool invertall;
 uniform float colorbal;
 uniform float src_alphamul;
 uniform vec2 texsize;
+#endif
 varying vec4 v_texcoord;
+
+#ifdef SPRITE_ATLAS
+vec4 atlas_rgba_sample(highp vec2 uv)
+{
+  highp float slot = v_atlas_params.z;
+  if (slot < 0.5) return texture2D(atlas_tex0, uv);
+  if (slot < 1.5) return texture2D(atlas_tex1, uv);
+  if (slot < 2.5) return texture2D(atlas_tex2, uv);
+  if (slot < 3.5) return texture2D(atlas_tex3, uv);
+  if (slot < 4.5) return texture2D(atlas_tex4, uv);
+  if (slot < 5.5) return texture2D(atlas_tex5, uv);
+  return texture2D(atlas_tex6, uv);
+}
+#endif
 
 
 /*
@@ -72,7 +104,11 @@ void palfx(inout vec4 color)
  */
 vec4 texcol()
 {
-#if defined(PERSPECTIVE_NONE)
+#if defined(SPRITE_ATLAS)
+  highp vec2 texel = clamp(floor(v_texcoord.st * v_atlas_rect.zw),
+                           vec2(0.0), v_atlas_rect.zw - vec2(1.0));
+  vec4 color = atlas_rgba_sample((v_atlas_rect.xy + texel + vec2(0.5)) / v_atlas_params.xy);
+#elif defined(PERSPECTIVE_NONE)
   vec4 color = texture2D(texunit0, v_texcoord.st);
 #elif defined(PERSPECTIVE_STANDARD)
   vec4 color = texture2D(texunit0, v_texcoord.st / v_texcoord.q);

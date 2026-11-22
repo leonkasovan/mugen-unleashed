@@ -40,7 +40,7 @@ for backend in desktop gles linux-gles vita; do
         printf 'void main(){}\n' > "$OUT/data/$name.vert"
         printf 'void main(){}\n' > "$OUT/data/$name.frag"
     done
-    (cd "$OUT"; ${RUNNER:-} "./test_$backend")
+    (cd "$OUT"; MUGEN_SPRITEATLAS=1 ${RUNNER:-} "./test_$backend")
 done
 
 # A refused context must fail before the backend calls any GL entry point.

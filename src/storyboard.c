@@ -297,7 +297,10 @@ Storyboard *Storyboard_Parse(const char *dir, Ini *ini)
     strcpy(buf.path, STORYBOARD_KIND "def");
     has_definition = Ini_SelectGroup(ini, buf.path) != -1;
     if (!has_definition && !video_storyboard) {
-        sprintf(g_libraryErrorText, "Can't access group %s", buf.path);
+        /* Port fix: snprintf, not sprintf. buf.path is 0x208 and the message
+         * buffer 0x100, so a long group name overflows it; truncated instead. */
+        snprintf(g_libraryErrorText, sizeof(g_libraryErrorText),
+                 "Can't access group %s", buf.path);
         return NULL;
     }
     sb = calloc(1, sizeof(Storyboard));

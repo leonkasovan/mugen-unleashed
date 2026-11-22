@@ -39,6 +39,7 @@ static double perf_wait_ms;
 static double perf_present_ms;
 static double perf_calls;
 static double perf_triangles;
+static unsigned int perf_last_calls;
 #ifdef MUGEN_VITA_GL
 static double perf_vita_frame[PERF_VITA_PHASE_COUNT];
 static double perf_vita_sum[PERF_VITA_PHASE_COUNT];
@@ -267,6 +268,7 @@ void Perf_PresentDone(void)
         }
     }
     if (perf_marks == PERF_MARK_ALL) {
+        perf_last_calls = (unsigned int)perf_calls;
         perf_sum_logic += perf_logic_ms;
         perf_sum_draw += perf_draw_ms;
         perf_sum_wait += perf_wait_ms;
@@ -298,6 +300,14 @@ void Perf_CountDraw(unsigned int triangles)
 }
 
 #if !defined(ANDROID_PORT) || defined(MUGEN_GLES)
+unsigned int Probe_CurrentCalls(void) { return (unsigned int)perf_calls; }
+
+unsigned int Perf_LastDrawCount(void)
+{
+    return perf_last_calls;
+}
+
+/* Port fix: index_count/3 only describes independent triangles. */
 unsigned int Perf_TriangleCount(unsigned int mode, unsigned int count)
 {
     switch (mode) {

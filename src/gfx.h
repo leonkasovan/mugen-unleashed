@@ -48,7 +48,7 @@ typedef struct GlTex {
     unsigned int id;        /* 0x00 GL texture name */
     int w;                  /* 0x04 allocated size */
     int h;                  /* 0x08 (0 for 1D textures) */
-    int unused_0c;          /* 0x0C cleared, never read */
+    int gles_internal_format; /* 0x0C originally unused, GLES level-0 storage format */
     unsigned int depth;     /* 0x10 depth renderbuffer of a vbuf (GlTex_AllocDepth) */
     int refs;               /* 0x14 */
     unsigned int size;      /* 0x18 bytes of video memory (g_glTexMemory) */

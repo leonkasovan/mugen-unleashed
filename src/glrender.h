@@ -1,9 +1,7 @@
 #ifndef MUGEN_GLRENDER_H
 #define MUGEN_GLRENDER_H
 
-/* Flush queued desktop atlas draws before an immediate GL operation.
- * Port-move note: the batch queue itself lands in the next commit; until then
- * nothing is queued, so the call is a no-op and this stays behaviour-neutral. */
+/* Flush queued desktop atlas draws before an immediate GL operation. */
 #if !defined(MUGEN_VITA_GL) && !defined(MUGEN_GLES) && !defined(ANDROID_PORT)
 void GlBatch_Flush(void);
 #else
