@@ -65,12 +65,20 @@ static int g_limit_stage_pairs;
 static int g_indexed_atlas_inverse_size;
 static int g_atlasResidentPages;
 static GlesProgram g_glesProgramAtlas, g_glesProgramAtlasRgba;
+static int g_spriteAtlasDefault;
+static int g_spriteBatchDefault = -1;
+
+void Gles_ConfigureSprites(int atlas, int batch)
+{
+    g_spriteAtlasDefault = atlas == 1;
+    g_spriteBatchDefault = (batch == 0 || batch == 1) ? batch : -1;
+}
 
 static int gles_atlas_requested(void)
 {
     const char *value = getenv("MUGEN_SPRITEATLAS");
 
-    return value != NULL && strcmp(value, "1") == 0;
+    return value != NULL ? strcmp(value, "1") == 0 : g_spriteAtlasDefault;
 }
 
 static GlMvp g_glesProjection;
@@ -943,6 +951,7 @@ static GlesProgram g_glesProgramIndexed;
 static GlesProgram g_glesProgramRgba;
 static GlesProgram g_glesProgramSolid;
 static GlesBuffer g_glesBuffer;
+static unsigned int g_glesCaps;
 
 /* A solid-colour program for the primitive path (rects, lines, pixels). */
 static const char *gles_solid_vert_src =
@@ -1189,7 +1198,7 @@ void Gles_OnContextLost(void)
  */
 int Gles_OnContextRestore(int drawable_w, int drawable_h)
 {
-    int max_texture_size = 0;
+    unsigned int caps = 0;
 
     if (g_glesReady) {
         return 1;
@@ -1210,17 +1219,18 @@ int Gles_OnContextRestore(int drawable_w, int drawable_h)
             return 0;
         }
     }
-    if (!Gles_Probe(&max_texture_size)) {
+    if (!Gles_Probe(&caps)) {
         Log_Printf("GLES: restore failed: no usable context\n");
         return 0;
     }
+    g_glesCaps = caps;
     if (!gles_build_programs()) {
         /* The replacement context is live; delete partial programs on it. */
         gles_free_programs();
         Log_Printf("GLES: restore failed: programs did not rebuild\n");
         return 0;
     }
-    g_glMaxTextureSize = max_texture_size;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &g_glMaxTextureSize);
     if (drawable_w > 0 && drawable_h > 0) {
         glViewport(0, 0, drawable_w, drawable_h);
     }
@@ -1230,6 +1240,12 @@ int Gles_OnContextRestore(int drawable_w, int drawable_h)
     Log_Printf("GLES: context restored (%dx%d drawable, max texture %d)\n", drawable_w, drawable_h,
                g_glMaxTextureSize);
     return 1;
+}
+
+/* The capability bits the probe resolved, for the Android video layer. */
+unsigned int Gles_LastCaps(void)
+{
+    return g_glesCaps;
 }
 
 int Gles_IsReady(void)
@@ -1292,7 +1308,7 @@ static int gles_build_programs(void)
 
 int Gl_Init(int framebuffers)
 {
-    int max_texture_size = 0;
+    unsigned int caps = 0;
 
     if (g_glesReady) {
         return 1;
@@ -1305,15 +1321,16 @@ int Gl_Init(int framebuffers)
      * impossible: the caller saw "unavailable" while nothing had been tried.
      */
     Gl_Deinit();
-    if (!Gles_Probe(&max_texture_size)) {
+    if (!Gles_Probe(&caps)) {
         Log_Printf("\nGLES: capability probe failed; GL mode unavailable\n");
         return 0;
     }
+    g_glesCaps = caps;
     if (!gles_build_programs()) {
         Gl_Deinit();
         return 0;
     }
-    g_glMaxTextureSize = max_texture_size;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &g_glMaxTextureSize);
     g_glesReady = 1;
     g_glInitialized = 1;        /* port fix, see Gles_OnContextLost */
 #ifdef MUGEN_DEBUG
@@ -1775,7 +1792,7 @@ static int gles_batch_enabled(int native_atlas)
 
         /* Compatible ordinary and atlas sprites use the FIFO by default.
          * The override keeps a one-draw-per-sprite comparison path. */
-        g_batch_enabled = v != NULL ? strcmp(v, "1") == 0 : -1;
+        g_batch_enabled = v != NULL ? strcmp(v, "1") == 0 : g_spriteBatchDefault;
     }
     return g_batch_enabled >= 0 ? g_batch_enabled : native_atlas || (gles_atlas_requested() && g_glesProgramAtlas.program != 0);
 }

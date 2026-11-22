@@ -1268,7 +1268,11 @@ void BgElem_Draw(BgElem *e, Bg *bg)
         }
         break;
     }
-    Gfx_SetClipRect(clip_x1, clip_y1, clip_x2, clip_y2);
+    /* Port optimization: an unchanged scissor does not need a batch flush. */
+    if (g_renderMode != RENDER_OPENGL || clip_x1 != g_clipX1 || clip_y1 != g_clipY1 ||
+        clip_x2 != g_clipX2 || clip_y2 != g_clipY2) {
+        Gfx_SetClipRect(clip_x1, clip_y1, clip_x2, clip_y2);
+    }
 }
 
 /*

@@ -7,3 +7,5 @@ install/
 __pycache__/
 *.pyc
 .commandcode/
+node_modules/
+.pi/
