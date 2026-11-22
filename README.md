@@ -175,6 +175,66 @@ Unsupported model requests are logged.
 See [the merge and validation record](docs/UPSTREAM_MERGE.md) for the exact
 upstream revision, compatibility choices and remaining qualification limits.
 
+## Sprite atlases, LZ4 and the SFF toolchain
+
+These are mugen-unleashed additions, not part of the original engine.
+
+### SFF 3.00 atlases
+
+`src/sffatlas.c` adds an SFF 3.00 archive that stores sprites as rectangles
+borrowed from shared pages instead of one record per image. Convert with:
+
+```sh
+make sffcli
+./build/mingw-sdl2/sffcli --atlas chars/kfm/kfm.sff   # writes atlas.kfm.sff
+```
+
+The sibling is preferred automatically: a DEF naming `kfm.sff` will use
+`atlas.kfm.sff` when it exists and is valid, and fall back to the original if it
+is not. An explicit filename beginning with `atlas.` is opened exactly as named.
+This keeps atlasing opt-in per asset — only assets that ship an
+`atlas.<name>.sff` are atlas-backed. The wire format, conversion rules and
+rendering behaviour are in [docs/SFF3.md](docs/SFF3.md).
+
+The GLES renderer draws eligible consecutive sprites with instancing, sharing a
+draw when shader, clipping, masking and blend agree. Each distinct
+sprite/palette texture pair takes one of seven slots; the eighth starts a new
+draw. `MUGEN_SPRITEBATCH=0` forces one draw per sprite for comparison.
+
+### LZ4 sprite format 13
+
+`third_party/lz4` is LZ4 1.10.0. Sprite format 13 adds it as a codec alongside
+the original RLE8/RLE5/LZ5/PNG formats: lossless at any bit depth, decoded with a
+single allocation-free call. `sffcli --optimize --format lz4` (the default) uses
+it. A sprite that the chosen codec cannot shrink stays raw, so output is never
+larger than the input.
+
+### Mixed WAV/Ogg sound banks
+
+Sound banks may mix WAV and Ogg entries. An entry whose data begins with `OggS`
+is routed to the resampled Ogg decoder on both the eager and lazy (sound cache)
+paths; everything else goes through the WAV decoder. `tools/sndcli.c` inspects
+and converts these banks; it validates the whole record chain and refuses an
+existing or same-as-input output before writing. It builds against libsndfile,
+which is not vendored.
+
+### Directory mode in sffcli
+
+`sffcli` accepts a directory instead of a single file and processes every
+`*.sff` below it recursively with the chosen operation, reporting per-file
+progress and a summary. Re-runs skip the tool's own output — `opt.*` for
+`--optimize`, `atlas.*` for `--atlas`, and inputs whose PNG directory already
+exists for `--export` — so a second pass over a tree does not redo finished work.
+
+```sh
+./build/mingw-sdl2/sffcli --optimize chars/          # recursive, skips opt.*
+./build/mingw-sdl2/sffcli --atlas chars/             # recursive, skips atlas.*
+```
+
+Verification: `python tools/test_sff3.py <path-to-sffcli>` covers conversion,
+sibling lookup and the directory behaviour; `make sff3-probe` builds the
+engine-loader probe for the same suite.
+
 ## Legal
 
 M.U.G.E.N is © Elecbyte. Third-party libraries retain their license notices;
