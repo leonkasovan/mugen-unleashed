@@ -12,7 +12,6 @@ rem    port\psvita\build.bat                install what is missing, then build
 rem    port\psvita\build.bat --setup        install VitaSDK and its packages
 rem    port\psvita\build.bat --check-tools  report what is present, build nothing
 rem    port\psvita\build.bat --clean        remove this port's build output
-rem    port\psvita\build.bat --offline      fail instead of downloading anything
 rem    port\psvita\build.bat --jobs N       parallel build jobs (default: CPU count)
 rem    port\psvita\build.bat --model3d      basic glTF profile (on by default)
 rem    port\psvita\build.bat --no-model3d   compile model support out; the profile
@@ -113,7 +112,6 @@ if defined BUILD (set "BUILD_SET=1") else (set "BUILD_SET=0")
 set "JOBS=%NUMBER_OF_PROCESSORS%"
 if not defined JOBS set "JOBS=4"
 set "CLEAN=0"
-set "OFFLINE=0"
 set "DO_SETUP=0"
 set "CHECK_TOOLS=0"
 set "PRINT_ENV=0"
@@ -157,7 +155,6 @@ if /I "!ARG!"=="--setup"             ( set "DO_SETUP=1" & shift & goto parse )
 if /I "!ARG!"=="--check-tools"       ( set "CHECK_TOOLS=1" & shift & goto parse )
 if /I "!ARG!"=="--env"               ( set "PRINT_ENV=1" & shift & goto parse )
 if /I "!ARG!"=="--clean"             ( set "CLEAN=1" & shift & goto parse )
-if /I "!ARG!"=="--offline"           ( set "OFFLINE=1" & shift & goto parse )
 if /I "!ARG!"=="--debug"             ( set "BUILD_TYPE=Debug" & shift & goto parse )
 if /I "!ARG!"=="--profile"           ( set "PROFILE=1" & shift & goto parse )
 if /I "!ARG!"=="--gl-selftest"       ( set "GL_SELFTEST=ON" & shift & goto parse )
@@ -211,10 +208,6 @@ echo error: unknown argument: %~1  (--help)
 exit /b 2
 :parsed
 
-if "%OFFLINE%"=="1" if "%DO_SETUP%"=="1" (
-    echo error: --offline cannot be combined with --setup
-    exit /b 2
-)
 echo %JOBS%| findstr /r /c:"^[1-9][0-9]*$" >nul || (
     echo error: --jobs must be a positive integer, not '%JOBS%'
     exit /b 2
@@ -320,8 +313,7 @@ if "%CLEAN%"=="1" (
 )
 
 rem --check-tools reports and never touches the network, so it must not install
-rem the SDK it is being asked about. Every other mode downloads what is
-rem missing: that is what --offline exists to forbid.
+rem the SDK it is being asked about. Every other mode downloads what is missing.
 if "%CHECK_TOOLS%"=="1" goto report
 
 if "%DO_SETUP%"=="1" goto do_install
@@ -450,12 +442,6 @@ if "%SHADER_CACHE%"=="ON" goto want_vitagl
 goto vitagl_done
 :want_vitagl
 if exist "%ROOT%\third_party\vitagl\src\source\vgl.c" goto vitagl_done
-if "%OFFLINE%"=="1" (
-    echo error: --offline: the vendored vitaGL source is missing from
-    echo        %ROOT%\third_party\vitagl\src
-    echo        ^(--gl-selftest and --shader-cache build it^)
-    goto fail
-)
 call :fetch_vitagl
 if errorlevel 1 goto fail
 :vitagl_done
@@ -589,11 +575,6 @@ if not defined MISSING (
     exit /b 0
 )
 echo     missing:%MISSING%
-if "%OFFLINE%"=="1" (
-    echo error: --offline: these packages are not in %VITASDK_WIN%:%MISSING%
-    echo        ^(reinstall from the pinned archive, or drop --offline^)
-    exit /b 1
-)
 set "VDPM=%VITASDK_WIN%\bin\vdpm.exe"
 if not exist "%VDPM%" (
     echo error: vdpm not found in %VITASDK_WIN%\bin; the SDK is incomplete
@@ -688,11 +669,6 @@ if "%PRESENT%"=="1" (
     call :cc_version
     echo     ^(!CCVERSION!^)
     exit /b 0
-)
-if "%OFFLINE%"=="1" (
-    echo error: --offline: no VitaSDK at %VITASDK_WIN%
-    echo        ^(expected %CC_BIN% and share\vita.toolchain.cmake^)
-    exit /b 1
 )
 
 if not exist "%DOWNLOADS%" mkdir "%DOWNLOADS%"
@@ -862,13 +838,6 @@ rem A cached archive that fails its digest is not the asset this build was
 rem validated against; it is removed rather than unpacked.
 del /q "%ARCHIVE%"
 :vlib_need
-if "%OFFLINE%"=="1" (
-    echo     compiler  none: --offline and %VITA_LIBS_FILE% is not cached
-    echo               an OpenGL RenderMode then needs libshacccg.suprx
-    echo               installed on the console ^(ur0:/data/^)
-    set "COMPILER_REPORT=none ^(--offline, asset not cached^)"
-    exit /b 0
-)
 echo     compiler  downloading %VITA_LIBS_FILE% ^(vitaGL shader compiler^)
 echo               %VITA_LIBS_URL%
 set "DL_URL=%VITA_LIBS_URL%"

@@ -12,7 +12,7 @@
     sdkmanager.bat and CMake, and gradlew.bat are all native. Missing tools are
     installed with BITS/Get-FileHash/bsdtar and sdkmanager; missing SDL2 and its
     companions are cross-compiled by tools\build_sdl2_companions.bat. Nothing
-    is fetched with git. -CheckTools and -Offline never download.
+    is fetched with git. -CheckTools never downloads.
 
     Arguments not listed below are passed straight through, so the build.bat
     spelling works too:   .\build.ps1 --debug --no-assets
@@ -31,9 +31,6 @@
 
 .PARAMETER Clean
     Clean the generated app build and staging directories.
-
-.PARAMETER Offline
-    Use only cached Gradle/dependencies.
 
 .PARAMETER Debug
     Debug APK (default release).
@@ -67,10 +64,8 @@ param(
     [switch]$Setup,
     [switch]$DownloadTools,
     [switch]$Clean,
-    [switch]$Offline,
     [switch]$Debug,
     [switch]$NoAssets,
-    [switch]$Gles,
     [switch]$Model3d,
     [switch]$VideoBg
 )
@@ -90,10 +85,9 @@ if ($CheckTools)    { $argv.Add('--check-tools') }
 if ($Setup)         { $argv.Add('--setup') }
 if ($DownloadTools) { $argv.Add('--download-tools') }
 if ($Clean)         { $argv.Add('--clean') }
-if ($Offline)       { $argv.Add('--offline') }
+
 if ($Debug)         { $argv.Add('--debug') }
 if ($NoAssets)      { $argv.Add('--no-assets') }
-if ($Gles)          { $argv.Add('--gles') }
 if ($Model3d)       { $argv.Add('--model3d') }
 if ($VideoBg)       { $argv.Add('--video-bg') }
 if ($args)          { $argv.AddRange([string[]]$args) }

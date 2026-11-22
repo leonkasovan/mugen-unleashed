@@ -31,8 +31,12 @@ make -j8 MUGEN_TARGET=linux-arm64 CROSS_COMPILE=aarch64-none-linux-gnu- `
   MUGEN_GLES=1 MUGEN_MODEL3D=0 MUGEN_VIDEO_BG=0 SHELL=C:/x86devkit/bin/sh.exe
 ```
 
-The normal ARM64 GLES build enables video backgrounds and requires the
-`third_party/ffmpeg-7.1.5` submodule. Initialize it for a full build if
+Video backgrounds are opt-in on the port: `port\arm64\build.bat --video`
+shallow-fetches the pinned `third_party/ffmpeg-7.1.5` submodule and builds
+FFmpeg from source, and it passes `MUGEN_VIDEO_BG=1` to make. Without the flag
+the build passes `MUGEN_VIDEO_BG=0` and nothing FFmpeg-related is compiled. A
+direct `make` call still reads the Makefile's own default, which is 1 for
+`linux-arm64` + `MUGEN_GLES=1`; initialize the submodule first in that case if
 `configure` is missing:
 
 ```powershell

@@ -13,16 +13,26 @@ rem    port\arm64\build.bat --setup         download the toolchain, then stop
 rem    port\arm64\build.bat --check-tools   report what is present, build nothing
 rem    port\arm64\build.bat --sysroot       re-download the dependency tree
 rem    port\arm64\build.bat --no-sysroot    use the existing tree as-is
+rem    port\arm64\build.bat --video         WebM backgrounds: shallow-fetch and
+rem                                         build FFmpeg from source (off by default)
 rem    port\arm64\build.bat --clean         remove this port's build output
-rem    port\arm64\build.bat --offline       fail instead of downloading anything
 rem    port\arm64\build.bat --jobs N        parallel make jobs (default: CPU count)
-rem    port\arm64\build.bat --gles N       renderer: 1 = GLES 3.0 (default
-rem                                         for linux-arm64), 0 = desktop GL
 rem    port\arm64\build.bat --model3d       3D stage models (default on)
 rem    port\arm64\build.bat --no-model3d    turn model support off
 rem    port\arm64\build.bat --debug         -O0 -g3 -DMUGEN_DEBUG, own tree
 rem    port\arm64\build.bat --upload        build, then copy to DEVICE
 rem    port\arm64\build.bat --device U@H --device-dir DIR --no-keep-old
+rem
+rem  WebM backgrounds are opt-in: --video shallow-fetches the pinned
+rem  third_party/ffmpeg-7.1.5 submodule and has the Makefile build it from
+rem  source. Without the flag the build passes MUGEN_VIDEO_BG=0, so no submodule
+rem  is fetched, no FFmpeg is compiled, and a stage whose background is a WebM
+rem  file has nothing to draw. The Makefile records video_bg in its
+rem  configuration stamp, so switching either way rebuilds every object.
+rem
+rem  This port is GLES-only: linux-arm64's one backend is GLES 3.0, so
+rem  MUGEN_GLES=1 is always passed and there is no renderer flag. (The desktop-GL
+rem  backend exists only for the x64 Linux and Windows targets.)
 rem
 rem  Environment:
 rem    ARM64_TOOLCHAIN          9.2 (default, glibc 2.30) or 15.3 (glibc 2.42)
@@ -54,11 +64,10 @@ set "KEEP_OLD=1"
 set "CHECK_TOOLS=0"
 set "DO_SYSROOT=0"
 set "SKIP_SYSROOT=0"
+set "VIDEO_BG=0"
 set "CLEAN=0"
-set "OFFLINE=0"
 set "JOBS=%NUMBER_OF_PROCESSORS%"
 if "%JOBS%"=="" set "JOBS=4"
-set "GLES=1"
 set "MODEL3D=1"
 set "DEBUG_BUILD=0"
 if not defined DEVICE set "DEVICE=ark@192.168.7.2"
@@ -76,33 +85,27 @@ if /I "!ARG!"=="--setup"    ( set "DO_SETUP=1" & set "CHECK_TOOLS=1" & shift & g
 if /I "!ARG!"=="--check-tools" ( set "CHECK_TOOLS=1" & shift & goto parse )
 if /I "!ARG!"=="--sysroot"  ( set "DO_SYSROOT=1" & shift & goto parse )
 if /I "!ARG!"=="--no-sysroot" ( set "SKIP_SYSROOT=1" & shift & goto parse )
+if /I "!ARG!"=="--video"    ( set "VIDEO_BG=1" & shift & goto parse )
 if /I "!ARG!"=="--clean"    ( set "CLEAN=1" & shift & goto parse )
-if /I "!ARG!"=="--offline"  ( set "OFFLINE=1" & shift & goto parse )
 if /I "!ARG!"=="--model3d"  ( set "MODEL3D=1" & shift & goto parse )
 if /I "!ARG!"=="--no-model3d" ( set "MODEL3D=0" & shift & goto parse )
 if /I "!ARG!"=="--debug"    ( set "DEBUG_BUILD=1" & shift & goto parse )
 if /I "!ARG!"=="--upload"   ( set "DO_UPLOAD=1" & shift & goto parse )
 if /I "!ARG!"=="--no-keep-old" ( set "KEEP_OLD=0" & shift & goto parse )
 if /I "!ARG!"=="--jobs"     ( set "JOBS=%~2" & shift & shift & goto parse )
-if /I "!ARG!"=="--gles"     ( set "GLES=%~2" & shift & shift & goto parse )
 if /I "!ARG!"=="--device"   ( set "DEVICE=%~2" & shift & shift & goto parse )
 if /I "!ARG!"=="--device-dir" ( set "DEVICE_DIR=%~2" & shift & shift & goto parse )
 if /I "!ARG!"=="--device-bin" ( set "DEVICE_BIN=%~2" & shift & shift & goto parse )
+rem Removed flags get a pointer rather than the generic message: a script or a
+rem remembered command line that still passes them should say what replaced it.
+if /I "!ARG!"=="--gles" goto bad_gles
+if /I "!ARG!"=="--ffmpeg" goto bad_ffmpeg
 echo error: unknown argument: %~1  (--help)
 exit /b 2
 :parsed
 
-if not "%GLES%"=="0" if not "%GLES%"=="1" goto bad_gles
 if not "%MODEL3D%"=="0" if not "%MODEL3D%"=="1" goto bad_model3d
 echo %JOBS%| findstr /r /c:"^[1-9][0-9]*$" >nul || goto bad_jobs
-if "%OFFLINE%"=="1" if "%DO_SETUP%"=="1" (
-    echo error: --offline cannot be combined with --setup
-    exit /b 2
-)
-if "%OFFLINE%"=="1" if "%DO_SYSROOT%"=="1" (
-    echo error: --offline cannot be combined with --sysroot
-    exit /b 2
-)
 
 rem --------------------------------------------------------------- toolchain
 set "TOOLCHAIN_KIND=%ARM64_TOOLCHAIN%"
@@ -216,10 +219,6 @@ if "%DO_SETUP%"=="1" (
                 goto fail
             )
         )
-        if "%OFFLINE%"=="1" (
-            echo error: --offline: the toolchain is missing from "%TOOLCHAIN_DIR%".
-            goto fail
-        )
         call :install_toolchain
         if errorlevel 1 goto fail
     )
@@ -239,13 +238,17 @@ if not exist "%CC_BIN%" (
 if "%SKIP_SYSROOT%"=="1" goto sysroot_done
 call :check_sysroot
 if not errorlevel 1 if not "%DO_SYSROOT%"=="1" goto sysroot_done
-if "%OFFLINE%"=="1" (
-    echo error: --offline: the dependency tree is missing from "%XSYSROOT%".
-    goto fail
-)
 call :install_sysroot
 if errorlevel 1 goto fail
 :sysroot_done
+
+rem WebM backgrounds are opt-in (--video). Fetch the pinned FFmpeg submodule
+rem first, so the Makefile's own "Run git submodule update --init
+rem third_party/ffmpeg-7.1.5" is never the first thing the user sees.
+if "%VIDEO_BG%"=="1" (
+    call :ensure_submodule
+    if errorlevel 1 goto fail
+)
 
 rem ---------------------------------------------------------------- account
 echo.
@@ -255,8 +258,9 @@ echo     compiler  %CC_BIN%
 echo     sysroot   %XSYSROOT%
 echo     output    %OUT%
 echo     jobs      %JOBS%
-echo     gles      %GLES%
+echo     gles      GLES 3.0
 echo     model3d   %MODEL3D%
+echo     videobg   %VIDEO_BG%
 echo     build     %BUILD_TYPE%
 echo.
 
@@ -272,8 +276,9 @@ make.exe -C "%ROOT%" -j%JOBS% ^
     MUGEN_TARGET=linux-arm64 ^
     BUILD=%OUT_NAME:\=/% ^
     DEBUG=%DEBUG_VALUE% ^
-    MUGEN_GLES=%GLES% ^
+    MUGEN_GLES=1 ^
     MUGEN_MODEL3D=%MODEL3D% ^
+    MUGEN_VIDEO_BG=%VIDEO_BG% ^
     SHELL=%KITBIN_FWD%/sh.exe
 if errorlevel 1 goto build_failed
 
@@ -356,6 +361,60 @@ if "%~1"=="1" (
     echo   sysroot    MISSING  ^(%XSYSROOT%^)
     echo              run: port\arm64\build.bat --sysroot
 )
+exit /b 1
+
+rem ================================================================= submodule
+rem :ensure_submodule -> errorlevel 1 when third_party/ffmpeg-7.1.5 is unusable
+rem
+rem Called for --video only. FFmpeg is a large repository and only one commit
+rem of it is ever used (the one the superproject pins), so the clone is shallow:
+rem --depth 1 downloads that commit without the history. The plain
+rem "git submodule update --init" in the Makefile's error message fetches the
+rem whole history instead, which did not finish in ten minutes on this host.
+rem
+rem The submodule also has to work from a checkout that never had it, and from
+rem one whose earlier clone was interrupted. An interrupted clone leaves
+rem .git/modules/third_party/ffmpeg-7.1.5 registered with no objects, and a
+rem shallow update on that state fails with "Unable to find current revision".
+rem Detecting it here (the pinned commit does not resolve) and removing the
+rem half-built module repository makes the next update clone cleanly.
+:ensure_submodule
+set "SUB_PATH=third_party/ffmpeg-7.1.5"
+set "SUB_SRC=%ROOT%\third_party\ffmpeg-7.1.5"
+set "SUB_GIT=%ROOT%\.git\modules\third_party\ffmpeg-7.1.5"
+
+if exist "%SUB_SRC%\configure" (
+    if "%~1"=="1" echo   submodule  ok       %SUB_SRC%
+    exit /b 0
+)
+echo.
+echo ==^> FFmpeg submodule ^(%SUB_PATH%, shallow^)
+
+rem A registered module repository with no objects cannot be updated shallowly.
+rem Only discard one that is provably empty, so a good clone is never thrown away.
+if exist "%SUB_GIT%\config" if not exist "%SUB_SRC%\configure" (
+    git.exe -C "%SUB_GIT%" rev-parse --verify --quiet HEAD >nul 2>&1
+    if errorlevel 1 (
+        echo     removing an interrupted module repository
+        rmdir /s /q "%SUB_GIT%"
+    )
+)
+
+git.exe -C "%ROOT%" submodule update --init --depth 1 -- "%SUB_PATH%"
+if errorlevel 1 goto submodule_failed
+
+if not exist "%SUB_SRC%\configure" (
+    echo error: %SUB_PATH% checked out but configure is still missing
+    exit /b 1
+)
+exit /b 0
+
+:submodule_failed
+echo.
+echo error: could not fetch %SUB_PATH%
+echo        Retry, then:
+echo          git submodule update --init third_party/ffmpeg-7.1.5
+echo        Or drop --video: WebM backgrounds are opt-in.
 exit /b 1
 
 :report
@@ -442,10 +501,6 @@ if exist "%ARCHIVE%" (
     )
     echo     cached download fails its %TOOLCHAIN_HASH_KIND%; fetching again
     del /q "%ARCHIVE%"
-)
-if "%OFFLINE%"=="1" (
-    echo error: --offline: %ARCHIVE% is missing or fails its checksum
-    exit /b 1
 )
 set "DL_URL=%TOOLCHAIN_URL%"
 set "DL_DEST=%ARCHIVE%"
@@ -538,10 +593,6 @@ if exist "%ARCHIVE%" (
         echo     cached download verified ^(sha256^)
         goto sr_unpack
     )
-)
-if "%OFFLINE%"=="1" (
-    echo error: --offline: %ARCHIVE% is missing or fails its checksum
-    exit /b 1
 )
 if exist "%ARCHIVE%" del /q "%ARCHIVE%"
 set "DL_URL=%SYSROOT_URL%"
@@ -674,7 +725,11 @@ exit /b 1
 
 rem ==================================================================== errors
 :bad_gles
-echo error: --gles must be 0 or 1, not '%GLES%'
+echo error: --gles was removed: this port is GLES-only, so there is no renderer flag
+echo        (desktop GL is a different target: MUGEN_TARGET=linux-x64 / win32)
+exit /b 2
+:bad_ffmpeg
+echo error: --ffmpeg was renamed to --video
 exit /b 2
 :bad_model3d
 echo error: --model3d must be 0 or 1, not '%MODEL3D%'

@@ -54,8 +54,7 @@ Output: `build/android/mugen-android-arm64-v8a.apk`.
 |---|---|
 | `--setup` | Installs missing tool components; does **not** check SDL libraries or package assets |
 | `--download-tools` | Downloads missing tool components (JDK/NDK SDK manager) |
-| `--check-tools` | Verifies all required tools are present |
-| `--offline` | Runs without downloading; requires a pre-populated Gradle cache |
+| `--check-tools` | Validate only; downloads nothing |
 | `--debug --no-assets` | Builds debug APK without repackaging assets |
 | `--clean` | Removes generated app build/CMake output; does not uninstall tools |
 

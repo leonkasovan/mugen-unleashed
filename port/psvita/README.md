@@ -28,8 +28,8 @@ PowerShell:
 ```
 
 `build.ps1` is the PowerShell front end for the same build: `-CheckTools`,
-`-Jobs N`, `-Debug`, `-Clean`, `-Offline`, `-NoData`/`-Data DIR` and friends,
-and anything unrecognised is passed through, so `\build.ps1 --gles 0` works
+`-Jobs N`, `-Debug`, `-Clean`, `-NoData`/`-Data DIR` and friends,
+and anything unrecognised is passed through, so `\build.ps1 --profile` works
 too. It forwards to `build.bat` -- one implementation, two front doors -- and
 PowerShell may need `-ExecutionPolicy Bypass` (or `Unblock-File build.ps1`)
 before it will run a local script.
@@ -54,10 +54,8 @@ builds the engine-only one, `--data DIR` packs another tree.
 | `--setup` | install VitaSDK and its packages, then stop |
 | `--check-tools` | report VitaSDK, packages, cmake/ninja/pkg-config; never downloads |
 | `--clean` | remove `build/psvita/` before building |
-| `--offline` | fail instead of downloading (needs the cached zip or an SDK already present) |
+| `--jobs N` | parallel build jobs (default: CPU count) |
 | `--debug` | `Debug` build instead of `Release` |
-| `--profile` | `Release` (-O2) with `MUGEN_DEBUG` diagnostics; output defaults to `build/psvita-profile` |
-| `--jobs N` | parallel jobs (default: CPU count) |
 | `--data DIR` / `--no-data` | pack this game tree / pack no game data |
 | `--titleid ID` | nine-character title ID (default `MUGEN0001`) |
 | `--renderer MODE` | *retired*: set `[Video] RenderMode` in `mugen.psvita.cfg` |
@@ -137,8 +135,7 @@ provides, and what to arrange yourself on a host it does not cover.
 **VitaSDK.** The project publishes the SDK as a release asset
 (`vitasdk.zip` on the `toolchains-v1.0` release, 196 MB packed / 600 MB
 installed), pinned by SHA-256 in the script and unpacked to `C:\vitasdk`. It is
-an older dependency snapshot. Missing SDL2 packages are installed with `vdpm`;
-`--offline` requires those packages to be installed already. The environment it needs is
+an older dependency snapshot. Missing SDL2 packages are installed with `vdpm`.
 
 ```bat
 set VITASDK=C:\vitasdk
@@ -1484,9 +1481,9 @@ port\psvita\build.bat            # opengl + bundled compiler, title MUGEN0001
 ```
 
 `--shader-compiler FILE` packs another file instead (given on each invocation —
-a plain build packs the default); `--no-shader-compiler` packs none. With
-`--offline` and no cached asset the VPK is built without a compiler and the
-script says so.
+a plain build packs the default); `--no-shader-compiler` packs none. If the
+asset cannot be fetched, the VPK is built without a compiler and the script
+says so.
 
 Manual CMake accepts
 `-DMUGEN_VITA_SHADER_COMPILER=/path/to/libshacccg.suprx`. The input must exist

@@ -25,7 +25,7 @@ From PowerShell:
 
 `build.ps1` is the PowerShell front end for the same build: `-CheckTools`,
 `-Jobs N`, `-Debug`, `-Clean`, `-Offline`, `-NoData`/`-Data DIR` and friends,
-and anything unrecognised is passed through, so `\build.ps1 --gles 0` works
+and anything unrecognised is passed through, so `\build.ps1 --video` works
 too. It forwards to `build.bat` -- one implementation, two front doors -- and
 PowerShell may need `-ExecutionPolicy Bypass` (or `Unblock-File build.ps1`)
 before it will run a local script.
@@ -104,11 +104,12 @@ port\arm64\build.bat --check-tools   report what is present, build nothing
 port\arm64\build.bat --sysroot       re-download the dependency tree, then build
 port\arm64\build.bat --clean         remove this port's build output
 port\arm64\build.bat --no-sysroot    use the existing tree as-is
-port\arm64\build.bat --offline       fail instead of downloading
 port\arm64\build.bat --jobs N        parallel make jobs (default: CPU count)
-port\arm64\build.bat --gles 0 or 1   renderer; 1 = GLES 3.0 (the arm64 default)
 port\arm64\build.bat --model3d       3D stage models ([BGdef] model = *.glb); on by default
 port\arm64\build.bat --no-model3d    compile model support out
+port\arm64\build.bat --video         WebM backgrounds: shallow-fetch the pinned
+                                     third_party/ffmpeg-7.1.5 and build FFmpeg
+                                     from source (off by default)
 port\arm64\build.bat --debug         -O0 -g3 -DMUGEN_DEBUG into a separate tree, and
                                      turns on the batch-rendering profiler (`batch:`
                                      line in mugen.log, next to `perf:`)
@@ -126,7 +127,6 @@ Environment overrides:
 | `ARM64_TOOLCHAIN` | `9.2` | which Arm release: `9.2` (glibc 2.30) or `15.3` (glibc 2.42) |
 | `ARM64_SYSROOT_URL` | the `toolchains-v1.0` release asset | where the dependency tree comes from |
 | `ARM64_SYSROOT_SHA256` | pinned in the scripts | its expected hash; needed when the asset is republished |
-| `MUGEN_GLES` | `1` | same as `make MUGEN_GLES=`; `--gles` wins |
 | `MUGEN_WIN_KIT` | autodetected | `build.bat` only: which devkit supplies make/sh/sed (`C:\w64devkit`, `C:\x86devkit`, then PATH) |
 | `DEVICE` | `ark@192.168.7.2` | device for `--upload` |
 | `DEVICE_PASS` | *(prompted)* | its password; `build.bat` uses it via `sshpass`, `build.bat` needs a key or an interactive prompt |
@@ -256,10 +256,12 @@ objects, because that is what an arm64 root provides. The target needs them
 installed (they are what its distribution packages anyway). `--sysroot`/
 `XSYSROOT` only changes what the *build* links against, not that.
 
-**The GLES renderer needs a GPU.** `linux-arm64` defaults to `MUGEN_GLES=1`
-because the handhelds it targets expose OpenGL ES only. If the device cannot
-create an ES 3.0 context, the engine falls back to the System renderer and says
-why in `mugen.log`; `MUGEN_GLES=0` builds the desktop-GL one instead.
+**The GLES renderer needs a GPU.** This port is GLES-only — `linux-arm64`'s one
+backend is GLES 3.0, and `build.bat` always passes `MUGEN_GLES=1` — because the
+handhelds it targets expose OpenGL ES only. If the device cannot create an ES
+3.0 context, the engine falls back to the System renderer and says why in
+`mugen.log`. Desktop GL is a different target (`linux-x64`, the Windows builds),
+not a flag here.
 
 ## Verifying a build without an arm64 device
 

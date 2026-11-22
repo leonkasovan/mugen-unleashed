@@ -13,7 +13,7 @@
     PowerShell's Get-FileHash and System32's bsdtar.
 
     Arguments not listed below are passed straight through, so the build.bat
-    spelling works too:   .\build.ps1 --gles 0 --upload
+    spelling works too:   .\build.ps1 --video --upload
 
 .PARAMETER Help
     Print the full flag reference (build.bat's header) and exit.
@@ -27,9 +27,6 @@
 .PARAMETER Clean
     Remove this port's build output.
 
-.PARAMETER Offline
-    Fail instead of downloading anything.
-
 .PARAMETER Sysroot
     Re-download the dependency tree.
 
@@ -39,11 +36,12 @@
 .PARAMETER Jobs
     Parallel make jobs. Default: the CPU count.
 
-.PARAMETER Gles
-    Renderer: 1 (default) = GLES 3.0, 0 = desktop GL.
-
 .PARAMETER NoModel3d
     Compile 3D stage model support out (it is on by default).
+
+.PARAMETER Video
+    WebM backgrounds: shallow-fetch the pinned FFmpeg submodule and build it
+    from source. Off by default.
 
 .PARAMETER Debug
     -O0 -g3 -DMUGEN_DEBUG into a separate tree.
@@ -70,18 +68,17 @@
 # attribute would inject -Debug/-Verbose/-ErrorAction as common parameters,
 # and -Debug is the name this build's flag has everywhere else (build.bat
 # --debug). A plain param block also means anything unrecognised lands in
-# $args, so the build.bat spelling (--gles 0) passes straight through.
+# $args, so the build.bat spelling (--video) passes straight through.
 param(
     [switch]$Help,
     [switch]$Setup,
     [switch]$CheckTools,
     [switch]$Clean,
-    [switch]$Offline,
     [switch]$Sysroot,
     [switch]$NoSysroot,
     [int]$Jobs = 0,
-    [ValidateSet('0', '1')][string]$Gles,
     [switch]$NoModel3d,
+    [switch]$Video,
     [switch]$Debug,
     [switch]$Upload,
     [string]$Device,
@@ -102,12 +99,11 @@ if ($Help)       { $argv.Add('--help') }
 if ($Setup)      { $argv.Add('--setup') }
 if ($CheckTools) { $argv.Add('--check-tools') }
 if ($Clean)      { $argv.Add('--clean') }
-if ($Offline)    { $argv.Add('--offline') }
 if ($Sysroot)    { $argv.Add('--sysroot') }
 if ($NoSysroot)  { $argv.Add('--no-sysroot') }
 if ($Jobs -gt 0) { $argv.Add('--jobs'); $argv.Add("$Jobs") }
-if ($Gles)       { $argv.Add('--gles'); $argv.Add($Gles) }
 if ($NoModel3d)  { $argv.Add('--no-model3d') }
+if ($Video)      { $argv.Add('--video') }
 if ($Debug)      { $argv.Add('--debug') }
 if ($Upload)     { $argv.Add('--upload') }
 if ($Device)     { $argv.Add('--device'); $argv.Add($Device) }

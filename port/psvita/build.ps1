@@ -30,9 +30,6 @@
 .PARAMETER Clean
     Remove this port's build output.
 
-.PARAMETER Offline
-    Fail instead of downloading anything.
-
 .PARAMETER Jobs
     Parallel build jobs. Default: the CPU count.
 
@@ -78,7 +75,6 @@ param(
     [switch]$CheckTools,
     [switch]$Env,
     [switch]$Clean,
-    [switch]$Offline,
     [int]$Jobs = 0,
     [switch]$Debug,
     [switch]$Profile,
@@ -105,7 +101,6 @@ if ($Setup)            { $argv.Add('--setup') }
 if ($CheckTools)       { $argv.Add('--check-tools') }
 if ($Env)              { $argv.Add('--env') }
 if ($Clean)            { $argv.Add('--clean') }
-if ($Offline)          { $argv.Add('--offline') }
 if ($Jobs -gt 0) { $argv.Add('--jobs'); $argv.Add("$Jobs") }
 if ($Debug)            { $argv.Add('--debug') }
 if ($Profile)          { $argv.Add('--profile') }

@@ -6,9 +6,8 @@ There is no Android SDL1 API shim or SDL1 library dependency. The desktop
 `android_main.h`, `android_gfx.c` and `android_glstub.c` have been removed.
 
 Current target: **arm64-v8a**, minimum API 21, compile SDK 34, target SDK 29.
-The default build uses the **System/software renderer** and presents through
-SDL2. The `--gles` build supports `RenderMode = OpenGL` through GLES 3.0.
-`OpenGLScreen` falls back to System.
+The build uses the **GLES 3.0 renderer** (`mugenGles=ON`, always), which supports
+`RenderMode = OpenGL` through GLES 3.0. `OpenGLScreen` falls back to System.
 
 See [REVIEW.md](REVIEW.md) for the native SDL2 migration evidence and
 [PLAN.md](PLAN.md) for device qualification.
@@ -63,8 +62,7 @@ port\android\build.bat                   :: release APK
 missing: Temurin from Adoptium's official metadata, the command-line tools from
 Google's repository XML, and the SDK/NDK/CMake packages through the SDK's own
 `sdkmanager.bat`. Missing SDL2 and its companions are cross-compiled next.
-`--check-tools` validates only and never downloads; `--offline` never
-downloads either.
+`--check-tools` validates only and never downloads.
 
 ```powershell
 .\port\android\build.ps1 -CheckTools     # validate the tools, build nothing
@@ -220,8 +218,8 @@ closure when doing a real build.
 
 ## 3. Build and install
 
-The default APK uses the System renderer. Build with `--gles` for OpenGL.
-The build stages a copy of the game data and the Android config overlay.
+The APK uses the GLES 3.0 renderer. The build stages a copy of the game data and
+the Android config overlay.
 
 ```sh
 port\android\build.bat --check-tools
@@ -236,7 +234,7 @@ or diagnostic builds. The first-run extraction/update limitations still apply.
 
 ### GLES sprite atlas and batching
 
-Build the Android GLES APK with `port\android\build.bat --gles`. In the
+Build the Android GLES APK with `port\android\build.bat`. In the
 installed game's `data/mugen.cfg`, set these keys in the existing `[Video]`
 section and restart the app.
 
@@ -335,19 +333,21 @@ adb install -r build/android/mugen-android-arm64-v8a.apk
 adb logcat -s mugen
 ```
 
-For offline builds, first populate the selected Gradle distribution/dependency
-cache online, then run:
+### Offline builds
+
+There is no `--offline` flag. An offline build is an environment question: the
+toolchain (JDK, SDK, NDK, CMake) must already be installed, and Gradle needs a
+populated distribution and dependency cache from a previous online run. With
+those in place, `--check-tools` proves the toolchain is complete, and a normal
+build downloads nothing new.
 
 ```sh
-port\android\build.bat --offline --no-assets
+port\android\build.bat --check-tools --no-assets
 ```
 
-Without a complete cached Gradle 8.1.1 distribution this fails before invoking
-Gradle. Offline mode runs that distribution directly, so the wrapper cannot
-start a distribution download from a different cache key.
-Gradle also needs cached plugin/Maven dependencies. `--offline` cannot be
-combined with setup/download options. A normal online build may still download
-Gradle or dependencies; the opt-in flags specifically control tool provisioning.
+The Gradle wrapper starts a distribution download whenever its cache key is
+missing, which is exactly what an offline machine cannot satisfy — warm the
+cache with one online build first.
 
 ### Signing
 
@@ -511,7 +511,7 @@ evidence for the M8 GLES backend, not a pass from `tools/test_qualify.sh`, which
 is host-only and keeps `ES01-device` OPEN.
 
 Device: Retroid Pocket Flip2 (kona), arm64-v8a, Android 13 (API 33), Adreno.
-Build: `port\android\build.bat --gles`, `data/mugen.cfg` with
+Build: `port\android\build.bat`, `data/mugen.cfg` with
 `RenderMode = OpenGL`.
 
 | Check | Result |
@@ -534,7 +534,7 @@ Reproduce with:
 
 ```sh
 export ANDROID_NDK_HOME="$PWD/build/android/toolchains/sdk/ndk/27.1.12297006"
-port\android\build.bat --gles
+port\android\build.bat
 adb install -r build/android/mugen-android-arm64-v8a.apk
 adb logcat -c; adb shell am force-stop org.mugen_unleashed.mugen
 adb shell am start -n org.mugen_unleashed.mugen/org.libsdl.app.SDLActivity

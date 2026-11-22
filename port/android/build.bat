@@ -13,12 +13,10 @@ rem    port\android\build.bat --debug           debug APK
 rem    port\android\build.bat --setup           install tools + native libs, then stop
 rem    port\android\build.bat --download-tools  install missing tools, then build
 rem    port\android\build.bat --check-tools     validate only; downloads nothing
-rem    port\android\build.bat --offline         no downloads; cached Gradle/deps only
 rem    port\android\build.bat --clean           clean generated app build/staging
 rem    port\android\build.bat --no-assets       package no game data
-rem    port\android\build.bat --gles            build the GLES 3.0 renderer, M8
-rem    port\android\build.bat --video-bg        WebM backgrounds, implies --gles
-rem    port\android\build.bat --model3d         opt-in glTF renderer, implies --gles
+rem    port\android\build.bat --video-bg        WebM backgrounds (needs GLES)
+rem    port\android\build.bat --model3d         opt-in glTF renderer
 rem
 rem  Missing tools are installed automatically. The JDK comes from Adoptium's
 rem  official metadata, the Android command-line tools from Google's repository
@@ -26,7 +24,7 @@ rem  XML, and the SDK platform/build-tools/platform-tools/CMake/NDK packages
 rem  through the SDK's own sdkmanager.bat. Missing SDL2, SDL2_mixer and
 rem  SDL2_ttf are cross-compiled by tools\build_sdl2_companions.bat, which
 rem  downloads SDL2's release tarball with BITS. Nothing is fetched with git.
-rem  --check-tools and --offline never download; --setup stops after the tools
+rem  --check-tools never downloads; --setup stops after the tools
 rem  and libraries are in place, and --download-tools continues to the APK.
 rem
 rem  The packaged data/mugen.cfg is res\mugen.cfg, the project's documented
@@ -76,8 +74,7 @@ set "PACK_ASSETS=1"
 set "CHECK_TOOLS=0"
 set "SETUP_ONLY=0"
 set "EXPLICIT_DOWNLOAD=0"
-set "OFFLINE=0"
-set "GLES=0"
+set "GLES=1"
 set "MODEL3D=0"
 set "VIDEO_BG=0"
 if not defined MUGEN_ACCEPT_LICENSES set "MUGEN_ACCEPT_LICENSES=1"
@@ -92,11 +89,11 @@ if /I "!ARG!"=="-h" goto usage
 if /I "!ARG!"=="--debug" ( set "BUILD_TYPE=debug" & shift & goto parse )
 if /I "!ARG!"=="--clean" ( set "CLEAN=1" & shift & goto parse )
 if /I "!ARG!"=="--no-assets" ( set "PACK_ASSETS=0" & shift & goto parse )
-rem --model3d implies --gles, exactly as the MSYS2 build.sh that was removed did: the glTF renderer has no
-rem desktop-GL path on Android.
-if /I "!ARG!"=="--gles" ( set "GLES=1" & shift & goto parse )
-if /I "!ARG!"=="--video-bg" ( set "VIDEO_BG=1" & set "GLES=1" & shift & goto parse )
-if /I "!ARG!"=="--model3d" ( set "MODEL3D=1" & set "GLES=1" & shift & goto parse )
+rem GLES 3.0 is the only renderer this port builds: the glTF model renderer has
+rem no desktop-GL path on Android, and packaging the System renderer instead
+rem would mean a second, untested native configuration.
+if /I "!ARG!"=="--video-bg" ( set "VIDEO_BG=1" & shift & goto parse )
+if /I "!ARG!"=="--model3d" ( set "MODEL3D=1" & shift & goto parse )
 rem --setup installs the toolchain and the native libraries, then stops before
 rem Gradle. --download-tools does the same installation but continues to build.
 rem --check-tools validates what is present and never downloads. Nothing here
@@ -104,20 +101,20 @@ rem reports a missing tool and exits: the missing pieces are fetched.
 if /I "!ARG!"=="--setup" ( set "SETUP_ONLY=1" & set "EXPLICIT_DOWNLOAD=1" & shift & goto parse )
 if /I "!ARG!"=="--download-tools" ( set "EXPLICIT_DOWNLOAD=1" & shift & goto parse )
 if /I "!ARG!"=="--check-tools" ( set "CHECK_TOOLS=1" & shift & goto parse )
-if /I "!ARG!"=="--offline" ( set "OFFLINE=1" & shift & goto parse )
+rem --gles was removed: the GLES 3.0 renderer is always built. Named rather
+rem than left to the unknown-argument path, for scripts that still pass it.
+if /I "!ARG!"=="--gles" (
+    echo error: --gles was removed: this port always builds the GLES 3.0 renderer
+    exit /b 2
+)
 echo error: unknown argument: %~1  ^(--help^)
 exit /b 2
 :parsed
 
-if "%OFFLINE%"=="1" if "%EXPLICIT_DOWNLOAD%"=="1" (
-    echo error: --offline cannot be combined with --setup or --download-tools
-    exit /b 2
-)
 rem Provisioning is the default: a clean checkout should build after one run.
-rem --check-tools (validate only) and --offline (never download) turn it off.
+rem --check-tools (validate only) turns it off.
 set "DOWNLOAD_TOOLS=1"
 if "%CHECK_TOOLS%"=="1" set "DOWNLOAD_TOOLS=0"
-if "%OFFLINE%"=="1" set "DOWNLOAD_TOOLS=0"
 if not defined ANDROID_ABI set "ANDROID_ABI=arm64-v8a"
 if /I not "%ANDROID_ABI%"=="arm64-v8a" (
     echo error: app/build.gradle currently packages arm64-v8a only; requested ABI %ANDROID_ABI% is unsupported
@@ -185,11 +182,6 @@ if not exist "%GRADLE_LAUNCHER%" (
     echo error: port\android\gradlew.bat is missing; restore it from git
     goto fail
 )
-if "%OFFLINE%"=="1" (
-    call :find_gradle_offline
-    if errorlevel 1 goto fail
-)
-
 if "%CLEAN%"=="1" (
     echo.
     echo ==^> Cleaning generated Android build output
@@ -263,16 +255,13 @@ rem jni/src/CMakeLists.txt reads this environment variable before it falls back
 rem to the -Psdl2IncludeDir property; the MSYS2 build.sh that was removed exported both.
 set "MUGEN_ANDROID_SDL2_INCLUDE=%SDL2_INCLUDE%"
 
-set "GLES_PROP="
-if "%GLES%"=="1" set "GLES_PROP=-PmugenGles=ON"
-set "OFFLINE_PROP="
-if "%OFFLINE%"=="1" set "OFFLINE_PROP=--offline"
+set "GLES_PROP=-PmugenGles=ON"
 set "TASK=assembleRelease"
 if /I "%BUILD_TYPE%"=="debug" set "TASK=assembleDebug"
 
 echo.
 echo ==^> Building APK ^(%BUILD_TYPE%, %ANDROID_ABI%^)
-if "%GLES%"=="1" echo     GLES 3.0 renderer enabled ^(M8, experimental^)
+echo     GLES 3.0 renderer enabled ^(M8, experimental^)
 if "%MODEL3D%"=="1" echo     glTF stage models enabled
 if "%VIDEO_BG%"=="1" echo     WebM backgrounds: !FFMPEG_DEPS_DIR!
 echo     %GRADLE_LAUNCHER%
@@ -293,7 +282,7 @@ call "%GRADLE_LAUNCHER%" --no-daemon ^
     "-PmugenModel3d=%MODEL3D%" ^
     "-PmugenVideoBg=%VIDEO_BG%" ^
     "-PffmpegDepsDir=!FFMPEG_DEPS_DIR!" ^
-    !GLES_PROP! !OFFLINE_PROP! %TASK%
+    !GLES_PROP! %TASK%
 if errorlevel 1 set "GRADLE_RC=1"
 popd
 if not "%GRADLE_RC%"=="0" (
@@ -439,7 +428,7 @@ if not defined JDK (
         echo error: JDK 17 missing. Set JAVA_HOME or MUGEN_JAVA_HOME to a JDK 17,
         echo        or install Temurin 17 from
         echo        https://adoptium.net/temurin/releases/?version=17
-        echo        ^(--check-tools and --offline never download^)
+        echo        ^(--check-tools never downloads^)
         exit /b 1
     )
 )
@@ -463,7 +452,7 @@ if not defined SDKC (
         echo error: Android SDK not found. Set ANDROID_SDK_ROOT to an installed SDK
         echo        ^(see https://developer.android.com/studio^), for example
         echo        set ANDROID_SDK_ROOT=C:\Android\SDK
-        echo        ^(--check-tools and --offline never download^)
+        echo        ^(--check-tools never downloads^)
         exit /b 1
     )
 )
@@ -490,7 +479,7 @@ if defined MISSING (
 if defined MISSING (
     echo error: Missing SDK packages:!MISSING!
     echo        run port\android\build.bat --setup to install them
-    echo        ^(--check-tools and --offline never download^)
+    echo        ^(--check-tools never downloads^)
     exit /b 1
 )
 
@@ -828,24 +817,6 @@ for /f tokens^=2 %%V in ('"%JO%\bin\javac.exe" -version 2^>^&1') do if not defin
 if not "!JV:~0,3!"=="17." exit /b 0
 set "JDK_OK=1"
 set "JDK_VERSION=!JV!"
-exit /b 0
-
-rem ------------------------------------------------------ offline gradle
-rem the MSYS2 build.sh that was removed looked for a complete distribution in the wrapper cache and calls it
-rem directly, so the wrapper cannot start a download when the URL-hash directory
-rem differs. On Windows the same tree holds bin\gradle.bat beside bin\gradle.
-:find_gradle_offline
-set "DISTS=%GRADLE_USER_HOME%\wrapper\dists\gradle-8.1.1-bin"
-set "FOUND="
-if exist "%DISTS%" for /d %%D in ("%DISTS%\*") do (
-    if not defined FOUND if exist "%%~fD\gradle-8.1.1-bin.zip.ok" if exist "%%~fD\gradle-8.1.1\bin\gradle.bat" set "FOUND=%%~fD\gradle-8.1.1\bin\gradle.bat"
-)
-if not defined FOUND (
-    echo error: Offline Gradle 8.1.1 distribution is not cached or incomplete; run an online build once
-    echo        looked in %DISTS%
-    exit /b 1
-)
-set "GRADLE_LAUNCHER=!FOUND!"
 exit /b 0
 
 rem ------------------------------------------------------- game data staging
