@@ -55,7 +55,8 @@ src/            83 .c + 52 .h — the engine, one file per original module
   sdl2video.c   explicit engine display operations over SDL2
   sdl2surface.c shared SDL2 scaler, proven against SDL_gfx by test_zoomdiff
   mugen.rc      error dialog (200), version info, icon 101 from res/icons
-third_party/    Lua 5.1.4, libpng 1.2.38, glad 2.1, minizip 0.15, sdk,
+third_party/    Lua 5.1.4, libpng 1.2.38, glad 2.1, minizip 0.15, lz4 1.10.0
+                (sprite format 13, a mugen-unleashed addition), sdk,
                 libresample, vitagl,
                 cgltf-1.14 and stb (upstream desktop 3D model support)
 port/*/cmake/   platform-only CMake helpers; no root MSVC build
@@ -638,6 +639,9 @@ no display, and runs on a build box.
 
 **0b. Inspecting SFF archives with `make sffcli`**
 
+Native atlas conversion, sibling lookup, and the SFF 3.00 wire format are
+specified in [docs/SFF3.md](docs/SFF3.md).
+
 `tools/sffcli.c` is a standalone C11 program for Windows and Linux. It follows
 the engine's `Sff_Load` behavior for SFF 1.01, 2.00 and 2.01. It builds without
 engine headers, SDL, or image libraries. `make sffcli` writes
@@ -653,6 +657,7 @@ cp install/chars/kfm/kfm.sff build/tmp/kfm.sff
 ./build/mingw-sdl2/sffcli build/tmp/kfm.sff
 ./build/mingw-sdl2/sffcli --export build/tmp/kfm.sff
 ./build/mingw-sdl2/sffcli --optimize build/tmp/kfm.sff
+./build/mingw-sdl2/sffcli --atlas build/tmp/kfm.sff     # writes atlas.kfm.sff
 ```
 
 Export creates `build/tmp/kfm/` and writes one RGBA PNG per sprite. Optimize
@@ -691,7 +696,7 @@ diffing `mugen.log`** (`docs/ANALYSIS.md`, "Validation").
 ```sh
 make install
 cd install
-./mugen-mingw-win32-sdl2.exe -nosound          # startup/mode select
+./mugen-mingw-win32-sdl2.exe          # startup/mode select
 ```
 
 Copy the original `mugen.exe` log out of the way first, then compare:
@@ -703,20 +708,6 @@ python ../tools/compare_logs.py <original.log> <rebuilt.log>
 Exit 0 means the logs match after numeric normalisation (timings, RNG seed,
 palette ids); exit 1 lists the differing fragments. A difference is either a
 regression or a deliberate change — decide which and say so.
-
-**The original will not start without its app-local assemblies.** `mugen.exe`
-carries a manifest pinning `Elecbyte.MUGEN.libs` 1.0.0.0 and
-`Microsoft.VC90.CRT` **9.0.21022.8**, so `SDL.dll`, `zlib1.dll`, … must sit in
-`Elecbyte.MUGEN.libs/` next to it with the matching `Microsoft.VC90.CRT/`
-(which also needs `msvcp90.dll`; the released tree lists it but does not ship
-it, and only the WinSxS 9.0.30729 copy exists on a modern machine). The WinSxS
-assembly alone is **not** enough and the only symptom is
-`WinError 14001: side-by-side configuration is incorrect`. A working layout is
-`build/tmp/orig-run/`: the pristine tree's `Elecbyte.MUGEN.libs/` and
-`Microsoft.VC90.CRT/`, this checkout's data directories copied beside them, and
-`mugen.exe`. Never stage it in `install/` — that tree stays pristine.
-
-Scenarios worth running (all with `-nosound` for reproducibility):
 
 | Scenario | Command |
 |---|---|
@@ -779,7 +770,7 @@ Performance instrumentation, all off by default:
 |---|---|
 | `--debug` (`port\arm64\build.bat`) | `-O0 -g3 -DMUGEN_DEBUG`: the `perf:` and `batch:` lines, driver capability dump |
 | `BUILD_DEFS=-DMUGEN_DEBUG` on the make line | the same diagnostics in an `-O2` build — batchprof is otherwise tied to `DEBUG=1`'s `-O0`, which exaggerates engine cost |
-| `MUGEN_SPRITEBATCH=1` | deferred sprite queue (see `docs/BUILD-LINUX.md`, rejected batching) |
+| `MUGEN_SPRITEBATCH=0` | disable the current GLES sprite queue for a one-draw-per-sprite comparison; see `port/arm64/OPTIMIZING_ARM64_PLAN.md` |
 | `MUGEN_GPUTIME=1` | `EXT_disjoint_timer_query` probe; returns sentinels on the reference device |
 | `MUGEN_PROF=1`, `MUGEN_PROF_OUT=<file>` | 100 Hz sampling profiler; symbolize with `tools/prof_symbolize.py` |
 
@@ -796,6 +787,8 @@ plausible optimisations (buffer orphaning, blend/texture state caching, a
 dedicated VAO) changed nothing measurable, one real cost (a sprite re-uploaded
 per draw) was worth 3.5 -> 58 fps on one screen, and two larger ones (a sprite
 atlas, instanced batching) were measured, implemented, and rejected on evidence.
+The current SFF v3 and seven-slot GLES queue are a later implementation; see
+`port/arm64/OPTIMIZING_ARM64_PLAN.md` for its device measurements and open checks.
 That directory is the pristine game tree; leave it as you found it.
 
 **A mean over loop frames hides what a drawn frame costs.** `perf:` divides by
@@ -876,19 +869,15 @@ PLANS.md.
    original's address range, and which quirks are preserved.
 2. Keep the address comments (`/* 0x0042E390: ... */`) and the
    `/* 0x... */` prototype comments in `symbols.h` in sync with any change.
-3. Do not add new dependencies. The dependency set is fixed by what the original
-   binary imported (see `docs/ANALYSIS.md`). One deliberate exception is
-   recorded in `PLANS.md`: GLEW 1.5.4 was replaced by glad 2.1 as the OpenGL
-   loader, which is smaller and generates exactly what the engine needs.
-4. Never put `<SDL.h>` or `<GL/gl.h>` above `#include "mugen.h"` in a source
+3. Never put `<SDL.h>` or `<GL/gl.h>` above `#include "mugen.h"` in a source
    file: glad must see the GL headers first or it refuses to load.
    `<GL/glu.h>` goes after `mugen.h`.
-5. Prefer the existing helpers: `Ftol`/`Trunc64` for float→int (`src/ftol.h`),
+4. Prefer the existing helpers: `Ftol`/`Trunc64` for float→int (`src/ftol.h`),
    `Mem_Calloc`/`Mem_Malloc` for allocation, `Log_Printf`/`MatchLog_Printf` for
    output.
-6. Validate supported MinGW/Linux builds and Android/Vita platform paths for
+5. Validate supported MinGW/Linux builds and Android/Vita platform paths for
    shared changes. Report unavailable cross-compilers/device tests honestly.
-7. If you change behaviour on purpose, add a comment saying so. If you fix an
+6. If you change behaviour on purpose, add a comment saying so. If you fix an
    original bug, mark it as a fix — silently diverging is the one thing this
    project does not accept.
 

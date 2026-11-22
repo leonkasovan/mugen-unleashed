@@ -6,6 +6,7 @@
 #include "soundcache.h"
 #include <SDL_mixer.h>
 #include <errno.h>
+#include <string.h>
 
 typedef struct CachedSound {
     struct CachedSound *next;
@@ -137,7 +138,9 @@ int SoundCache_Resolve(Snd *bank, int index)
         errno = 0;
         SDL_ClearError();
         start = SDL_GetPerformanceCounter();
-        s->chunk = Snd_DecodeWav(input, &status);
+        s->chunk = s->size >= 4 && memcmp(s->encoded, "OggS", 4) == 0
+                       ? Snd_DecodeOggResampled(input, &status)
+                       : Snd_DecodeWav(input, &status);
         elapsed = 1000.0 * (SDL_GetPerformanceCounter() - start) / SDL_GetPerformanceFrequency();
         Stream_Close(input);
         if (elapsed > max_decode_ms) max_decode_ms = elapsed;

@@ -12,6 +12,15 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <libgen.h>
+#ifdef _WIN32
+#include <io.h>
+#define fileno _fileno
+#define fstat _fstat
+#define stat_struct struct _stat
+#else
+#include <unistd.h>
+#define stat_struct struct stat
+#endif
 
 // ---- SND headers (Preserved from original) ----
 #pragma pack(push, 1)
@@ -237,20 +246,62 @@ int process_snd_file(const char* input_path, Options opts) {
     free(full_path);
 
     FILE* in = fopen(input_path, "rb");
-    FILE* out = fopen(output_path, "wb");
+    if (!in) {
+        perror("File error");
+        return 0;
+    }
+
+    Header hdr;
+    stat_struct input_stat;
+    if (fread(&hdr, sizeof(hdr), 1, in) != 1 ||
+        memcmp(hdr.signature, "ElecbyteSnd", 11) != 0 ||
+        fstat(fileno(in), &input_stat) != 0 ||
+        hdr.oFirst < sizeof(Header) || hdr.oFirst > (uint64_t)input_stat.st_size ||
+        hdr.cSounds > ((uint64_t)input_stat.st_size - hdr.oFirst) / sizeof(SubfileHeader)) {
+        fprintf(stderr, "Not a valid M.U.G.E.N SND file: %s\n", input_path);
+        fclose(in);
+        return 0;
+    }
+
+    /* Validate every chained record before creating the destination. */
+    uint32_t nextOffset = hdr.oFirst;
+    for (uint32_t i = 0; i < hdr.cSounds; ++i) {
+        SubfileHeader sub;
+        if (nextOffset < sizeof(Header) ||
+            (uint64_t)nextOffset + sizeof(sub) > (uint64_t)input_stat.st_size ||
+            fseek(in, nextOffset, SEEK_SET) != 0 ||
+            fread(&sub, sizeof(sub), 1, in) != 1 ||
+            sub.cbSubfile > (uint64_t)input_stat.st_size - nextOffset - sizeof(sub) ||
+            (i + 1 < hdr.cSounds && sub.oNext <= nextOffset) ||
+            (i + 1 < hdr.cSounds && sub.oNext > (uint64_t)input_stat.st_size)) {
+            fprintf(stderr, "Invalid SND record chain: %s\n", input_path);
+            fclose(in);
+            return 0;
+        }
+        nextOffset = sub.oNext;
+    }
+    if (fclose(in) != 0) return 0;
+
+    /* Refuse an existing destination and recheck identity before truncation. */
+    if (stat(output_path, &input_stat) == 0) {
+        fprintf(stderr, "Output already exists: %s\n", output_path);
+        return 0;
+    }
+    in = fopen(input_path, "rb");
+    FILE* out = fopen(output_path, "wbx");
     if (!in || !out) {
         perror("File error");
         if (in) fclose(in);
         if (out) fclose(out);
         return 0;
     }
-
-    Header hdr;
-    fread(&hdr, sizeof(hdr), 1, in);
-    if (memcmp(hdr.signature, "ElecbyteSnd", 11) != 0) {
-        fprintf(stderr, "Not a valid M.U.G.E.N SND file: %s\n", input_path);
+    stat_struct reopened_stat, output_stat;
+    if (fstat(fileno(in), &reopened_stat) != 0 || fstat(fileno(out), &output_stat) != 0 ||
+        (reopened_stat.st_dev == output_stat.st_dev && reopened_stat.st_ino == output_stat.st_ino)) {
+        fprintf(stderr, "Input and output must be different files\n");
         fclose(in);
         fclose(out);
+        remove(output_path);
         return 0;
     }
     fwrite(&hdr, sizeof(hdr), 1, out);
@@ -260,7 +311,7 @@ int process_snd_file(const char* input_path, Options opts) {
     // }
 
     fseek(in, hdr.oFirst, SEEK_SET);
-    uint32_t nextOffset = hdr.oFirst;
+    nextOffset = hdr.oFirst;
     int count_converted = 0, count_skipped = 0;
 
     for (uint32_t i = 0; i < hdr.cSounds; i++) {

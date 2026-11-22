@@ -17,6 +17,7 @@
 #include <SDL_mixer.h>
 #include <libresample.h>
 #include "soundcache.h"
+#include <string.h>
 
 
 #define SOUND_VOLUME_SCALE 1.28     /* percent to SDL_mixer volume (MIX_MAX_VOLUME = 128) */
@@ -1012,7 +1013,9 @@ Snd *Snd_ParseWithPolicy(Stream *s, int *status, int lazy)
             goto fail;
         }
         ms->owns_buf = 1;
-        chunk = Snd_DecodeWav(ms, &wav_status);
+        chunk = sub.size >= 4 && memcmp(buf, "OggS", 4) == 0
+                    ? Snd_DecodeOggResampled(ms, &wav_status)
+                    : Snd_DecodeWav(ms, &wav_status);
         if (chunk == NULL) {
             MatchLog_Printf(5, "ERROR loading wave file %d, %d: %s\n", sub.group, sub.number,
                             Wav_StrError(wav_status));
