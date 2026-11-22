@@ -451,6 +451,14 @@ int Config_Load(void)
         Ini_GetIntDef(ini, "SpriteBatch", &batch, -1);
         Gles_ConfigureSprites(atlas, batch);
     }
+#if defined(__linux__) && defined(__aarch64__) && !defined(ANDROID_PORT)
+    {
+        double scale;
+
+        Ini_GetDoubleDef(ini, "RenderScale", &scale, 1.0);
+        Gfx_ConfigureRenderScale(scale);
+    }
+#endif
 #endif
     /* mugen-unleashed: shadows of the lights of 3D stages, as Ikemen GO's option (model.c) */
     Ini_GetInt(ini, "enablemodelshadow", &g_modelShadows);

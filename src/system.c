@@ -630,7 +630,7 @@ void System_ReinitVideo(void)
         Error_Exit();
     }
     g = g_game;
-    g->screen = Screen_Create(g->depth, (int)g->game_coord[0], (int)g->game_coord[1]);
+    g->screen = Screen_CreateGame(g->depth, (int)g->game_coord[0], (int)g->game_coord[1]);
     g = g_game;
     if (g->screen == NULL) {
         Log_Printf("Can't create screen buffer. ");
@@ -1602,7 +1602,7 @@ int GameVars_Init(void)
     g = g_game;
     g->continue_reselect = 1;
     if (!g->safe_mode_opengl) {
-        g->screen = Screen_Create(g->depth, (int)g->game_coord[0], (int)g->game_coord[1]);
+        g->screen = Screen_CreateGame(g->depth, (int)g->game_coord[0], (int)g->game_coord[1]);
         g = g_game;
         if (g->screen == NULL) {
             GameVars_Free();

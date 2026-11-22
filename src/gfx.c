@@ -27,6 +27,20 @@
 
 #define GL_FRAMEBUFFER_EXT 0x8D40
 
+/* Port addition: scale only the game buffer on ARM64 GLES. */
+#if defined(MUGEN_GLES) && defined(__linux__) && defined(__aarch64__) && !defined(ANDROID_PORT)
+static double game_render_scale = 1.0;
+
+void Gfx_ConfigureRenderScale(double scale)
+{
+    if (!(scale >= 0.5 && scale <= 1.0)) {
+        Log_Printf("Video: RenderScale must be between 0.5 and 1.0; using 1.0\n");
+        scale = 1.0;
+    }
+    game_render_scale = scale;
+}
+#endif
+
 /* Sprite slot `index` of a sprite set, as the original computes it (no bounds check). */
 static Sprite *Gfx_SpriteAt(const SpriteSet *set, int index)
 {
@@ -100,12 +114,15 @@ void Fade_DrawBars(const Fade *fade)
  * an SDL surface in the video surface's format, or an OpenGL vbuf. Quirk:
  * the set leaks when a KeyedArray cannot be created.
  */
-SpriteSet *Screen_Create(int depth, int width, int height)
+static SpriteSet *screen_create(int depth, int width, int height, double scale)
 {
     SpriteSet *set;
     Sprite spr;
     int i;
 
+#if defined(ANDROID_PORT) && !defined(MUGEN_GLES)
+    (void)scale;
+#endif
     set = calloc(1, sizeof(SpriteSet));
     if (set == NULL) {
         g_outOfMemory = 1;
@@ -128,7 +145,13 @@ SpriteSet *Screen_Create(int depth, int width, int height)
          * stayed black while sprites rendered invisibly.
          */
         if (g_renderMode == RENDER_OPENGL) {
-            void *vbuf = GlVbuf_Alloc(depth, width, height);
+            int render_w = (int)(width * scale + 0.5);
+            int render_h = (int)(height * scale + 0.5);
+            void *vbuf = GlVbuf_Alloc(depth, render_w, render_h);
+            if (vbuf != NULL && scale < 1.0) {
+                Log_Printf("Video: RenderScale %.3g, game buffer %dx%d for %dx%d coordinates\n",
+                           scale, render_w, render_h, width, height);
+            }
             if (!Sprite_Init(SPRITE_INIT_OWN, &spr, SPRITE_FORMAT_TEXTURE, vbuf, 0x1C, width, height, depth, 0, 0)) {
                 SpriteSet_Free(set);
                 return NULL;
@@ -157,6 +180,18 @@ SpriteSet *Screen_Create(int depth, int width, int height)
     }
     return set;
 }
+
+SpriteSet *Screen_Create(int depth, int width, int height)
+{
+    return screen_create(depth, width, height, 1.0);
+}
+
+#if defined(MUGEN_GLES) && defined(__linux__) && defined(__aarch64__) && !defined(ANDROID_PORT)
+SpriteSet *Screen_CreateGame(int depth, int width, int height)
+{
+    return screen_create(depth, width, height, game_render_scale);
+}
+#endif
 
 /*
  * 0x0046BA90: renders to sprite `index` of target, or to the screen when

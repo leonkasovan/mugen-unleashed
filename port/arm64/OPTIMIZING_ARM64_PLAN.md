@@ -237,6 +237,87 @@ two-pair baseline byte for byte. The FPS overlay was enabled with the same
 fixed text in both captures. Capture and timing hooks were removed after
 verification.
 
+### No-swap and internal resolution tests
+
+The benchmark used the paired indexed shaders on the RG351MP with
+`MUGEN_SPRITEATLAS=1`, `MUGEN_SPRITEBATCH=1`, the one-page FPS font,
+and ShowFPS enabled. The match was GohanZ2 versus VegetaZ2 on
+`hdbz_lookout`, with `-nosound -sessionseed 12345`. SDL reported a
+59 Hz display mode and swap interval 1. Each condition ran twice,
+sampling 25 seconds starting at the first drawn match loop iteration.
+The first four conditions ran in forward and reverse order. The two
+smaller-target no-swap runs followed that sequence.
+
+All runs kept the 640×480 game coordinates and the actual
+640×480 drawable. For the 320×240 test, the engine allocated a smaller
+game color and depth target and scaled its viewport and scissor.
+Projection, the final screen blit, and presentation overlays retained
+their usual sizes. The `glFinish` controls called it after the final
+blit and overlay flush and before any swap. The no-swap FPS counts
+completed renders with no new frames sent to the panel.
+
+| Game target | Presentation | Rendered FPS, run 1 / run 2 | Mean FPS | Logic (ms) | Draw (ms) | Present (ms) | Finish (ms) | Swap (ms) |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| 640×480 | Normal swap | 16.12 / 16.08 | 16.10 | 9.82 | 5.35 | 19.80 | — | 17.54 |
+| 640×480 | Finish, then swap | 15.88 / 15.92 | 15.90 | 9.82 | 5.48 | 20.05 | 17.14 | 0.63 |
+| 640×480 | Finish, no swap | 16.40 / 16.56 | 16.48 | 9.78 | 5.32 | 19.38 | 17.17 | 0.00 |
+| 320×240 | Normal swap | 29.56 / 29.36 | 29.46 | 10.03 | 5.16 | 8.18 | — | 5.85 |
+| 320×240 | Finish, no swap | 30.56 / 30.84 | 30.70 | 9.99 | 5.11 | 7.71 | 5.45 | 0.00 |
+
+Timing columns average the rendered iterations from both runs. Present
+includes the blit, overlays, and any finish or swap wait. Finish is
+timed separately for 25 seconds from the first match present call.
+The engine continued to run at about 59.5 loop iterations per second
+in these runs.
+
+At 640×480, `glFinish` moved roughly 17 ms out of the swap call.
+Omitting swap then recovered only 0.38 rendered FPS over the normal
+control. The frame was still waiting on completion of submitted work.
+The explicit finish serializes completion, so these values measure
+CPU wait with this probe and cannot be read as GPU timer results or
+as an uncapped throughput ceiling.
+
+With normal presentation, 320×240 increased rendered FPS by
+**83%** and reduced presentation by **11.61 ms** per rendered frame.
+The median gap between rendered loop starts went from about 63 ms to
+33 ms. The 95th percentile dropped from about 80 ms to 47–48 ms.
+These are engine timings, with no claim of uniform panel cadence.
+
+The resolution gain persisted without swaps. The completion wait
+dropped by **11.72 ms** while the draw span changed by only 0.21 ms.
+This places the main measured gain in resolution-sensitive rendering
+and framebuffer work. The test does not distinguish fragment shading,
+overdraw, and framebuffer bandwidth or resolves. The resolution change
+alters pixel sampling and was tested as a temporary performance option,
+with no pixel parity claim. The probe was removed after the runs.
+
+### ARM64 RenderScale retest
+
+To enable the smaller game buffer, uncomment `RenderScale = 0.5` under
+`[Video]` in `data/mugen.arm64.cfg`. ARM64 Linux GLES defaults to
+`1.0` and accepts values from `0.5` through `1.0`. The setting scales
+the game color and depth buffers and maps clipping to the smaller
+viewport. The game projection, output drawable, and presentation
+overlay still use their original dimensions. Screenshots are expanded
+to the logical game size.
+
+The same seeded match ran for two 25-second samples per setting in
+full, half, half, full order, with the paired shaders, FPS font atlas,
+and normal swaps. The device confirmed 640×480 game coordinates and a
+640×480 drawable in all four runs. SDL reported swap interval 1.
+
+| RenderScale | Game buffer | Frames in each run | Mean rendered FPS | Logic (ms) | Draw (ms) | Present (ms) | Swap (ms) |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Default (1.0) | 640×480 | 410 / 413 | 16.46 | 9.70 | 5.29 | 19.73 | 17.49 |
+| 0.5 | 320×240 | 747 / 752 | 29.98 | 10.02 | 5.06 | 8.12 | 5.84 |
+
+The config option reproduced the prototype's FPS gain with normal
+presentation. Rendered FPS rose by 82% and average swap time fell by
+11.65 ms per rendered frame. The loop continued at about 59.5
+iterations per second. At the smaller size the game image has lower
+sampling detail. Fifteen half-scale captures from match ticks 60–74
+were verified as 640×480 RGBA PNGs.
+
 ## Implementation and next checks
 
 1. Keep the queue in submission order. Group only adjacent draws with the same

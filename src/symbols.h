@@ -1454,6 +1454,12 @@ int __cdecl Ini_AppendGroupLine(Ini *ini, const char *text);
 /* 0x0046b7a0 */ void __cdecl Fade_Update(Fade *fade, int advance);
 /* 0x0046b830 */ void __cdecl Fade_DrawBars(const Fade *fade);
 /* 0x0046b930 */ SpriteSet *__cdecl Screen_Create(int depth, int width, int height);
+#if defined(MUGEN_GLES) && defined(__linux__) && defined(__aarch64__) && !defined(ANDROID_PORT)
+SpriteSet *Screen_CreateGame(int depth, int width, int height);
+void Gfx_ConfigureRenderScale(double scale);
+#else
+#define Screen_CreateGame Screen_Create
+#endif
 /* 0x0046ba90 */ int __cdecl Gfx_SetRenderTarget(SpriteSet *target, int index);
 /* 0x0046bc10 */ SDL_Surface *__cdecl SpriteSet_GetSurface(const SpriteSet *set, int sprite);
 /* 0x0046bc30 */ SDL_Surface *__cdecl Gfx_GetScreenSurface(void);

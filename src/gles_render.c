@@ -100,6 +100,7 @@ static int g_glesProjectionValid;
  */
 static GLuint g_glesFbo;
 static GLuint g_glesAttachedTexture, g_glesAttachedDepth;
+static int g_glesTargetWidth, g_glesTargetHeight;
 
 static void gles_clear_errors(void) { while (glGetError() != GL_NO_ERROR) {} }
 static int gles_ok(void)
@@ -1366,7 +1367,8 @@ int Gl_SetupView(void)
     GlMvp_SetupView(&g_glesProjection, g_glProjection, g_targetWidth, g_targetHeight, g_glBoundFramebuffer,
                     g_glNear, g_glFar, g_glZScale);
     g_glesProjectionValid = 1;
-    glViewport(0, 0, g_targetWidth, g_targetHeight);
+    glViewport(0, 0, g_glBoundFramebuffer ? g_glesTargetWidth : g_targetWidth,
+                     g_glBoundFramebuffer ? g_glesTargetHeight : g_targetHeight);
     return 1;
 }
 
@@ -1394,6 +1396,15 @@ void Gl_ApplyClipRect(void)
         y1 = Ftol(floor((double)(g_targetHeight - g_clipY2) * view[3] / g_targetHeight));
         y2 = Ftol(ceil((double)(g_targetHeight - g_clipY1) * view[3] / g_targetHeight));
         glScissor(view[0] + x1, view[1] + y1, x2 - x1, y2 - y1);
+    } else if (g_glBoundFramebuffer && g_targetWidth > 0 && g_targetHeight > 0 &&
+               (g_glesTargetWidth != g_targetWidth || g_glesTargetHeight != g_targetHeight)) {
+        int x1 = (int)floor((double)g_clipX1 * g_glesTargetWidth / g_targetWidth);
+        int x2 = (int)ceil((double)g_clipX2 * g_glesTargetWidth / g_targetWidth);
+        int y1 = (int)floor((double)g_clipY1 * g_glesTargetHeight / g_targetHeight);
+        int y2 = (int)ceil((double)g_clipY2 * g_glesTargetHeight / g_targetHeight);
+
+        glScissor(x1, y1, g_clipX2 == g_clipX1 ? 0 : x2 - x1,
+                         g_clipY2 == g_clipY1 ? 0 : y2 - y1);
     } else {
         glScissor(g_clipX1, g_clipY1, g_clipX2 - g_clipX1, g_clipY2 - g_clipY1);
     }
@@ -2588,10 +2599,13 @@ void *Gl_Capture(void)
     unsigned char *flipped;
     int w = g_targetWidth;
     int h = g_targetHeight;
+    int read_w = g_glBoundFramebuffer ? g_glesTargetWidth : w;
+    int read_h = g_glBoundFramebuffer ? g_glesTargetHeight : h;
     int y;
     size_t row, bytes;
 
-    if (!g_glesReady || !GlImage_Size(w, h, 4, &row, &bytes)) {
+    if (!g_glesReady || read_w <= 0 || read_h <= 0 || read_w > w || read_h > h ||
+        !GlImage_Size(w, h, 4, &row, &bytes)) {
         return NULL;
     }
     GlesBatch_Flush();
@@ -2601,8 +2615,21 @@ void *Gl_Capture(void)
     }
     gles_clear_errors();
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    glReadPixels(0, 0, read_w, read_h, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
     if (!gles_ok()) { free(rgba); return NULL; }
+
+    /* Keep captures at logical size. Walk backward so nearest-neighbor
+     * expansion cannot overwrite a source pixel still needed below it. */
+    if (read_w != w || read_h != h) {
+        uint32_t *pixels = (uint32_t *)rgba;
+        for (y = h - 1; y >= 0; --y) {
+            size_t src_row = (size_t)((2LL * y + 1) * read_h / (2LL * h)) * read_w;
+            for (int x = w - 1; x >= 0; --x) {
+                size_t src_x = (size_t)((2LL * x + 1) * read_w / (2LL * w));
+                pixels[(size_t)y * w + x] = pixels[src_row + src_x];
+            }
+        }
+    }
 
     /*
      * Row order depends on which framebuffer was read, because the engine
@@ -2754,11 +2781,11 @@ int GlVbuf_Bind(GlTex *vbuf)
     }
     if (vbuf == NULL) {
         if (!Gl_AttachFramebuffer(0, 0)) return 0;
-        glViewport(0, 0, g_targetWidth, g_targetHeight);
         return Gl_SetupView();
     }
     if (!Gl_AttachFramebuffer(vbuf->id, vbuf->depth)) return 0;
-    glViewport(0, 0, vbuf->w, vbuf->h);
+    g_glesTargetWidth = vbuf->w;
+    g_glesTargetHeight = vbuf->h;
     return Gl_SetupView();
 }
 

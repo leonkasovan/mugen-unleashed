@@ -103,7 +103,7 @@ int Game_SetResolution(int width, int height)
     if (g->safe_mode_opengl == 0) {
         int h = Ftol(g->game_coord[1]);
         int w = Ftol(g->game_coord[0]);
-        SpriteSet *screen = Screen_Create(g->depth, w, h);
+        SpriteSet *screen = Screen_CreateGame(g->depth, w, h);
         g_game->screen = screen;
         if (screen == NULL) {
             Error_Printf("Can't allocate screen buffer.\n");
