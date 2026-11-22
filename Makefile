@@ -689,6 +689,7 @@ CPPFLAGS += $(CROSS_CPPFLAGS) \
             -I$(TP_DIR)/lua-5.1.4/src \
             -I$(GLAD_DIR) \
             -I$(TP_DIR)/minizip-0.15 \
+            -I$(TP_DIR)/lz4 \
             $(PKG_CFLAGS) $(SDL_CFLAGS)
 
 # mugen-unleashed: local WebM backgrounds in the Linux GLES build.
@@ -782,10 +783,11 @@ LUA_OBJS := $(patsubst $(TP_DIR)/lua-5.1.4/src/%.c,$(OBJ_DIR)/lua/%.o,$(LUA_SRCS
 LRS_OBJS := $(patsubst $(TP_DIR)/libresample/src/%.c,$(OBJ_DIR)/libresample/%.o,$(LRS_SRCS))
 GLAD_OBJ := $(OBJ_DIR)/glad/glad.o
 MINIZIP_OBJ := $(OBJ_DIR)/minizip/unzip.o
+LZ4_OBJ := $(OBJ_DIR)/lz4/lz4.o
 
 LUA_LIB := $(LIB_DIR)/liblua.a
 LRS_LIB := $(LIB_DIR)/libresample.a
-TP_LIBS := $(LUA_LIB) $(LRS_LIB) $(GLAD_OBJ) $(MINIZIP_OBJ) $(MODEL_TP_OBJS)
+TP_LIBS := $(LUA_LIB) $(LRS_LIB) $(GLAD_OBJ) $(MINIZIP_OBJ) $(LZ4_OBJ) $(MODEL_TP_OBJS)
 
 # Resources: the error dialog (200) and version info from mugen.rc, plus an
 # assembly manifest (the original embeds one the same way, as RT_MANIFEST 1).
@@ -836,7 +838,7 @@ $(TARGET): $(ENGINE_OBJS) $(RC_OBJ) $(TP_LIBS) $(FFMPEG_STAMP)
 	$(Q)$(CC) $(ARCHFLAGS) -o $@ $(ENGINE_OBJS) $(RC_OBJ) \
 	    $(PLAT_LDFLAGS) $(CROSS_LDFLAGS) \
 	    -L$(LIB_DIR) -llua -lresample \
-	    $(GLAD_OBJ) $(MINIZIP_OBJ) $(MODEL_TP_OBJS) \
+	    $(GLAD_OBJ) $(MINIZIP_OBJ) $(LZ4_OBJ) $(MODEL_TP_OBJS) \
 	    $(FFMPEG_LIBS) $(if $(FFMPEG_LIBS),-lm) $(PKG_LIBS) $(SYS_LIBS) \
 	    $(LINK_MODE)
 
@@ -967,6 +969,13 @@ $(MINIZIP_OBJ): $(TP_DIR)/minizip-0.15/unzip.c $(CONFIG_STAMP)
 	@echo "  CC      $<"
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(CC) $(TP_CFLAGS) -I$(TP_DIR)/minizip-0.15 -I$(SDK_DIR)/include -c $< -o $@
+
+# --- lz4 (v1.10.0) ----------------------------------------------------------
+# mugen-unleashed addition: the LZ4 block codec behind sprite format 13.
+$(LZ4_OBJ): $(TP_DIR)/lz4/lz4.c $(CONFIG_STAMP)
+	@echo "  CC      $<"
+	$(Q)mkdir -p $(dir $@)
+	$(Q)$(CC) $(TP_CFLAGS) -I$(TP_DIR)/lz4 -c $< -o $@
 
 # --- resources --------------------------------------------------------------
 
@@ -1166,13 +1175,42 @@ validate-run: $(VALIDATE_BIN)
 # --- Standalone SFF inspection, PNG export and repacking ----------------------
 SFFCLI_BIN := $(BUILD)/sffcli$(if $(filter win32,$(MUGEN_FAMILY)),.exe)
 
-$(SFFCLI_BIN): tools/sffcli.c Makefile
+$(SFFCLI_BIN): tools/sffcli.c third_party/lz4/lz4.c Makefile
 	@echo "  CC      $@"
 	$(Q)mkdir -p "$(dir $@)"
-	$(Q)$(CC) $(ARCHFLAGS) -std=c11 $(OPT) -Wall -Wextra $(SFFCLI_CFLAGS_EXTRA) -o "$@" "$<"
+	$(Q)$(CC) $(ARCHFLAGS) -std=c11 $(OPT) -Wall -Wextra -Ithird_party/lz4 $(SFFCLI_CFLAGS_EXTRA) -o "$@" tools/sffcli.c third_party/lz4/lz4.c
 
 sffcli: $(SFFCLI_BIN)
 .PHONY: sffcli
+
+# Production-loader probe used by tools/test_sff3.py (standalone CLI stays independent).
+SFF3_TEST_DIR := $(BUILD)/sff3-test
+SFF3_PROBE := $(SFF3_TEST_DIR)/probe$(if $(filter win32,$(MUGEN_FAMILY)),.exe)
+$(SFF3_TEST_DIR)/main.o: src/main.c $(CONFIG_STAMP)
+	@mkdir -p $(SFF3_TEST_DIR)
+	$(Q)$(CC) $(ENGINE_CFLAGS) $(CPPFLAGS) -DMUGEN_NO_ENTRY -MMD -MP -c $< -o $@
+$(SFF3_TEST_DIR)/probe.o: tools/test_sff3_engine.c $(CONFIG_STAMP)
+	@mkdir -p $(SFF3_TEST_DIR)
+	$(Q)$(CC) $(ENGINE_CFLAGS) $(CPPFLAGS) -MMD -MP -c $< -o $@
+-include $(SFF3_TEST_DIR)/main.d $(SFF3_TEST_DIR)/probe.d
+SFF3_PROBE_OBJS := $(filter-out $(OBJ_DIR)/src/main.o $(OBJ_DIR)/src/platform_main_win32.o,$(ENGINE_OBJS)) $(SFF3_TEST_DIR)/main.o $(SFF3_TEST_DIR)/probe.o
+$(SFF3_PROBE): $(SFF3_PROBE_OBJS) $(TP_LIBS)
+	$(Q)$(CC) $(ARCHFLAGS) -o $@ $(SFF3_PROBE_OBJS) $(PLAT_LDFLAGS) $(CROSS_LDFLAGS) -L$(LIB_DIR) -llua -lresample $(GLAD_OBJ) $(MINIZIP_OBJ) $(LZ4_OBJ) $(MODEL_TP_OBJS) $(PKG_LIBS) $(SYS_LIBS) $(LINK_MODE) $(if $(filter win32,$(MUGEN_FAMILY)),-mconsole)
+sff3-probe: $(SFF3_PROBE)
+.PHONY: sff3-probe
+
+# --- SFF codec benchmark (build/tmp copy, not a shipped tool) ----------------
+# Measures load/decode time and pool residency of an archive through the real
+# loader and codecs. Source lives under build/tmp so it is never committed.
+BENCH_SFF := $(BUILD)/sff3-test/bench_sff$(if $(filter win32,$(MUGEN_FAMILY)),.exe)
+$(BENCH_SFF): build/tmp/bench_sff.c $(CONFIG_STAMP) $(SFF3_TEST_DIR)/main.o
+	@echo "  CC      $@"
+	@mkdir -p $(dir $@)
+	$(Q)$(CC) $(ENGINE_CFLAGS) $(CPPFLAGS) -c build/tmp/bench_sff.c -o $(SFF3_TEST_DIR)/bench_sff.o
+	$(Q)$(CC) $(ARCHFLAGS) -o $@ $(filter-out $(OBJ_DIR)/src/main.o $(OBJ_DIR)/src/platform_main_win32.o,$(ENGINE_OBJS)) $(SFF3_TEST_DIR)/main.o $(SFF3_TEST_DIR)/bench_sff.o $(PLAT_LDFLAGS) $(CROSS_LDFLAGS) -L$(LIB_DIR) -llua -lresample $(GLAD_OBJ) $(MINIZIP_OBJ) $(LZ4_OBJ) $(MODEL_TP_OBJS) $(PKG_LIBS) $(SYS_LIBS) $(LINK_MODE) $(if $(filter win32,$(MUGEN_FAMILY)),-mconsole)
+
+bench-sff: $(BENCH_SFF)
+.PHONY: bench-sff
 
 # --- memprof side-table benchmark -------------------------------------------
 # Times src/memprof.c's pointer side table at several bucket counts, using

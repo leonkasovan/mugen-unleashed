@@ -8,8 +8,8 @@
 extern BgmSubsystem g_bgmSdlmixSubsystem; /* 0x004f17a0 */
 extern BgmSubsystem g_bgmMpg123Subsystem; /* 0x004f1818 */
 extern const ResamplerVtbl g_resamplerVtbl; /* 0x004f1890 */
-extern SpriteEncodeFn g_spriteEncoders[13]; /* 0x004f19e0 */
-extern SpriteDecodeFn g_spriteDecoders[13]; /* 0x004f1a14 */
+extern SpriteEncodeFn g_spriteEncoders[14]; /* 0x004f19e0 (+1 slot for format 13 LZ4) */
+extern SpriteDecodeFn g_spriteDecoders[14]; /* 0x004f1a14 (+1 slot for format 13 LZ4) */
 extern int g_triggersV10[3]; /* 0x004f1a64 */
 extern int g_triggersV11[9]; /* 0x004f1a70 */
 extern int g_sctrlsV10[2]; /* 0x004f1a98 */
@@ -1927,6 +1927,10 @@ void __cdecl Gl_SetPalFxSuppressed(int on);
 /* 0x0048d720 */ int __cdecl Rle5_EncodeBlock(const unsigned char *src, GrowBufWriter *w, const unsigned char *last);
 /* 0x0048d880 */ int __cdecl Rle5_DecodeBlock(const unsigned char *src, const unsigned char *end, unsigned char *out);
 /* 0x0048d920 */ int __cdecl Rle5_PutPixels(const unsigned char *src, GrowBufWriter *w, const unsigned char *last);
+/* ---- port addition: LZ4 sprite codec (format 13; no original address) ---- */
+unsigned char *__cdecl Lz4_Encode(const void *pixels, int w, int h, int *size_out);
+int __cdecl Lz4_Decode(const void *data, size_t size, void *out);
+int __cdecl Lz4_DecodeBlock(const void *data, size_t size, void *out, size_t expected);
 /* 0x0048d9b0 */ unsigned int __cdecl Hash_Lookup3(const void *key, size_t length);
 /* 0x0048ded0 */ void __cdecl GlDetect_Clear(void);
 /* 0x0048df40 */ int __cdecl GlDetect_TestLinesEven(void);

@@ -15,6 +15,17 @@
 /* Encoder of a compressed sprite format (g_spriteEncoders[format]): malloc'ed data, or NULL. */
 typedef unsigned char *(__cdecl *SpriteEncodeFn)(const void *pixels, int w, int h, int *size_out);
 
+/*
+ * LZ4 (format 13, a mugen-unleashed addition): lossless at any depth, decoded
+ * with a single allocation-free LZ4_decompress_safe call. The payload is the
+ * 4-byte decoded size followed by the LZ4 block, like every other codec.
+ * Lz4_DecodeBlock takes the expected output length because LZ4_decompress_safe
+ * needs the destination capacity; Lz4_Decode reads it from the prefix.
+ */
+unsigned char *Lz4_Encode(const void *pixels, int w, int h, int *size_out);
+int Lz4_Decode(const void *data, size_t size, void *out);
+int Lz4_DecodeBlock(const void *data, size_t size, void *out, size_t expected);
+
 /* Size prefix of compressed sprite data (the decoded size). */
 #define SPRITE_CODEC_PREFIX 4
 

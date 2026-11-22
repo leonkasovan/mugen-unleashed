@@ -27,7 +27,7 @@ int g_targetBpp;
 int g_glMaxTextureSize;
 int g_outOfMemory;
 PalRemap *g_palRemapCur;
-SpriteDecodeFn g_spriteDecoders[13];
+SpriteDecodeFn g_spriteDecoders[14];
 int g_clipX1, g_clipY1, g_clipX2, g_clipY2;
 
 /* ---- stubs for callees not under test ---- */

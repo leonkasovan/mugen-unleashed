@@ -11,7 +11,7 @@ static int fail_realloc, fail_chunk, null_session, consumed;
 int g_outOfMemory, g_renderMode=1, g_glMaxTextureSize=4096;
 AudioFormat g_sndFormat={44100,AUDIO_FMT_S16,2};
 Resampler *g_sndResampler;
-SpriteDecodeFn g_spriteDecoders[13];
+SpriteDecodeFn g_spriteDecoders[14];
 static void remember(void *p,size_t n) { if(!p)return;for(int i=0;i<64;i++)if(!ptrs[i]){ptrs[i]=p;sizes[i]=n;return;}abort(); }
 void *Memprof_Malloc(size_t n){void*p=malloc(n);remember(p,n);return p;}
 void *Memprof_Calloc(size_t n,size_t s){void*p=calloc(n,s);remember(p,n*s);return p;}

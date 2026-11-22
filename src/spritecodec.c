@@ -5,11 +5,16 @@
  * g_spriteDecoders), and the sprite decompression buffer in which the
  * sprite cache (0x477EC0) keeps decoded sprites.
  *
+ * Port addition: format 13 is LZ4 (third_party/lz4, v1.10.0), a lossless
+ * block codec with an allocation-free decoder. It is not in the original.
+ *
  * The encoders are not used by the game (nothing references
  * g_spriteEncoders); the decoders run when sprites are loaded or drawn.
  */
 #include "mugen.h"
 #include <limits.h>
+/* mugen-unleashed addition: LZ4 block codec (format 13). */
+#include "lz4.h"
 
 /* ------------------------------------------------------------------ GrowBuf */
 
@@ -902,6 +907,93 @@ int Rle5_Decode(const void *data, size_t size, void *out)
     return Rle5_DecodeBlock(d + SPRITE_CODEC_PREFIX, d + size - 1, out);
 }
 
+/* --------------------------------------------------------------------- LZ4 */
+
+/*
+ * mugen-unleashed addition: LZ4 block format (format 13), the modern replacement
+ * for the legacy codecs. Not in the original binary; no original address.
+ *
+ * Payload layout matches every other codec: the 4-byte little-endian decoded
+ * size, then the LZ4 block. LZ4 stores lengths little-endian and needs no
+ * external dictionary, so the decode side is a single LZ4_decompress_safe call
+ * that writes straight into the caller's buffer -- allocation-free, which is
+ * what makes it a better fit for the DecompBuffer (its eviction cost is the
+ * compressed size) than deflate. Unlike RLE5/LZ5 it is lossless at any depth.
+ *
+ * The encoder is not used by the game (as with Rle8/Rle5/Lz5).
+ */
+unsigned char *Lz4_Encode(const void *pixels, int w, int h, int *size_out)
+{
+    int n = w * h;
+    int bound = LZ4_compressBound(n);
+    int written;
+    GrowBufWriter wr;
+    GrowBuf *buf;
+
+    if (n < 0 || bound <= 0) {
+        return NULL;
+    }
+    buf = Codec_CreateOutput(&wr, n);
+    if (buf == NULL) {
+        return NULL;
+    }
+    if (buf->size < SPRITE_CODEC_PREFIX + bound && !GrowBuf_Resize(buf, SPRITE_CODEC_PREFIX + bound)) {
+        Codec_Discard(buf);
+        return NULL;
+    }
+    written = LZ4_compress_default((const char *)pixels, (char *)buf->data + SPRITE_CODEC_PREFIX, n, bound);
+    if (written <= 0) {
+        Codec_Discard(buf);
+        return NULL;
+    }
+    *size_out = written + SPRITE_CODEC_PREFIX;
+    return Codec_Finish(buf, written + SPRITE_CODEC_PREFIX);
+}
+
+/*
+ * Decodes size bytes of LZ4 data (after the decoded size) into out. Returns the
+ * bytes written, or -1 when the block is malformed or does not fill `expected`
+ * bytes. The output buffer is exactly `expected` bytes; LZ4_decompress_safe never
+ * writes past it. (The legacy decoders take no expected length; this one needs
+ * it because LZ4_decompress_safe requires the output capacity.)
+ */
+int Lz4_DecodeBlock(const void *data, size_t size, void *out, size_t expected)
+{
+    int result;
+
+    if (data == NULL || out == NULL || size > (size_t)INT_MAX || expected > (size_t)INT_MAX) {
+        return -1;
+    }
+    result = LZ4_decompress_safe((const char *)data, (char *)out, (int)size, (int)expected);
+    if (result < 0 || (size_t)result != expected) {
+        return -1;
+    }
+    return result;
+}
+
+/*
+ * Decoder of format 13: data is the whole sprite record (decoded size, then the
+ * LZ4 block), size includes the prefix, out is the decoded buffer. Reads the
+ * declared size from the prefix and decodes into that many bytes of out. Returns
+ * the bytes written (equal to the declared size) or -1, matching the legacy
+ * signature's int result; the engine ignores it like the other legacy codecs.
+ */
+int Lz4_Decode(const void *data, size_t size, void *out)
+{
+    const unsigned char *p = data;
+    unsigned int declared;
+
+    if (p == NULL || out == NULL || size < SPRITE_CODEC_PREFIX) {
+        return -1;
+    }
+    declared = (unsigned int)p[0] | ((unsigned int)p[1] << 8) |
+               ((unsigned int)p[2] << 16) | ((unsigned int)p[3] << 24);
+    if (declared > (unsigned int)INT_MAX) {
+        return -1;
+    }
+    return Lz4_DecodeBlock(p + SPRITE_CODEC_PREFIX, size - SPRITE_CODEC_PREFIX, out, declared);
+}
+
 /* ------------------------------------------------- sprite decompression buffer */
 
 static DecompBlock *DecompBlock_Next(const DecompBlock *blk)
@@ -1243,6 +1335,56 @@ int Sprite_ValidateCompressed(const void *data, size_t size, int format, size_t 
         channels = p[29] == 3 ? 1 : p[29] == 2 ? 3 : p[29] == 6 ? 4 : 0;
         return w && h && channels && p[28] <= 8 &&
                w <= (size_t)INT_MAX / h / channels && w * h * channels == expected;
+    }
+    if (format == 13) {
+        /*
+         * mugen-unleashed addition: walk the LZ4 block without decoding it.
+         * A sequence is a token (high nibble: literal length, low nibble:
+         * match length - 4), extended lengths as 0xFF bytes, that many
+         * literals, then (except on the final sequence) a 2-byte little-endian
+         * offset back into the output. Reject truncated lengths, a back
+         * reference before the start, and a decoded extent that does not equal
+         * `expected`.
+         */
+        size_t in = SPRITE_CODEC_PREFIX;
+        while (in < size) {
+            unsigned int token = p[in++];
+            size_t literals = token >> 4;
+            size_t match;
+            if (literals == 15) {
+                unsigned int ext;
+                do {
+                    if (in == size) return 0;
+                    ext = p[in++];
+                    if (literals > expected) return 0;
+                    literals += ext;
+                } while (ext == 255);
+            }
+            if (literals > expected - pos || literals > size - in) return 0;
+            in += literals;
+            pos += literals;
+            if (in == size) break; /* last sequence: literals only */
+            if (size - in < 2) return 0;
+            {
+                unsigned int offset = p[in] | ((unsigned int)p[in + 1] << 8);
+                in += 2;
+                if (offset == 0 || offset > pos) return 0;
+            }
+            match = token & 15;
+            if (match == 15) {
+                unsigned int ext;
+                do {
+                    if (in == size) return 0;
+                    ext = p[in++];
+                    if (match > expected) return 0;
+                    match += ext;
+                } while (ext == 255);
+            }
+            match += 4;
+            if (match > expected - pos) return 0;
+            pos += match;
+        }
+        return pos == expected;
     }
     if (format != 2 && format != 3 && format != 4) return 0;
     while (i < size) {

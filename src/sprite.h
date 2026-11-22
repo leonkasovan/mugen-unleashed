@@ -7,6 +7,7 @@
  */
 
 /* Sprite.format: SFF v2 compression, or one of these. */
+#define SPRITE_FORMAT_ATLAS     101     /* SFF v3 borrowed page region */
 #define SPRITE_FORMAT_RAW       0
 #define SPRITE_FORMAT_SURFACE   1       /* SDL_Surface */
 #define SPRITE_FORMAT_TEXTURE   100     /* OpenGL texture */
@@ -14,14 +15,15 @@
 /*
  * Compressed formats that Sprite_Init decodes with SPRITE_INIT_DECODE (SFF v2:
  * 2 RLE8, 3 RLE5, 4 LZ5, 10-12 PNG; 5-9 have no decoder in g_spriteDecoders).
+ * 13 is the mugen-unleashed LZ4 addition (format 13), lossless at any depth.
  */
 #define SPRITE_FORMAT_DECODE_MIN    2
-#define SPRITE_FORMAT_DECODE_MAX    12
+#define SPRITE_FORMAT_DECODE_MAX    13
 
 /* Sprite_Init flags. */
 #define SPRITE_INIT_COPY        0x01    /* copy the pixel data */
 #define SPRITE_INIT_OWN         0x02    /* take ownership of the pixel data */
-#define SPRITE_INIT_DECODE      0x04    /* decode compressed formats (2..12) at load */
+#define SPRITE_INIT_DECODE      0x04    /* decode compressed formats (2..13) at load */
 #define SPRITE_INIT_NO_TEXTURE  0x08    /* never upload to a texture */
 
 /* Largest texture side when the renderer is not RENDER_MODE_GL (g_glMaxTextureSize otherwise). */

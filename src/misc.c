@@ -98,6 +98,13 @@ int SpriteCache_Acquire(void *data, int format, size_t size, size_t expected, vo
             SpriteCache_Remove(data);
             return 0;
         }
+    } else if (format == 13) {
+        /* Port addition: LZ4 (13) also reports a status; Lz4_Decode returns the
+         * bytes written (>= 0) on success and -1 on a malformed block. */
+        if (g_spriteDecoders[format](data, size, pixels) < 0) {
+            SpriteCache_Remove(data);
+            return 0;
+        }
     } else {
         /* The legacy codecs' return value is not a status (Rle8_Decode returns
          * 0, the LZ5/RLE5 ones return the bytes written); the validator above

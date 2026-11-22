@@ -17,15 +17,16 @@ file(GLOB PNG "${ROOT}/third_party/libpng-1.2.38/png*.c")
 list(FILTER PNG EXCLUDE REGEX ".*/(pnggccrd|pngvcrd)\\.c$")
 file(GLOB RESAMPLE "${ROOT}/third_party/libresample/src/*.c")
 file(GLOB ZIP "${ROOT}/third_party/minizip-0.15/*.c")
+file(GLOB LZ4 "${ROOT}/third_party/lz4/lz4.c")
 file(GLOB PLATFORM "${ROOT}/port/android/app/src/main/jni/src/android_*.c")
 list(FILTER PLATFORM EXCLUDE REGEX ".*/android_main\\.c$")
-add_library(android_native SHARED ${ENGINE} ${LUA} ${PNG} ${RESAMPLE} ${ZIP} ${PLATFORM}
+add_library(android_native SHARED ${ENGINE} ${LUA} ${PNG} ${RESAMPLE} ${ZIP} ${LZ4} ${PLATFORM}
  "${CMAKE_CURRENT_LIST_DIR}/test_present_host.c")
 target_compile_definitions(android_native PRIVATE ANDROID_PORT=1 SDL_MAIN_HANDLED LIBRESAMPLE_STATIC=1)
 target_include_directories(android_native PRIVATE
  "${ROOT}/src" "${ROOT}/port/android/app/src/main/jni/src"
  "${ROOT}/third_party/libpng-1.2.38" "${ROOT}/third_party/lua-5.1.4/src"
- "${ROOT}/third_party/minizip-0.15" "${ROOT}/third_party/libresample/include" "${ROOT}/third_party/libresample/src"
+ "${ROOT}/third_party/minizip-0.15" "${ROOT}/third_party/lz4" "${ROOT}/third_party/libresample/include" "${ROOT}/third_party/libresample/src"
  "${SDL2_INCLUDE_DIR}" "${SDL2_MIXER_INCLUDE_DIR}" "${SDL2_TTF_INCLUDE_DIR}")
 target_compile_options(android_native PRIVATE -O1 -g -Werror=implicit-function-declaration -fno-strict-aliasing)
 target_link_options(android_native PRIVATE -Wl,--no-undefined -Wl,--wrap=SDL_UpdateTexture -Wl,--wrap=SDL_RenderPresent)

@@ -6,7 +6,7 @@
 int g_outOfMemory, g_renderMode=RENDER_SYSTEM, g_streamError;
 Stream *g_pngStream;
 DecompBuffer *g_spriteDecompBuffer;
-SpriteDecodeFn g_spriteDecoders[13]={[2]=(SpriteDecodeFn)Rle8_Decode,[12]=(SpriteDecodeFn)Png_Decode};
+SpriteDecodeFn g_spriteDecoders[14]={[2]=(SpriteDecodeFn)Rle8_Decode,[12]=(SpriteDecodeFn)Png_Decode,[13]=(SpriteDecodeFn)Lz4_Decode};
 static int fail_png_alloc, closes;
 static void *stream_alloc;
 void *Mem_Calloc(size_t n,size_t s){return stream_alloc=calloc(n,s);}

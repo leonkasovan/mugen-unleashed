@@ -105,6 +105,13 @@ if(MINIZIP_SRC)
     list(APPEND MUGEN_ENGINE_SOURCES ${MINIZIP_SRC})
 endif()
 
+# LZ4 (vendored v1.10.0), the sprite codec behind SFF v2 format 13.
+file(GLOB LZ4_SRC "${TP}/lz4/lz4.c")
+if(LZ4_SRC)
+    list(APPEND MUGEN_ENGINE_SOURCES ${LZ4_SRC})
+    list(APPEND ANDROID_INCLUDES "${TP}/lz4")
+endif()
+
 # libresample, used by the BGM speed paths
 file(GLOB RESAMPLE_SRC "${TP}/libresample/src/*.c")
 if(RESAMPLE_SRC)

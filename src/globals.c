@@ -14,8 +14,9 @@ BgmSubsystem g_bgmSdlmixSubsystem = { Bgm_BuiltinVersion, Sdlmix_Extensions, Sdl
 
 BgmSubsystem g_bgmMpg123Subsystem = { Bgm_BuiltinVersion, Mpg123_Extensions, Mpg123_Init, MPG123_DEINIT_SLOT, Mpg123_Create, Mpg123_Destroy, Mpg123_IsPlaying, Mpg123_Start, Mpg123_Stop, Mpg123_Rewind, Mpg123_Seek, Mpg123_Open, Mpg123_Close, Mpg123_GetVolume, Mpg123_SetVolume, Mpg123_GetLoopFlag, Mpg123_SetLoopFlag, Mpg123_GetLoopPoints, Mpg123_SetLoopPoints, Mpg123_SetEndCallback, Mpg123_StrError, Mpg123_Read, Mpg123_GetFormatOf, NULL, NULL, NULL, NULL, NULL, NULL, NULL }; /* 0x004f1818 */
 const ResamplerVtbl g_resamplerVtbl = { Resampler_Open, Resampler_Create, Resampler_Close, Resampler_InputNeeded, Resampler_State, Resampler_Write, Resampler_Read, Resampler_InFormat, Resampler_OutFormat, Resampler_Reset, Resampler_InBlock, Resampler_OutBlock }; /* 0x004f1890 */
-SpriteEncodeFn g_spriteEncoders[13] = { NULL, NULL, (SpriteEncodeFn)Rle8_Encode, (SpriteEncodeFn)Rle5_Encode, (SpriteEncodeFn)Lz5_Encode, NULL, NULL, NULL, NULL, NULL, (SpriteEncodeFn)Png_Encode8, (SpriteEncodeFn)Png_Encode24, (SpriteEncodeFn)Png_Encode32 }; /* 0x004f19e0 */
-SpriteDecodeFn g_spriteDecoders[13] = { NULL, NULL, (SpriteDecodeFn)Rle8_Decode, (SpriteDecodeFn)Rle5_Decode, (SpriteDecodeFn)Lz5_Decode, NULL, NULL, NULL, NULL, NULL, (SpriteDecodeFn)Png_Decode, (SpriteDecodeFn)Png_Decode, (SpriteDecodeFn)Png_Decode }; /* 0x004f1a14 */
+/* Port addition: format 13 (LZ4) extends the original's 0..12 tables by one slot. */
+SpriteEncodeFn g_spriteEncoders[14] = { NULL, NULL, (SpriteEncodeFn)Rle8_Encode, (SpriteEncodeFn)Rle5_Encode, (SpriteEncodeFn)Lz5_Encode, NULL, NULL, NULL, NULL, NULL, (SpriteEncodeFn)Png_Encode8, (SpriteEncodeFn)Png_Encode24, (SpriteEncodeFn)Png_Encode32, (SpriteEncodeFn)Lz4_Encode }; /* 0x004f19e0 */
+SpriteDecodeFn g_spriteDecoders[14] = { NULL, NULL, (SpriteDecodeFn)Rle8_Decode, (SpriteDecodeFn)Rle5_Decode, (SpriteDecodeFn)Lz5_Decode, NULL, NULL, NULL, NULL, NULL, (SpriteDecodeFn)Png_Decode, (SpriteDecodeFn)Png_Decode, (SpriteDecodeFn)Png_Decode, (SpriteDecodeFn)Lz4_Decode }; /* 0x004f1a14 */
 int g_triggersV10[3] = { 25, 182, -1 }; /* 0x004f1a64 */
 int g_triggersV11[9] = { 22, 212, 213, 214, 215, 216, 217, 218, 219 }; /* 0x004f1a70 */
 int g_sctrlsV10[2] = { 0x8C, -1 }; /* 0x004f1a98 */

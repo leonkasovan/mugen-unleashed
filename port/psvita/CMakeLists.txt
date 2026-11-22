@@ -399,6 +399,9 @@ set(MUGEN_MINIZIP_SOURCES "${MUGEN_THIRD}/minizip-0.15/unzip.c")
 # libresample 0.1.3, vendored and ported to Elecbyte's multi-channel ABI.
 file(GLOB MUGEN_LIBRESAMPLE_SOURCES "${MUGEN_THIRD}/libresample/src/*.c")
 
+# LZ4 (vendored v1.10.0), the sprite codec behind SFF v2 format 13.
+set(MUGEN_LZ4_SOURCES "${MUGEN_THIRD}/lz4/lz4.c")
+
 # ------------------------------------------------------------------- flags --
 
 # ARMv7-A has no x87. The x86 builds pin -mfpmath=387 -fexcess-precision=standard
@@ -457,6 +460,7 @@ add_executable(mugen
   src/vita_power.c
   ${MUGEN_LUA_SOURCES}
   ${MUGEN_MINIZIP_SOURCES}
+  ${MUGEN_LZ4_SOURCES}
   ${MUGEN_LIBRESAMPLE_SOURCES})
 
 target_compile_definitions(mugen PRIVATE
@@ -478,6 +482,7 @@ target_include_directories(mugen PRIVATE
   "${MUGEN_SRC}"                                  # engine headers
   "${MUGEN_THIRD}/lua-5.1.4/src"
   "${MUGEN_THIRD}/minizip-0.15"
+  "${MUGEN_THIRD}/lz4"
   "${MUGEN_THIRD}/libresample/include"
   "${MUGEN_THIRD}/libresample/src"
   src)                                            # vita_gl_shim.h
@@ -527,7 +532,7 @@ target_compile_definitions(mugen PRIVATE
 
 # One shot at silencing the vendored libraries' warnings: -w for them only.
 set_source_files_properties(
-  ${MUGEN_LUA_SOURCES} ${MUGEN_MINIZIP_SOURCES} ${MUGEN_LIBRESAMPLE_SOURCES}
+  ${MUGEN_LUA_SOURCES} ${MUGEN_MINIZIP_SOURCES} ${MUGEN_LZ4_SOURCES} ${MUGEN_LIBRESAMPLE_SOURCES}
   PROPERTIES COMPILE_OPTIONS "-w;-fno-strict-aliasing")
 
 # Lua: no LUA_USE_LINUX. That macro pulls in <dlfcn.h> and readline-based lua.c,

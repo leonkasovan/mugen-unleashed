@@ -11,6 +11,7 @@ SDL2_mixer and SDL2_ttf come from the selected platform dependency tree.
 | `glad-2.1/` | **glad 2.1** OpenGL loader, generated for this engine (GL 2.1 **compatibility** profile + `ARB_fragment_program`, `ARB_texture_non_power_of_two`, `EXT_blend_logic_op`, `EXT_framebuffer_object`) | MIT; `khrplatform.h` carries the Khronos MIT text |
 | `minizip-0.15/` | unzip 0.15 by Gilles Vollant (zlib 1.1.3 contrib) | zlib license (`unzip.h`) |
 | `cgltf-1.14/` | cgltf 1.14 by Johannes Kuhlmann, the glTF reader of 3D stages (a mugen-unleashed addition, not in the original) | MIT (`LICENSE`) |
+| `lz4/` | LZ4 1.10.0 block codec by Yann Collet, the decoder and encoder of sprite format 13 (a mugen-unleashed addition, not in the original) | BSD 2-Clause (`LICENSE`) |
 | `stb/` | stb_image 2.30 by Sean Barrett (nothings/stb commit 013ac3b), the JPEG decoder of 3D stage textures (a mugen-unleashed addition) | public domain or MIT (end of `stb_image.h`) |
 | `stb/stb_rect_pack.h` | stb_rect_pack 1.02 by Sean Barrett, used by the optional indexed GLES sprite atlas. | Public domain or MIT (end of header) |
 | `sdk/include/zlib.h`, `zconf.h` | zlib 1.2.3 headers | zlib license |
