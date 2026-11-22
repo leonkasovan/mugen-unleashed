@@ -21,19 +21,24 @@
 #define seek64 _fseeki64
 #define tell64 _ftelli64
 #else
+#include <dirent.h>
 #include <unistd.h>
 #define seek64 fseeko
 #define tell64 ftello
 #endif
 
+#include "lz4.h"
+
 #define V101 UINT32_C(0x01000100)
 #define V200 UINT32_C(0x02000000)
 #define V201 UINT32_C(0x02000100)
+#define V300 UINT32_C(0x03000000)
+enum { ATLAS_SPRITE = 40, ATLAS_PAGE = 28, ATLAS_SIDE = 1024 };
 #define NO_PALETTE UINT32_MAX
 
 enum { HEADER_SIZE = 512, V1_NODE = 32, SPRITE_NODE = 28, PALETTE_NODE = 16 };
 enum { RAW = 0, RLE8 = 2, RLE5 = 3, LZ5 = 4, PNG8 = 10, PNG24 = 11,
-       PNG32 = 12, PCX = 255, TDATA = 1 };
+       PNG32 = 12, LZ4F = 13, PCX = 255, TDATA = 1 };
 
 typedef unsigned char Byte;
 
@@ -41,6 +46,7 @@ typedef struct {
     int group, number, x, y;
     unsigned width, height, depth, format, flags;
     uint32_t offset, size, link, root, palette, effective_palette;
+    unsigned page, left, top, next_on_page;
 } Sprite;
 
 typedef struct {
@@ -50,6 +56,15 @@ typedef struct {
 } Palette;
 
 typedef struct {
+    unsigned w, h, depth, codec;
+    uint32_t offset, size, decoded;
+    unsigned cursor_x, cursor_y, row_height, first_sprite, last_sprite;
+} AtlasPage;
+
+typedef struct {
+    AtlasPage *pages;
+    Byte *cached_pixels;
+    uint32_t page_count, cached_page, source_version;
     FILE *file;
     uint32_t size, version, compat, sprite_count, palette_count;
     uint32_t v1_groups;
@@ -572,6 +587,8 @@ static int decode_rle(unsigned format, const Byte *data, size_t size, Byte *out,
             if (i == size)
                 return 0;
             count = value & 63;
+            if (!count)
+                return 0;
             value = data[i++];
         } else if (format == RLE5) {
             if (i == size)
@@ -673,8 +690,36 @@ static int format_matches(const Sprite *s)
     case RLE8: case RLE5: case LZ5: case PNG8: return s->depth <= 8;
     case PNG24: return s->depth == 24;
     case PNG32: return s->depth == 32;
+    case LZ4F: return 1; /* lossless at any depth */
     default: return 0;
     }
+}
+
+/* Keep one decoded page while exporting a sequence of sprites. */
+static int read_page(Sff *sff, uint32_t index)
+{
+    if (sff->cached_pixels && sff->cached_page == index)
+        return 1;
+    free(sff->cached_pixels);
+    sff->cached_pixels = NULL;
+    const AtlasPage *p = &sff->pages[index];
+    Byte *data = read_payload(sff, p->offset, p->size);
+    if (!data)
+        return 0;
+    if (p->codec == RLE8) {
+        Byte *raw = malloc(p->decoded);
+        int ok = raw && le32(data) == p->decoded &&
+                 decode_rle(RLE8, data + 4, p->size - 4, raw, p->decoded);
+        free(data);
+        if (!ok) {
+            free(raw);
+            return fail(sff, "invalid RLE8 atlas page");
+        }
+        data = raw;
+    }
+    sff->cached_pixels = data;
+    sff->cached_page = index;
+    return 1;
 }
 
 /* Raw data can be used directly. Keep the encoded data when the optimizer
@@ -682,6 +727,20 @@ static int format_matches(const Sprite *s)
 static int load_pixels(Sff *sff, const Sprite *s, Byte **encoded, Byte **pixels)
 {
     size_t length = pixel_bytes(s);
+    if (sff->version == V300) {
+        *encoded = *pixels = NULL;
+        if (!read_page(sff, s->page))
+            return 0;
+        *pixels = malloc(length);
+        if (!*pixels)
+            return fail(sff, "out of memory extracting atlas sprite");
+        size_t step = channels(s->depth);
+        size_t stride = step * sff->pages[s->page].w;
+        const Byte *row = sff->cached_pixels + s->top * stride + s->left * step;
+        for (unsigned y = 0; y < s->height; ++y)
+            memcpy(*pixels + y * s->width * step, row + y * stride, s->width * step);
+        return 1;
+    }
     *encoded = read_payload(sff, s->offset, s->size);
     *pixels = NULL;
     if (!*encoded)
@@ -704,6 +763,12 @@ static int load_pixels(Sff *sff, const Sprite *s, Byte **encoded, Byte **pixels)
     case PCX: ok = decode_pcx(s, data, s->size, *pixels, NULL); break;
     case RLE8: case RLE5: ok = decode_rle(s->format, data + 4, s->size - 4, *pixels, length); break;
     case LZ5: ok = decode_lz5(data + 4, s->size - 4, *pixels, length); break;
+    case LZ4F: {
+        size_t span = s->size - 4;
+        ok = span <= (size_t)INT_MAX && length <= (size_t)INT_MAX &&
+             LZ4_decompress_safe((const char *)data + 4, (char *)*pixels, (int)span, (int)length) == (int)length;
+        break;
+    }
     default: ok = decode_png(s, data + 4, s->size - 4, *pixels); break;
     }
     return ok || fail(sff, "malformed sprite image data");
@@ -983,6 +1048,76 @@ static int load_v2(Sff *sff, const Byte *header)
            resolve_v2_palettes(sff);
 }
 
+static int load_v3(Sff *sff, const Byte *h)
+{
+    uint32_t st = le32(h+36), pt = le32(h+44), at = le32(h+52), data = le32(h+60);
+    sff->source_version = le32(h+16);
+    sff->compat = le32(h+24);
+    sff->sprite_count = le32(h+40);
+    sff->palette_count = le32(h+48);
+    sff->page_count = le32(h+56);
+    if (sff->compat != V300 || (sff->source_version != V101 &&
+        sff->source_version != V200 && sff->source_version != V201) ||
+        st < HEADER_SIZE || !fits(st, (uint64_t)sff->sprite_count * ATLAS_SPRITE, pt) ||
+        !fits(pt, (uint64_t)sff->palette_count * PALETTE_NODE, at) ||
+        !fits(at, (uint64_t)sff->page_count * ATLAS_PAGE, data) || data > sff->size)
+        return fail(sff, "invalid SFF v3 header or table range");
+    if (!allocate_sprites(sff) || !allocate_palettes(sff, sff->palette_count) ||
+        !load_v2_palettes(sff, pt, data, sff->size - data))
+        return 0;
+    sff->pages = calloc(sff->page_count, sizeof(*sff->pages));
+    if (sff->page_count && !sff->pages)
+        return fail(sff, "out of memory reading atlas pages");
+    for (uint32_t i = 0; i < sff->page_count; ++i) {
+        Byte n[ATLAS_PAGE];
+        AtlasPage *p = &sff->pages[i];
+        if (!read_at(sff, at + i * ATLAS_PAGE, n, sizeof(n))) return 0;
+        p->w = le32(n); p->h = le32(n+4); p->depth = le32(n+8); p->codec = le32(n+12);
+        p->offset = le32(n+16); p->size = le32(n+20); p->decoded = le32(n+24);
+        if (!p->w || !p->h || p->w > 32769 || p->h > 32769 ||
+            (p->depth != 8 && p->depth != 24 && p->depth != 32) ||
+            (uint64_t)p->w * p->h * channels(p->depth) != p->decoded || p->decoded > INT_MAX ||
+            (p->codec == RAW ? p->size != p->decoded :
+             p->codec != RLE8 || p->size < 6 || (uint64_t)(p->size-4)*63 < p->decoded) ||
+            p->offset < data || !fits(p->offset, p->size, sff->size))
+            return fail(sff, "invalid atlas page descriptor");
+    }
+    for (uint32_t i = 0; i < sff->sprite_count; ++i) {
+        Byte n[ATLAS_SPRITE];
+        Sprite *s = &sff->sprites[i];
+        if (!read_at(sff, st + i * ATLAS_SPRITE, n, sizeof(n))) return 0;
+        s->group = (int32_t)le32(n); s->number = (int32_t)le32(n+4);
+        s->width = le16(n+8); s->height = le16(n+10);
+        s->x = signed16(n+12); s->y = signed16(n+14); s->depth = le32(n+16);
+        s->palette = le32(n+20); s->effective_palette = le32(n+24);
+        s->link = le32(n+28); s->page = le32(n+32);
+        s->left = le16(n+36); s->top = le16(n+38);
+        if ((s->palette != NO_PALETTE && s->palette >= sff->palette_count) ||
+            (s->effective_palette != NO_PALETTE && s->effective_palette >= sff->palette_count) ||
+            s->page >= sff->page_count || !format_matches(s) || !valid_dimensions(s))
+            return fail(sff, "invalid atlas sprite");
+        AtlasPage *p = &sff->pages[s->page];
+        if (s->effective_palette != NO_PALETTE && (s->depth > 8 ||
+            sff->palettes[s->effective_palette].count != (1u << s->depth)))
+            return fail(sff, "invalid effective atlas palette");
+        if (channels(s->depth) != channels(p->depth) || !s->left || !s->top ||
+            s->left + s->width >= p->w || s->top + s->height >= p->h)
+            return fail(sff, "invalid atlas rectangle");
+        s->root = i;
+        if (s->link == UINT32_MAX) {
+            s->size = (uint32_t)pixel_bytes(s);
+        } else {
+            if (s->link >= i) return fail(sff, "invalid atlas sprite link");
+            const Sprite *src = &sff->sprites[s->link];
+            if (s->page != src->page || s->left != src->left || s->top != src->top ||
+                s->width != src->width || s->height != src->height || s->depth != src->depth)
+                return fail(sff, "inconsistent linked atlas rectangle");
+            s->root = src->root;
+        }
+    }
+    return 1;
+}
+
 static int open_sff(Sff *sff, const char *path)
 {
     sff->file = fopen(path, "rb");
@@ -1004,6 +1139,7 @@ static int open_sff(Sff *sff, const char *path)
         return load_v1(sff, header);
     if (sff->version == V200 || sff->version == V201)
         return load_v2(sff, header);
+    if (sff->version == V300) return load_v3(sff, header);
     return fail(sff, "unsupported SFF version");
 }
 
@@ -1017,6 +1153,8 @@ static void close_sff(Sff *sff)
     }
     free(sff->palettes);
     free(sff->sprites);
+    free(sff->pages);
+    free(sff->cached_pixels);
 }
 
 static int write_bytes(FILE *file, const void *data, size_t size)
@@ -1110,6 +1248,7 @@ static const char *format_name(unsigned format)
     case RLE8: return "RLE8";
     case RLE5: return "RLE5";
     case LZ5: return "LZ5";
+    case LZ4F: return "LZ4";
     case PNG8: return "PNG8";
     case PNG24: return "PNG24";
     case PNG32: return "PNG32";
@@ -1124,6 +1263,7 @@ static const char *version_name(uint32_t version)
     case V101: return "1.01";
     case V200: return "2.00";
     case V201: return "2.01";
+    case V300: return "3.00";
     default: return "unspecified";
     }
 }
@@ -1131,7 +1271,14 @@ static const char *version_name(uint32_t version)
 static int inspect_sff(Sff *sff, const char *path)
 {
     /* V1 records were already decoded while collecting the PCX palettes. */
-    if (sff->version != V101) {
+    if (sff->version == V300) {
+        printf("Source SFF %s | Atlas pages: %u\n", version_name(sff->source_version), sff->page_count);
+        for (uint32_t i = 0; i < sff->page_count; ++i) {
+            const AtlasPage *p = &sff->pages[i];
+            if (!read_page(sff, i)) return 0;
+            printf("  Page [%u] %ux%u %u-bit %s %u bytes\n", i, p->w, p->h, p->depth, format_name(p->codec), p->size);
+        }
+    } else if (sff->version != V101) {
         for (uint32_t i = 0; i < sff->sprite_count; ++i) {
             const Sprite *s = &sff->sprites[i];
             if (s->size) {
@@ -1157,7 +1304,9 @@ static int inspect_sff(Sff *sff, const char *path)
                format_name(s->format), s->size);
         if (!s->size)
             printf("  link [%" PRIu32 "]", s->link);
-        else if (sff->version != V101)
+        if (sff->version == V300)
+            printf("  page [%u] at %u,%u", s->page, s->left, s->top);
+        else if (s->size && sff->version != V101)
             printf("  %s", s->flags & TDATA ? "tdata" : "ldata");
         if (s->palette != NO_PALETTE && s->palette != s->effective_palette)
             printf("  requested palette [%" PRIu32 "]", s->palette);
@@ -1227,16 +1376,18 @@ static char *output_path(Sff *sff, const char *input, int optimize)
     }
     if (!optimize)
         length -= 4;
-    char *out = malloc(length + (optimize ? 5 : 1));
+    const char *tag = optimize == 2 ? "atlas." : "opt.";
+    size_t taglen = optimize ? strlen(tag) : 0;
+    char *out = malloc(length + taglen + 1);
     if (!out) {
         fail(sff, "out of memory constructing the output path");
         return NULL;
     }
     memcpy(out, input, prefix);
     if (optimize) {
-        memcpy(out + prefix, "opt.", 4);
-        memcpy(out + prefix + 4, name, length - prefix);
-        out[length + 4] = '\0';
+        memcpy(out + prefix, tag, taglen);
+        memcpy(out + prefix + taglen, name, length - prefix);
+        out[length + taglen] = '\0';
     } else {
         memcpy(out + prefix, name, length - prefix);
         out[length] = '\0';
@@ -1407,6 +1558,88 @@ static size_t encode_rle8(const Byte *pixels, size_t length, Byte *out, size_t l
     return size;
 }
 
+/* RLE8 payload (decoded-size prefix + packets) in a freshly allocated buffer.
+ * Returns NULL when encoding fails or cannot fit. */
+static Byte *encode_rle8_alloc(const Byte *pixels, size_t length, size_t *size)
+{
+    if (length > (SIZE_MAX - 8) / 2)
+        return NULL;
+    size_t cap = length * 2 + 4;
+    Byte *out = malloc(cap);
+    if (!out)
+        return NULL;
+    size_t n = encode_rle8(pixels, length, out, cap);
+    if (!n) {
+        free(out);
+        return NULL;
+    }
+    *size = n;
+    return out;
+}
+
+/* LZ4 payload (decoded-size prefix + block), matching src/spritecodec.c. */
+static Byte *encode_lz4(const Byte *pixels, size_t length, size_t *size)
+{
+    if (length > INT_MAX)
+        return NULL;
+    int bound = LZ4_compressBound((int)length);
+    if (bound <= 0)
+        return NULL;
+    Byte *out = malloc(4 + (size_t)bound);
+    if (!out)
+        return NULL;
+    put_le32(out, (uint32_t)length);
+    int written = LZ4_compress_default((const char *)pixels, (char *)out + 4, (int)length, bound);
+    if (written <= 0) {
+        free(out);
+        return NULL;
+    }
+    *size = 4 + (size_t)written;
+    return out;
+}
+
+/* LZ5 payload, matching the engine's Lz5_Decode token stream.
+ *
+ * LZ5 is a 5-bit format: every color is masked to its low 5 bits by the
+ * decoder, so it can only represent pixels 0..31. A sprite with any larger
+ * value is refused (returns NULL) rather than silently corrupted; the caller
+ * then keeps the raw or source bytes. Every token here is a run (flag bit
+ * clear), so each group's flag byte stays zero. */
+static Byte *encode_lz5(const Byte *pixels, size_t length, size_t *size)
+{
+    for (size_t i = 0; i < length; ++i)
+        if (pixels[i] > 31)
+            return NULL;
+    if (length > (SIZE_MAX - 8) / 3)
+        return NULL;
+    /* Decoded-size prefix + flag bytes + up to 2 bytes per run. */
+    size_t cap = 4 + length * 2 + length / 8 + 8;
+    Byte *out = malloc(cap);
+    if (!out)
+        return NULL;
+    put_le32(out, (uint32_t)length);
+    size_t o = 4, i = 0;
+    unsigned code_in_group = 0;
+    while (i < length) {
+        if (code_in_group == 0)
+            out[o++] = 0; /* flag byte: all runs */
+        unsigned color = pixels[i] & 31;
+        unsigned run = 1;
+        while (i + run < length && (pixels[i + run] & 31) == color && run < 263)
+            ++run;
+        if (run <= 7) {
+            out[o++] = (Byte)((run << 5) | color);
+        } else {
+            out[o++] = (Byte)color;
+            out[o++] = (Byte)(run - 8);
+        }
+        i += run;
+        code_in_group = (code_in_group + 1) & 7;
+    }
+    *size = o;
+    return out;
+}
+
 typedef struct {
     uint32_t offset, size;
     unsigned format, link;
@@ -1471,49 +1704,52 @@ static int pack_palettes(ArchiveWriter *writer, uint32_t ldata, PackedRecord *re
     return ok;
 }
 
-static int pack_sprite(ArchiveWriter *writer, const Sprite *s, uint32_t base, PackedRecord *r)
+/*
+ * Packs one sprite using `target` when it can represent the image and its
+ * payload beats the raw bytes; otherwise raw. RLE8 and LZ5 are 8-bit formats,
+ * so a 24/32-bit sprite stays raw. LZ5 also refuses pixels above 31 (it masks
+ * to five bits) and RLE8/LZ5 failure simply leaves the sprite raw. The result
+ * is therefore deterministic per --format and never larger than raw.
+ */
+static int pack_sprite(ArchiveWriter *writer, const Sprite *s, uint32_t base, unsigned target,
+                       PackedRecord *r)
 {
-    Byte *encoded, *pixels, *rle = NULL;
+    Byte *encoded, *pixels, *packed = NULL;
     int ok = load_pixels(writer->sff, s, &encoded, &pixels);
     if (ok) {
-        const Byte *best = encoded;
-        size_t length = pixel_bytes(s), size = s->size;
-        unsigned format = s->format;
-        if (format == PCX || (s->depth <= 8 && length < size)) {
-            best = pixels;
-            size = length;
-            format = RAW;
+        size_t length = pixel_bytes(s), size = length, packed_size = 0;
+        unsigned format = RAW;
+        if (target == LZ4F) {
+            packed = encode_lz4(pixels, length, &packed_size);
+        } else if (s->depth <= 8) {
+            packed = target == RLE8 ? encode_rle8_alloc(pixels, length, &packed_size)
+                                    : target == LZ5 ? encode_lz5(pixels, length, &packed_size)
+                                                    : NULL;
         }
-        if (s->depth <= 8) {
-            size_t rle_size = encode_rle8(pixels, length, NULL, size);
-            if (rle_size) {
-                rle = malloc(rle_size);
-                if (rle) {
-                    encode_rle8(pixels, length, rle, rle_size);
-                    best = rle;
-                    size = rle_size;
-                    format = RLE8;
-                } else {
-                    ok = fail(writer->sff, "out of memory encoding RLE8");
-                }
-            }
+        if (packed && packed_size < size) {
+            size = packed_size;
+            format = target;
+        } else {
+            free(packed);
+            packed = NULL;
         }
         r->offset = writer->pos - base;
         r->size = (uint32_t)size;
         r->format = format;
         if (ok)
-            ok = append_data(writer, best, size);
+            ok = append_data(writer, packed ? packed : pixels, size);
     }
-    free(rle);
+    free(packed);
     free_pixels(encoded, pixels);
     return ok;
 }
 
-static int pack_sprite_block(ArchiveWriter *writer, uint32_t base, unsigned block, PackedRecord *records)
+static int pack_sprite_block(ArchiveWriter *writer, uint32_t base, unsigned block, unsigned target,
+                             PackedRecord *records)
 {
     for (uint32_t i = 0; i < writer->sff->sprite_count; ++i) {
         const Sprite *s = &writer->sff->sprites[i];
-        if (s->size && (s->flags & TDATA) == block && !pack_sprite(writer, s, base, &records[i]))
+        if (s->size && (s->flags & TDATA) == block && !pack_sprite(writer, s, base, target, &records[i]))
             return 0;
     }
     return 1;
@@ -1557,7 +1793,7 @@ static int write_tables(FILE *out, const Sff *sff, const PackedRecord *palettes,
     return 1;
 }
 
-static int write_archive(Sff *sff, FILE *out, uint32_t ldata, uint32_t *out_size)
+static int write_archive(Sff *sff, FILE *out, uint32_t ldata, unsigned target, uint32_t *out_size)
 {
     PackedRecord *palettes = calloc(sff->palette_count ? sff->palette_count : 1, sizeof(*palettes));
     PackedRecord *sprites = calloc(sff->sprite_count ? sff->sprite_count : 1, sizeof(*sprites));
@@ -1567,14 +1803,14 @@ static int write_archive(Sff *sff, FILE *out, uint32_t ldata, uint32_t *out_size
         fail(sff, "out of memory preparing the output tables");
     } else if (seek64(out, ldata, SEEK_SET) != 0) {
         fail(sff, "could not reserve space for the output tables");
-    } else if (pack_palettes(&writer, ldata, palettes) && pack_sprite_block(&writer, ldata, 0, sprites)) {
+    } else if (pack_palettes(&writer, ldata, palettes) && pack_sprite_block(&writer, ldata, 0, target, sprites)) {
         /* Sff2_Load reads ldata as a single item even if the archive uses
          * only tdata. One padding byte makes that fread work on file streams. */
         static const Byte padding = 0;
         uint32_t tdata = ldata;
         if (writer.pos != ldata || append_data(&writer, &padding, 1)) {
             tdata = writer.pos;
-            if (pack_sprite_block(&writer, tdata, TDATA, sprites)) {
+            if (pack_sprite_block(&writer, tdata, TDATA, target, sprites)) {
                 Byte header[HEADER_SIZE] = {0};
                 memcpy(header, "ElecbyteSpr", 12);
                 put_le32(header + 12, V201);
@@ -1600,7 +1836,7 @@ static int write_archive(Sff *sff, FILE *out, uint32_t ldata, uint32_t *out_size
     return ok;
 }
 
-static int optimize_sff(Sff *sff, const char *path)
+static int optimize_sff(Sff *sff, const char *path, unsigned target)
 {
     uint64_t tables_end = HEADER_SIZE + (uint64_t)sff->palette_count * PALETTE_NODE +
                           (uint64_t)sff->sprite_count * SPRITE_NODE;
@@ -1617,7 +1853,7 @@ static int optimize_sff(Sff *sff, const char *path)
     if (!out)
         return fail(sff, strerror(errno));
     uint32_t out_size;
-    int ok = write_archive(sff, out, (uint32_t)tables_end, &out_size);
+    int ok = write_archive(sff, out, (uint32_t)tables_end, target, &out_size);
     if (fclose(out) != 0 && ok)
         ok = fail(sff, "could not finish writing the archive");
     if (!ok) {
@@ -1628,36 +1864,341 @@ static int optimize_sff(Sff *sff, const char *path)
     return 1;
 }
 
-static void usage(FILE *out)
+/* Stable shelves in archive order. Each sample format has one active page. */
+static int plan_pages(Sff *sff)
 {
-    fputs("Usage:\n"
-          "  sffcli                         Show usage\n"
-          "  sffcli input.sff               List sprites and palettes\n"
-          "  sffcli --export input.sff      Export PNGs to input/ beside the archive\n"
-          "  sffcli --optimize input.sff    Write opt.input.sff as SFF v2.01 beside the archive\n",
-          out);
+    uint32_t active[5] = {UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX};
+    sff->pages = calloc(sff->sprite_count, sizeof(*sff->pages));
+    if (sff->sprite_count && !sff->pages) return fail(sff, "out of memory planning atlas");
+    for (uint32_t i = 0; i < sff->sprite_count; ++i) {
+        Sprite *s = &sff->sprites[i];
+        if (s->root != i) {
+            const Sprite *root = &sff->sprites[s->root];
+            s->page = root->page; s->left = root->left; s->top = root->top;
+            continue;
+        }
+        unsigned step = channels(s->depth), w = s->width + 2, h = s->height + 2;
+        int dedicated = w > ATLAS_SIDE || h > ATLAS_SIDE;
+        uint32_t index = dedicated ? UINT32_MAX : active[step];
+        AtlasPage *p = index == UINT32_MAX ? NULL : &sff->pages[index];
+        if (p && p->cursor_x + w > ATLAS_SIDE) {
+            p->cursor_y += p->row_height;
+            p->cursor_x = p->row_height = 0;
+        }
+        if (!p || p->cursor_y + h > ATLAS_SIDE) {
+            index = sff->page_count++;
+            p = &sff->pages[index];
+            if (!dedicated) active[step] = index;
+            p->depth = step * 8;
+            p->first_sprite = i;
+        } else {
+            sff->sprites[p->last_sprite].next_on_page = i;
+        }
+        p->last_sprite = i;
+        s->next_on_page = UINT32_MAX;
+        s->page = index; s->left = p->cursor_x + 1; s->top = p->cursor_y + 1;
+        p->cursor_x += w;
+        if (p->w < p->cursor_x) p->w = p->cursor_x;
+        if (p->row_height < h) p->row_height = h;
+        p->h = p->cursor_y + p->row_height;
+        uint64_t decoded = (uint64_t)p->w * p->h * step;
+        if (decoded > INT_MAX) return fail(sff, "atlas page exceeds the decoded size limit");
+        p->decoded = (uint32_t)decoded;
+    }
+    return 1;
 }
 
-int main(int argc, char **argv)
+static int write_page(ArchiveWriter *writer, AtlasPage *p)
 {
-    if (argc == 1 || (argc == 2 && (!strcmp(argv[1], "--help") || !strcmp(argv[1], "-h")))) {
-        usage(stdout);
+    Sff *sff = writer->sff;
+    size_t step = channels(p->depth), stride = p->w * step;
+    Byte *raw = calloc(1, p->decoded);
+    if (!raw) return fail(sff, "out of memory building atlas page");
+    int ok = 1;
+    for (uint32_t i = p->first_sprite; ok && i != UINT32_MAX; i = sff->sprites[i].next_on_page) {
+        const Sprite *s = &sff->sprites[i];
+        Byte *encoded, *pixels;
+        ok = load_pixels(sff, s, &encoded, &pixels);
+        if (ok) {
+            size_t bytes = s->width * step;
+            Byte *start = raw + (s->top * stride) + (s->left-1) * step;
+            for (unsigned y = 0; y < s->height; ++y) {
+                Byte *row = start + y * stride;
+                const Byte *src = pixels + y * bytes;
+                memcpy(row, src, step);
+                memcpy(row + step, src, bytes);
+                memcpy(row + step + bytes, src + bytes - step, step);
+            }
+            memcpy(start - stride, start, bytes + 2*step);
+            memcpy(start + s->height * stride, start + (s->height-1) * stride, bytes + 2*step);
+        }
+        free_pixels(encoded, pixels);
+    }
+    if (ok) {
+        size_t size = encode_rle8(raw, p->decoded, NULL, p->decoded-1);
+        p->offset = writer->pos;
+        p->codec = size ? RLE8 : RAW;
+        p->size = size ? (uint32_t)size : p->decoded;
+        if (size) {
+            Byte *encoded = malloc(size);
+            if (!encoded) ok = fail(sff, "out of memory encoding atlas page");
+            else {
+                encode_rle8(raw, p->decoded, encoded, size);
+                ok = append_data(writer, encoded, size);
+                free(encoded);
+            }
+        } else ok = append_data(writer, raw, p->decoded);
+    }
+    free(raw);
+    return ok;
+}
+
+static int write_atlas_tables(FILE *out, Sff *sff, const PackedRecord *pal, uint32_t data)
+{
+    Byte header[HEADER_SIZE] = {0};
+    memcpy(header, "ElecbyteSpr", 12);
+    put_le32(header+12, V300); put_le32(header+16, sff->version); put_le32(header+24, V300);
+    uint32_t pt = HEADER_SIZE + sff->sprite_count * ATLAS_SPRITE;
+    put_le32(header+36, HEADER_SIZE); put_le32(header+40, sff->sprite_count);
+    put_le32(header+44, pt); put_le32(header+48, sff->palette_count);
+    put_le32(header+52, pt + sff->palette_count * PALETTE_NODE);
+    put_le32(header+56, sff->page_count); put_le32(header+60, data);
+    if (seek64(out, 0, SEEK_SET) || !write_bytes(out, header, sizeof(header))) return 0;
+    for (uint32_t i = 0; i < sff->sprite_count; ++i) {
+        const Sprite *s = &sff->sprites[i];
+        Byte n[ATLAS_SPRITE];
+        put_le32(n, s->group); put_le32(n+4, s->number);
+        put_le16(n+8, s->width); put_le16(n+10, s->height);
+        put_le16(n+12, s->x); put_le16(n+14, s->y);
+        put_le32(n+16, s->depth); put_le32(n+20, s->palette); put_le32(n+24, s->effective_palette);
+        put_le32(n+28, s->root == i ? UINT32_MAX : s->link);
+        put_le32(n+32, s->page); put_le16(n+36, s->left); put_le16(n+38, s->top);
+        if (!write_bytes(out, n, sizeof(n))) return 0;
+    }
+    for (uint32_t i = 0; i < sff->palette_count; ++i) {
+        Byte n[PALETTE_NODE];
+        Palette *p = &sff->palettes[i];
+        put_le16(n, p->group); put_le16(n+2, p->number); put_le16(n+4, p->count);
+        put_le16(n+6, pal[i].link); put_le32(n+8, pal[i].offset); put_le32(n+12, pal[i].size);
+        if (!write_bytes(out, n, sizeof(n))) return 0;
+    }
+    for (uint32_t i = 0; i < sff->page_count; ++i) {
+        Byte n[ATLAS_PAGE];
+        AtlasPage *p = &sff->pages[i];
+        put_le32(n,p->w); put_le32(n+4,p->h); put_le32(n+8,p->depth); put_le32(n+12,p->codec);
+        put_le32(n+16,p->offset); put_le32(n+20,p->size); put_le32(n+24,p->decoded);
+        if (!write_bytes(out, n, sizeof(n))) return 0;
+    }
+    return 1;
+}
+
+static int atlas_sff(Sff *sff, const char *path)
+{
+    if (sff->version == V300) return fail(sff, "input is already an atlas");
+    if (sff->palette_count > 65536) return fail(sff, "palette slots exceed atlas format limit");
+    if (!plan_pages(sff)) return 0;
+    uint64_t data = HEADER_SIZE + (uint64_t)sff->sprite_count * ATLAS_SPRITE +
+        (uint64_t)sff->palette_count * PALETTE_NODE + (uint64_t)sff->page_count * ATLAS_PAGE;
+    if (data > UINT32_MAX) return fail(sff, "atlas tables exceed file size limit");
+    FILE *out = create_file(path);
+    if (!out) return fail(sff, strerror(errno));
+    ArchiveWriter writer = {out, (uint32_t)data, sff};
+    PackedRecord *pal = calloc(sff->palette_count, sizeof(*pal));
+    int ok = (pal || !sff->palette_count) && !seek64(out, data, SEEK_SET) &&
+             pack_palettes(&writer, (uint32_t)data, pal);
+    for (uint32_t i = 0; ok && i < sff->page_count; ++i)
+        ok = write_page(&writer, &sff->pages[i]);
+    if (ok) ok = write_atlas_tables(out, sff, pal, (uint32_t)data);
+    if (fclose(out)) ok = 0;
+    free(pal);
+    if (!ok) {
+        remove(path);
+        return fail(sff, sff->error ? sff->error : "could not write atlas");
+    }
+    printf("Wrote %s (SFF 3.00, %u pages, %u bytes)\n", path, sff->page_count, writer.pos);
+    return 1;
+}
+
+/* ------------------------------------------------------- recursive directory mode */
+
+/* The per-file options, so the directory walker can reuse the single-file path. */
+typedef struct {
+    int exporting, optimizing, atlasing;
+    unsigned target;
+} Options;
+
+static int has_sff_extension(const char *name)
+{
+    const char *dot = strrchr(name, '.');
+    return dot && dot != name &&
+           (dot[1] == 's' || dot[1] == 'S') && (dot[2] == 'f' || dot[2] == 'F') &&
+           (dot[3] == 'f' || dot[3] == 'F') && dot[4] == '\0';
+}
+
+static int is_directory(const char *path)
+{
+    struct stat st;
+    if (stat(path, &st) != 0)
         return 0;
+    return S_ISDIR(st.st_mode) ? 1 : 0;
+}
+
+static char *join_path(const char *dir, const char *name)
+{
+    size_t a = strlen(dir), b = strlen(name);
+    int sep = a > 0 && !path_separator(dir[a - 1]);
+    char *p = malloc(a + b + (size_t)sep + 1);
+    if (!p)
+        return NULL;
+    memcpy(p, dir, a);
+    if (sep)
+        p[a++] = '/';
+    memcpy(p + a, name, b + 1);
+    return p;
+}
+
+typedef struct {
+    char **items;
+    size_t count, capacity;
+    int error;
+} PathList;
+
+static int path_list_add(PathList *list, const char *path)
+{
+    if (list->count == list->capacity) {
+        size_t capacity = list->capacity ? list->capacity * 2 : 16;
+        char **items = realloc(list->items, capacity * sizeof(*items));
+        if (!items) {
+            list->error = 1;
+            return -1;
+        }
+        list->items = items;
+        list->capacity = capacity;
     }
-    int exporting = argc == 3 && !strcmp(argv[1], "--export");
-    int optimizing = argc == 3 && !strcmp(argv[1], "--optimize");
-    if (!exporting && !optimizing && (argc != 2 || argv[1][0] == '-')) {
-        usage(stderr);
-        return 2;
+    size_t len = strlen(path) + 1;
+    char *copy = malloc(len);
+    if (!copy) {
+        list->error = 1;
+        return -1;
     }
-    const char *input = argv[argc - 1];
+    memcpy(copy, path, len);
+    list->items[list->count++] = copy;
+    return 0;
+}
+
+static void path_list_free(PathList *list)
+{
+    for (size_t i = 0; i < list->count; ++i)
+        free(list->items[i]);
+    free(list->items);
+    list->items = NULL;
+    list->count = list->capacity = 0;
+}
+
+#ifdef _WIN32
+static int collect_sff(const char *dir, PathList *list)
+{
+    char *pattern = join_path(dir, "*");
+    struct _finddata_t data;
+    intptr_t handle;
+    if (!pattern) {
+        list->error = 1;
+        return -1;
+    }
+    handle = _findfirst(pattern, &data);
+    free(pattern);
+    if (handle == -1)
+        return 0;
+    do {
+        char *full;
+        if (!strcmp(data.name, ".") || !strcmp(data.name, ".."))
+            continue;
+        full = join_path(dir, data.name);
+        if (!full) {
+            _findclose(handle);
+            list->error = 1;
+            return -1;
+        }
+        if (data.attrib & _A_SUBDIR) {
+            if (collect_sff(full, list) < 0) {
+                free(full);
+                _findclose(handle);
+                return -1;
+            }
+            free(full);
+        } else if (has_sff_extension(data.name)) {
+            int rc = path_list_add(list, full);
+            free(full);
+            if (rc < 0) {
+                _findclose(handle);
+                return -1;
+            }
+        } else {
+            free(full);
+        }
+    } while (_findnext(handle, &data) == 0);
+    _findclose(handle);
+    return 0;
+}
+#else
+static int collect_sff(const char *dir, PathList *list)
+{
+    DIR *d = opendir(dir);
+    struct dirent *entry;
+    if (!d)
+        return 0;
+    while ((entry = readdir(d)) != NULL) {
+        char *full;
+        struct stat st;
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
+            continue;
+        full = join_path(dir, entry->d_name);
+        if (!full) {
+            closedir(d);
+            list->error = 1;
+            return -1;
+        }
+        if (stat(full, &st) != 0) {
+            free(full);
+            continue;
+        }
+        if (S_ISDIR(st.st_mode)) {
+            if (collect_sff(full, list) < 0) {
+                free(full);
+                closedir(d);
+                return -1;
+            }
+            free(full);
+        } else if (S_ISREG(st.st_mode) && has_sff_extension(entry->d_name)) {
+            int rc = path_list_add(list, full);
+            free(full);
+            if (rc < 0) {
+                closedir(d);
+                return -1;
+            }
+        } else {
+            free(full);
+        }
+    }
+    closedir(d);
+    return 0;
+}
+#endif
+
+/* Runs one input through the selected operation. Errors go to stderr. */
+static int process_file(const Options *opt, const char *input)
+{
     char *output = NULL;
     Sff sff = {0};
     int ok = open_sff(&sff, input);
     if (ok) {
-        if (exporting || optimizing) {
-            output = output_path(&sff, input, optimizing);
-            ok = output && (exporting ? export_sff(&sff, output) : optimize_sff(&sff, output));
+        if (opt->optimizing && sff.version == V300) {
+            ok = fail(&sff, "--optimize accepts legacy SFF inputs");
+        } else if (opt->exporting || opt->optimizing || opt->atlasing) {
+            output = output_path(&sff, input, opt->atlasing ? 2 : opt->optimizing);
+            ok = output && (opt->exporting ? export_sff(&sff, output)
+                            : opt->atlasing ? atlas_sff(&sff, output)
+                                            : optimize_sff(&sff, output, opt->target));
         } else {
             ok = inspect_sff(&sff, input);
         }
@@ -1666,5 +2207,133 @@ int main(int argc, char **argv)
         fprintf(stderr, "sffcli: %s: %s\n", output ? output : input, sff.error);
     free(output);
     close_sff(&sff);
-    return ok ? 0 : 1;
+    return ok;
+}
+
+static void usage(FILE *out)
+{
+    fputs("Usage:\n"
+          "  sffcli                         Show usage\n"
+          "  sffcli input.sff               List sprites and palettes\n"
+          "  sffcli --export input.sff      Export PNGs to input/ beside the archive\n"
+          "  sffcli --atlas input.sff       Write atlas.input.sff as SFF v3.00\n"
+          "  sffcli --optimize [--format lz4|lz5|rle8] input.sff\n"
+          "                                 Write opt.input.sff as SFF v2.01 beside the\n"
+          "                                 archive; --format picks the sprite codec\n"
+          "                                 (default lz4). Sprites that the chosen codec\n"
+          "                                 cannot shrink stay raw. lz5 masks to 5 bits,\n"
+          "                                 so it is only used for pixels 0..31.\n"
+          "\n"
+          "  input may be a directory: every *.sff below it is processed\n"
+          "  recursively with the same operation, and progress is reported.\n"
+          "  Re-runs skip this tool's own output: opt.* for --optimize,\n"
+          "  atlas.* for --atlas, and any input whose PNG directory exists\n"
+          "  for --export.\n",
+          out);
+}
+
+/* --format argument: the sprite codec --optimize should prefer. */
+static int parse_format(const char *name, unsigned *format)
+{
+    if (!strcmp(name, "lz4") || !strcmp(name, "LZ4")) { *format = LZ4F; return 1; }
+    if (!strcmp(name, "lz5") || !strcmp(name, "LZ5")) { *format = LZ5; return 1; }
+    if (!strcmp(name, "rle8") || !strcmp(name, "RLE8")) { *format = RLE8; return 1; }
+    return 0;
+}
+
+/* True when directory mode should leave this file alone: the tool's own
+ * output from a previous run (opt.* / atlas.*) or, for --export, an input
+ * whose PNG directory already exists. */
+static int skip_output(const Options *opt, const char *path)
+{
+    const char *name = filename(path);
+    if (opt->optimizing && !strncmp(name, "opt.", 4))
+        return 1;
+    if (opt->atlasing && !strncmp(name, "atlas.", 6))
+        return 1;
+    if (opt->exporting) {
+        /* output_path drops the ".sff" suffix to name the PNG directory. */
+        size_t len = strlen(path);
+        char *dir = malloc(len - 3);
+        int exists;
+        if (!dir)
+            return 0;           /* cannot check; let the operation report it */
+        memcpy(dir, path, len - 4);
+        dir[len - 4] = '\0';
+        exists = is_directory(dir);
+        free(dir);
+        return exists;
+    }
+    return 0;
+}
+
+/* Processes every *.sff under a directory, reporting progress. Returns the
+ * number of files that failed (0 when all succeeded or none were found). */
+static int process_directory(const Options *opt, const char *dir)
+{
+    PathList list = {0};
+    int failures = 0, skipped = 0;
+
+    if (collect_sff(dir, &list) < 0) {
+        path_list_free(&list);
+        fprintf(stderr, "sffcli: %s: out of memory scanning the directory\n", dir);
+        return 1;
+    }
+    if (list.count == 0) {
+        fprintf(stderr, "sffcli: %s: no .sff files found\n", dir);
+        path_list_free(&list);
+        return 0;
+    }
+    for (size_t i = 0; i < list.count; ++i) {
+        printf("[%zu/%zu] %s", i + 1, list.count, list.items[i]);
+        if (skip_output(opt, list.items[i])) {
+            printf(" (skipped)\n");
+            fflush(stdout);
+            ++skipped;
+            continue;
+        }
+        putchar('\n');
+        fflush(stdout);
+        if (!process_file(opt, list.items[i]))
+            ++failures;
+    }
+    printf("%zu file%s processed, %d skipped, %d failed\n", list.count,
+           list.count == 1 ? "" : "s", skipped, failures);
+    path_list_free(&list);
+    return failures;
+}
+
+int main(int argc, char **argv)
+{
+    if (argc == 1 || (argc == 2 && (!strcmp(argv[1], "--help") || !strcmp(argv[1], "-h")))) {
+        usage(stdout);
+        return 0;
+    }
+
+    /* --format lz4|lz5|rle8 may follow --optimize; default lz4. */
+    Options opt = {0, 0, 0, LZ4F};
+    int argi = 1;
+    if (!strcmp(argv[argi], "--export")) { opt.exporting = 1; argi++; }
+    else if (!strcmp(argv[argi], "--optimize")) { opt.optimizing = 1; argi++; }
+    else if (!strcmp(argv[argi], "--atlas")) { opt.atlasing = 1; argi++; }
+    if (opt.optimizing && argi < argc && !strcmp(argv[argi], "--format")) {
+        if (argi + 1 >= argc || !parse_format(argv[argi + 1], &opt.target)) {
+            fprintf(stderr, "sffcli: --format needs lz4, lz5 or rle8\n");
+            return 2;
+        }
+        argi += 2;
+    }
+    if (!opt.atlasing && !opt.exporting && !opt.optimizing &&
+        (argc != 2 || argv[1][0] == '-')) {
+        usage(stderr);
+        return 2;
+    }
+    if (argc - argi != 1) {
+        usage(stderr);
+        return 2;
+    }
+    const char *input = argv[argi];
+    if (is_directory(input))
+        return process_directory(&opt, input) ? 1 : 0;
+    return process_file(&opt, input) ? 0 : 1;
 }
