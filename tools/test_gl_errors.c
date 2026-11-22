@@ -49,6 +49,11 @@ void VitaGl_DrawQuad(const VitaGlVertexInterface *vertex, const float *v, int sp
 #define glDeleteRenderbuffers glDeleteRenderbuffersEXT
 #define glBindRenderbuffer glBindRenderbufferEXT
 #define glRenderbufferStorage glRenderbufferStorageEXT
+/* The desktop loader does not declare the GLES 3 instancing entry points. */
+static void APIENTRY draw_arrays_instanced(GLenum mode, GLint first, GLsizei count, GLsizei instances) {}
+static void APIENTRY vertex_attrib_divisor(GLuint index, GLuint divisor) {}
+static void (APIENTRY *glDrawArraysInstanced)(GLenum, GLint, GLsizei, GLsizei) = draw_arrays_instanced;
+static void (APIENTRY *glVertexAttribDivisor)(GLuint, GLuint) = vertex_attrib_divisor;
 void Android_GLDrawableSize(int *w, int *h);
 void Sdl2_GLDrawableSize(int *w, int *h);
 void Android_MarkDisplayDirty(SDL_Surface *s);
@@ -138,6 +143,7 @@ void Log_Printf(const char *fmt, ...)
     (void)fmt;
 }
 void MatchLog_Printf(int level, const char *fmt, ...) { (void)level; (void)fmt; }
+Uint64 SDLCALL SDL_GetPerformanceCounter(void) { return 0; }
 static GLenum APIENTRY error_get(void) { GLenum e = pending; pending = 0; return e; }
 static void APIENTRY gen(GLsizei n, GLuint *p)
 { while (n--) { gen_calls++; *p++ = gen_calls == fail_gen_at ? 0 : next_id++; } }

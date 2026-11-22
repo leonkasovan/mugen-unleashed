@@ -72,7 +72,7 @@ Linked statically (built from source in `third_party/`, not reconstructed):
 |---|---|---|
 | Lua | 5.1.4 | `third_party/lua-5.1.4` |
 | libpng | 1.2.38 | `third_party/libpng-1.2.38` |
-| GLEW | 1.5.4 | statically linked in the original (0x4B68F0–0x4C4DCF). **The reconstruction uses glad 2.1 instead** (`third_party/glad-2.1`); `glew-1.5.4/` is kept for reference only |
+| GLEW | 1.5.4 | Statically linked in the original (0x4B68F0–0x4C4DCF). The reconstruction uses glad under `third_party/glad-2.1`. The old GLEW snapshot is available at commit `41ffd2c`. |
 | minizip (unzip) | 0.15 | `third_party/minizip-0.15` (characters in .zip files) |
 | lookup3 (Bob Jenkins) | 2006 | `src/lookup3.c`: `hashlittle` with the initial value 0x1337B47E folded in |
 | SDLmain | 1.2.15 | `src/sdlmain.c`, rebuilt from the binary |

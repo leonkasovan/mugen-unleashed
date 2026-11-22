@@ -34,22 +34,18 @@ caught() { echo "MUT $1: caught ($2)"; CAUGHT=$((CAUGHT + 1)); }
 missed() { echo "MUT $1: NOT CAUGHT ($2)" >&2; MISSED=$((MISSED + 1)); }
 
 # ---------------------------------------------------------------- MUT-R01 --
-# Revert the transactional resize to the pre-fix shape: the replacement
-# texture failure keeps the old texture while metadata and surface move on.
+# Lose the resize transaction: keep the old texture after a failed
+# replacement, then let the surface resize proceed.
 cp src/sdl2video.c "$OUT/r01.fixed.c"
-"$PYBIN" - "$OUT/r01.fixed.c" src/sdl2video.c <<'PYEOF'
-import subprocess, sys
-fixed, target = sys.argv[1], sys.argv[2]
-s = open(fixed, encoding="utf-8").read()
-old = subprocess.run(["git", "show", "e76be3b^:src/sdl2video.c"], capture_output=True,
-                     text=True, encoding="utf-8").stdout
-start = old.index("    if (g_sdl2Video.texture == NULL || g_sdl2Video.texture_format != format) {")
-end = old.index("    return g_sdl2Video.surface;", start) + len("    return g_sdl2Video.surface;")
-pre = old[start:end]
-cur_start = s.index("    /*\n     * Texture and surface are replaced as one transaction.")
-cur_end = s.index("    return g_sdl2Video.surface;", cur_start) + len("    return g_sdl2Video.surface;")
-t = s[:cur_start] + pre + s[cur_end:]
-open(target, "w", newline="").write(t.replace("\n", "\r\n"))
+"$PYBIN" - src/sdl2video.c <<'PYEOF'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text(encoding="utf-8")
+old = "return NULL;    /* the old texture and surface stay paired */"
+assert source.count(old) == 2
+path.write_text(source.replace(old, "new_texture = g_sdl2Video.texture;", 1), encoding="utf-8")
 print("MUT-R01 applied")
 PYEOF
 
@@ -62,7 +58,7 @@ cp "$OUT/r01.fixed.c" src/sdl2video.c
 bash tools/test_render_regress.sh >"$OUT/r01.fixed.log" 2>&1 && echo "MUT R01: fixed code passes again" || missed R01 "revert did not restore a passing gate"
 
 # ---------------------------------------------------------------- MUT-R03 --
-# Restore immediate presentation in UpdateRect (pre-M3 shape).
+# Present immediately when the display is marked dirty (pre-M3 shape).
 cp src/sdl2video.c "$OUT/r03.fixed.c"
 "$PYBIN" - src/sdl2video.c <<'PYEOF'
 import sys
@@ -213,10 +209,8 @@ cp src/sdl2video.c "$OUT/reset.fixed.c"
 import sys
 p = sys.argv[1]
 s = open(p, encoding="utf-8").read()
-old = """                                                SDL_TEXTUREACCESS_STREAMING, g_sdl2Video.storage_w,
-                                                g_sdl2Video.storage_h);"""
-new = """                                                SDL_TEXTUREACCESS_STREAMING, g_sdl2Video.width,
-                                                g_sdl2Video.height);"""
+old = "SDL_TEXTUREACCESS_STREAMING, surface->w, surface->h);"
+new = "SDL_TEXTUREACCESS_STREAMING, g_sdl2Video.width, g_sdl2Video.height);"
 assert old in s
 s = s.replace(old, new, 1)
 open(p, "w", newline="").write(s.replace("\n", "\r\n"))

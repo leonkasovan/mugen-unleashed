@@ -3,14 +3,9 @@
 #define MUGEN_GLES_PROBE_H
 
 #ifdef MUGEN_GLES
-/* Capability bits Gles_Probe reports. */
-#define GLES_CAP_NPOT        0x01
-#define GLES_CAP_FBO         0x02
-#define GLES_CAP_GLSL_ES_100  0x04
-
-/* Probes the current context. Returns 1 and fills *caps when the context is a
- * usable ES 3.0+ with NPOT and FBO; 0 otherwise. */
-int Gles_Probe(unsigned int *caps);
+/* Returns 1 for a usable ES 3.0+ context and writes the texture limit if
+ * requested. Returns 0 without setting the output if the context is unusable. */
+int Gles_Probe(int *max_texture_size);
 
 /*
  * Port addition: writes the driver's strings, the limits this renderer cares

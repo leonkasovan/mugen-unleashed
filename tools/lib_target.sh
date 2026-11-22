@@ -16,7 +16,7 @@
 #   ARCHFLAGS     -m32 | -m64
 #   EXPECT_BITS   32 | 64      (harnesses assert the built binary matches)
 #   PKGCONF       pkg-config belonging to the same kit
-#   PLAT_INC      extra include dir for the 32-bit kit's SDL 1.2 headers
+#   PLAT_INC      extra include dir for the 32-bit Windows SDK declarations
 #
 # It also prepends the chosen compiler's own directory to PATH: the kits' gcc
 # wrappers need their bin dir first to find cc1/as for the right target, and an

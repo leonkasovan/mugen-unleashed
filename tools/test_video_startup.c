@@ -1,6 +1,6 @@
 /* Production Video_SetMode with a refused platform display. Do not reach the
  * GL loader/probe when there is no context; fallback must remain possible.
- * Engine type declarations use vendored SDL1 headers; no SDL library needed. */
+ * Engine types use SDL2 headers. The harness supplies its own link stubs. */
 #include "mugen.h"
 #ifdef main
 #undef main
@@ -16,7 +16,6 @@ void MatchLog_Printf(int level,const char *fmt, ...) {}
 SDL_Surface *Sdl2_SetVideoMode(int w,int h,int bpp,Uint32 flags)
 { mode_calls++;return refused ? NULL : &display; }
 int Sdl2_GL_SetAttribute(SDL_GLattr attr,int value) { return 0; }
-int SDL_putenv(const char *value) { return 0; }
 int SDL_ShowCursor(int value) { return 0; }
 void SDL_FreeSurface(SDL_Surface *s) {}
 int Gl_Init(int fbo) { gl_calls++;return 1; }
@@ -44,4 +43,4 @@ int main(void)
     return 0;
 }
 
-int Sdl2_SetSwapInterval(int value) { (void)value; return 0; }
+void Sdl2_SetSwapInterval(int value) { (void)value; }

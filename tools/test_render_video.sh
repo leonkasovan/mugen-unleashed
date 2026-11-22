@@ -18,7 +18,7 @@ mkdir -p "$OUT"
 echo "target $TARGET: $CC $ARCHFLAGS ($("$CC" -dumpmachine 2>/dev/null || echo unknown))"
 
 # shellcheck disable=SC2086
-"$CC" $ARCHFLAGS -std=gnu11 -O1 -g -Wall \
+"$CC" $ARCHFLAGS ${CFLAGS:-} -std=gnu11 -O1 -g -Wall \
     -DSDL_MAIN_HANDLED -DMUGEN_SDL2_DIAG \
     -Isrc -Ithird_party/glad-2.1 -Ithird_party/minizip-0.15 \
     -Ithird_party/lua-5.1.4/src $PLAT_INC \

@@ -209,11 +209,6 @@ int GpuTime_Init(void)
     return 1;
 }
 
-int GpuTime_Ready(void)
-{
-    return g_gpu_state == 1;
-}
-
 void GpuTime_Reset(void)
 {
     memset(&g_gpu_draw, 0, sizeof(g_gpu_draw));

@@ -27,27 +27,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <SDL.h>
+#include "sdl2video.h"
 #include "test_abi.h"
 
 #ifdef main
 #undef main
 #endif
-
-/* Production entry points under test. */
-SDL_Surface *Sdl2_SetVideoMode(int width, int height, int bpp, Uint32 flags);
-void Sdl2_Flip(SDL_Surface *surface);
-void Sdl2_UpdateRect(SDL_Surface *surface, Sint32 x, Sint32 y, Uint32 w, Uint32 h);
-void Sdl2_VideoQuit(void);
-void Sdl2_ResetRenderer(void);
-
-/* MUGEN_SDL2_DIAG test hooks (src/sdl2video.c). */
-void Sdl2_DiagReset(void);
-void Sdl2_DiagCounters(int *present, int *tex_create, int *tex_destroy);
-int Sdl2_DiagTextureSize(int *w, int *h, Uint32 *format);
-void Sdl2_DiagFailNext(int which);
-void Sdl2_PresentFrame(void);
-int Sdl2_DiagIsDirty(void);
 
 /* The engine's logger; this test is not the engine. */
 void Log_Printf(const char *fmt, ...)
@@ -146,7 +131,7 @@ static void test_r01_transaction(void)
     }
     Sdl2_DiagReset();
     memset(retry->pixels, 0x5A, (size_t)retry->pitch * (size_t)retry->h);
-    Sdl2_Flip(retry);
+    Sdl2_Flip();
     Sdl2_DiagCounters(&present, NULL, NULL);
     check(present == 1, "R01: one present for the upload");
     check(Sdl2_DiagTextureSize(&tw, &th, NULL) && tw == 320 && th == 240,
@@ -214,7 +199,7 @@ static void test_r01_reset_uses_storage(void)
     check(s != NULL && s->w == 640 && s->h == 480, "RESET: storage still usable");
     if (s != NULL) {
         memset(s->pixels, 0x3C, (size_t)s->pitch * (size_t)s->h);
-        Sdl2_Flip(s);
+        Sdl2_Flip();
         check(Sdl2_DiagTextureSize(&tw, &th, NULL) && tw == 640 && th == 480,
               "RESET: pair consistent after upload");
     }
@@ -223,15 +208,15 @@ static void test_r01_reset_uses_storage(void)
 
 /* ---- R03 / PR01: one present per frame on SDL2 desktop ----
  *
- * M3 frame boundary: UpdateRect only dirties the display; Sdl2_PresentFrame
+ * M3 frame boundary: dirty mark only dirties the display; Sdl2_PresentFrame
  * (called once per Screen_Present) does the single upload+present; Flip
  * presents immediately and clears. Gates:
- *  - offscreen pixel writes (no shim call) + UpdateRect without flush =
+ *  - offscreen pixel writes (no shim call) + dirty mark without flush =
  *    zero presents (1000-primitive audit in miniature);
- *  - one UpdateRect + one PresentFrame = exactly one present (Normal);
- *  - one UpdateRect + one Flip = exactly one present (PageFlip);
+ *  - one dirty mark + one PresentFrame = exactly one present (Normal);
+ *  - one dirty mark + one Flip = exactly one present (PageFlip);
  *  - repeated dirty marks without flush still present once;
- *  - a skipped frame (no UpdateRect, no flush) presents nothing.
+ *  - a skipped frame (no dirty mark, no flush) presents nothing.
  */
 static void test_r03_single_present(void)
 {
@@ -251,25 +236,25 @@ static void test_r03_single_present(void)
         return;
     }
 
-    /* 1000 offscreen pixel updates: no shim call, no present. */
+    /* Offscreen writes do not schedule a display upload. */
     Sdl2_DiagReset();
     for (i = 0; i < 1000; i++) {
         ((unsigned short *)off->pixels)[i % (64 * 64)] = (unsigned short)i;
     }
-    Sdl2_UpdateRect(off, 0, 0, 64, 64);
+    Sdl2_MarkDisplayDirty(off);
     Sdl2_DiagCounters(&present, NULL, NULL);
     check(present == 0, "R03: offscreen updates present nothing");
-    check(Sdl2_DiagIsDirty() == 0, "R03: offscreen UpdateRect dirties nothing");
+    check(Sdl2_DiagIsDirty() == 0, "R03: offscreen writes leave the display clean");
 
-    /* Display write + UpdateRect without flush: dirty, still nothing. */
+    /* Display write + dirty mark without flush: dirty, still nothing. */
     Sdl2_DiagReset();
     memset(s->pixels, 0x12, (size_t)s->pitch * (size_t)s->h);
-    Sdl2_UpdateRect(s, 0, 0, 0, 0);
+    Sdl2_MarkDisplayDirty(s);
     Sdl2_DiagCounters(&present, NULL, NULL);
-    check(present == 0, "R03: UpdateRect alone presents nothing");
-    check(Sdl2_DiagIsDirty() == 1, "R03: display UpdateRect marks dirty");
+    check(present == 0, "R03: dirty mark alone presents nothing");
+    check(Sdl2_DiagIsDirty() == 1, "R03: display writes schedule an upload");
 
-    /* Normal frame: UpdateRect + frame-end flush = one present. */
+    /* Normal frame: dirty mark + frame-end flush = one present. */
     Sdl2_PresentFrame();
     Sdl2_DiagCounters(&present, NULL, NULL);
     check(present == 1, "R03: Normal frame presents once");
@@ -277,17 +262,17 @@ static void test_r03_single_present(void)
 
     /* Repeated dirty marks + one flush = still one present. */
     Sdl2_DiagReset();
-    Sdl2_UpdateRect(s, 0, 0, 0, 0);
-    Sdl2_UpdateRect(s, 0, 0, 0, 0);
+    Sdl2_MarkDisplayDirty(s);
+    Sdl2_MarkDisplayDirty(s);
     Sdl2_PresentFrame();
     Sdl2_DiagCounters(&present, NULL, NULL);
     check(present == 1, "R03: repeated marks flush once");
 
-    /* PageFlip frame: UpdateRect + Flip = one present, flush is a no-op. */
+    /* PageFlip frame: dirty mark + Flip = one present, flush is a no-op. */
     Sdl2_DiagReset();
     memset(s->pixels, 0x34, (size_t)s->pitch * (size_t)s->h);
-    Sdl2_UpdateRect(s, 0, 0, 0, 0);
-    Sdl2_Flip(s);
+    Sdl2_MarkDisplayDirty(s);
+    Sdl2_Flip();
     Sdl2_PresentFrame();
     Sdl2_DiagCounters(&present, NULL, NULL);
     check(present == 1, "R03: PageFlip frame presents once");

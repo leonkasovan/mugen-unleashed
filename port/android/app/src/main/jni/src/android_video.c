@@ -12,11 +12,7 @@ extern int g_rendererFallbackRequested;
 static SDL_Window *display_window;
 static SDL_Renderer *display_renderer;
 #ifdef MUGEN_GLES
-/* Set when the window was created for GL: the two presentation paths cannot
- * share a window (plan section 12.2), so the flags are decided at creation and
- * a switch tears the window down. */
 static SDL_GLContext display_gl;
-static int display_is_gl;
 static SDL_Surface *display_placeholder;
 #endif
 static SDL_Texture *display_texture;
@@ -72,7 +68,6 @@ SDL_Surface *Android_CreateDisplay(int width, int height, int depth, int keep_as
         display_window = NULL;
         SDL_FreeSurface(display_placeholder);
         display_placeholder = NULL;
-        display_is_gl = 0;
     }
 #endif
     if (display_window == NULL) {
@@ -182,7 +177,6 @@ SDL_Surface *Android_CreateDisplayGL(int width, int height, int depth, int keep_
             display_window = NULL;
             return NULL;
         }
-        display_is_gl = 1;
         SDL_ShowCursor(SDL_DISABLE);
     }
     SDL_FreeSurface(display_placeholder);
@@ -400,7 +394,6 @@ void Android_VideoQuit(void)
     }
     SDL_FreeSurface(display_placeholder);
     display_placeholder = NULL;
-    display_is_gl = 0;
 #endif
     SDL_DestroyTexture(display_texture);
     SDL_DestroyRenderer(display_renderer);

@@ -14,8 +14,7 @@
  * The device exposes the extension (ARM Mali-G31, GLES 3.2; see
  * Gles_LogCapabilities), but the vendored glad build has only core ES 3.0 query
  * entry points, so the EXT functions are resolved through SDL at runtime. When
- * the extension or the entry points are missing everything here is a no-op and
- * GpuTime_Ready() stays 0.
+ * the extension or the entry points are missing, timing stays inactive.
  *
  * STATUS: opt-in and not yet trustworthy on the RG351MP. The extension is
  * advertised (Gles_LogCapabilities) and the queries are created, but the elapsed
@@ -34,9 +33,6 @@
 
 /* Resolves the entry points and creates the query objects. 1 when usable. */
 int GpuTime_Init(void);
-
-/* Nonzero when GPU timing is active (extension present and enabled). */
-int GpuTime_Ready(void);
 
 void GpuTime_BeginDraw(void);
 void GpuTime_EndDraw(void);

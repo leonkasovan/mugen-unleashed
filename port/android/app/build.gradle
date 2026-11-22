@@ -66,7 +66,9 @@ android {
                           // M8: the GLES 3.0 renderer (RENDERING_PLAN.md section 12).
                           // Off unless build.sh --gles passes mugenGles=true.
                           "-DMUGEN_GLES=" + (project.findProperty('mugenGles') ?: 'OFF'),
-                          "-DMUGEN_MODEL3D=" + (project.findProperty('mugenModel3d') ?: 'OFF')
+                          "-DMUGEN_MODEL3D=" + (project.findProperty('mugenModel3d') ?: 'OFF'),
+                          "-DMUGEN_VIDEO_BG=" + (project.findProperty('mugenVideoBg') ?: 'OFF'),
+                          "-DffmpegDepsDir=" + (project.findProperty('ffmpegDepsDir') ?: '')
                 cFlags "-O2"
             }
         }
@@ -87,7 +89,7 @@ android {
          * reads with minizip, double-compression is actively wrong.
          */
         noCompress 'sff', 'snd', 'def', 'air', 'cns', 'cmd', 'st', 'stc', 'txt', 'cfg',
-                   'lua', 'ttf', 'fnt', 'font', 'zip', 'mp3', 'ogg', 'wav'
+                   'lua', 'ttf', 'fnt', 'font', 'zip', 'mp3', 'ogg', 'wav', 'webm'
     }
 
     sourceSets.main {

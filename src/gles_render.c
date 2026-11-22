@@ -53,9 +53,31 @@
 #include "gl_size.h"
 #include "shader_src.h"
 
+#define STB_RECT_PACK_IMPLEMENTATION
+#include "../third_party/stb/stb_rect_pack.h"
+
 /* 1 once the programs are linked on a live context. Declared early because the
  * texture and view entry points test it before the renderer proper. */
 static int g_glesReady;
+static int g_batch_count;
+static int g_batch_enabled;
+static int g_atlasResidentPages;
+static GlesProgram g_glesProgramAtlas;
+static int g_spriteAtlasDefault;
+static int g_spriteBatchDefault = -1;
+
+void Gles_ConfigureSprites(int atlas, int batch)
+{
+    g_spriteAtlasDefault = atlas == 1;
+    g_spriteBatchDefault = (batch == 0 || batch == 1) ? batch : -1;
+}
+
+static int gles_sprite_option(const char *env, int fallback)
+{
+    const char *value = getenv(env);
+
+    return value != NULL ? strcmp(value, "1") == 0 : fallback;
+}
 
 static GlMvp g_glesProjection;
 static int g_glesProjectionValid;
@@ -224,15 +246,250 @@ static GlesPalSlot g_glesPalSlots[GLES_PALETTE_SLOTS];
 
 static int gles_register_tex(GlTex *tex);
 
+/* Port addition: a bounded indexed atlas per SFF. The sidecar owns GL
+ * pages and maps sprite slots to immutable regions, preserving engine layouts. */
+#define GLES_ATLAS_PAGE_SIZE 1024
+#define GLES_ATLAS_SET_PAGES 8
+#define GLES_ATLAS_RESIDENT_PAGES 16
+
+typedef struct GlesAtlasSource {
+    uintptr_t pixels;
+    int format, bytes, w, h;
+    int sprite;
+} GlesAtlasSource;
+
+typedef struct GlesAtlasRegion {
+    int page, x, y;
+    unsigned int generation;
+    int uploaded;
+} GlesAtlasRegion;
+
+typedef struct GlesAtlasPage {
+    GlTex *tex;
+    int w, h;
+} GlesAtlasPage;
+
+typedef struct GlesSpriteAtlas {
+    const SpriteSet *set;
+    int capacity;
+    int *sprite_regions;
+    GlesAtlasRegion *regions;
+    GlesAtlasPage pages[GLES_ATLAS_SET_PAGES];
+    struct GlesSpriteAtlas *next;
+} GlesSpriteAtlas;
+
+static GlesSpriteAtlas *g_glesAtlases;
+
+static int gles_atlas_page_limit(void)
+{
+    return g_glMaxTextureSize < GLES_ATLAS_PAGE_SIZE ? g_glMaxTextureSize : GLES_ATLAS_PAGE_SIZE;
+}
+
+int Gles_AtlasUsesSource(int w, int h, int bpp)
+{
+    int limit = gles_atlas_page_limit();
+
+    return g_glesProgramAtlas.program != 0 && g_renderMode == RENDER_MODE_GL &&
+           bpp == 8 && w > 0 && h > 0 && w <= limit && h <= limit;
+}
+
+static int gles_atlas_compare_sources(const void *a, const void *b)
+{
+    const GlesAtlasSource *x = a, *y = b;
+
+    if (x->pixels != y->pixels) return x->pixels < y->pixels ? -1 : 1;
+    if (x->format != y->format) return x->format < y->format ? -1 : 1;
+    if (x->bytes != y->bytes) return x->bytes < y->bytes ? -1 : 1;
+    if (x->w != y->w) return x->w < y->w ? -1 : 1;
+    if (x->h != y->h) return x->h < y->h ? -1 : 1;
+    return 0;
+}
+
+void Gles_AtlasPlan(const SpriteSet *set)
+{
+    GlesSpriteAtlas *atlas = NULL;
+    GlesAtlasSource *sources = NULL;
+    stbrp_rect *rects = NULL;
+    stbrp_node *nodes = NULL;
+    const KeyedArray *sprites;
+    int limit = gles_atlas_page_limit();
+    int i, count = 0, unique = 0, page;
+
+    if (set == NULL || set->sprites == NULL || !Gles_AtlasUsesSource(1, 1, 8)) return;
+    sprites = set->sprites;
+    if (sprites->count < 2) return;
+    sources = calloc((size_t)sprites->count, sizeof(*sources));
+    if (sources == NULL) goto done;
+    for (i = 0; i < sprites->capacity; i++) {
+        const Sprite *spr = (const Sprite *)(sprites->data + (size_t)i * sprites->elem_size);
+
+        if (!sprites->slots[i].used || spr->pixels == NULL || spr->pixels_size <= 0 ||
+            !Gles_AtlasUsesSource(spr->w, spr->h, spr->bpp)) continue;
+        if (spr->format == SPRITE_FORMAT_RAW) {
+            if (spr->pixels_size < spr->w * spr->h) continue;
+        } else if (spr->format < SPRITE_FORMAT_DECODE_MIN || spr->format > SPRITE_FORMAT_DECODE_MAX) {
+            continue;
+        }
+        sources[count++] = (GlesAtlasSource){ (uintptr_t)spr->pixels, spr->format,
+                                             spr->pixels_size, spr->w, spr->h, i };
+    }
+    if (count < 2) goto done;
+    qsort(sources, (size_t)count, sizeof(*sources), gles_atlas_compare_sources);
+
+    atlas = calloc(1, sizeof(*atlas));
+    rects = calloc((size_t)count, sizeof(*rects));
+    nodes = calloc((size_t)limit, sizeof(*nodes));
+    if (atlas == NULL || rects == NULL || nodes == NULL) goto done;
+    atlas->sprite_regions = calloc((size_t)sprites->capacity, sizeof(*atlas->sprite_regions));
+    atlas->regions = calloc((size_t)count, sizeof(*atlas->regions));
+    if (atlas->sprite_regions == NULL || atlas->regions == NULL) goto done;
+
+    for (i = 0; i < count; i++) {
+        const GlesAtlasSource *source = &sources[i];
+
+        if (i == 0 || gles_atlas_compare_sources(source, &sources[i - 1]) != 0) {
+            rects[unique] = (stbrp_rect){ .id = unique, .w = source->w, .h = source->h };
+            atlas->regions[unique++].page = -1;
+        }
+        atlas->sprite_regions[source->sprite] = unique;  /* zero means no region */
+    }
+    if (unique < 2) goto done;
+
+    for (count = unique, page = 0; count > 0 && page < GLES_ATLAS_SET_PAGES; page++) {
+        stbrp_context packer;
+        GlesAtlasPage *out = &atlas->pages[page];
+        int remaining = 0;
+
+        stbrp_init_target(&packer, limit, limit, nodes, limit);
+        stbrp_pack_rects(&packer, rects, count);
+        for (i = 0; i < count; i++) {
+            stbrp_rect rect = rects[i];
+            GlesAtlasRegion *region = &atlas->regions[rect.id];
+
+            if (!rect.was_packed) {
+                rects[remaining++] = rect;
+                continue;
+            }
+            region->page = page;
+            region->x = rect.x;
+            region->y = rect.y;
+            if (out->w < rect.x + rect.w) out->w = rect.x + rect.w;
+            if (out->h < rect.y + rect.h) out->h = rect.y + rect.h;
+        }
+        count = remaining;
+    }
+    atlas->set = set;
+    atlas->capacity = sprites->capacity;
+    atlas->next = g_glesAtlases;
+    g_glesAtlases = atlas;
+    Log_Printf("GLES: SFF atlas planned %d/%d indexed images across %d page(s)\n", unique - count, unique, page);
+    atlas = NULL;
+
+done:
+    if (atlas != NULL) {
+        free(atlas->sprite_regions);
+        free(atlas->regions);
+        free(atlas);
+    }
+    free(nodes);
+    free(rects);
+    free(sources);
+}
+
+static void gles_atlas_free(const SpriteSet *set)
+{
+    GlesSpriteAtlas **link;
+
+    for (link = &g_glesAtlases; *link != NULL; link = &(*link)->next) {
+        GlesSpriteAtlas *atlas = *link;
+        int i;
+
+        if (atlas->set != set) continue;
+        *link = atlas->next;
+        for (i = 0; i < GLES_ATLAS_SET_PAGES; i++) {
+            GlTex *tex = atlas->pages[i].tex;
+
+            if (tex != NULL && tex->id != 0) g_atlasResidentPages--;
+            GlTex_Free(tex);
+        }
+        free(atlas->sprite_regions);
+        free(atlas->regions);
+        free(atlas);
+        return;
+    }
+}
+
+static GlTex *gles_atlas_texture(SpriteSet *set, int sprite, const Sprite *spr, float rect[4])
+{
+    GlesSpriteAtlas *atlas;
+    GlesAtlasRegion *region;
+    GlesAtlasPage *page;
+    int index;
+
+    if (!Gles_AtlasUsesSource(spr->w, spr->h, spr->bpp)) return NULL;
+    while (set->shared != NULL) set = set->shared;
+    for (atlas = g_glesAtlases; atlas != NULL && atlas->set != set; atlas = atlas->next) {}
+    if (atlas == NULL || sprite < 0 || sprite >= atlas->capacity) return NULL;
+    index = atlas->sprite_regions[sprite];
+    if (index == 0) return NULL;
+    region = &atlas->regions[index - 1];
+    if (region->page < 0) return NULL;
+    page = &atlas->pages[region->page];
+
+    if (page->tex == NULL || page->tex->id == 0 ||
+        !region->uploaded || region->generation != g_glesStreamGeneration) {
+        const void *pixels;
+        unsigned long long start = BATCHPROF_NOW();
+
+        if ((page->tex == NULL || page->tex->id == 0) &&
+            g_atlasResidentPages >= GLES_ATLAS_RESIDENT_PAGES) return NULL;
+        pixels = Sprite_GetPixels(set, sprite);
+        if (pixels == NULL) return NULL;
+
+        /* Uploads can change bindings. Flush first to keep queued draws
+         * ordered, including calls using a recycled standalone texture. */
+        GlesBatch_Flush();
+        glActiveTexture(GL_TEXTURE0);
+        if (page->tex == NULL) page->tex = GlTex_Create();
+        if (page->tex == NULL) return NULL;
+        if (page->tex->id == 0) {
+            if (!GlTex_Upload(page->tex, page->h, GL_R8, page->w, GL_RED, NULL)) return NULL;
+            g_atlasResidentPages++;
+        }
+        gles_clear_errors();
+        glBindTexture(GL_TEXTURE_2D, page->tex->id);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, region->x, region->y, spr->w, spr->h,
+                        GL_RED, GL_UNSIGNED_BYTE, pixels);
+        if (!gles_ok()) return NULL;
+        {
+            unsigned long long elapsed = BATCHPROF_NOW() - start;
+
+            BatchProf_Split(BATCHPROF_SPLIT_UPLOAD, elapsed);
+            BatchProf_Split(BATCHPROF_SPLIT_UPLOAD_SPRITE, elapsed);
+        }
+        region->uploaded = 1;
+        region->generation = g_glesStreamGeneration;
+    }
+
+    rect[0] = (float)region->x;
+    rect[1] = (float)region->y;
+    rect[2] = (float)spr->w;
+    rect[3] = (float)spr->h;
+    return page->tex;
+}
+
 /*
  * Drops every streaming-texture key. Called when a sprite set is freed, because
  * that releases the decoded pixel buffers the keys point at (gles_render.h).
  */
-void Gles_OnSpriteSetFreed(void)
+void Gles_OnSpriteSetFreed(const SpriteSet *set)
 {
+    int i;
+
     /* Queued quads may reference this set's textures. */
     GlesBatch_Flush();
-    int i;
+    gles_atlas_free(set);
 
     for (i = 0; i < GLES_STREAM_SLOTS; i++) {
         g_glesStream[i].valid = 0;
@@ -688,7 +945,6 @@ static GlesProgram g_glesProgramIndexed;
 static GlesProgram g_glesProgramRgba;
 static GlesProgram g_glesProgramSolid;
 static GlesBuffer g_glesBuffer;
-static unsigned int g_glesCaps;
 
 /* A solid-colour program for the primitive path (rects, lines, pixels). */
 static const char *gles_solid_vert_src =
@@ -755,7 +1011,7 @@ static void gles_build_defines(char *out, size_t cap)
 }
 
 /* Loads one program from the ES dialect files. */
-static int gles_load_es_program(GlesProgram *prog, const char *name)
+static int gles_load_es_program(GlesProgram *prog, const char *name, int atlas)
 {
     char vert_name[64];
     char frag_name[64];
@@ -789,7 +1045,12 @@ static int gles_load_es_program(GlesProgram *prog, const char *name)
      * device.
      */
     gles_build_defines(defines, sizeof(defines));
-    ok = GlesDraw_LoadProgram(prog, vert, frag, name, defines);
+    if (atlas) {
+        size_t used = strlen(defines);
+
+        snprintf(defines + used, sizeof(defines) - used, "#define SPRITE_ATLAS\n");
+    }
+    ok = GlesDraw_LoadProgram(prog, vert, frag, atlas ? "indexed atlas" : name, defines);
     free(vert);
     free(frag);
     return ok;
@@ -798,6 +1059,7 @@ static int gles_load_es_program(GlesProgram *prog, const char *name)
 /* Deletes the sprite textures and the programs. */
 static void gles_free_programs(void)
 {
+    GlesDraw_FreeProgram(&g_glesProgramAtlas);
     GlesDraw_FreeProgram(&g_glesProgramIndexed);
     GlesDraw_FreeProgram(&g_glesProgramRgba);
     GlesDraw_FreeProgram(&g_glesProgramSolid);
@@ -853,6 +1115,9 @@ void Gles_OnContextLost(void)
      * glDeleteProgram/glDeleteBuffers here would use names that belong to a
      * context that no longer exists.
      */
+    g_batch_count = 0;
+    g_atlasResidentPages = 0;
+    memset(&g_glesProgramAtlas, 0, sizeof(g_glesProgramAtlas));
     memset(&g_glesProgramIndexed, 0, sizeof(g_glesProgramIndexed));
     memset(&g_glesProgramRgba, 0, sizeof(g_glesProgramRgba));
     memset(&g_glesProgramSolid, 0, sizeof(g_glesProgramSolid));
@@ -914,7 +1179,7 @@ void Gles_OnContextLost(void)
  */
 int Gles_OnContextRestore(int drawable_w, int drawable_h)
 {
-    unsigned int caps = 0;
+    int max_texture_size;
 
     if (g_glesReady) {
         return 1;
@@ -935,11 +1200,10 @@ int Gles_OnContextRestore(int drawable_w, int drawable_h)
             return 0;
         }
     }
-    if (!Gles_Probe(&caps)) {
+    if (!Gles_Probe(&max_texture_size)) {
         Log_Printf("GLES: restore failed: no usable context\n");
         return 0;
     }
-    g_glesCaps = caps;
     if (!gles_build_programs()) {
         /* The replacement context is live; delete partial programs on it. */
         gles_free_programs();
@@ -947,7 +1211,7 @@ int Gles_OnContextRestore(int drawable_w, int drawable_h)
         return 0;
     }
     memset(g_glesTexFormat, 0, sizeof(g_glesTexFormat));
-    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &g_glMaxTextureSize);
+    g_glMaxTextureSize = max_texture_size;
     if (drawable_w > 0 && drawable_h > 0) {
         glViewport(0, 0, drawable_w, drawable_h);
     }
@@ -957,12 +1221,6 @@ int Gles_OnContextRestore(int drawable_w, int drawable_h)
     Log_Printf("GLES: context restored (%dx%d drawable, max texture %d)\n", drawable_w, drawable_h,
                g_glMaxTextureSize);
     return 1;
-}
-
-/* The capability bits the probe resolved, for the Android video layer. */
-unsigned int Gles_LastCaps(void)
-{
-    return g_glesCaps;
 }
 
 int Gles_IsReady(void)
@@ -983,14 +1241,43 @@ int Gles_IsReady(void)
  */
 static int gles_build_programs(void)
 {
-    if (!gles_load_es_program(&g_glesProgramIndexed, "indexed") ||
-        !gles_load_es_program(&g_glesProgramRgba, "rgba") ||
+    if (!gles_load_es_program(&g_glesProgramIndexed, "indexed", 0) ||
+        !gles_load_es_program(&g_glesProgramRgba, "rgba", 0) ||
         !GlesDraw_LoadProgram(&g_glesProgramSolid, gles_solid_vert_src, gles_solid_frag_src, "solid", NULL) ||
         g_glesProgramSolid.u_color < 0) {
         Log_Printf("\nGLES: program set unavailable; GL mode unavailable\n");
         gles_free_programs();
         return 0;
     }
+    if (gles_sprite_option("MUGEN_SPRITEATLAS", g_spriteAtlasDefault)) {
+        /*
+         * u_mvp < 0 is EXPECTED here, not a failure. Compiled with SPRITE_ATLAS
+         * (see the defines in gles_load_es_program), indexed.vert takes its
+         * transform from the a_instance_mvp attribute and puts u_mvp inside the
+         * #else, so the atlas program has no u_mvp uniform and
+         * glGetUniformLocation returns -1 for it.
+         *
+         * The real validation is in GlesDraw_LoadProgram (gles_draw.c), which
+         * accepts a program with no MVP only when a_instance_mvp and
+         * a_atlas_rect are bound to the expected attribute slots and texsize
+         * resolved. Testing u_mvp >= 0 here instead would reject the shipped
+         * atlas shader and accept a pre-atlas shader that has u_mvp but no
+         * per-instance inputs.
+         */
+        if (glDrawArraysInstanced != NULL && glVertexAttribDivisor != NULL &&
+            gles_load_es_program(&g_glesProgramAtlas, "indexed", 1) &&
+            g_glesProgramAtlas.u_mvp < 0) {
+            Log_Printf("\nGLES: indexed sprite atlas enabled\n");
+        } else {
+            GlesDraw_FreeProgram(&g_glesProgramAtlas);
+            Log_Printf("\nGLES: indexed sprite atlas unavailable; using standalone sprites\n");
+        }
+    }
+    /* Automatic batching follows a usable atlas program, including after a
+     * context restore. Resolve once here instead of during each sprite draw. */
+    g_batch_enabled = gles_sprite_option("MUGEN_SPRITEBATCH",
+        g_spriteBatchDefault < 0 ? g_glesProgramAtlas.program != 0 : g_spriteBatchDefault);
+    if (g_batch_enabled) Log_Printf("\nGLES: sprite batching enabled\n");
     glEnable(GL_BLEND);
     glBlendEquation(GL_FUNC_ADD);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -1000,7 +1287,7 @@ static int gles_build_programs(void)
 
 int Gl_Init(int framebuffers)
 {
-    unsigned int caps = 0;
+    int max_texture_size;
 
     if (g_glesReady) {
         return 1;
@@ -1013,16 +1300,15 @@ int Gl_Init(int framebuffers)
      * impossible: the caller saw "unavailable" while nothing had been tried.
      */
     Gl_Deinit();
-    if (!Gles_Probe(&caps)) {
+    if (!Gles_Probe(&max_texture_size)) {
         Log_Printf("\nGLES: capability probe failed; GL mode unavailable\n");
         return 0;
     }
-    g_glesCaps = caps;
     if (!gles_build_programs()) {
         Gl_Deinit();
         return 0;
     }
-    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &g_glMaxTextureSize);
+    g_glMaxTextureSize = max_texture_size;
     g_glesReady = 1;
     g_glInitialized = 1;        /* port fix, see Gles_OnContextLost */
 #ifdef MUGEN_DEBUG
@@ -1219,6 +1505,7 @@ void Gfx_GlClear(unsigned int color)
     if (!g_glesReady) {
         return;
     }
+    GlesBatch_Flush();
     /* Same path as the desktop: palettised then mapped, cleared with alpha 0. */
     src[0] = (unsigned char)color;
     src[1] = (unsigned char)(color >> 8);
@@ -1441,33 +1728,10 @@ static GLenum gles_gl_factor(GlesBlendFactor f)
     }
 }
 
-/*
- * Port addition: the deferred sprite-draw queue.
- *
- * Every sprite quad currently goes straight to the driver: bind program, set
- * uniforms, upload four vertices, glDrawArrays. Measured on an RG351MP that is
- * ~150 us per call and ~34 calls a frame, so the draw call itself is the largest
- * single cost of a 2D frame (batchprof's `dr` split), and a draw can never be
- * merged with its neighbour while each call is submitted on its own.
- *
- * This queue records the calls instead, so a later flush can submit several of
- * them with one instanced draw. It follows Ikemen-GO's Phase 5 design
- * (render_gles32.go, flushSpriteBatches/renderBatch): texture identity is NOT
- * part of the batch key, so a batch may span several textures bound to separate
- * units.
- *
- * Stage 1 (this file, as it stands): the flush replays each call through the
- * immediate path, in order, with the same GL calls as before. That changes no
- * pixels -- it exists so the deferral and its flush points can be validated on
- * their own, before the instanced submitter replaces the replay. MUGEN_SPRITEBATCH=0
- * restores the old straight-through behaviour for A/B measurement.
- *
- * Ordering: the queue is strictly FIFO and is flushed before anything that is
- * not a queued sprite quad -- a scissor change, a primitive, the present blit, a
- * texture upload, a model draw. Painter's order is otherwise lost, which shows
- * up immediately as sprites drawn over each other in the wrong sequence.
- */
-#define GLES_BATCH_MAX 512
+/* Port addition: FIFO sprite submission. Standalone quads replay one at a
+ * time. Atlas quads with compatible consecutive state share an instanced
+ * draw. Flush before operations that affect recorded state or textures. */
+#define GLES_BATCH_MAX GLES_MAX_ATLAS_INSTANCES
 
 typedef struct GlesSpriteCall {
     /* batch key */
@@ -1486,34 +1750,48 @@ typedef struct GlesSpriteCall {
     float colorbal, alphamul;
     int invertall;
     float texsize[2];
-    float alpha_src, alpha_dst;
+    float alpha_dst;
+    float atlas_rect[4];
     /* the clip rectangle in force when the call was recorded */
     int clip[4];
 } GlesSpriteCall;
 
 static GlesSpriteCall g_batch[GLES_BATCH_MAX];
-static int g_batch_count;
-static unsigned long g_batch_flushes;
-static unsigned long g_batch_recorded;
-static int g_batch_enabled = -1;    /* -1 unknown, 0 off (MUGEN_SPRITEBATCH=0) */
 /* Re-entrancy guard: the replay calls Gl_ApplyClipRect, which itself flushes. */
 static int g_batch_flushing;
 
-static int gles_batch_enabled(void)
+static int gles_atlas_can_join(const GlesSpriteCall *first, const GlesSpriteCall *next)
 {
-    if (g_batch_enabled < 0) {
-        const char *v = getenv("MUGEN_SPRITEBATCH");
+    return next->prog == first->prog && next->tex == first->tex && next->pal == first->pal &&
+           next->mask == first->mask && next->blend_enabled == first->blend_enabled &&
+           next->blend_src == first->blend_src && next->blend_dst == first->blend_dst &&
+           next->blend_eq == first->blend_eq && next->alphamul == first->alphamul &&
+           next->alpha_dst == first->alpha_dst && next->invertall == first->invertall &&
+           next->colorbal == first->colorbal &&
+           memcmp(next->add, first->add, sizeof(first->add)) == 0 &&
+           memcmp(next->mul, first->mul, sizeof(first->mul)) == 0 &&
+           memcmp(next->clip, first->clip, sizeof(first->clip)) == 0;
+}
 
-        /*
-         * OPT-IN for now: with the queue enabled a transition frame
-         * (MUGEN_AUTOSHOT=300) came out different on every run, while the same
-         * binary with the queue disabled was stable across repeats. Until that
-         * is explained, the deferral stays off by default so the shipped
-         * behaviour is the immediate path.
-         */
-        g_batch_enabled = (v != NULL && v[0] == '1') ? 1 : 0;
-    }
-    return g_batch_enabled;
+static int gles_atlas_submit_run(int start)
+{
+    const GlesSpriteCall *first = &g_batch[start];
+    static const float corners[] = { 0, 0, 1, 0, 0, 1, 1, 1 };
+    GlesAtlasBatch batch;
+    int end = start;
+
+    memcpy(batch.corners, corners, sizeof(corners));
+    do {
+        const GlesSpriteCall *call = &g_batch[end];
+
+        memcpy(batch.sprites[end - start].mvp, call->mvp, sizeof(call->mvp));
+        memcpy(batch.sprites[end - start].rect, call->atlas_rect, sizeof(call->atlas_rect));
+        end++;
+    } while (end < g_batch_count && gles_atlas_can_join(first, &g_batch[end]));
+
+    GlesDraw_Atlas(&g_glesBuffer, first->prog, &batch, end - start, first->mask, first->add, first->mul,
+                   first->invertall, first->colorbal, first->texsize[0], first->texsize[1], first->alphamul);
+    return end;
 }
 
 void GlesBatch_Flush(void)
@@ -1526,13 +1804,12 @@ void GlesBatch_Flush(void)
         return;
     }
     g_batch_flushing = 1;
-    g_batch_flushes++;
     saved_clip[0] = g_clipX1;
     saved_clip[1] = g_clipY1;
     saved_clip[2] = g_clipX2;
     saved_clip[3] = g_clipY2;
 
-    for (i = 0; i < g_batch_count; i++) {
+    for (i = 0; i < g_batch_count;) {
         const GlesSpriteCall *c = &g_batch[i];
 
         /* The scissor the call was recorded with. */
@@ -1555,7 +1832,7 @@ void GlesBatch_Flush(void)
         } else {
             glEnable(GL_BLEND);
             glBlendFunc((GLenum)c->blend_src, (GLenum)c->blend_dst);
-            glBlendColor(c->alpha_src, c->alpha_src, c->alpha_src, c->alpha_dst);
+            glBlendColor(c->alphamul, c->alphamul, c->alphamul, c->alpha_dst);
             glBlendEquation((GLenum)c->blend_eq);
         }
         /* Textures, exactly as the immediate path bound them. */
@@ -1568,9 +1845,14 @@ void GlesBatch_Flush(void)
             BatchProf_Texture(1, (unsigned int)c->pal->id);
             glActiveTexture(GL_TEXTURE0);
         }
-        GlesDraw_Quad(&g_glesBuffer, c->prog, c->mvp, c->pos, c->tc, c->paletted, c->mask,
-                      c->add[0], c->add[1], c->add[2], c->mul[0], c->mul[1], c->mul[2],
-                      c->invertall, c->colorbal, c->texsize[0], c->texsize[1], c->alphamul);
+        if (c->prog == &g_glesProgramAtlas) {
+            i = gles_atlas_submit_run(i);
+        } else {
+            GlesDraw_Quad(&g_glesBuffer, c->prog, c->mvp, c->pos, c->tc, c->paletted, c->mask,
+                          c->add[0], c->add[1], c->add[2], c->mul[0], c->mul[1], c->mul[2],
+                          c->invertall, c->colorbal, c->texsize[0], c->texsize[1], c->alphamul);
+            i++;
+        }
         glBlendEquation(GL_FUNC_ADD);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     }
@@ -1584,12 +1866,12 @@ void GlesBatch_Flush(void)
     Gl_ApplyClipRect();
 }
 
-void GlesBatch_Record(const GlesProgram *prog, int blend_enabled, unsigned int blend_src,
+static void gles_batch_record(const GlesProgram *prog, int blend_enabled, unsigned int blend_src,
                       unsigned int blend_dst, unsigned int blend_eq, int mask, const GlTex *tex,
                       const GlTex *pal, int paletted, const float *mvp16, const float *positions8,
                       const float *texcoords16, float add_r, float add_g, float add_b, float mul_r,
                       float mul_g, float mul_b, int invertall, float colorbal, float tex_w,
-                      float tex_h, float alpha_src, float alpha_dst)
+                      float tex_h, float alpha_src, float alpha_dst, const float *atlas_rect)
 {
     GlesSpriteCall *c;
 
@@ -1616,13 +1898,12 @@ void GlesBatch_Record(const GlesProgram *prog, int blend_enabled, unsigned int b
     c->invertall = invertall;
     c->texsize[0] = tex_w;
     c->texsize[1] = tex_h;
-    c->alpha_src = alpha_src;
     c->alpha_dst = alpha_dst;
     c->clip[0] = g_clipX1;
     c->clip[1] = g_clipY1;
     c->clip[2] = g_clipX2;
     c->clip[3] = g_clipY2;
-    g_batch_recorded++;
+    if (atlas_rect != NULL) memcpy(c->atlas_rect, atlas_rect, sizeof(c->atlas_rect));
 }
 
 /*
@@ -1687,7 +1968,7 @@ static int gles_quad_is_culled(const float *mvp16, const float *pos8)
 void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
 {
     Sprite *spr;
-    GlTex *tex;
+    GlTex *tex = NULL;
     GlTex *pal_tex = NULL;
     GlSpriteMv mv;
     float positions[8];
@@ -1699,7 +1980,8 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
     PalFx *fx;
     GlMvp mvp;
     GlesProgram *prog;
-    int paletted;
+    int paletted, atlased = 0, defer;
+    float atlas_rect[4];
     int blend_enabled = 0;
     unsigned int blend_src = 0, blend_dst = 0, blend_eq = 0;
     /* MUGEN_DEBUG: the texture uploads are the part of a sprite draw that
@@ -1731,7 +2013,103 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
     if (!(0.0f < c1)) {
         c1 = 1.0f;
     }
-    tex = (spr->format == SPRITE_FORMAT_TEXTURE) ? (GlTex *)spr->pixels : NULL;
+    /* Port fix: keep the same geometry for standalone and atlas textures.
+     * The atlas shader's half texel addresses a texel within the page. */
+    memset(&mv, 0, sizeof(mv));
+    mv.paletted = paletted;
+    mv.pal_offset = g_glPalOffset;
+    mv.rgba_offset_x = g_glRgbaOffsetX;
+    mv.rgba_offset_y = g_glRgbaOffsetY;
+    mv.x = dp->x;
+    mv.y = dp->y;
+    mv.angle = dp->angle;
+    mv.angle_x = dp->angle_y;
+    mv.angle_z = dp->angle_z;
+    mv.shear_x = dp->shear_x;
+    mv.shear_y = dp->shear_y;
+    mv.scale_x = dp->scale_x;
+    mv.scale_y = dp->scale_y;
+    mv.scale2_x = dp->scale2_x;
+    mv.scale2_y = dp->scale2_y;
+    mv.sx1 = (dp->flip & DRAW_FLIP_H) ? -1 : 1;
+    mv.sy1 = (dp->flip & DRAW_FLIP_V) ? -1 : 1;
+    mv.sx2 = (dp->flip2 & DRAW_FLIP_H) ? -1 : 1;
+    mv.sy2 = (dp->flip2 & DRAW_FLIP_V) ? -1 : 1;
+    mv.anchor_x = (float)spr->x;
+    mv.anchor_y = (float)spr->y;
+
+    if (!g_glesProjectionValid) {
+        Gl_SetupView();
+    }
+    /* Modelview on the CPU (GLES has no matrix stack), composed with the
+     * cached projection for the vertex shader. */
+    {
+        GlMvp modelview;
+
+        GlMvp_SpriteModelView(&modelview, &mv);
+        GlMvp_Multiply(&mvp, &g_glesProjection, &modelview);
+    }
+
+    /* Quad corners: the top edge squeezed by width_ratio around width_anchor. */
+    fw = (float)spr->w;
+    fh = (float)spr->h;
+    left = 0.0f;
+    right = fw;
+    if (!(1.0f == dp->width_ratio)) {
+        float d = (float)((double)fw * dp->width_ratio - fw);
+
+        left = (float)(0.0 - (double)d * dp->width_anchor);
+        right = (float)((1.0 - dp->width_anchor) * d + fw);
+    }
+    positions[0] = left;  positions[1] = 0.0f;
+    positions[2] = right; positions[3] = 0.0f;
+    positions[4] = 0.0f;  positions[5] = fh;
+    positions[6] = fw;    positions[7] = fh;
+
+    /*
+     * Texture coordinates through the shared quad builder, so a stretched or
+     * tinted quad carries its projective Q exactly as the desktop path does.
+     * Straight sampling (q = 1 everywhere) was the earlier behaviour, which
+     * flattened the trapezoid: parallax and top/bottom-stretched quads sampled
+     * a linear ramp instead of the perspective-correct one.
+     */
+    {
+        GlQuadVerts quad;
+        float tc_flat[GL_QUAD_VERTEX_COUNT * 4];
+        int i;
+
+        GlQuad_Build(&quad, positions, special, (double)c0, (double)c1, (double)dp->top_offset,
+                     (double)dp->bottom_offset, dp->width_ratio);
+        for (i = 0; i < GL_QUAD_VERTEX_COUNT; i++) {
+            tc_flat[i * 4 + 0] = quad.tc[i][0];
+            tc_flat[i * 4 + 1] = quad.tc[i][1];
+            tc_flat[i * 4 + 2] = quad.tc[i][2];
+            tc_flat[i * 4 + 3] = quad.tc[i][3];
+            texcoords[i * 4 + 0] = tc_flat[i * 4 + 0];
+            texcoords[i * 4 + 1] = tc_flat[i * 4 + 1];
+            texcoords[i * 4 + 2] = tc_flat[i * 4 + 2];
+            texcoords[i * 4 + 3] = tc_flat[i * 4 + 3];
+        }
+    }
+    /*
+     * Port addition: skip a quad the clip rectangle would reject outright,
+     * before its texture or palette is even uploaded.
+     */
+    {
+        int culled = gles_quad_is_culled(mvp.m, positions);
+
+#ifdef MUGEN_DEBUG
+        BatchProf_CountQuad(culled == 2, culled == 3);
+#endif
+        if (culled != 0) {
+            return;
+        }
+    }
+    if (paletted && !special) {
+        tex = gles_atlas_texture(set, sprite, spr, atlas_rect);
+        atlased = tex != NULL;
+    }
+    if (!atlased && spr->format == SPRITE_FORMAT_TEXTURE) tex = spr->pixels;
     if (tex != NULL && tex->id == 0) {
         /*
          * A context loss dropped this sprite's GL name. The sprite path uploads
@@ -1872,99 +2250,9 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
         }
     }
 
-    /* Modelview: the same terms, in the same order, as Gl_DrawSprite. */
-    memset(&mv, 0, sizeof(mv));
-    mv.paletted = paletted;
-    mv.pal_offset = g_glPalOffset;
-    mv.rgba_offset_x = g_glRgbaOffsetX;
-    mv.rgba_offset_y = g_glRgbaOffsetY;
-    mv.x = dp->x;
-    mv.y = dp->y;
-    mv.angle = dp->angle;
-    mv.angle_x = dp->angle_y;
-    mv.angle_z = dp->angle_z;
-    mv.shear_x = dp->shear_x;
-    mv.shear_y = dp->shear_y;
-    mv.scale_x = dp->scale_x;
-    mv.scale_y = dp->scale_y;
-    mv.scale2_x = dp->scale2_x;
-    mv.scale2_y = dp->scale2_y;
-    mv.sx1 = (dp->flip & DRAW_FLIP_H) ? -1 : 1;
-    mv.sy1 = (dp->flip & DRAW_FLIP_V) ? -1 : 1;
-    mv.sx2 = (dp->flip2 & DRAW_FLIP_H) ? -1 : 1;
-    mv.sy2 = (dp->flip2 & DRAW_FLIP_V) ? -1 : 1;
-    mv.anchor_x = (float)spr->x;
-    mv.anchor_y = (float)spr->y;
-
-    if (!g_glesProjectionValid) {
-        Gl_SetupView();
-    }
-    /* Modelview on the CPU (GLES has no matrix stack), composed with the
-     * cached projection for the vertex shader. */
-    {
-        GlMvp modelview;
-
-        GlMvp_SpriteModelView(&modelview, &mv);
-        GlMvp_Multiply(&mvp, &g_glesProjection, &modelview);
-    }
-
-    /* Quad corners: the top edge squeezed by width_ratio around width_anchor. */
-    fw = (float)spr->w;
-    fh = (float)spr->h;
-    left = 0.0f;
-    right = fw;
-    if (!(1.0f == dp->width_ratio)) {
-        float d = (float)((double)fw * dp->width_ratio - fw);
-
-        left = (float)(0.0 - (double)d * dp->width_anchor);
-        right = (float)((1.0 - dp->width_anchor) * d + fw);
-    }
-    positions[0] = left;  positions[1] = 0.0f;
-    positions[2] = right; positions[3] = 0.0f;
-    positions[4] = 0.0f;  positions[5] = fh;
-    positions[6] = fw;    positions[7] = fh;
-
-    /*
-     * Texture coordinates through the shared quad builder, so a stretched or
-     * tinted quad carries its projective Q exactly as the desktop path does.
-     * Straight sampling (q = 1 everywhere) was the earlier behaviour, which
-     * flattened the trapezoid: parallax and top/bottom-stretched quads sampled
-     * a linear ramp instead of the perspective-correct one.
-     */
-    {
-        GlQuadVerts quad;
-        float tc_flat[GL_QUAD_VERTEX_COUNT * 4];
-        int i;
-
-        GlQuad_Build(&quad, positions, special, (double)c0, (double)c1, (double)dp->top_offset,
-                     (double)dp->bottom_offset, dp->width_ratio);
-        for (i = 0; i < GL_QUAD_VERTEX_COUNT; i++) {
-            tc_flat[i * 4 + 0] = quad.tc[i][0];
-            tc_flat[i * 4 + 1] = quad.tc[i][1];
-            tc_flat[i * 4 + 2] = quad.tc[i][2];
-            tc_flat[i * 4 + 3] = quad.tc[i][3];
-            texcoords[i * 4 + 0] = tc_flat[i * 4 + 0];
-            texcoords[i * 4 + 1] = tc_flat[i * 4 + 1];
-            texcoords[i * 4 + 2] = tc_flat[i * 4 + 2];
-            texcoords[i * 4 + 3] = tc_flat[i * 4 + 3];
-        }
-    }
-    /*
-     * Port addition: skip a quad the clip rectangle would reject outright,
-     * before its texture or palette is even uploaded.
-     */
-    {
-        int culled = gles_quad_is_culled(mvp.m, positions);
-
-#ifdef MUGEN_DEBUG
-        BatchProf_CountQuad(culled == 2, culled == 3);
-#endif
-        if (culled != 0) {
-            return;
-        }
-    }
     fx = PalFx_GetApplied();
-    prog = paletted ? &g_glesProgramIndexed : &g_glesProgramRgba;
+    prog = atlased ? &g_glesProgramAtlas : (paletted ? &g_glesProgramIndexed : &g_glesProgramRgba);
+    defer = g_batch_enabled;
 
     /*
      * Blend state. The factors come from GlesBlend_ResolveOp (src/gles_blend.h),
@@ -1984,14 +2272,6 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
         blend_dst = (unsigned int)gles_gl_factor(blend.dst);
         blend_eq = (unsigned int)(blend.eq == GLES_BLEND_EQ_REVERSE_SUBTRACT ? GL_FUNC_REVERSE_SUBTRACT
                                                                            : GL_FUNC_ADD);
-        if (!blend.enabled) {
-            glDisable(GL_BLEND);
-        } else {
-            glEnable(GL_BLEND);
-            glBlendFunc((GLenum)blend_src, (GLenum)blend_dst);
-            glBlendColor(dp->alpha_src, dp->alpha_src, dp->alpha_src, dp->alpha_dst);
-            glBlendEquation((GLenum)blend_eq);
-        }
     }
 
     /*
@@ -1999,19 +2279,28 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
      * merge neighbours into one instanced draw. Same values either way; with
      * batching off this is exactly the old straight-through submission.
      */
-    if (gles_batch_enabled()) {
+    if (defer || atlased) {
         /* PalFX scalars exactly as Glr_FxTerms computes them: add is 0..255 and
          * mul / color are fixed point with 256 = 1.0. */
-        GlesBatch_Record(prog, blend_enabled, blend_src, blend_dst, blend_eq, dp->masked,
+        gles_batch_record(prog, blend_enabled, blend_src, blend_dst, blend_eq, dp->masked,
                          tex, pal_tex, paletted, mvp.m, positions, texcoords,
                          (float)fx->add[0] / 255.0f, (float)fx->add[1] / 255.0f, (float)fx->add[2] / 255.0f,
                          (float)fx->mul[0] * (1.0f / 256.0f), (float)fx->mul[1] * (1.0f / 256.0f),
                          (float)fx->mul[2] * (1.0f / 256.0f), fx->invertall,
                          (float)fx->color * (1.0f / 256.0f), (float)tex->w, (float)tex->h,
-                         dp->alpha_src, dp->alpha_dst);
+                         dp->alpha_src, dp->alpha_dst, atlased ? atlas_rect : NULL);
+        if (!defer) GlesBatch_Flush();
         return;
     }
 
+    if (!blend_enabled) {
+        glDisable(GL_BLEND);
+    } else {
+        glEnable(GL_BLEND);
+        glBlendFunc((GLenum)blend_src, (GLenum)blend_dst);
+        glBlendColor(dp->alpha_src, dp->alpha_src, dp->alpha_src, dp->alpha_dst);
+        glBlendEquation((GLenum)blend_eq);
+    }
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, (GLuint)tex->id);
     BatchProf_Texture(0, (unsigned int)tex->id);
@@ -2124,6 +2413,7 @@ void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
     }
     /* Port fix: pause/training/debug/console overlays share the desktop hook. */
     if (g_gfxPrePresent != NULL) g_gfxPrePresent(NULL, 0);
+    GlesBatch_Flush();
 #ifndef ANDROID_PORT
     /*
      * Present the frame that was just drawn.
@@ -2211,6 +2501,7 @@ void *Gl_Capture(void)
     if (!g_glesReady || !GlImage_Size(w, h, 4, &row, &bytes)) {
         return NULL;
     }
+    GlesBatch_Flush();
     rgba = malloc(bytes);
     if (rgba == NULL) {
         return NULL;

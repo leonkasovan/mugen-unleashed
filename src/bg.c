@@ -37,6 +37,9 @@
  *   element processed (or 0, 0 when there is none yet).
  */
 #include "mugen.h"
+#ifdef MUGEN_VIDEO_BG
+#include "video_bg_render.h"
+#endif
 
 #define BG_PI           3.141592653589793
 #define BG_FIXED_ONE    65536.0             /* 16.16 fixed point steps of the software parallax */
@@ -83,7 +86,10 @@ Bg *Bg_Load(const char *name, Ini *ini, const char *dir, SpriteSet *sprites, Ani
     float xscale_top, xscale_bottom;
     const char *header;
     const char *s;
-    int count, debugbg, i;
+    int count, debugbg, i, has_definition;
+#ifdef MUGEN_VIDEO_BG
+    int has_video = 0;
+#endif
     Bg *bg;
 
     sprintf(key_space, "%s ", name);
@@ -108,18 +114,32 @@ Bg *Bg_Load(const char *name, Ini *ini, const char *dir, SpriteSet *sprites, Ani
         }
 #endif
     }
+#ifdef MUGEN_VIDEO_BG
+    ini->group = -1;
+    for (header = Ini_NextGroup(ini); header != NULL; header = Ini_NextGroup(ini)) {
+        if (Bg_IsGroup(header, name, name_len) && VideoBgLayer_IsType(Ini_GetValue(ini, "type"))) {
+            has_video = 1;
+            break;
+        }
+    }
+#endif
     bg = Bg_Create(count > 0 ? count : 1);
     if (bg == NULL) {
         return NULL;
     }
     strcpy(group, name);
     strcat(group, "def");
-    if (Ini_SelectGroup(ini, group) == -1) {
+    has_definition = Ini_SelectGroup(ini, group) != -1;
+    if (!has_definition
+#ifdef MUGEN_VIDEO_BG
+        && !has_video
+#endif
+    ) {
         MatchLog_Printf(3, "Can't access group %s\n", group);
         Bg_Free(bg);
         return NULL;
     }
-    s = Ini_GetValue(ini, "spr");
+    s = has_definition ? Ini_GetValue(ini, "spr") : NULL;
     if (s != NULL) {
         Path_Join(s, dir, group);
         bg->sprites = Sff_Load(group);
@@ -130,7 +150,11 @@ Bg *Bg_Load(const char *name, Ini *ini, const char *dir, SpriteSet *sprites, Ani
         }
         bg->owns_sprites = 1;
     } else {
-        if (sprites == NULL) {
+        if (sprites == NULL
+#ifdef MUGEN_VIDEO_BG
+            && !has_video
+#endif
+        ) {
             MatchLog_Printf(3, "Error: sff file must be specified\n");
             Bg_Free(bg);
             return NULL;
@@ -138,17 +162,19 @@ Bg *Bg_Load(const char *name, Ini *ini, const char *dir, SpriteSet *sprites, Ani
         bg->sprites = sprites;
         bg->owns_sprites = 0;
     }
-    if (Ini_GetInt(ini, "debugbg", &debugbg)) {
-        if (debugbg != 0) {
-            bg->clear_color[2] = 0xFF;
-            bg->clear_color[0] = 0xFF;
-            bg->clear_color[1] = 0;
+    if (has_definition) {
+        if (Ini_GetInt(ini, "debugbg", &debugbg)) {
+            if (debugbg != 0) {
+                bg->clear_color[2] = 0xFF;
+                bg->clear_color[0] = 0xFF;
+                bg->clear_color[1] = 0;
+            }
+        } else {
+            Ini_Scanf(ini, "bgclearcolor", "%i,%i,%i", &bg->clear_color[0], &bg->clear_color[1], &bg->clear_color[2]);
         }
-    } else {
-        Ini_Scanf(ini, "bgclearcolor", "%i,%i,%i", &bg->clear_color[0], &bg->clear_color[1], &bg->clear_color[2]);
+        /* mugen-unleashed: a scene of the motif's / storyboard's 3D model (bg3d.c) */
+        Bg3D_Attach(bg, ini);
     }
-    /* mugen-unleashed: a scene of the motif's / storyboard's 3D model (bg3d.c) */
-    Bg3D_Attach(bg, ini);
     if (anim != NULL) {
         bg->anim = anim;
         bg->owns_anim = 0;
@@ -220,6 +246,14 @@ Bg *Bg_Load(const char *name, Ini *ini, const char *dir, SpriteSet *sprites, Ani
         case 'p':
             type = BG_TYPE_PARALLAX;
             break;
+#ifdef MUGEN_VIDEO_BG
+        case 'v':
+            if (VideoBgLayer_IsType(s)) {
+                type = BG_TYPE_VIDEO;
+                break;
+            }
+            /* fall through */
+#endif
         default:
             MatchLog_Printf(3, "Invalid type: %s in %s\n", s, header);
             Bg_Free(bg);
@@ -287,6 +321,16 @@ Bg *Bg_Load(const char *name, Ini *ini, const char *dir, SpriteSet *sprites, Ani
         }
         Ini_GetInt(ini, "mask", &mask);
 
+#ifdef MUGEN_VIDEO_BG
+        if (type == BG_TYPE_VIDEO) {
+            group_no = -1;
+            action = -1;
+        } else if (!bg->sprites && type != BG_TYPE_DUMMY) {
+            MatchLog_Printf(3, "Missing sprite file for %s\n", header);
+            Bg_Free(bg);
+            return NULL;
+        }
+#endif
         if (type == BG_TYPE_DUMMY) {
             group_no = -1;
             action = -1;
@@ -315,6 +359,16 @@ Bg *Bg_Load(const char *name, Ini *ini, const char *dir, SpriteSet *sprites, Ani
 
         e = KeyedArray_Get(bg->elems, 0, i);
         e->layer = layer;
+#ifdef MUGEN_VIDEO_BG
+        if (type == BG_TYPE_VIDEO) {
+            e->video = VideoBgLayer_Open(ini, dir);
+            if (!e->video) {
+                MatchLog_Printf(3, "Cannot open video background %s (requires OpenGL and a decodable WebM)\n", header);
+                Bg_Free(bg);
+                return NULL;
+            }
+        }
+#endif
         e->velocity_x = velocity_x;
         e->velocity_y = velocity_y;
         e->scalestart_x = scalestart_x;
@@ -596,6 +650,10 @@ void Bg_Free(Bg *bg)
     list = bg->elems;
     if (list != NULL) {
         for (e = KeyedArray_First(list); e != NULL; e = KeyedArray_Next(list)) {
+#ifdef MUGEN_VIDEO_BG
+            if (e->type == BG_TYPE_VIDEO)
+                VideoBgLayer_Close(e->video);
+#endif
             if (e->type == BG_TYPE_PARALLAX) {
                 if (e->row_widths != NULL) {
                     free(e->row_widths);
@@ -686,7 +744,7 @@ int BgElem_AddSprite(int type, Bg *bg, int index, float start_x, float start_y, 
     e.alpha_dst = alpha_dst;
     e.scale_x = 1.0f;
     e.mask = mask;
-    if (type != BG_TYPE_DUMMY) {
+    if (type != BG_TYPE_DUMMY && type != BG_TYPE_VIDEO) {
         Sprite *spr;
         e.sprite = KeyedArray_Find(bg->sprites->sprites, group, number);
         if (e.sprite == -1) {
@@ -1005,6 +1063,10 @@ void Bg_Reset(Bg *bg)
         bg->ctrls[i].timer = 0;
     }
     for (e = KeyedArray_First(list); e != NULL; e = KeyedArray_Next(list)) {
+#ifdef MUGEN_VIDEO_BG
+        if (e->type == BG_TYPE_VIDEO)
+            VideoBgLayer_Reset(e->video);
+#endif
         if (e->action != -1 && e->anim != NULL) {
             Anim_SetAction(e->anim, e->action);
             Anim_Reset(e->anim);
@@ -1180,6 +1242,11 @@ void BgElem_Draw(BgElem *e, Bg *bg)
     }
     dp.masked = e->type == BG_TYPE_ANIM ? 1 : e->mask;
     switch (e->type) {
+#ifdef MUGEN_VIDEO_BG
+    case BG_TYPE_VIDEO:
+        VideoBgLayer_Draw(e->video, bg->ticks, x, y);
+        break;
+#endif
     case BG_TYPE_NORMAL:
         if (e->tile_x == 0 && e->tile_y == 0) {
             Sprite_Draw(bg->sprites, e->sprite, &dp);

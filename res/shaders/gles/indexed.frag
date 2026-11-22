@@ -44,7 +44,12 @@ uniform bool invertall;
 uniform float colorbal;
 uniform float src_alphamul;
 
+#ifdef SPRITE_ATLAS
+uniform highp vec2 texsize;
+varying highp vec4 v_atlas_rect;
+#else
 uniform vec2 texsize;
+#endif
 varying vec4 v_texcoord;
 
 #if defined(INDEX_STANDARD) // This works on Radeon Mobility 1400 and is faster
@@ -107,7 +112,15 @@ void palfx(inout vec4 color)
  */
 vec4 nearest()
 {
-#if defined(PERSPECTIVE_NONE)
+#if defined(SPRITE_ATLAS)
+  // Select the original sprite's nearest texel before adding the page offset.
+  // Sampling its center also prevents reads from adjacent atlas regions.
+  highp vec2 local_uv = v_texcoord.st;
+  highp vec2 texel = clamp(floor(local_uv * v_atlas_rect.zw),
+                          vec2(0.0), v_atlas_rect.zw - vec2(1.0));
+  highp vec2 page_uv = (v_atlas_rect.xy + texel + vec2(0.5)) / texsize;
+  vec4 idxv = texture2D(texunit0, page_uv);
+#elif defined(PERSPECTIVE_NONE)
   vec4 idxv = texture2D(texunit0, v_texcoord.st);
 #elif defined(PERSPECTIVE_STANDARD)
   vec4 idxv = texture2D(texunit0, v_texcoord.st / v_texcoord.q);

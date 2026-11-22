@@ -60,6 +60,18 @@ static unsigned char *Prim_TargetPixels(const Sprite *spr)
     return spr->pixels;
 }
 
+static __inline void Prim_MarkSurfaceDirty(const Sprite *spr)
+{
+    if (spr->format != SPRITE_FORMAT_SURFACE) {
+        return;
+    }
+#ifdef ANDROID_PORT
+    Android_MarkDisplayDirty(spr->pixels);
+#else
+    Sdl2_MarkDisplayDirty(spr->pixels);
+#endif
+}
+
 /* RGB565 components of a colour, for the additive and subtractive versions. */
 #define PRIM_R(c)   ((c) & 0xF800)
 #define PRIM_G(c)   ((c) & 0x07E0)
@@ -168,15 +180,8 @@ void Gfx_SoftPutPixel(int x, int y, unsigned int color)
 {
     Sprite *spr = Prim_Target();
     unsigned int c = PalFx_Apply565(color);
-    SDL_Surface *surface = NULL;
-    unsigned char *pixels;
+    unsigned char *pixels = Prim_TargetPixels(spr);
 
-    if (spr->format == SPRITE_FORMAT_SURFACE) {
-        surface = spr->pixels;
-        pixels = surface->pixels;
-    } else {
-        pixels = spr->pixels;
-    }
     if (pixels == NULL || !Prim_InClip(x, y)) {
         return;
     }
@@ -191,13 +196,7 @@ void Gfx_SoftPutPixel(int x, int y, unsigned int color)
         *(unsigned int *)(pixels + spr->rows[y] + x * 4) = c;
         break;
     }
-    if (surface != NULL) {
-#ifdef ANDROID_PORT
-        Android_MarkDisplayDirty(surface);
-#else
-        Sdl2_UpdateRect(surface, x, y, 1, 1);
-#endif
-    }
+    Prim_MarkSurfaceDirty(spr);
 }
 
 /* 0x00485960: g_gfxAddPixel (software): adds an RGB565 colour (PalFX applied) to pixel (x, y). */
@@ -205,56 +204,30 @@ void Gfx_SoftAddPixel(int x, int y, unsigned int color)
 {
     Sprite *spr = Prim_Target();
     unsigned int c = PalFx_Apply565(color);
-    SDL_Surface *surface = NULL;
-    unsigned char *pixels;
+    unsigned char *pixels = Prim_TargetPixels(spr);
     unsigned short *p;
 
-    if (spr->format == SPRITE_FORMAT_SURFACE) {
-        surface = spr->pixels;
-        pixels = surface->pixels;
-    } else {
-        pixels = spr->pixels;
-    }
     if (pixels == NULL || !Prim_InClip(x, y)) {
         return;
     }
     p = Prim_Pixel16(spr, pixels, x, y);
     *p = Prim_Add565(*p, PRIM_R(c), PRIM_G(c), PRIM_B(c));
-    if (surface != NULL) {
-#ifdef ANDROID_PORT
-        Android_MarkDisplayDirty(surface);
-#else
-        Sdl2_UpdateRect(surface, x, y, 1, 1);
-#endif
-    }
+    Prim_MarkSurfaceDirty(spr);
 }
 
 /* 0x00485AA0: g_gfxInvertPixel (software): inverts pixel (x, y). */
 void Gfx_SoftInvertPixel(int x, int y)
 {
     Sprite *spr = Prim_Target();
-    SDL_Surface *surface = NULL;
-    unsigned char *pixels;
+    unsigned char *pixels = Prim_TargetPixels(spr);
     unsigned short *p;
 
-    if (spr->format == SPRITE_FORMAT_SURFACE) {
-        surface = spr->pixels;
-        pixels = surface->pixels;
-    } else {
-        pixels = spr->pixels;
-    }
     if (pixels == NULL || !Prim_InClip(x, y)) {
         return;
     }
     p = Prim_Pixel16(spr, pixels, x, y);
     *p = (unsigned short)~*p;
-    if (surface != NULL) {
-#ifdef ANDROID_PORT
-        Android_MarkDisplayDirty(surface);
-#else
-        Sdl2_UpdateRect(surface, x, y, 1, 1);
-#endif
-    }
+    Prim_MarkSurfaceDirty(spr);
 }
 
 /*

@@ -12,11 +12,24 @@
  * decoded there too.
  */
 #include "mugen.h"
+#ifdef MUGEN_GLES
+#include "gles_render.h"
+#endif
 #include <limits.h>
 #include <stdlib.h>
 
 #define SFF_LOG_INFO    7
 #define SFF_LOG_ERROR   3
+
+/* Port addition: the optional GLES atlas needs the original indices for
+ * first use, standalone fallback, and context restoration. */
+static unsigned int Sff_AtlasFlags(int w, int h, int bpp)
+{
+#ifdef MUGEN_GLES
+    if (Gles_AtlasUsesSource(w, h, bpp)) return SPRITE_INIT_NO_TEXTURE;
+#endif
+    return 0;
+}
 
 /* Offset relative to the start of the stream for a file offset of an SFF. */
 static long Sff_StreamPos(unsigned int file_offset, long start)
@@ -386,7 +399,8 @@ SpriteSet *Sff1_Load(const Sff1Header *hdr, Stream *s)
             } else if (new_pal != NULL && !SpriteSet_AddPalette(set, new_pal, 0, pal_count)) {
                 goto fail;
             }
-            if (!Sprite_Init(SPRITE_INIT_OWN | SPRITE_INIT_DECODE, &spr, SPRITE_FORMAT_RAW, pixels, size,
+            if (!Sprite_Init(SPRITE_INIT_OWN | SPRITE_INIT_DECODE | Sff_AtlasFlags(w, h, bpp),
+                             &spr, SPRITE_FORMAT_RAW, pixels, size,
                              w, h, bpp, sub.x, sub.y)) {
                 goto fail;
             }
@@ -493,7 +507,8 @@ SpriteSet *Sff1_LoadSelected(Stream *s, const Sff1Header *hdr, const int *select
                     } else if (new_pal != NULL && !SpriteSet_AddPalette(set, new_pal, 0, pal_count)) {
                         goto fail;
                     }
-                    if (!Sprite_Init(SPRITE_INIT_OWN | SPRITE_INIT_DECODE, &spr, SPRITE_FORMAT_RAW, pixels, size,
+                    if (!Sprite_Init(SPRITE_INIT_OWN | SPRITE_INIT_DECODE | Sff_AtlasFlags(w, h, bpp),
+                                     &spr, SPRITE_FORMAT_RAW, pixels, size,
                                      w, h, bpp, sub.x, sub.y)) {
                         goto fail;
                     }
@@ -774,7 +789,7 @@ SpriteSet *Sff2_Load(Stream *s, const Sff2Header *hdr, const int *select)
                 /* Port addition (SFF memory plan P3): on a GL build the tdata
                  * image stays encoded and is decoded on demand, so loading a
                  * character does not allocate a texture per unused sprite. */
-                if (!Sprite_Init(SPRITE_INIT_COPY |
+                if (!Sprite_Init(SPRITE_INIT_COPY | Sff_AtlasFlags(node->w, node->h, node->depth) |
                                  ((Sff_DecodeOnLoad(node) || (g_gfxFlags & 1) == 0) ? SPRITE_INIT_DECODE : 0),
                                  &spr, node->format, buf, node->data_size,
                                  (short)node->w, (short)node->h, node->depth, node->x, node->y)) {
@@ -797,7 +812,8 @@ SpriteSet *Sff2_Load(Stream *s, const Sff2Header *hdr, const int *select)
                     at = node->data_offset;
                     data_pos = at;
                 }
-                if (!Sprite_Init(flags, &spr, node->format, data + at, node->data_size,
+                if (!Sprite_Init(flags | Sff_AtlasFlags(node->w, node->h, node->depth),
+                                 &spr, node->format, data + at, node->data_size,
                                  (short)node->w, (short)node->h, node->depth, node->x, node->y)) {
                     goto fail_sprites;
                 }
@@ -872,6 +888,9 @@ SpriteSet *Sff_LoadStream(Stream *s)
         }
         if (set != NULL) {
             set->version = hdr.v1.version;
+#ifdef MUGEN_GLES
+            Gles_AtlasPlan(set);
+#endif
         }
     }
     Stream_Seek(s, start, SEEK_SET);
@@ -900,6 +919,9 @@ SpriteSet *Sff_LoadSelected(Stream *s, const int *select)
         }
         if (set != NULL) {
             set->version = hdr.v1.version;
+#ifdef MUGEN_GLES
+            Gles_AtlasPlan(set);
+#endif
         }
     }
     Stream_Seek(s, start, SEEK_SET);

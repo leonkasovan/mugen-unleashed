@@ -10,18 +10,6 @@
 #include "mugen.h"
 #include "perf.h"
 
-#ifdef ANDROID_PORT
-/*
- * Port fix: the default Android build deliberately includes no GL loader
- * (mugen.h's ANDROID_PORT branch), but Perf_TriangleCount still compares
- * primitive modes. The NDK's GLES2 header supplies those enums and adds no
- * link dependency; with MUGEN_GLES on, glad_es.h has already defined them.
- */
-#ifndef MUGEN_GLES
-#include <GLES2/gl2.h>
-#endif
-#endif
-
 /* A frame contributes a sample only when it reached all four marks. A frame
  * that broke out early (screen change, skipped draw) would otherwise report a
  * fast `draw` on exactly the slow frames. */
@@ -309,7 +297,7 @@ void Perf_CountDraw(unsigned int triangles)
     }
 }
 
-/* Port fix: index_count/3 only describes independent triangles. */
+#if !defined(ANDROID_PORT) || defined(MUGEN_GLES)
 unsigned int Perf_TriangleCount(unsigned int mode, unsigned int count)
 {
     switch (mode) {
@@ -322,6 +310,7 @@ unsigned int Perf_TriangleCount(unsigned int mode, unsigned int count)
         return 0u;
     }
 }
+#endif
 
 int Perf_TakeAverages(PerfAverages *out)
 {

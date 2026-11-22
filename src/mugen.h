@@ -82,9 +82,17 @@
 #endif
 
 #include <SDL.h>
+/* Engine configuration key IDs are independent of the SDL version. */
+#if SDL_MAJOR_VERSION != 2
+#error "mugen-unleashed requires SDL2 headers"
+#endif
+#ifndef SDL_MAIN_HANDLED
+#error "Build with SDL_MAIN_HANDLED; the engine owns its entry point"
+#endif
+
 #if defined(MUGEN_VITA_GL) && !defined(ANDROID_PORT)
 /* Port change: native vitaGL owns its display, SDL2 must use ordinary GXM. */
-#if SDL_MAJOR_VERSION != 2 || !SDL_VIDEO_RENDER_VITA_GXM || \
+#if !SDL_VIDEO_RENDER_VITA_GXM || \
     SDL_VIDEO_VITA_VGL || SDL_VIDEO_VITA_PIB || SDL_VIDEO_VITA_PVR
 #error "Vita requires ordinary VitaSDK sdl2 (GXM), not sdl2_vitagl/PIB/PVR"
 #endif
@@ -96,14 +104,6 @@
 #include <unzip.h>
 #include <png.h>
 
-/* SDL2-only platform contract. Engine configuration key IDs are independent
- * of SDL keycodes and remain stable (engine_keys.h). */
-#if SDL_MAJOR_VERSION != 2
-#error "mugen-unleashed requires SDL2 headers"
-#endif
-#ifndef SDL_MAIN_HANDLED
-#error "Build with SDL_MAIN_HANDLED; the engine owns its entry point"
-#endif
 #include "sdl2keys.h"
 #include "sdl2surface.h"
 #ifndef ANDROID_PORT

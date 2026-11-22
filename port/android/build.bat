@@ -17,6 +17,7 @@ rem    port\android\build.bat --offline         no downloads; cached Gradle/deps
 rem    port\android\build.bat --clean           clean generated app build/staging
 rem    port\android\build.bat --no-assets       package no game data
 rem    port\android\build.bat --gles            build the GLES 3.0 renderer, M8
+rem    port\android\build.bat --video-bg        WebM backgrounds, implies --gles
 rem    port\android\build.bat --model3d         opt-in glTF renderer, implies --gles
 rem
 rem  Missing tools are installed automatically. The JDK comes from Adoptium's
@@ -44,6 +45,7 @@ rem                             then ANDROID_HOME_DIR, then the local caches
 rem    ANDROID_NDK_HOME         optional external NDK; must be the pinned one
 rem    SDL2_DEPS_DIR            SDL2 prefix, default build\android\sdl2\abi
 rem    SDL2_COMPANION_DIR       mixer/ttf prefix, default android-deps\abi
+rem    FFMPEG_DEPS_DIR           optional WebM prefix, default build\android\ffmpeg\abi
 rem    GAME_DATA_DIR            game tree to copy, default install\
 rem    GAME_CFG                 staged data/mugen.cfg, default res\mugen.cfg
 rem    GRADLE_USER_HOME         default build\android\gradle-user-home
@@ -77,6 +79,7 @@ set "EXPLICIT_DOWNLOAD=0"
 set "OFFLINE=0"
 set "GLES=0"
 set "MODEL3D=0"
+set "VIDEO_BG=0"
 if not defined MUGEN_ACCEPT_LICENSES set "MUGEN_ACCEPT_LICENSES=1"
 set "TOOLSDIR=%PORTDIR%\tools"
 
@@ -92,6 +95,7 @@ if /I "!ARG!"=="--no-assets" ( set "PACK_ASSETS=0" & shift & goto parse )
 rem --model3d implies --gles, exactly as the MSYS2 build.sh that was removed did: the glTF renderer has no
 rem desktop-GL path on Android.
 if /I "!ARG!"=="--gles" ( set "GLES=1" & shift & goto parse )
+if /I "!ARG!"=="--video-bg" ( set "VIDEO_BG=1" & set "GLES=1" & shift & goto parse )
 if /I "!ARG!"=="--model3d" ( set "MODEL3D=1" & set "GLES=1" & shift & goto parse )
 rem --setup installs the toolchain and the native libraries, then stops before
 rem Gradle. --download-tools does the same installation but continues to build.
@@ -159,6 +163,17 @@ for %%N in (mixer ttf) do if not exist "%SDL2_COMPANION_DIR%\lib\libSDL2_%%N.so"
     echo        run port\android\tools\build_sdl2_companions.bat with SDL2_DEPS_DIR set,
     echo        or point SDL2_COMPANION_DIR at a prefix that has it
     goto fail
+)
+
+rem FFmpeg is cross-built separately, like other prebuilt native inputs.
+if "%VIDEO_BG%"=="1" (
+    if not defined FFMPEG_DEPS_DIR set "FFMPEG_DEPS_DIR=%OUT%\ffmpeg\%ANDROID_ABI%"
+    for %%I in ("!FFMPEG_DEPS_DIR!") do set "FFMPEG_DEPS_DIR=%%~fI"
+    for %%L in (avformat avcodec swscale avutil) do if not exist "!FFMPEG_DEPS_DIR!\lib\lib%%L.so" (
+        echo error: lib%%L.so missing in !FFMPEG_DEPS_DIR!\lib
+        echo        build FFmpeg with port/android/tools/build_ffmpeg.sh or set FFMPEG_DEPS_DIR
+        goto fail
+    )
 )
 
 if not exist "%PORTDIR%\gradle\wrapper\gradle-wrapper.jar" (
@@ -259,6 +274,7 @@ echo.
 echo ==^> Building APK ^(%BUILD_TYPE%, %ANDROID_ABI%^)
 if "%GLES%"=="1" echo     GLES 3.0 renderer enabled ^(M8, experimental^)
 if "%MODEL3D%"=="1" echo     glTF stage models enabled
+if "%VIDEO_BG%"=="1" echo     WebM backgrounds: !FFMPEG_DEPS_DIR!
 echo     %GRADLE_LAUNCHER%
 echo.
 
@@ -275,6 +291,8 @@ call "%GRADLE_LAUNCHER%" --no-daemon ^
     "-Psdl2IncludeDir=%SDL2_INCLUDE%" ^
     "-Psdl2MixerTtfDir=%SDL2_COMPANION_DIR%" ^
     "-PmugenModel3d=%MODEL3D%" ^
+    "-PmugenVideoBg=%VIDEO_BG%" ^
+    "-PffmpegDepsDir=!FFMPEG_DEPS_DIR!" ^
     !GLES_PROP! !OFFLINE_PROP! %TASK%
 if errorlevel 1 set "GRADLE_RC=1"
 popd

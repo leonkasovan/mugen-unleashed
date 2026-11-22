@@ -103,9 +103,6 @@ void Timer_ResetFrame(void)
 }
 
 void Video_OnResize(int width, int height);
-/* MUGEN_SDL2_DIAG fault injection (src/sdl2video.c). */
-void Sdl2_DiagFailNext(int which);
-
 static int failures;
 
 static void check(int cond, const char *what)

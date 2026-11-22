@@ -4,8 +4,8 @@
  * trigger module's in .rdata, from "intro" to "Out of memory error parsing
  * format string.").
  *
- * - Cns_CompileInt/Float: a parameter of an Ini group with a default.
- * - Cns_ParseValues / Cns_ParseExprList / Cns_ParseArgs: comma-separated
+ * - Cns_CompileIntCtx / Cns_CompileFloatCtx: a parameter with a default.
+ * - Cns_ParseValues / Cns_ParseExprListCtx / Cns_ParseArgsCtx: comma-separated
  *   values in a format ("ii", "ff", "nnn:)"...) compiled to Exprs or appended
  *   as postfix tokens.
  * - postype, AssertSpecial flag names, F/S anim and sound references,
@@ -17,7 +17,7 @@
  *   against the source text instead of the format's terminator list (they
  *   scanned the text from the argument count on until they met the character,
  *   reading past its end when it was absent). The terminator is now looked up
- *   in fmt. Cns_ParseExprList used to shrink its array with realloc and ignore
+ *   in fmt. The expression list parser used to shrink its array with realloc and ignore
  *   the result, returning a freed block for fewer than three values (which the
  *   cond() trigger then freed again); it keeps its three slots and frees
  *   everything on failure instead. Cns_ParseValues frees a value it drops
@@ -114,10 +114,6 @@ int Cns_CompileIntCtx(Ini *ini, const char *key, Expr *e, CharData *owner, int d
 }
 
 /* 0x00458C90: e = def, then the key's value as a float expression if present. */
-int Cns_CompileFloat(Ini *ini, const char *key, Expr *e, CharData *owner, float def)
-{
-    return Cns_CompileFloatCtx(ini,key,e,owner,def,NULL);
-}
 int Cns_CompileFloatCtx(Ini *ini, const char *key, Expr *e, CharData *owner, float def, ExprCompileCtx *ctx)
 {
     const char *value = Ini_GetValue(ini, key);
@@ -208,10 +204,6 @@ int Cns_ParseValuesCtx(const char *s, const char *fmt, CharData *owner, const ch
  * cond() trigger is its only user) into a new array of Exprs. Returns the
  * number of values and the array in *out, or 0.
  */
-int Cns_ParseExprList(const char *s, CharData *owner, const char **end, Expr **out)
-{
-    return Cns_ParseExprListCtx(s,owner,end,out,NULL);
-}
 int Cns_ParseExprListCtx(const char *s, CharData *owner, const char **end, Expr **out, ExprCompileCtx *ctx)
 {
     static const char fmt[] = "nnn:)";
@@ -278,11 +270,6 @@ int Cns_ParseExprListCtx(const char *s, CharData *owner, const char **end, Expr 
  * to tokens/types (at most max in all) for a function trigger's arguments.
  * Returns the number of values; *count gets the number of tokens.
  */
-int Cns_ParseArgs(const char *s, const char *fmt, CharData *owner, const char **end, ExprValue *tokens, char *types,
-                  int *count, int max)
-{
-    return Cns_ParseArgsCtx(s,fmt,owner,end,tokens,types,count,max,NULL);
-}
 int Cns_ParseArgsCtx(const char *s, const char *fmt, CharData *owner, const char **end, ExprValue *tokens, char *types,
                   int *count, int max, ExprCompileCtx *ctx)
 {
@@ -503,10 +490,6 @@ int Cns_ParseSoundRefCtx(const char *s, int *fight, Expr *group, Expr *index,
  * the end, the second only by a blank or the end. A missing value (NULL) is
  * fine.
  */
-int Cns_ParseVelocity(const char *s, Expr *x, Expr *y, CharData *owner)
-{
-    return Cns_ParseVelocityCtx(s,x,y,owner,NULL);
-}
 /* Port addition: local/function context reaches both velocity components. */
 int Cns_ParseVelocityCtx(const char *s, Expr *x, Expr *y, CharData *owner, ExprCompileCtx *ctx)
 {

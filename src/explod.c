@@ -638,14 +638,8 @@ void Explods_DrawShadows(SysDrawList *list)
  * parameters it was not given at INT_MIN / -FLT_MAX, which are skipped.
  * The facing and vfacing flags are only ever added (quirk of the original).
  */
-void Explod_SetParams(Player *p, SysDrawItem *e, const ExplodParams *ep, StateRunCtx *ctx, int modify,
-                      const StateCtrl *sc)
-{
-    Explod_SetParamsCtx(p, e, ep, ctx, modify, sc, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
-void Explod_SetParamsCtx(Player *p, SysDrawItem *e, const ExplodParams *ep, StateRunCtx *ctx, int modify,
-                      const StateCtrl *sc, ExprEvalCtx *frame)
+static void Explod_SetParamsCtx(Player *p, SysDrawItem *e, const ExplodParams *ep, StateRunCtx *ctx, int modify,
+                                const StateCtrl *sc, ExprEvalCtx *frame)
 {
     int v, r, gg, b;
     float f;
@@ -855,11 +849,6 @@ void Explod_SetParamsCtx(Player *p, SysDrawItem *e, const ExplodParams *ep, Stat
  * the player (or of fightfx.air with the F prefix), with its PalFX and
  * palette remapping shared with the player unless ownpal is set.
  */
-void Explod_Create(Player *p, ExplodParams *ep, StateRunCtx *ctx, StateCtrl *sc)
-{
-    Explod_CreateCtx(p, ep, ctx, sc, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 void Explod_CreateCtx(Player *p, ExplodParams *ep, StateRunCtx *ctx, StateCtrl *sc, ExprEvalCtx *frame)
 {
     GameVars *g = g_game;
@@ -919,11 +908,6 @@ void Explod_CreateCtx(Player *p, ExplodParams *ep, StateRunCtx *ctx, StateCtrl *
 }
 
 /* 0x00410950: the ModifyExplod controller: the explods of the player with the ID (-1: all of them). */
-void Explod_Modify(Player *p, ExplodParams *ep, StateRunCtx *ctx, StateCtrl *sc)
-{
-    Explod_ModifyCtx(p, ep, ctx, sc, NULL);
-}
-/* Port addition: explicit ZSS expression context; legacy wrapper uses NULL. */
 void Explod_ModifyCtx(Player *p, ExplodParams *ep, StateRunCtx *ctx, StateCtrl *sc, ExprEvalCtx *frame)
 {
     SysDrawList *list = g_game->explods;

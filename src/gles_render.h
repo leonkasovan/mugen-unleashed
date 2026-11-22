@@ -23,11 +23,15 @@
 
 #ifdef MUGEN_GLES
 
+typedef struct SpriteSet SpriteSet;
+
 /* 1 when the renderer has a context and its programs are linked. */
 int Gles_IsReady(void);
 
-/* Capability bits the last probe resolved (GLES_CAP_* in gles_probe.h). */
-unsigned int Gles_LastCaps(void);
+/* Port addition: [Video] defaults for the next GLES initialization.
+ * Atlas is 0/1, and batch is 0/1 or -1 to follow atlas availability.
+ * MUGEN_SPRITEATLAS and MUGEN_SPRITEBATCH override the configured values. */
+void Gles_ConfigureSprites(int atlas, int batch);
 
 /*
  * Called after the client context has gone away, before it is deleted.
@@ -48,7 +52,12 @@ void Gles_OnContextLost(void);
  * look like a cache hit. Dropping the cache here makes that impossible rather
  * than unlikely.
  */
-void Gles_OnSpriteSetFreed(void);
+void Gles_OnSpriteSetFreed(const SpriteSet *set);
+
+/* Port addition: retain CPU sources for eligible SFF sprites, then plan atlas
+ * placement without decoding or touching GPU textures. */
+int Gles_AtlasUsesSource(int w, int h, int bpp);
+void Gles_AtlasPlan(const SpriteSet *set);
 
 /*
  * Port addition: the deferred sprite-draw queue (gles_render.c).

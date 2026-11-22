@@ -19,25 +19,7 @@ static Uint64 Test_Counter(void) { return clock_ticks; }
 static Uint64 Test_Frequency(void) { return 1000; }
 #define SDL_GetPerformanceCounter Test_Counter
 #define SDL_GetPerformanceFrequency Test_Frequency
-/*
- * The host harness included mugen.h before selecting its simulated Android
- * path, so desktop glad already supplies GL_TRIANGLES and the other enums.
- * For TEST_ANDROID=1, perf.c's normal Android-only GLES2/gl2.h include would
- * redeclare glad's function pointers as GL functions and fail on Linux.
- *
- * Temporarily suppress that header for the perf.c inclusion only; keep
- * MUGEN_GLES unset when compiling frame.c so the Android software present
- * path is still tested. Production Android compilation remains unchanged.
- */
-#if TEST_ANDROID == 1
-#define MUGEN_GLES 1
-#define TEST_PERF_HOST_GL_ENUMS 1
-#endif
 #include "../src/perf.c"
-#ifdef TEST_PERF_HOST_GL_ENUMS
-#undef MUGEN_GLES
-#undef TEST_PERF_HOST_GL_ENUMS
-#endif
 #include "../src/frame.c"
 /* Standalone frame test does not link the optional memory-profiler module. */
 void Memprof_Tick(void) {}
@@ -46,6 +28,7 @@ void SoundCache_Tick(void) {}
 static int swaps, uploads, desktop_presents, fail_upload;
 static GameVars game;
 static int timer_late;
+static int capture_test, shots_written;
 
 int Timer_WaitFrame(void) { clock_ticks += 3; return 1; }
 int64_t Timer_GetFrame(void) { return g_timerFrame + timer_late; }
@@ -64,14 +47,70 @@ int Android_PresentFrame(void)
 }
 int Android_GLForceContextLoss(void) { assert(0 && "unexpected loss rehearsal"); return 0; }
 #endif
-SDL_Surface *Gfx_GetScreenSurface(void) { assert(0); return NULL; }
+SDL_Surface *Gfx_GetScreenSurface(void)
+{
+    static SDL_PixelFormat format = { .BitsPerPixel = 32 };
+    static SDL_Surface surface = { .format = &format };
+
+    assert(capture_test);
+    return &surface;
+}
 unsigned int Video_MapRGB(int r, int g, int b) { assert(0); return 0; }
 void Font_DrawText(const char *s, Font *f, int x, int y, int a, int bank, int r, int g, int b) { assert(0); }
-int Png_WriteSurface(SDL_Surface *s, FILE *f) { assert(0); return 0; }
-void Log_Printf(const char *fmt, ...) { assert(0); }
+int Png_WriteSurface(SDL_Surface *s, FILE *f)
+{
+    assert(capture_test);
+    assert(fputc(game.round_ticks, f) != EOF);
+    assert(fclose(f) == 0);
+    shots_written++;
+    return 0;
+}
+void Log_Printf(const char *fmt, ...) { assert(capture_test); }
 void MatchLog_Printf(int level, const char *fmt, ...) { assert(0); }
 void Gfx_SoftBlendRect(int x1, int y1, int x2, int y2, unsigned int c, int a, int b) { assert(0); }
 static void present(SpriteSet *s, int sprite, float x, float y, float w, float h) {}
+
+static void check_shot_range(int next_state)
+{
+    capture_test = 1;
+    g_game = &game;
+    g_gfxPresent = present;
+    game.match_loaded = 1;
+    game.round_no = 1;
+    game.round_ticks = 10;
+    game.round_state = 1;
+    Screen_Present();
+    game.round_state = 2;
+    game.skip_draw = 1;
+    Screen_Present();
+    assert(shots_written == 0 && g_quitRequested == 0);
+
+    game.skip_draw = 0;
+    Screen_Present();
+    Screen_Present();
+    assert(shots_written == 1 && g_screenshotNumber == 0 && g_quitRequested == 0);
+
+    if (next_state != 2) {
+        game.round_state = next_state;
+        Screen_Present();
+        assert(shots_written == 1 && g_quitRequested != 0);
+    } else {
+        game.round_ticks = 11;
+        game.screenshot_requested = 1;
+        Screen_Present();
+        assert(shots_written == 3 && game.screenshot_requested == 0 && g_quitRequested == 0);
+        game.round_ticks = 12;
+        Screen_Present();
+        assert(shots_written == 4 && g_quitRequested != 0);
+    }
+
+    game.round_no = 2;
+    game.round_state = 2;
+    game.round_ticks = 10;
+    Screen_Present();
+    assert(shots_written == (next_state == 2 ? 4 : 1));
+    puts("ok: tick capture bounds, repeated and skipped ticks, and manual screenshots");
+}
 
 static void check_frame(int mode, int skipped, int speedup, int failure)
 {
@@ -109,6 +148,7 @@ static void check_frame(int mode, int skipped, int speedup, int failure)
     assert(!Perf_TakeAverages(&a)); /* consumption resets the sample window */
 }
 
+#if TEST_ANDROID != 1
 static void check_primitives(void)
 {
     static const struct { unsigned int mode, count, triangles; } cases[] = {
@@ -135,6 +175,7 @@ static void check_primitives(void)
     Perf_LogicDone(); Perf_DrawDone(); Perf_WaitDone(); Perf_PresentDone();
     assert(Perf_TakeAverages(&a) && a.frames == 1 && a.calls == 0 && a.triangles == 0);
 }
+#endif
 
 static void check_trace(void)
 {
@@ -194,9 +235,15 @@ static void check_trace(void)
     }
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     printf("abi: %d-bit build\n", (int)(sizeof(void *) * 8));
+    if (argc == 2) {
+        if (strcmp(argv[1], "early-end") == 0) check_shot_range(3);
+        else if (strcmp(argv[1], "reset") == 0) check_shot_range(0);
+        else check_shot_range(2);
+        return 0;
+    }
     g_timerFrequency = 1000;
     g_timerFrameTicks = 17;
     check_frame(RENDER_SYSTEM, 0, 0, 0);
@@ -208,7 +255,9 @@ int main(void)
 #if TEST_ANDROID
     check_frame(RENDER_SYSTEM, 0, 0, 1);
 #endif
+#if TEST_ANDROID != 1
     check_primitives();
+#endif
     check_trace();
     puts("ok: frame phases include presentation; skips, speedup, failures, primitive counts and frame trace");
     return 0;

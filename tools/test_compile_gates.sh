@@ -63,9 +63,9 @@ for MODULE in $MODULES; do
     # Desktop SDL2: the combination that was broken.
     check "sdl2-$name"
     # Android, software renderer.
-    check "android-$name" -DANDROID_PORT -DMUGEN_ANDROID_SW
+    check "android-$name" -DANDROID_PORT
     # Android with the GLES backend compiled in.
-    check "android-gles-$name" -DANDROID_PORT -DMUGEN_ANDROID_SW -DMUGEN_GLES
+    check "android-gles-$name" -DANDROID_PORT -DMUGEN_GLES
 done
 
 if [ "$fails" -ne 0 ]; then

@@ -28,12 +28,12 @@ The ZIP and generated `res/lua_script_zip.h` are checked in together so CMake
 ports can embed the same resource without needing Python at build time.
 GNU Make also regenerates the header when the ZIP changes.
 
-→ `build/linux-x64/mugen-linux-x64` (or `build/linux-arm64/…`), installed under
+→ `build/linux-x64-sdl2/mugen-linux-x64` (or `build/linux-arm64-sdl2/…`), installed under
 the same name so an ELF binary never ends up called `.exe`.
 
 Checks follow the platform: `make check-toolchain` verifies the compiler's
 triple against `MUGEN_TARGET` (`^x86_64-` for `linux-x64`, and so on) and that
-`ar`/`strip` are present — no `libSDL.a` or `windres`, those are Windows-only.
+`ar`/`strip` are present.
 `make check-pkgconfig` names every missing `.pc` file; a plain `make` runs it
 first, so a missing `-dev` package is reported before compiling rather than as
 undefined `Mix_*`/`TTF_*` symbols at the link.
@@ -60,33 +60,21 @@ on any disagreement; `uname -m` is only reported by `check-toolchain`.
 
 Override for cross-compiling with `MUGEN_TARGET=linux-arm64`.
 
-## Dependencies (Ubuntu 22.04)
+## Dependencies on Debian and Ubuntu
 
 ```sh
-sudo apt install build-essential pkg-config \
-  libsdl1.2-dev libsdl-mixer1.2-dev libsdl-ttf2.0-dev libsdl-gfx1.2-dev \
-  zlib1g-dev libpng-dev libmpg123-dev libgl1-mesa-dev libglu1-mesa-dev \
-  libfreetype-dev libbz2-dev
+sudo apt-get install build-essential pkg-config libsdl2-dev libsdl2-mixer-dev \
+    libsdl2-ttf-dev zlib1g-dev libpng-dev
 ```
 
-Verified versions on a stock 22.04:
-
-| Package | Version | Why |
-|---|---|---|
-| `libsdl1.2-dev` | **1.2.15** | the exact SDL the engine targets |
-| `libsdl-mixer1.2-dev` | 1.2.12 | `Mix_*` |
-| `libsdl-ttf2.0-dev` | 2.0.11 | `TTF_*` |
-| `libsdl-gfx1.2-dev` | 2.0.25 | `zoomSurface` |
-| `libpng-dev` | 1.6.37 | SFF v2 / PNG |
-| `zlib1g-dev` | 1.2.11 | inflate/deflate |
-| `libmpg123-dev` | 1.29.3 | BGM plugin |
-| `libgl1-mesa-dev`, `libglu1-mesa-dev` | 23.2.1 / 9.0.2 | `<GL/gl.h>`, `gluOrtho2D` — **not needed for `linux-arm64`, which defaults to the GLES backend** |
+Install `libglu1-mesa-dev` as well for the desktop OpenGL build. Linux ARM64
+defaults to GLES, which uses SDL2 to load EGL.
 
 Lua 5.1.4, glad 2.1, minizip 0.15 and libresample are built from
 `third_party/`, so no distro Lua is needed (and 5.1 is often unavailable).
 
-Unlike the Windows build, Linux links the distro's **shared** SDL. That is the
-normal thing to do on Linux and means SDL_mixer's codecs come with it.
+Native Linux builds link the distribution's shared SDL2 and its SDL2_mixer
+and SDL2_ttf companions.
 
 ## What `src/compat_linux.h` provides
 
@@ -117,8 +105,8 @@ Each is marked in the code with a comment. None affect Windows.
 |---|---|
 | Error dialog | writes the message to `stderr` instead of a modal RichEdit dialog built from PE resource 200 |
 | Window icon | not set; the icon lives in a PE resource the Linux build has no access to |
-| Full screen | `SDL_WM_ToggleFullScreen` instead of poking `HWND` styles and the primary monitor's rectangle |
-| `-log` / stdout redirection | `platform_main_win32.c` (SDL 1.2's WinMain wrapper) is Windows-only; `main.c` is the entry on Linux |
+| Full screen | `SDL_SetWindowFullscreen` changes the SDL2 window mode |
+| `-log` / stdout redirection | Linux uses the entry point in `main.c` |
 | `g_triggersV11` loop | bounded by the array length. The original's table is the only one with no `-1` terminator and relied on reading into `g_sctrlsV10` to stop |
 
 ## Struct layouts on 64-bit
@@ -965,3 +953,18 @@ backend, automatic trace-derived prefetch, real-device audio qualification, and
 default rollout remain gated as described in
 [the design plan](LAZY_SOUND_DECODING_PLAN.md). No new codec dependency or audio
 callback decoding was introduced.
+
+## WebM backgrounds
+
+Linux ARM64 GLES builds include VP8 and VP9 video background support. Initialize
+the pinned source before building.
+
+```sh
+git submodule update --init third_party/ffmpeg-7.1.5
+```
+
+Use `RenderMode = OpenGL`. Other Linux GLES builds can opt in with
+`MUGEN_VIDEO_BG=1`. Configure `type = video` and `path = filename.webm` in a
+background element. Paths are relative to the DEF. Video-only storyboards may
+omit the SFF and BGDef. The player fits the video to the existing viewport,
+supports `loop = 1`, and follows the storyboard timer. Video audio is ignored.

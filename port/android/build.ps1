@@ -47,6 +47,9 @@
 .PARAMETER Model3d
     Opt-in glTF renderer; implies -Gles.
 
+.PARAMETER VideoBg
+    Enable WebM backgrounds from a prepared Android FFmpeg prefix; implies -Gles.
+
 .EXAMPLE
     .\build.ps1 -CheckTools
 
@@ -68,7 +71,8 @@ param(
     [switch]$Debug,
     [switch]$NoAssets,
     [switch]$Gles,
-    [switch]$Model3d
+    [switch]$Model3d,
+    [switch]$VideoBg
 )
 
 $ErrorActionPreference = 'Stop'
@@ -91,6 +95,7 @@ if ($Debug)         { $argv.Add('--debug') }
 if ($NoAssets)      { $argv.Add('--no-assets') }
 if ($Gles)          { $argv.Add('--gles') }
 if ($Model3d)       { $argv.Add('--model3d') }
+if ($VideoBg)       { $argv.Add('--video-bg') }
 if ($args)          { $argv.AddRange([string[]]$args) }
 
 Write-Host "==> $bat $($argv -join ' ')" -ForegroundColor DarkGray

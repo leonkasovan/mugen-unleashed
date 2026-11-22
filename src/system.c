@@ -165,7 +165,7 @@ void System_Init(void)
     g_unused505200 = 0;
     g_libraryErrorText[0] = '\0';
 #ifndef ANDROID_PORT
-    Sdl2_SetCaption("M.U.G.E.N", "MUGEN");
+    Sdl2_SetWindowTitle("M.U.G.E.N");
 #endif
     System_SetWindowIcon();
 

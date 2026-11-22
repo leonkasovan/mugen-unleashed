@@ -5,11 +5,17 @@
  * Floating point follows the x87 code of the original: intermediate results
  * stay in double; float to int conversions truncate like __ftol2.
  */
+#include <errno.h>
+#include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "mugen.h"
 #include "soundcache.h"
 #include "memprof.h"
+#ifdef _WIN32
+#include <direct.h>
+#endif
 
 /* ------------------------------------------------------------------ coordinates */
 
@@ -103,22 +109,12 @@ static void Frame_ResetPalFx(void)
     g_palFx.serial = g_palFxSerial++;
 }
 
-/*
- * 0x0040F9E0: saves the screen as the first free mugen%03i.png (in the
- * working directory; screens of less than 24 bits go through a 32-bit copy).
- */
-void Screen_SaveShot(void)
+static void Screen_WriteShot(const char *path)
 {
-    char path[0x200];
-    SDL_Surface *s, *copy;
+    SDL_Surface *s = Gfx_GetScreenSurface();
+    SDL_Surface *copy = NULL;
     FILE *fp;
 
-    sprintf(path, "mugen%03i.png", g_screenshotNumber++);
-    for (fp = fopen(path, "rb"); fp != NULL; fp = fopen(path, "rb")) {
-        fclose(fp);
-        sprintf(path, "mugen%03i.png", g_screenshotNumber++);
-    }
-    s = Gfx_GetScreenSurface();
     if (s == NULL) {
         return;
     }
@@ -128,22 +124,116 @@ void Screen_SaveShot(void)
             return;
         }
         SDL_UpperBlit(s, NULL, copy, NULL);
-        fp = fopen(path, "wb");
-        if (fp == NULL) {
-            MatchLog_Printf(3, "libpng: fopen error\n");
-            SDL_FreeSurface(copy);
-            return;
-        }
-        Png_WriteSurface(copy, fp);
-        SDL_FreeSurface(copy);
-        return;
+        s = copy;
     }
     fp = fopen(path, "wb");
     if (fp == NULL) {
-        MatchLog_Printf(3, "libpng: fopen error\n");
+        MatchLog_Printf(3, "Could not open screenshot path %s\n", path);
+    } else {
+        Png_WriteSurface(s, fp);
+    }
+    if (copy != NULL) {
+        SDL_FreeSurface(copy);
+    }
+}
+
+/*
+ * 0x0040F9E0: saves the screen as the first free mugen%03i.png (in the
+ * working directory; screens of less than 24 bits go through a 32-bit copy).
+ */
+void Screen_SaveShot(void)
+{
+    char path[0x200];
+    FILE *fp;
+
+    sprintf(path, "mugen%03i.png", g_screenshotNumber++);
+    for (fp = fopen(path, "rb"); fp != NULL; fp = fopen(path, "rb")) {
+        fclose(fp);
+        sprintf(path, "mugen%03i.png", g_screenshotNumber++);
+    }
+    Screen_WriteShot(path);
+}
+
+static int Screen_ParseShotRange(const char *range, int *first, int *last)
+{
+    char *end;
+    long lo, hi;
+
+    errno = 0;
+    lo = strtol(range, &end, 10);
+    if (end == range || errno == ERANGE || lo < 0 || lo > INT_MAX) return 0;
+    hi = lo;
+    if (*end == '-') {
+        const char *upper = end + 1;
+
+        hi = strtol(upper, &end, 10);
+        if (end == upper || errno == ERANGE) return 0;
+    }
+    if (*end != '\0' || hi < lo || hi > INT_MAX) return 0;
+    *first = (int)lo;
+    *last = (int)hi;
+    return 1;
+}
+
+static int Screen_CreateShotDirectory(char *directory, size_t size)
+{
+    unsigned int i;
+
+    for (i = 1; i != 0; i++) {
+        snprintf(directory, size, "shots-%03u", i);
+        if (_mkdir(directory) == 0) {
+            Log_Printf("Screenshot range writes to %s/\n", directory);
+            return 1;
+        }
+        if (errno != EEXIST) break;
+    }
+    Log_Printf("Could not create a screenshot range directory (%s)\n", strerror(errno));
+    return 0;
+}
+
+/* Port addition: MUGEN_SHOT_RANGE captures one image per drawn tick in the
+ * first fight round. A new directory keeps the same tick keys in every run. */
+static void Screen_CaptureShotRange(const GameVars *g)
+{
+    static int initialized, first = -1, last, captured = -1, round_started;
+    static char directory[32];
+    char path[64];
+    int tick = g->round_ticks;
+    int in_fight;
+
+    if (!initialized) {
+        const char *range = getenv("MUGEN_SHOT_RANGE");
+
+        initialized = 1;
+        if (range != NULL && !Screen_ParseShotRange(range, &first, &last)) {
+            Log_Printf("Invalid MUGEN_SHOT_RANGE '%s' (expected <tick> or <from>-<to>)\n", range);
+        }
+    }
+    if (first < 0) return;
+    in_fight = g->match_loaded != 0 && g->round_no == 1 && g->round_state == 2;
+    if ((round_started && !in_fight) ||
+        (g->match_loaded != 0 && (g->round_no > 1 || g->round_state >= 3)) ||
+        (in_fight && tick > last)) {
+        first = -1;
+        g_quitRequested = 1;
         return;
     }
-    Png_WriteSurface(s, fp);
+    if (!in_fight) return;
+    round_started = 1;
+    if (g->skip_draw != 0 || tick < first || tick <= captured) return;
+    if (directory[0] == '\0' && !Screen_CreateShotDirectory(directory, sizeof(directory))) {
+        first = -1;
+        g_quitRequested = 1;
+        return;
+    }
+
+    snprintf(path, sizeof(path), "%s/shot-t%05d.png", directory, tick);
+    Screen_WriteShot(path);
+    captured = tick;
+    if (tick == last) {
+        first = -1;
+        g_quitRequested = 1;
+    }
 }
 
 /*
@@ -161,6 +251,7 @@ void Screen_Present(void)
         g = g_game;
         g->screenshot_requested = 0;
     }
+    Screen_CaptureShotRange(g);
     if (g->skip_draw != 0) {
         return;
     }

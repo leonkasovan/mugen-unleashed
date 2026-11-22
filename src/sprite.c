@@ -548,7 +548,7 @@ int SpriteSet_Free(SpriteSet *set)
 #ifdef MUGEN_GLES
     /* Port addition: the GLES renderer's streaming textures are keyed on the
      * sprite pixels this call is about to release. */
-    Gles_OnSpriteSetFreed();
+    Gles_OnSpriteSetFreed(set);
 #elif !defined(ANDROID_PORT)
     /* Same for the desktop GL streaming cache: its keys are spans inside this
      * set's data block or its sprites' pixel buffers. Only this set's entries

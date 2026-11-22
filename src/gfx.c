@@ -19,6 +19,9 @@
  */
 
 #include "mugen.h"
+#ifdef MUGEN_GLES
+#include "gles_render.h"
+#endif
 #include "gl_size.h"
 
 
@@ -169,6 +172,9 @@ int Gfx_SetRenderTarget(SpriteSet *target, int index)
     int old_w = g_targetWidth, old_h = g_targetHeight, old_pixels = g_targetPixels;
     int old_bpp = g_targetBpp, old_bytes = g_targetBytesPerPixel, old_skip = g_clipRowSkip;
 
+#ifdef MUGEN_GLES
+    if (changed) GlesBatch_Flush();
+#endif
     if (target == NULL) {
         g_targetWidth = g_videoWidth;
         g_targetHeight = g_videoHeight;
@@ -449,9 +455,10 @@ static void Vita_ScaleToVideo(SDL_Surface *src, SDL_Surface *dst)
 
 void Gfx_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
 {
+    SDL_Surface *surface = NULL;
 #ifdef ANDROID_PORT
-    SDL_Surface *surface;
     SDL_Rect dst;
+#endif
 
     if (g_gfxPrePresent != NULL) {
         SpriteSet *target = g_renderTarget;
@@ -459,6 +466,7 @@ void Gfx_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
         g_gfxPrePresent(set, sprite);
         Gfx_SetRenderTarget(target, target_sprite);
     }
+#ifdef ANDROID_PORT
     surface = SpriteSet_GetSurface(set, sprite);
     if (surface == NULL || g_screenSurface == NULL) {
         return;
@@ -471,15 +479,6 @@ void Gfx_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
         Android_MarkDisplayDirty(g_screenSurface);
     }
 #else
-
-    SDL_Surface *surface = NULL;
-
-    if (g_gfxPrePresent != NULL) {
-        SpriteSet *target = g_renderTarget;
-        int target_sprite = g_renderTargetSprite;
-        g_gfxPrePresent(set, sprite);
-        Gfx_SetRenderTarget(target, target_sprite);
-    }
     if (g_renderMode != RENDER_MODE_GL && g_renderMode != RENDER_MODE_GL_ALT) {
         const Sprite *spr = Gfx_SpriteAt(set, sprite);
         if (spr == NULL || spr->format != SPRITE_FORMAT_SURFACE) {
@@ -501,24 +500,7 @@ void Gfx_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
 #endif
     } else if (g_renderMode == RENDER_SYSTEM) {
         SDL_Rect dst;
-#ifdef ANDROID_PORT
-        /*
-         * Android port: no CPU scaling.
-         *
-         * The Vita branch below scales the game surface up to the panel because
-         * its SDL driver flips 1:1. Android's present path is an SDL_RenderCopy
-         * of a streaming texture, so the GPU does the scaling for free -- doing
-         * it on the CPU first would be pure waste, and would drag
-         * Vita_ScaleToVideo's pixel-format assumptions onto a platform it was
-         * never tested on.
-         */
-        dst.x = (Sint16)(int)x;
-        dst.y = (Sint16)(int)y;
-        dst.w = 0;
-        dst.h = 0;
-        SDL_UpperBlit(surface, NULL, g_screenSurface, &dst);
-        Sdl2_UpdateRect(g_screenSurface, 0, 0, 0, 0);
-#elif defined(MUGEN_VITA_GL)
+#ifdef MUGEN_VITA_GL
         /*
          * PS Vita port (port/psvita): stretch the game surface up to the panel.
          *
@@ -564,50 +546,24 @@ void Gfx_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
             dst.w = 0;
             dst.h = 0;
             SDL_UpperBlit(surface, NULL, g_screenSurface, &dst);
-            /* On the SDL2 desktop backend UpdateRect only dirties the display;
-             * the frame-boundary flush in Screen_Present (Sdl2_PresentFrame)
-             * does the single upload+present, and the PageFlip block below
-             * presents via Flip -- either way one present per frame. On
-             * SDL 1.2 UpdateRect is the presentation of the single-buffered
-             * surface and Flip of a double-buffered one, and each driver
-             * ignores the call that does not apply -- the original engine
-             * could call both for that reason. */
-            Sdl2_UpdateRect(g_screenSurface, 0, 0, 0, 0);
+            Sdl2_MarkDisplayDirty(g_screenSurface);
         }
     }
     if (g_videoFlags & VIDEO_HWBLIT) {
         if (g_videoSdlFlags & DISPLAY_DOUBLEBUF) {
-#ifdef ANDROID_PORT
-            /*
-             * Android port: no GL renderer is compiled in (glrender.c is
-             * excluded), so the OpenGL branches below cannot be reached and the
-             * GL calls are not available. Only the software flip remains.
-             */
-            Sdl2_Flip(g_videoSurface);
-#else
             if (g_renderMode == RENDER_OPENGL || g_renderMode == RENDER_OPENGL_SCREEN) {
                 Video_SwapBuffers();
             } else {
-                Sdl2_Flip(g_videoSurface);
+                Sdl2_Flip();
             }
-#endif
         }
-#ifndef ANDROID_PORT
+#ifndef MUGEN_GLES
+        /* GLES clears in Gl_Present. */
         if (g_renderMode == RENDER_OPENGL) {
-#ifdef MUGEN_GLES
-            /*
-             * GLES has no glClearDepth (the ES spelling is glClearDepthf, and
-             * the ES backend's presenter already clears the window itself --
-             * src/gles_render.c Gl_Present). Clearing here as well would be a
-             * second clear of the same buffer for nothing, so the desktop
-             * block is simply not taken on this backend.
-             */
-#else
             glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
             glClearDepth(1.0);
             glDisable(GL_SCISSOR_TEST);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-#endif
         }
 #endif
     }

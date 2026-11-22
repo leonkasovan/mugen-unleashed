@@ -1,4 +1,4 @@
-# Staged by build.sh — regenerated, not part of the port.
+# Assets staged by build.bat.
 app/src/main/assets/
 app/src/main/jniLibs/
 local.properties
@@ -8,3 +8,5 @@ local.properties
 app/build/
 app/.cxx/
 build/
+/app/src/main/jni/src/CMakeCache.txt
+/app/src/main/jni/src/CMakeFiles/

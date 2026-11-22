@@ -38,7 +38,7 @@
 
 /* ---- helpers ---- */
 
-#if defined(MUGEN_VITA_GL) || defined(MUGEN_ANDROID_SW)
+#if defined(MUGEN_VITA_GL) || defined(ANDROID_PORT)
 /*
  * PS Vita port (port/psvita): byte size of the current render target's pixels,
  * used to bound scaled/rotated rows. See the row check in Soft_Scale.
@@ -318,7 +318,7 @@ static void Soft_Scale(SpriteSet *set, int sprite, float x, float y, float sw, f
     if (sw <= 0.0f || sh <= 0.0f) {
         return;
     }
-#if defined(MUGEN_VITA_GL) || defined(MUGEN_ANDROID_SW)
+#if defined(MUGEN_VITA_GL) || defined(ANDROID_PORT)
     /*
      * PS Vita port (port/psvita): reject non-finite draw parameters.
      *
@@ -421,7 +421,7 @@ static void Soft_Scale(SpriteSet *set, int sprite, float x, float y, float sw, f
         return;
     }
     dst = Sprite_GetPixels(g_renderTarget, g_renderTargetSprite);
-#if defined(MUGEN_VITA_GL) || defined(MUGEN_ANDROID_SW)
+#if defined(MUGEN_VITA_GL) || defined(ANDROID_PORT)
     /*
      * PS Vita port (port/psvita): the NULL check this file's own header says is
      * missing -- "SpriteSet_GetPaletteConverted's result is used without a NULL
@@ -460,7 +460,7 @@ static void Soft_Scale(SpriteSet *set, int sprite, float x, float y, float sw, f
 #else
     pal = SpriteSet_GetPaletteConverted(set, spr->pal_index)->rgb565;
 #endif
-#if defined(MUGEN_VITA_GL) || defined(MUGEN_ANDROID_SW)
+#if defined(MUGEN_VITA_GL) || defined(ANDROID_PORT)
     /*
      * PS Vita port (port/psvita): bound every row against the target surface.
      *
@@ -519,7 +519,7 @@ static void Soft_Scale(SpriteSet *set, int sprite, float x, float y, float sw, f
         int u = u0;
         int row, n;
 
-#if defined(MUGEN_VITA_GL) || defined(MUGEN_ANDROID_SW)
+#if defined(MUGEN_VITA_GL) || defined(ANDROID_PORT)
         if ((long)tspr->rows[iy] + (long)ix0 * 2 < 0 ||
             (long)tspr->rows[iy] + (long)ix0 * 2 + (long)ncols * 2 > g_softDstBytes) {
             continue;   /* row table not (yet) valid for this sprite */
@@ -955,7 +955,7 @@ int Gfx_SoftCeil(float x)
  * Byte orders (verified against the decoders, not assumed from the name):
  * - 32-bit (SFF v2 PNG via Png_ReadStream, SpriteSet_FromPixels from an RGBA
  *   surface): libpng writes R,G,B,A in order with no BGR/swap transform, and
- *   the GL path's Gl_Premultiply reads src[0] as R for a GL_RGBA upload --
+ *   the GL path's premultiplied upload reads src[0] as R for GL_RGBA --
  *   so byte 0 is R. Straight (not premultiplied) alpha.
  * - 24-bit (PCX via Pcx_Decode): planes arrive R, G, B but are stored at
  *   px*3+2, +1, +0 respectively, so byte 0 is B. Pure black is the mask

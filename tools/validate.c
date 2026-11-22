@@ -18,7 +18,8 @@
  *   - character [Files] values are joined onto the character's directory
  *     (src/char.c Char_OpenFile -> Path_Join(name, dir, path)), so the correct
  *     spelling for a character is "files/c18.sff", not "C18Z2/files/c18.sff";
- *   - src/char.c reads cmd, cns, anim, stcommon, sprite, sound and st0..st9;
+ *   - src/char.c reads cmd, cns, anim, stcommon, sprite, sound, st0..st9 and
+ *     pal1..pal12. External palettes use Char_OpenFile's character directory;
  *   - src/select.c resolves a bare "kfm" cell as chars/kfm/kfm.def.
  *
  * Modes:
@@ -28,6 +29,9 @@
  *   --out FILE     write the report to FILE instead of validation<TIME>.txt
  *
  * Exit status: 0 everything resolves, 1 problems found, 2 usage error.
+ * With --fix, the exit status reflects what is left after the rewrite: a
+ * case mismatch or a backslash path that was repaired is not a failure, but
+ * a missing file -- or a rewrite that could not be applied -- is.
  *
  * Build: make validate   (or cc -O2 -o validate tools/validate.c)
  */
@@ -35,6 +39,11 @@
 #include <dirent.h>
 #include <errno.h>
 #include <limits.h>
+#include <fcntl.h>
+#include <unistd.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -401,12 +410,131 @@ static char *read_file(const char *path, size_t *size)
     return buf;
 }
 
+/* Stage replacements beside the original so the final rename is atomic. */
+static FILE *open_rewrite(const char *path, char *temp, size_t capacity)
+{
+    unsigned attempt;
+    struct stat original;
+
+    if (stat(path, &original) != 0) return NULL;
+    for (attempt = 0; attempt < 100; attempt++) {
+        int fd, flags = O_WRONLY | O_CREAT | O_EXCL;
+        FILE *out;
+
+#ifdef _WIN32
+        flags |= O_BINARY;
+#endif
+        if (snprintf(temp, capacity, "%s.validate-%ld-%u", path, (long)getpid(), attempt)
+            >= (int)capacity) return NULL;
+        fd = open(temp, flags, original.st_mode & 0777);
+        if (fd < 0 && errno == EEXIST) continue;
+        if (fd < 0) return NULL;
+        out = fdopen(fd, "wb");
+        if (out == NULL) {
+            close(fd);
+            remove(temp);
+        }
+        return out;
+    }
+    return NULL;
+}
+
+static int replace_file(const char *source, const char *destination)
+{
+#ifdef _WIN32
+    return MoveFileExA(source, destination, MOVEFILE_REPLACE_EXISTING) != 0;
+#else
+    return rename(source, destination) == 0;
+#endif
+}
+
+static int close_rewrite(FILE *out)
+{
+    int ok = !ferror(out);
+
+    return fclose(out) == 0 && ok;
+}
+
+/*
+ * Removes a temporary created by open_rewrite.
+ *
+ * open_rewrite gives the temporary the original file's mode, so that the final
+ * rename preserves permissions. When the original is read-only the temporary is
+ * read-only too, and Windows refuses to unlink it -- so a failed rewrite left
+ * .validate-<pid>-<n> files beside the def it could not repair. Making it
+ * writable first is what lets the cleanup finish.
+ */
+static void remove_temp(const char *path)
+{
+    if (path == NULL || path[0] == '\0') return;
+    if (remove(path) == 0) return;
+    (void)chmod(path, 0600);
+    (void)remove(path);
+}
+
+static void finish_rewrite(const char *path, const char *temp, FILE *out, unsigned fixed_before)
+{
+    char backup[PATH_MAX + 8], backup_temp[PATH_MAX + 64];
+    char *original = NULL;
+    size_t size;
+    FILE *copy;
+    int have_backup_temp = 0;
+    int have_backup = 0;
+
+    /* Cleared so the fail path knows whether backup_temp names a real file. */
+    backup_temp[0] = '\0';
+    if (!close_rewrite(out)) goto fail;
+    if (snprintf(backup, sizeof(backup), "%s.bak", path) >= (int)sizeof(backup)) goto fail;
+    original = read_file(path, &size);
+    if (original == NULL) goto fail;
+    copy = open_rewrite(path, backup_temp, sizeof(backup_temp));
+    if (copy == NULL) goto fail;
+    have_backup_temp = 1;
+    {
+        int written = fwrite(original, 1, size, copy) == size;
+
+        if (!close_rewrite(copy) || !written || !replace_file(backup_temp, backup)) {
+            remove_temp(backup_temp);
+            have_backup_temp = 0;
+            goto fail;
+        }
+        have_backup_temp = 0;   /* renamed into place */
+        have_backup = 1;
+    }
+    if (!replace_file(temp, path)) goto fail;
+    fprintf(g_report, "[FIXED] %s (backup %s)\n", path, backup);
+    free(original);
+    return;
+
+fail:
+    /*
+     * Both temporaries have to go, or a failed rewrite leaves .validate-<pid>-<n>
+     * files in the game tree. On a read-only file remove() can itself fail --
+     * that is the condition that got us here -- so this is best effort, but it
+     * covers the ordinary case (a full disk, a permission error on the target
+     * only).
+     */
+    free(original);
+    remove_temp(temp);
+    if (have_backup_temp) remove_temp(backup_temp);
+    /*
+     * The original is still in place -- replace_file(temp, path) is what failed
+     * -- so a backup taken in this call is a copy of the file as it stands.
+     * Leaving it would just litter the game tree after a failed repair.
+     */
+    if (have_backup) remove_temp(backup);
+    g_count.fixed = fixed_before;
+    g_count.missing++;
+    fprintf(g_report, "[ERROR] could not rewrite %s\n", path);
+}
+
 /* ------------------------------------------------------------- file checking */
 
 /* The keys the engine reads out of a given def group. */
 typedef struct {
     const char *const *keys;
     int count;
+    int character_files;
 } KeySet;
 
 static const char *const k_system_keys[] = {
@@ -417,10 +545,13 @@ static const char *const k_fight_keys[] = {
     "spr", "snd", "anim", "font", "font0", "font1", "font2", "font3",
     "font4", "font5", "font6", "font7", "font8", "font9"
 };
-/* src/char.c: cmd, cns, anim, stcommon, sprite, sound, and the st0..st9 loop. */
 static const char *const k_char_keys[] = {
     "cmd", "cns", "anim", "stcommon", "sprite", "sound",
     "st", "st0", "st1", "st2", "st3", "st4", "st5", "st6", "st7", "st8", "st9"
+};
+static const char *const k_char_palette_keys[] = {
+    "pal1", "pal2", "pal3", "pal4", "pal5", "pal6",
+    "pal7", "pal8", "pal9", "pal10", "pal11", "pal12"
 };
 
 static int key_wanted(const KeySet *set, const char *key)
@@ -431,6 +562,43 @@ static int key_wanted(const KeySet *set, const char *key)
         if (strcmp(set->keys[i], key) == 0) return 1;
     }
     return 0;
+}
+
+/* Char_OpenFile uses Path_Join and opens the result directly. Keep rooted
+ * paths rooted and resolve relative palettes only beside the character DEF. */
+static void resolve_palette_path(const char *value, const char *character_dir, Resolved *out)
+{
+    if (value[0] == '/' || value[0] == '\\') {
+        const char *root = "/";
+
+        resolve(value + 1, &root, 1, out);
+        out->base[0] = '\0';
+        if (value[0] == '\\' && out->status != RES_MISSING) out->status = RES_SEP;
+    } else if (value[1] == ':') {
+        memset(out, 0, sizeof(*out));
+        out->status = is_file(value) ? RES_OK : RES_MISSING;
+        if (out->status == RES_OK) snprintf(out->matched, sizeof(out->matched), "%s", value);
+    } else {
+        resolve(value, &character_dir, 1, out);
+    }
+}
+
+static int resolve_def_path(const KeySet *keys, const char *key, const char *value,
+                            const char *const *bases, int base_count, Resolved *out)
+{
+    static const KeySet palette_keys = {
+        .keys = k_char_palette_keys,
+        .count = sizeof(k_char_palette_keys) / sizeof(k_char_palette_keys[0])
+    };
+
+    if (keys->character_files && key_wanted(&palette_keys, key)) {
+        resolve_palette_path(value, bases[0], out);
+    } else if (key_wanted(keys, key)) {
+        resolve(value, bases, base_count, out);
+    } else {
+        return 0;
+    }
+    return 1;
 }
 
 /*
@@ -470,9 +638,8 @@ static void validate_file(const char *path, const char *const *bases, int base_c
         strip_cr(code);
         strip_comment(code);
         if (!parse_assignment(code, key, sizeof(key), value, sizeof(value))) continue;
-        if (!key_wanted(keys, key)) continue;
+        if (!resolve_def_path(keys, key, value, bases, base_count, &r)) continue;
 
-        resolve(value, bases, base_count, &r);
         if (r.status == RES_OK) {
             g_count.ok++;
             if (!g_quiet) fprintf(g_report, "  [%s] %s = %s [OK]\n", label, key, value);
@@ -501,24 +668,14 @@ static void validate_file(const char *path, const char *const *bases, int base_c
     content = read_file(path, &size);
     if (content == NULL) return;
     {
-        char backup[PATH_MAX];
-        FILE *in, *out_file;
+        char temp[PATH_MAX + 64];
+        unsigned fixed_before = g_count.fixed;
+        FILE *out_file = open_rewrite(path, temp, sizeof(temp));
         char *l, *nx;
 
-        snprintf(backup, sizeof(backup), "%s.bak", path);
-        remove(backup);
-        if (rename(path, backup) != 0) {
-            fprintf(g_report, "[ERROR] could not back up %s: %s\n", path, strerror(errno));
-            free(content);
-            return;
-        }
-        in = fopen(backup, "rb");
-        out_file = fopen(path, "wb");
-        if (in == NULL || out_file == NULL) {
-            if (in != NULL) fclose(in);
-            if (out_file != NULL) fclose(out_file);
-            rename(backup, path);
-            fprintf(g_report, "[ERROR] could not rewrite %s\n", path);
+        if (out_file == NULL) {
+            fprintf(g_report, "[ERROR] could not stage %s\n", path);
+            g_count.missing++;
             free(content);
             return;
         }
@@ -526,6 +683,7 @@ static void validate_file(const char *path, const char *const *bases, int base_c
             char code[PATH_MAX * 2];
             char key[128], value[PATH_MAX];
             int crlf, had_nl = 0;
+            Resolved r;
 
             nx = strchr(l, '\n');
             /* had_nl: the file really ended this line with '\n'. A final line
@@ -539,9 +697,7 @@ static void validate_file(const char *path, const char *const *bases, int base_c
             strip_cr(code);
             strip_comment(code);   /* or ";comment" becomes part of the value */
             if (parse_assignment(code, key, sizeof(key), value, sizeof(value)) &&
-                key_wanted(keys, key)) {
-                Resolved r;
-                resolve(value, bases, base_count, &r);
+                resolve_def_path(keys, key, value, bases, base_count, &r)) {
                 if (r.status == RES_CASE || r.status == RES_SEP) {
                     char rewrite[PATH_MAX];
                     char *eq = strchr(l, '=');
@@ -605,9 +761,7 @@ static void validate_file(const char *path, const char *const *bases, int base_c
             if (crlf) fputc('\r', out_file);
             if (had_nl) fputc('\n', out_file);
         }
-        fclose(in);
-        fclose(out_file);
-        fprintf(g_report, "[FIXED] %s (backup %s)\n", path, backup);
+        finish_rewrite(path, temp, out_file, fixed_before);
     }
     free(content);
 }
@@ -814,6 +968,8 @@ static void fix_select(const char *path)
     char section[64] = "";
     int changed = 0;
     FILE *out_file;
+    char temp[PATH_MAX + 64];
+    unsigned fixed_before = g_count.fixed;
 
     content = read_file(path, NULL);
     if (content == NULL) return;
@@ -850,7 +1006,16 @@ static void fix_select(const char *path)
                 char *comma = strchr(code, ',');
                 Resolved r;
 
-                if (comma != NULL) *comma = '\0';
+                if (comma != NULL) {
+                    char *stage = comma + 1;
+                    char *end = strchr(stage, ',');
+
+                    if (end != NULL) *end = '\0';
+                    trim(stage);
+                    resolve(stage, stage_bases, 2, &r);
+                    if (r.status == RES_CASE || r.status == RES_SEP) changed = 1;
+                    *comma = '\0';
+                }
                 snprintf(first, sizeof(first), "%s", code);
                 trim(first);
                 if (first[0] == '\0' || is_random(first)) continue;
@@ -884,22 +1049,12 @@ static void fix_select(const char *path)
     content = read_file(path, NULL);
     if (content == NULL) return;
 
-    {
-        char backup[PATH_MAX + 8];
-
-        snprintf(backup, sizeof(backup), "%s.bak", path);
-        remove(backup);
-        if (rename(path, backup) != 0) {
-            fprintf(g_report, "[ERROR] could not back up %s: %s\n", path, strerror(errno));
-            free(content);
-            return;
-        }
-        out_file = fopen(path, "wb");
-        if (out_file == NULL) {
-            rename(backup, path);
-            free(content);
-            return;
-        }
+    out_file = open_rewrite(path, temp, sizeof(temp));
+    if (out_file == NULL) {
+        fprintf(g_report, "[ERROR] could not stage %s\n", path);
+        g_count.missing++;
+        free(content);
+        return;
     }
 
     for (line = content; line != NULL; line = next) {
@@ -937,12 +1092,15 @@ static void fix_select(const char *path)
             char work[PATH_MAX * 2];
             char out_line[PATH_MAX * 4];
             char *cols[16];
-            int ncols = 0, k, rewritten = 0;
+            int ncols = 0, k, rewritten = 0, columns_fixed = 0;
             char *c;
+            const char *comment;
             size_t used = 0;
 
             snprintf(work, sizeof(work), "%s", line);
             strip_cr(work);
+            strip_comment(work);
+            comment = line + strlen(work);
             cols[ncols++] = work;
             for (c = work; *c != '\0' && ncols < 16; c++) {
                 if (*c == ',') {
@@ -997,6 +1155,7 @@ static void fix_select(const char *path)
                                 }
                                 snprintf(cell_out, sizeof(cell_out), "%s", full);
                                 rewritten = 1;
+                                columns_fixed++;
                             }
                         }
                     } else {
@@ -1004,6 +1163,7 @@ static void fix_select(const char *path)
                         if (r.status == RES_CASE || r.status == RES_SEP) {
                             relative_to(&r, cell_out, sizeof(cell_out));
                             rewritten = 1;
+                            columns_fixed++;
                         }
                     }
                 }
@@ -1017,28 +1177,26 @@ static void fix_select(const char *path)
 
             if (rewritten) {
                 fputs(out_line, out_file);
+                if (*comment == ';') {
+                    size_t length = strlen(comment);
+                    fwrite(comment, 1, length - (size_t)crlf, out_file);
+                }
                 if (crlf) fputc('\r', out_file);
                 if (had_nl) fputc('\n', out_file);
-                g_count.fixed++;
+                g_count.fixed += (unsigned)columns_fixed;
                 continue;
             }
         } else if (strcmp(section, "extrastages") == 0) {
             char work[PATH_MAX * 2];
             char stage_out[PATH_MAX * 2];
-            char *comma = strchr(line, ',');
             const char *raw;
             size_t raw_len, lead = 0, trail = 0;
             Resolved r;
 
             snprintf(work, sizeof(work), "%s", line);
             strip_cr(work);
-            /* Keep everything from the first comma on (order=.../unlock=...). */
-            {
-                char *c = strchr(work, ',');
-                if (c != NULL) *c = '\0';
-            }
             raw = work;
-            raw_len = strlen(raw);
+            raw_len = strcspn(raw, ",;");
             while (lead < raw_len && (raw[lead] == ' ' || raw[lead] == '\t')) lead++;
             while (trail + lead < raw_len &&
                    (raw[raw_len - 1 - trail] == ' ' || raw[raw_len - 1 - trail] == '\t')) {
@@ -1060,7 +1218,7 @@ static void fix_select(const char *path)
                 if (changed_here) {
                     fprintf(out_file, "%.*s%s%.*s", (int)lead, raw, stage_out,
                             (int)trail, raw + raw_len - trail);
-                    if (comma != NULL) fputs(comma, out_file);
+                    fputs(raw + raw_len, out_file);
                     if (crlf) fputc('\r', out_file);
                     if (had_nl) fputc('\n', out_file);
                     g_count.fixed++;
@@ -1079,26 +1237,26 @@ static void fix_select(const char *path)
         if (crlf) fputc('\r', out_file);
         if (had_nl) fputc('\n', out_file);
     }
-    fclose(out_file);
-    fprintf(g_report, "[FIXED] %s (backup %s.bak)\n", path, path);
+    finish_rewrite(path, temp, out_file, fixed_before);
     free(content);
 }
 
 /* ------------------------------------------------------------- char def pass */
 
-static void check_character_defs(const char *select_path)
+static void check_character_defs(const char *select_path, const char *motif_dir)
 {
     char *content = read_file(select_path, NULL);
     char *line, *next;
     char section[64] = "";
     static const char *const char_bases[] = { "", "chars/" };
-    KeySet keys;
+    static const KeySet keys = {
+        .keys = k_char_keys,
+        .count = sizeof(k_char_keys) / sizeof(k_char_keys[0]),
+        .character_files = 1
+    };
     char seen[256][PATH_MAX];
     int seen_count = 0;
     int i;
-
-    keys.keys = k_char_keys;
-    keys.count = (int)(sizeof(k_char_keys) / sizeof(k_char_keys[0]));
 
     if (content == NULL) return;
     for (line = content; line != NULL && *line != '\0'; line = next) {
@@ -1165,13 +1323,15 @@ static void check_character_defs(const char *select_path)
         snprintf(cdir, sizeof(cdir), "%s", r.matched);
         slash = strrchr(cdir, '/');
         if (slash != NULL) slash[1] = '\0';
+        else cdir[0] = '\0';
         {
-            const char *bases[5];
+            /*
+             * Keep the File_Find fallbacks for the general [Files] scan.
+             * stcommon uses them for common1.cns in data/. Palette keys use
+             * the character directory at bases[0].
+             */
+            const char *bases[] = { cdir, motif_dir, "", "data/" };
 
-            bases[0] = cdir;
-            bases[1] = "";
-            bases[2] = "chars/";
-            bases[3] = "data/";
             fprintf(g_report, "character: %s\n", r.matched);
             validate_file(r.matched, bases, 4, &keys, "Files");
         }
@@ -1252,7 +1412,9 @@ static void usage(FILE *out, const char *argv0)
             "  -h, --help     this text\n"
             "  -V, --version  version\n"
             "\n"
-            "Exit status: 0 all paths resolve, 1 problems found, 2 usage error.\n",
+            "Exit status: 0 all paths resolve, 1 problems found, 2 usage error.\n"
+            "With --fix the status counts what is left after the rewrite, so a\n"
+            "repaired path is not a failure; a missing file still is.\n",
             argv0);
 }
 
@@ -1353,9 +1515,10 @@ int main(int argc, char **argv)
         bases[3] = "font/";
         bases[4] = NULL;
         {
-            KeySet keys;
-            keys.keys = k_system_keys;
-            keys.count = (int)(sizeof(k_system_keys) / sizeof(k_system_keys[0]));
+            static const KeySet keys = {
+                .keys = k_system_keys,
+                .count = sizeof(k_system_keys) / sizeof(k_system_keys[0])
+            };
             validate_file(motif, bases, 4, &keys, "system.def");
         }
         /* The fight definition named by system.def has its own [Files]. */
@@ -1410,15 +1573,16 @@ int main(int argc, char **argv)
                     }
                     {
                         const char *fbases[5];
-                        KeySet keys;
+                        static const KeySet keys = {
+                            .keys = k_fight_keys,
+                            .count = sizeof(k_fight_keys) / sizeof(k_fight_keys[0])
+                        };
 
                         fbases[0] = "";
                         fbases[1] = fdir;
                         fbases[2] = "data/";
                         fbases[3] = "font/";
                         fbases[4] = NULL;
-                        keys.keys = k_fight_keys;
-                        keys.count = (int)(sizeof(k_fight_keys) / sizeof(k_fight_keys[0]));
                         validate_file(r.matched, fbases, 4, &keys, "fight.def");
                     }
                 }
@@ -1429,14 +1593,44 @@ int main(int argc, char **argv)
         fprintf(g_report, "system.def %s [NOT FOUND]\n", motif);
     }
 
-    /* select.def lives next to system.def (or in data/). */
+    /* Match Motif_Load's [Files] select and Select_OpenDef's File_Find order. */
     {
-        char candidate[PATH_MAX + 16];
+        char *content = read_file(motif, NULL);
+        char *line, *next;
+        int in_files = 0;
 
-        snprintf(candidate, sizeof(candidate), "%sselect.def", motif_dir);
-        if (is_file(candidate)) snprintf(select_path, sizeof(select_path), "%.*s",
-                                          (int)(sizeof(select_path) - 1), candidate);
-        else if (is_file("data/select.def")) snprintf(select_path, sizeof(select_path), "data/select.def");
+        for (line = content; line != NULL; line = next) {
+            char key[128], value[PATH_MAX];
+
+            next = strchr(line, '\n');
+            if (next != NULL) *next++ = '\0';
+            strip_comment(line);
+            trim(line);
+            if (line[0] == '[') {
+                char *end = strchr(line, ']');
+
+                in_files = 0;
+                if (end != NULL) {
+                    *end = '\0';
+                    trim(line + 1);
+                    in_files = ieq(line + 1, "files");
+                }
+            } else if (in_files && parse_assignment(line, key, sizeof(key), value, sizeof(value))
+                       && strcmp(key, "select") == 0) {
+                const char *bases[] = { motif_dir, "./", "data/" };
+                Resolved r;
+
+                resolve(value, bases, 3, &r);
+                if (r.status == RES_OK) {
+                    snprintf(select_path, sizeof(select_path), "%s", r.matched);
+                } else {
+                    fprintf(g_report, "  [Files] select = %s [%s]\n", value,
+                            r.status == RES_MISSING ? "NOT FOUND" : "PATH NEEDS CORRECTION");
+                }
+                break;
+            }
+        }
+        free(content);
     }
 
     printf("=== [select.def] ===\n");
@@ -1450,21 +1644,51 @@ int main(int argc, char **argv)
     }
 
     printf("=== [character defs] ===\n");
-    if (select_path[0] != '\0') check_character_defs(select_path);
+    if (select_path[0] != '\0') check_character_defs(select_path, motif_dir);
 
-    bad = (int)(g_count.case_mismatch + g_count.backslash + g_count.missing);
-    fprintf(g_report, "\n=== summary ===\n");
-    fprintf(g_report, "  ok         %u\n", g_count.ok);
-    fprintf(g_report, "  case       %u  (on disk with different case)\n", g_count.case_mismatch);
-    fprintf(g_report, "  backslash  %u  (Windows path separators)\n", g_count.backslash);
-    fprintf(g_report, "  missing    %u\n", g_count.missing);
-    if (g_fix) fprintf(g_report, "  fixed      %u  (files rewritten, .bak backups made)\n", g_count.fixed);
-    fclose(g_report);
+    /*
+     * What counts as a problem depends on whether the run repaired anything.
+     *
+     * Without --fix, every finding is a problem: a case mismatch or a backslash
+     * path is a path this filesystem will not resolve, even though it is
+     * fixable.
+     *
+     * With --fix, the case and backslash findings were rewritten, so what
+     * matters is what is left. `fixed` counts values actually substituted, so
+     * `rewritable - fixed` is the part a rewrite could not repair -- a file
+     * that could not be backed up or reopened, say. `missing` is never
+     * fixable: nothing on disk matches it.
+     *
+     * Deriving it from the counters rather than re-scanning keeps one pass, and
+     * still reports a failed rewrite instead of exiting 0 over it.
+     */
+    {
+        unsigned rewritable = g_count.case_mismatch + g_count.backslash;
+        unsigned unfixed = (g_count.fixed >= rewritable) ? 0u : rewritable - g_count.fixed;
 
-    printf("validate: %u ok, %u case, %u backslash, %u missing -> %s\n",
-           g_count.ok, g_count.case_mismatch, g_count.backslash, g_count.missing, report_path);
-    if (g_count.fixed > 0) printf("validate: %u value(s) rewritten.\n", g_count.fixed);
-    if (bad == 0) printf("validate: all asset paths resolve on this filesystem.\n");
-    else if (!g_fix) printf("validate: re-run with --fix to rewrite the def files.\n");
-    return bad == 0 ? 0 : 1;
+        bad = (int)(g_count.missing + unfixed);
+        fprintf(g_report, "\n=== summary ===\n");
+        fprintf(g_report, "  ok         %u\n", g_count.ok);
+        fprintf(g_report, "  case       %u  (on disk with different case)\n", g_count.case_mismatch);
+        fprintf(g_report, "  backslash  %u  (Windows path separators)\n", g_count.backslash);
+        fprintf(g_report, "  missing    %u\n", g_count.missing);
+        if (g_fix) {
+            fprintf(g_report, "  fixed      %u  (files rewritten, .bak backups made)\n", g_count.fixed);
+            if (unfixed > 0) fprintf(g_report, "  unfixed    %u  (detected but not rewritten)\n", unfixed);
+            fprintf(g_report, "  remaining  %d  (what still fails to resolve)\n", bad);
+        }
+        fclose(g_report);
+
+        printf("validate: %u ok, %u case, %u backslash, %u missing -> %s\n",
+               g_count.ok, g_count.case_mismatch, g_count.backslash, g_count.missing, report_path);
+        if (g_count.fixed > 0) printf("validate: %u value(s) rewritten.\n", g_count.fixed);
+        if (bad == 0) {
+            printf("validate: all asset paths resolve on this filesystem.\n");
+        } else if (!g_fix) {
+            printf("validate: re-run with --fix to rewrite the def files.\n");
+        } else {
+            printf("validate: %d path(s) still do not resolve after --fix.\n", bad);
+        }
+        return bad == 0 ? 0 : 1;
+    }
 }
