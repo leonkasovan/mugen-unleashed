@@ -919,9 +919,7 @@ CharData *Char_LoadDef(const char *dir, Stream *s)
     Log_Printf("  Loading sff %s...", buf);
     if (is_zip) {
         Stream_ZipUnload(zs);
-        Stream_ZipLoad(zs, buf);
-        /* the original then tests a stack slot that holds the st<n> loop counter (10): never NULL */
-        c->sff = Sff_LoadStream(zs);
+        c->sff = Sff_LoadZipMember(zs, buf, NULL);
     } else {
         Path_Join(buf, dir, path);
         c->sff = Sff_Load(path);
@@ -1055,7 +1053,7 @@ CharData *Char_LoadDef(const char *dir, Stream *s)
      * SFF v1.01: sprites using the palette of 9000,0 or 0,0 are switched to
      * palette 1,1 (the first one), so that palette selection works.
      */
-    if (c->sff->version == 0x01000100 && SpriteSet_FindPalette(c->sff, 1, 1) != NULL) {
+    if (Sff_SourceVersion(c->sff) == SFF_VERSION_101 && SpriteSet_FindPalette(c->sff, 1, 1) != NULL) {
         int pal_9000 = -1, pal_0, index;
         Sprite *spr = SpriteSet_FindSprite(c->sff, 9000, 0);
         if (spr != NULL) {
@@ -2697,7 +2695,7 @@ void Player_Reset(Player *p)
     p->palfx_def.color = 0x100;
     p->palfx_def.reset = 1;
     PalFx_Init(&p->palfx_own, NULL);    /* inlined in the original */
-    if (!p->helper && p->sprites->version == 0x01000100) {
+    if (!p->helper && Sff_SourceVersion(p->sprites) == SFF_VERSION_101) {
         /* SFF v1.01: the selected palette replaces palette 1,1 */
         PalRemapEntry e;
         e.src_group = 1;

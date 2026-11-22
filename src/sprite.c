@@ -6,6 +6,7 @@
  * points, which dispatch to the OpenGL renderer or to the software one.
  */
 #include "mugen.h"
+#include "sffatlas.h"
 #include <limits.h>
 #ifdef MUGEN_GLES
 #include "gles_render.h"
@@ -194,7 +195,17 @@ int Sprite_Init(unsigned int flags, Sprite *spr, int format, void *data, size_t 
             }
             return 0;
         }
-        g_spriteDecoders[format](data, size, out);
+        /* Port addition: LZ4 (13) reports a status; -1 means the decode failed. */
+        if (format == 13 && g_spriteDecoders[format](data, size, out) < 0) {
+            free(out);
+            if (owns) {
+                free(data);
+            }
+            return 0;
+        }
+        if (format != 13) {
+            g_spriteDecoders[format](data, size, out);
+        }
         if (owns) {
             free(data);
         }
@@ -572,6 +583,7 @@ int SpriteSet_Free(SpriteSet *set)
             }
             KeyedArray_Free(set->sprites);
         }
+        Sff3_Release(set);
         if (set->data != NULL) {
             free(set->data);
         }
@@ -665,6 +677,7 @@ void *Sprite_GetPixels(SpriteSet *set, int sprite)
     if (spr == NULL) {
         return NULL;
     }
+    if (spr->format == SPRITE_FORMAT_ATLAS) return Sff3_Pixels(spr);
     if (spr->format == SPRITE_FORMAT_RAW) {
         return spr->pixels;
     }
@@ -958,6 +971,7 @@ void SpriteSet_MemUse(SpriteSet *set, unsigned int *sys_bytes, unsigned int *tex
 
             sys += (unsigned int)(bytes > (size_t)UINT_MAX ? (size_t)UINT_MAX : bytes);
         }
+        Sff3_MemUse(set, &sys, &tex);
         sys += sizeof(SpriteSet);
     }
     if (sys_bytes != NULL) {

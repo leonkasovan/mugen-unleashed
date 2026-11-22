@@ -1152,10 +1152,7 @@ int Fight_Load(const char *path)
         Error_Printf("Can't read Files|sff\n");
         return 0;
     }
-    if (!File_Find(value, found, NULL, dir)) {
-        return 0;
-    }
-    fd->sff = Sff_Load(found);
+    fd->sff = Sff_FindAndLoad(value, found, dir);
     if (fd->sff == NULL) {
         Error_Printf("Can't load %s\n", value);
         return 0;
@@ -1182,10 +1179,7 @@ int Fight_Load(const char *path)
         Error_Printf("Can't read Files|fightfx.sff\n");
         return 0;
     }
-    if (!File_Find(value, found, NULL, dir)) {
-        return 0;
-    }
-    g_game->fightfx_sff = Sff_Load(found);
+    g_game->fightfx_sff = Sff_FindAndLoad(value, found, dir);
     if (g_game->fightfx_sff == NULL) {
         Error_Printf("Can't load %s\n", value);
         return 0;

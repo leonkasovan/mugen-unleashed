@@ -31,8 +31,15 @@
  * --gc-sections a Linux link happened to drop it, but that is luck rather than
  * design: the section references GetCommandLineA and the engine main, which do not
  * exist here, and any build that keeps the section alive fails to link.
+ *
+ * MUGEN_NO_ENTRY is the tools' opt-out ("make sffcli", see src/main.c's guard):
+ * MinGW links WinMainCRTStartup and runs WinMain in preference to main even in a
+ * console-subsystem executable, so a tool linked with this object never sees its
+ * own main -- it ends up inside the engine's WinMain, which redirects stdout to
+ * stdout.txt beside the executable and then starts the game. Omitting the object
+ * leaves the tool's main as the entry point.
  */
-#if defined(_WIN32) && !defined(ANDROID_PORT)
+#if defined(_WIN32) && !defined(ANDROID_PORT) && !defined(MUGEN_NO_ENTRY)
 
 /* Port fix: SDL_MAIN_HANDLED leaves the engine entry named main; SDL2's
  * headers no longer declare it on our behalf. */

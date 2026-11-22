@@ -53,6 +53,15 @@ static void Glr_StreamDropAll(int delete_gl);
 static void Glr_StreamLog(void);
 static unsigned int g_attachedTexture, g_attachedDepth;
 
+/* Port-move placeholder: the desktop atlas batch queue arrives with the next
+ * commit (the SFF3 GLES batch path). Until it exists nothing is ever queued,
+ * so this no-op is behaviour-neutral; it is replaced there, not kept. */
+#if !defined(MUGEN_VITA_GL) && !defined(MUGEN_GLES) && !defined(ANDROID_PORT)
+void GlBatch_Flush(void)
+{
+}
+#endif
+
 /* Port fix: reject unsafe payloads and impossible storage before touching GL. */
 static int Glr_TextureSize(int w, int h)
 {

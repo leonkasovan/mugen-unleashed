@@ -11,10 +11,16 @@ void *Pcx_DecodeSized(Palette *pal, int *w, Stream *s, int *h, int *bpp,
                       size_t *size, int flags, size_t length);
 SpriteSet *Pcx_LoadSized(Stream *s, int flags, size_t length);
 
+SpriteSet *Sff_FindAndLoad(const char *path, char *out, const char *base_dir);
+SpriteSet *Sff_LoadSelectedFile(const char *path, const int *selection);
+SpriteSet *Sff_LoadZipMember(Stream *zip, const char *path, const int *selection);
+unsigned Sff_SourceVersion(const SpriteSet *set);
+
 /* ---- SFF file format ---- */
 
 #define SFF_VERSION_101     0x01000100u     /* 1.01 */
 #define SFF_VERSION_200     0x02000000u     /* 2.00 */
+#define SFF_VERSION_300     0x03000000u     /* mugen-unleashed atlas extension */
 #define SFF_VERSION_201     0x02000100u     /* 2.01 */
 
 /* Size of the file header; offsets in the file count from its start. */

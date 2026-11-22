@@ -3,6 +3,21 @@
  * error reporting code).
  */
 #include "mugen.h"
+#include "sffatlas.h"
+
+int Sff_AtlasSibling(const char *path, char *out, size_t capacity)
+{
+    const char *file = path, *ext = strrchr(path, '.');
+    if (!ext || strcasecmp(ext, ".sff") || strlen(path) + 7 > capacity) return 0;
+    for (const char *p = path; *p; ++p)
+        if (*p == '/' || *p == '\\' || *p == ':') file = p+1;
+    if (!strncasecmp(file, "atlas.", 6)) return 0;
+    size_t prefix = (size_t)(file-path);
+    memcpy(out, path, prefix);
+    memcpy(out+prefix, "atlas.", 6);
+    strcpy(out+prefix+6, file);
+    return 1;
+}
 
 /* 0x0040C1D0 */
 int File_Exists(const char *path)
@@ -22,7 +37,7 @@ int File_Exists(const char *path)
  *
  * A drive letter is cut off the path and never used, as in the original.
  */
-int File_Find(const char *path, char *out, char *dir_out, const char *base_dir)
+static int find_file(const char *path, char *out, char *dir_out, const char *base_dir, SpriteSet **sprites)
 {
     char drive[4];
     const char *prefixes[4];
@@ -70,9 +85,12 @@ int File_Find(const char *path, char *out, char *dir_out, const char *base_dir)
         if (len < 0 || (size_t)len >= sizeof(full)) {
             continue;
         }
-        fp = fopen(full, "rb");
+        char sibling[sizeof(full)+6];
+        fp = sprites && Sff_AtlasSibling(full, sibling, sizeof(sibling)) ? fopen(sibling, "rb") : NULL;
+        if (!fp) fp = fopen(full, "rb");
         if (fp != NULL) {
             fclose(fp);
+            if (sprites && !(*sprites = Sff_Load(full))) continue;
             if (dir_out != NULL) {
                 /* This prefix is bounded by the already checked full path. */
                 size_t dir_len = (size_t)len - file_len;
@@ -85,6 +103,18 @@ int File_Find(const char *path, char *out, char *dir_out, const char *base_dir)
     }
     Error_Printf("Can't find file %s", path);
     return 0;
+}
+
+int File_Find(const char *path, char *out, char *dir_out, const char *base_dir)
+{
+    return find_file(path, out, dir_out, base_dir, 0);
+}
+
+SpriteSet *Sff_FindAndLoad(const char *path, char *out, const char *base_dir)
+{
+    SpriteSet *set = NULL;
+    find_file(path, out, NULL, base_dir, &set);
+    return set;
 }
 
 /*

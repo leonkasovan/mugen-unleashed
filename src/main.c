@@ -30,7 +30,18 @@ static int Vita_StdioDiscard(void *cookie, const char *buf,
 #endif
 
 /* 0x00421500 (SDL.h renames main to SDL_main) */
-#ifdef ANDROID_PORT
+#if defined(MUGEN_NO_ENTRY)
+/*
+ * Tools build (tools/sffcli.c, "make sffcli"): main.c is compiled for its
+ * helpers, not its entry point -- Screen_IsSpecial, Camera_GetX/Y,
+ * Str_IsVersionNumber, Version_Parse, Rng_Seed and Random_Next, which the rest
+ * of the engine calls unconditionally. The same renaming the Android port uses
+ * below, for the same reason: the tool supplies main(), and two definitions of
+ * one symbol is a link error rather than a choice. Nothing calls Mugen_Main in
+ * a tool build, so it is dropped by --gc-sections.
+ */
+int Mugen_Main(int argc, char *argv[])
+#elif defined(ANDROID_PORT)
 /*
  * Android port: main.c is compiled for its helpers, not its entry point.
  *

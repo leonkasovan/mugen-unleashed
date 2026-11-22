@@ -1,6 +1,15 @@
 #ifndef MUGEN_GLRENDER_H
 #define MUGEN_GLRENDER_H
 
+/* Flush queued desktop atlas draws before an immediate GL operation.
+ * Port-move note: the batch queue itself lands in the next commit; until then
+ * nothing is queued, so the call is a no-op and this stays behaviour-neutral. */
+#if !defined(MUGEN_VITA_GL) && !defined(MUGEN_GLES) && !defined(ANDROID_PORT)
+void GlBatch_Flush(void);
+#else
+#define GlBatch_Flush() ((void)0)
+#endif
+
 /*
  * Types of the OpenGL renderer (glrender.c): GLSL programs and the GLEW
  * function pointers it uses from mugen.exe's own GLEW 1.5.4 copy (filled by

@@ -240,10 +240,7 @@ int System_LoadMotif(void)
         Error_Printf("Missing spr specification in [Files]\n");
         return 0;
     }
-    if (!File_Find(value, path, NULL, NULL)) {
-        return 0;
-    }
-    g->motif_sprites = Sff_Load(path);
+    g->motif_sprites = Sff_FindAndLoad(value, path, NULL);
     if (g->motif_sprites == NULL) {
         Error_Printf("Can't load %s\n", value);
         return 0;

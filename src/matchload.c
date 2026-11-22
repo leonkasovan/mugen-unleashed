@@ -1135,17 +1135,9 @@ int Match_LoadTeamFaces(void)
                 }
                 Ini_Free(ini);
                 if (path[0] != '\0') {
-                    SpriteSet *set = NULL;
-                    Stream *s;
-                    g_bufferedRead = 0;
-                    s = Stream_OpenFile(path, "rb");
-                    if (s != NULL) {
-                        set = Sff_LoadSelected(s, select);
-                        Stream_Close(s);
-                    }
+                    SpriteSet *set = Sff_LoadSelectedFile(path, select);
                     g = g_game;
                     g->team_faces[side].sprites[m] = set;
-                    g_bufferedRead = g->buffered_read;
                 }
                 g = g_game;
             }

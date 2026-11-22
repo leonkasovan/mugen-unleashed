@@ -12,6 +12,7 @@
  * decoded there too.
  */
 #include "mugen.h"
+#include "sffatlas.h"
 #ifdef MUGEN_GLES
 #include "gles_render.h"
 #endif
@@ -99,6 +100,7 @@ int Sff_ReadHeader(Stream *s, SffHeader *hdr, unsigned int *version)
     if (version != NULL) {
         *version = hdr->v1.version;
     }
+    if (hdr->v1.version == SFF_VERSION_300) return Sff2_ReadHeader(&hdr->v2, s);
     if (hdr->v1.version < SFF_VERSION_101 || hdr->v1.version > SFF_VERSION_201) {
         return 0;
     }
@@ -877,7 +879,9 @@ SpriteSet *Sff_LoadStream(Stream *s)
 
     if (Sff_ReadHeader(s, &hdr, &version)) {
         MatchLog_Printf(SFF_LOG_INFO, "SFF version %08X (compatver %08X)\n", version, hdr.v2.compat_version);
-        if (version == SFF_VERSION_101) {
+        if (version == SFF_VERSION_300) {
+            set = Sff3_Load(s, start, &hdr.v2, NULL);
+        } else if (version == SFF_VERSION_101) {
             set = Sff1_Load(&hdr.v1, s);
         } else if (hdr.v2.compat_version > SFF_VERSION_201) {
             MatchLog_Printf(SFF_LOG_ERROR, "SFF version not supported: %08X (compatver %08X)\n", version,
@@ -889,7 +893,7 @@ SpriteSet *Sff_LoadStream(Stream *s)
         if (set != NULL) {
             set->version = hdr.v1.version;
 #ifdef MUGEN_GLES
-            Gles_AtlasPlan(set);
+            if (version != SFF_VERSION_300) Gles_AtlasPlan(set);
 #endif
         }
     }
@@ -909,7 +913,9 @@ SpriteSet *Sff_LoadSelected(Stream *s, const int *select)
     long start = Stream_Tell(s);
 
     if (Sff_ReadHeader(s, &hdr, &version)) {
-        if (version == SFF_VERSION_101) {
+        if (version == SFF_VERSION_300) {
+            set = Sff3_Load(s, start, &hdr.v2, select);
+        } else if (version == SFF_VERSION_101) {
             set = Sff1_LoadSelected(s, &hdr.v1, select);
         } else if (hdr.v2.compat_version > SFF_VERSION_201) {
             MatchLog_Printf(SFF_LOG_ERROR, "SFF version not supported: %08X (compatver %08X)\n", version,
@@ -920,7 +926,7 @@ SpriteSet *Sff_LoadSelected(Stream *s, const int *select)
         if (set != NULL) {
             set->version = hdr.v1.version;
 #ifdef MUGEN_GLES
-            Gles_AtlasPlan(set);
+            if (version != SFF_VERSION_300) Gles_AtlasPlan(set);
 #endif
         }
     }
@@ -932,14 +938,14 @@ SpriteSet *Sff_LoadSelected(Stream *s, const int *select)
  * 0x00467510: loads a sprite file (.sff, or a .pcx image) and logs its
  * estimated memory use. With BufferedRead the file is read into memory first.
  */
-SpriteSet *Sff_Load(const char *path)
+static SpriteSet *Sff_LoadFileExact(const char *path, const int *select, int require_atlas)
 {
     unsigned int sys_bytes = 0;
     unsigned int tex_bytes = 0;
     SpriteSet *set;
     Stream *s;
 
-    if (!g_bufferedRead) {
+    if (!g_bufferedRead || select) {
         s = Stream_OpenFile(path, "rb");
         if (s == NULL) {
             return NULL;
@@ -975,7 +981,17 @@ SpriteSet *Sff_Load(const char *path)
         s->owns_buf = 1;
     }
     Stream_Seek(s, 0, SEEK_SET);
-    if (File_GetType(path) == FILETYPE_PCX) {
+    if (require_atlas) {
+        unsigned version;
+        if (Stream_Seek(s, 12, SEEK_SET) || Stream_ReadU32(s, &version) || version != SFF_VERSION_300) {
+            Stream_Close(s);
+            return NULL;
+        }
+        Stream_Seek(s, 0, SEEK_SET);
+    }
+    if (select) {
+        set = Sff_LoadSelected(s, select);
+    } else if (File_GetType(path) == FILETYPE_PCX) {
         set = Pcx_Load(s, 0);
     } else {
         set = Sff_LoadStream(s);
@@ -988,4 +1004,39 @@ SpriteSet *Sff_Load(const char *path)
     MatchLog_Printf(SFF_LOG_INFO, "SFF %s estimated mem use: %uk sys %uk tex\n", path, sys_bytes >> 10,
                     tex_bytes >> 10);
     return set;
+}
+
+/* Loose assets and ZIP members use the same sibling preference. A
+ * prefixed name explicitly requested in a DEF is always opened exactly. */
+SpriteSet *Sff_LoadSelectedFile(const char *path, const int *select)
+{
+    char sibling[0x206];
+    if (Sff_AtlasSibling(path, sibling, sizeof(sibling)) && File_Exists(sibling)) {
+        SpriteSet *set = Sff_LoadFileExact(sibling, select, 1);
+        if (set) return set;
+        Log_Printf("Invalid or unreadable SFF atlas %s; trying %s\n", sibling, path);
+    }
+    return Sff_LoadFileExact(path, select, 0);
+}
+
+SpriteSet *Sff_Load(const char *path)
+{
+    return Sff_LoadSelectedFile(path, NULL);
+}
+
+SpriteSet *Sff_LoadZipMember(Stream *zip, const char *path, const int *select)
+{
+    char sibling[0x206];
+    if (Sff_AtlasSibling(path, sibling, sizeof(sibling)) && Stream_ZipLoad(zip, sibling)) {
+        unsigned version;
+        SpriteSet *set = NULL;
+        if (!Stream_Seek(zip, 12, SEEK_SET) && !Stream_ReadU32(zip, &version) &&
+            version == SFF_VERSION_300 && !Stream_Seek(zip, 0, SEEK_SET))
+            set = select ? Sff_LoadSelected(zip, select) : Sff_LoadStream(zip);
+        if (set) return set;
+        Stream_ZipUnload(zip);
+        Log_Printf("Invalid SFF atlas ZIP member %s; trying %s\n", sibling, path);
+    }
+    if (!Stream_ZipLoad(zip, path)) return NULL;
+    return select ? Sff_LoadSelected(zip, select) : Sff_LoadStream(zip);
 }
