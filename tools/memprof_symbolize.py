@@ -10,7 +10,7 @@ the PCs are absolute, so the base is subtracted before addr2line is asked.
 
 Usage:
   python3 tools/memprof_symbolize.py mugen.memprof \
-      --binary build/mingw-sdl2/mugen-mingw-win32-sdl2.exe \
+      --binary build/mingw-sdl2/mugen-win32.exe \
       [--addr2line i686-w64-mingw32-addr2line] [--top 10]
 
 If the binary is stripped, use the unstripped one from the build tree (the

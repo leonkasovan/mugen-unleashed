@@ -185,8 +185,8 @@ if "%DO_BUILD32%"=="0" if "%DO_BUILD64%"=="0" (
 echo.
 echo Done.
 echo.
-if "%DO_BUILD32%"=="1" call :report_exe win32 "install\mugen-mingw-win32-sdl2.exe"
-if "%DO_BUILD64%"=="1" call :report_exe win64 "install\mugen-mingw-win64-sdl2.exe"
+if "%DO_BUILD32%"=="1" call :report_exe win32 "install\mugen-win32.exe"
+if "%DO_BUILD64%"=="1" call :report_exe win64 "install\mugen-win64.exe"
 if exist "%ROOT%\install\data\mugen.cfg" (
     echo   data   %ROOT%\install
 ) else (
@@ -195,8 +195,8 @@ if exist "%ROOT%\install\data\mugen.cfg" (
 echo.
 echo Each build is installed next to the game data. Run it from there:
 echo   cd install
-if "%DO_BUILD32%"=="1" echo   mugen-mingw-win32-sdl2.exe
-if "%DO_BUILD64%"=="1" echo   mugen-mingw-win64-sdl2.exe
+if "%DO_BUILD32%"=="1" echo   mugen-win32.exe
+if "%DO_BUILD64%"=="1" echo   mugen-win64.exe
 exit /b 0
 
 rem ---------------------------------------------------------------- helpers --
@@ -538,8 +538,8 @@ if not "%B_RC%"=="0" (
     echo   ERROR: the %B_NAME% build failed
     exit /b 1
 )
-set "B_EXE=%ROOT%\build\mingw64-sdl2\mugen-mingw-win64-sdl2.exe"
-if /i "%B_NAME%"=="win32" set "B_EXE=%ROOT%\build\mingw-sdl2\mugen-mingw-win32-sdl2.exe"
+set "B_EXE=%ROOT%\build\mingw64-sdl2\mugen-win64.exe"
+if /i "%B_NAME%"=="win32" set "B_EXE=%ROOT%\build\mingw-sdl2\mugen-win32.exe"
 if not exist "%B_EXE%" (
     echo   ERROR: the build reported success but %B_EXE% is missing
     exit /b 1
@@ -559,8 +559,8 @@ if not "%B_RC%"=="0" (
     echo   ERROR: the %B_NAME% install failed
     exit /b 1
 )
-set "B_INSTALL=%ROOT%\install\mugen-mingw-win64-sdl2.exe"
-if /i "%B_NAME%"=="win32" set "B_INSTALL=%ROOT%\install\mugen-mingw-win32-sdl2.exe"
+set "B_INSTALL=%ROOT%\install\mugen-win64.exe"
+if /i "%B_NAME%"=="win32" set "B_INSTALL=%ROOT%\install\mugen-win32.exe"
 if not exist "%B_INSTALL%" (
     echo   ERROR: make install reported success but %B_INSTALL% is missing
     exit /b 1

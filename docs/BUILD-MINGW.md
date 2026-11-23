@@ -1,6 +1,6 @@
 # Building the static executable with GNU Make and GCC
 
-`Makefile` builds **`mugen-mingw-win32-sdl2.exe`**: a single self-contained 32-bit Windows
+`Makefile` builds **`mugen-win32.exe`**: a single self-contained 32-bit Windows
 executable with no DLL dependencies besides the Windows system ones. GNU Make +
 GCC. This is the supported Windows build; root MSVC/CMake has been removed.
 
@@ -96,7 +96,7 @@ build.bat /build32       :: cmd.exe: the whole job, reference build
 ```sh
 make check-toolchain     # verifies the 32-bit toolchain and that the static
                          # archives (not just .pc files) are present
-make -j8                 # build/mingw-sdl2/mugen-mingw-win32-sdl2.exe (SDL2 backend)
+make -j8                 # build/mingw-sdl2/mugen-win32.exe (SDL2 backend)
 make install             # strip it and copy it into install/
 ```
 
@@ -108,7 +108,7 @@ Targets and variables:
 
 | Command | Effect |
 |---|---|
-| `make` | build `$(TARGET)`; the SDL2 backend by default, so `build/mingw-sdl2/mugen-mingw-win32-sdl2.exe` |
+| `make` | build `$(TARGET)`; the SDL2 backend by default, so `build/mingw-sdl2/mugen-win32.exe` |
 | `make -j8` | parallel build, from scratch in ~30 s on a recent machine |
 | `make V=1` | print the full command lines |
 | `make DEBUG=1` | `-O0 -g3` build, in its own directory with `BUILD=build/mingw-debug` |
@@ -279,7 +279,7 @@ Windows system DLLs only, plus `msvcrt.dll` (MinGW's CRT, present on every
 Windows since XP). Verified with:
 
 ```sh
-objdump -p build/mingw-sdl2/mugen-mingw-win32-sdl2.exe | grep "DLL Name"
+objdump -p build/mingw-sdl2/mugen-win32.exe | grep "DLL Name"
 ```
 
 Note the executable *exports* a few hundred SDL/Mixer/TTF names. Those come
@@ -342,7 +342,7 @@ The standalone `mugen-static.manifest` is embedded as resource `1 24`
 3. Generate `build/mingw-sdl2/obj/res/mugen_all.rc` — a copy of `src/mugen.rc` with
    the assembly manifest appended as resource `1 24` — and compile it with
    `windres`. The source resource and manifest files remain unchanged.
-4. Link `build/mingw-sdl2/mugen-mingw-win32-sdl2.exe` with `-mwindows` (GUI subsystem,
+4. Link `build/mingw-sdl2/mugen-win32.exe` with `-mwindows` (GUI subsystem,
    `WinMain` from `src/platform_main_win32.c`) and `-Wl,--gc-sections` so unreferenced
    archive members are dropped.
 5. `make install` strips a copy and puts it in `install/`.

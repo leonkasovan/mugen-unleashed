@@ -294,7 +294,7 @@ with no pixel parity claim. The probe was removed after the runs.
 ### ARM64 RenderScale retest
 
 To enable the smaller game buffer, uncomment `RenderScale = 0.5` under
-`[Video]` in `data/mugen.arm64.cfg`. ARM64 Linux GLES defaults to
+`[Video]` in `data/mugen.linux_arm64.cfg`. ARM64 Linux GLES defaults to
 `1.0` and accepts values from `0.5` through `1.0`. The setting scales
 the game color and depth buffers and maps clipping to the smaller
 viewport. The game projection, output drawable, and presentation

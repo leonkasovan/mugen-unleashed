@@ -64,8 +64,8 @@ int main(void)
     /* Port sound cache settings must override per key, while volumes stay
      * owned by the game's options screen, on every shipped platform. */
     {
-        const char *paths[] = { "port/arm64/mugen.arm64.cfg",
-            "port/android/mugen.android.cfg", "port/psvita/mugen.psvita.cfg" };
+        const char *paths[] = { "res/configs/mugen.linux_arm64.cfg",
+            "res/configs/mugen.android.cfg", "res/configs/mugen.psvita.cfg" };
         const char *names[] = { "Snd.LazyDecode", "Snd.Cache.AutoGrow",
             "Snd.Cache.InitialMB", "Snd.Cache.MaxMB" };
         const int expected[] = { 1, 1, 8, 20 };

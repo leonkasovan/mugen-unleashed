@@ -98,7 +98,7 @@ use the manual commands below.
 | libc | newlib |
 | Graphics | **vitaGL** — GL 1.x/2.1 compatibility layer over SceGxm |
 | SDL | **SDL2** from VitaSDK (`libSDL2.a`); no SDL1 libraries |
-| Output | `mugen-psvita.self` (runnable) and `mugen-psvita.vpk` (installable) |
+| Output | `mugen-psvita.self` (runnable) and `mugen-psvita.vpk` (installable); both gain `-debug` with `--debug` |
 
 ### SDL2 backend and display ownership
 
@@ -218,10 +218,10 @@ chooses Ninja, then Unix Makefiles, for exactly this reason.
 
 ### Configuration ownership
 
-The `data/mugen.cfg` packed into the VPK is `res/mugen.cfg`, the project's
-documented default — the same file `make install` puts in the game tree and the
-Android build stages. The required platform overlay is
-`port/psvita/mugen.psvita.cfg`, selected by `MUGEN_VITA_CFG`. Localized
+The `data/mugen.cfg` packed into the VPK is `res/configs/mugen.cfg`, the
+project's documented default — the same file every target embeds and extracts.
+The required platform overlay is `res/configs/mugen.psvita.cfg`, selected by
+`MUGEN_VITA_CFG` and also embedded in the executable. Localized
 write-back groups such as `[en.Options]` remain owned by the game's config.
 `--data DIR` is the exception: a tree the caller supplied ships with its own
 `data/mugen.cfg` (`MUGEN_VITA_GAME_CFG=` empty).
@@ -230,7 +230,7 @@ The old `port/psvita/mugen.cfg` is a historical SDL1 template, not a build input
 ### `mugen.psvita.cfg` is merged over the game's `mugen.cfg`
 
 A desktop `data/mugen.cfg` needs Vita-specific settings, so the port ships its
-own file — `port/psvita/mugen.psvita.cfg`, packed as `data/mugen.psvita.cfg`:
+own file — `res/configs/mugen.psvita.cfg`, packed as `data/mugen.psvita.cfg`:
 
 ```ini
 [Config]
@@ -243,8 +243,8 @@ FullScreen = 1          ; was 0
 ```
 
 The values above are not packed by rewriting anything: `data/mugen.cfg` is
-`res/mugen.cfg` (or, with `--data`, the supplied tree's own copy), and
-`port/psvita/mugen.psvita.cfg` is packed beside it as `data/mugen.psvita.cfg`.
+`res/configs/mugen.cfg` (or, with `--data`, the supplied tree's own copy), and
+`res/configs/mugen.psvita.cfg` is packed beside it as `data/mugen.psvita.cfg`.
 At start-up the engine merges that file over the game's **per key**
 (`src/configmerge.c`, called from `Config_Load` and `Options_Load`): a key the
 platform file names wins, every other key keeps the game's value, and a group
@@ -262,7 +262,7 @@ RenderMode = OpenGL
 FullScreen = 1
 ```
 
-To change any of it, edit `port/psvita/mugen.psvita.cfg` and rebuild — there is no
+To change any of it, edit `res/configs/mugen.psvita.cfg` and rebuild — there is no
 flag for these values, and `--renderer`/`--precache`/`--resolution` now fail with
 a message naming the file rather than being silently ignored. A plain
 `cmake --build` repacks the edited file; no reconfigure is needed.
@@ -285,8 +285,8 @@ build instead of the console.
 
 **Your game tree is never modified, and nothing in it is rewritten.** The
 substitution happens only in the VPK's file list: `data/mugen.cfg` comes from
-`res/mugen.cfg` (or the supplied tree, with `--data`), and
-`data/mugen.psvita.cfg` from `port/psvita/`. The tree on disk is untouched.
+`res/configs/mugen.cfg` (or the supplied tree, with `--data`), and
+`data/mugen.psvita.cfg` from `res/configs/`. The tree on disk is untouched.
 Because the merge happens in memory at start-up, a user who edits
 `data/mugen.cfg` on the console keeps their change; only the keys the platform
 file names are overridden.
@@ -335,7 +335,7 @@ cmake -S port/psvita -B build/psvita -G Ninja \
 | `MUGEN_VITA_VERSION` | `01.00` | `APP_VER`, format `##.##` |
 | `MUGEN_VITA_MEMSIZE` | `0` | `vita-make-fself -m`: `0` for a normal app (recommended), `0x1000`–`0x12800` KiB for system mode |
 | `MUGEN_VITA_HEAP_MIB` | `64` | newlib heap; SDL's Vita video driver needs process memory for GXM too, so an oversized heap starves `sceGxmInitialize` |
-| `MUGEN_VITA_CFG` | `port/psvita/mugen.psvita.cfg` | Platform config packed verbatim as `data/mugen.psvita.cfg`. Required: a missing file, a missing `RenderMode`, or an unsupported resolution fails the configure |
+| `MUGEN_VITA_CFG` | `res/configs/mugen.psvita.cfg` | Platform config packed verbatim as `data/mugen.psvita.cfg`. Required: a missing file, a missing `RenderMode`, or an unsupported resolution fails the configure |
 | `MUGEN_VITA_SHADER_COMPILER` | `build/downloads/libshacccg.suprx` | Module bundled as `module/libshacccg.suprx`; `build.bat` unpacks the release asset there. Its default is passed on every build |
 | `MUGEN_VITA_ICON_ICO` | `res/icons/1.ico` | the artwork every `sce_sys/` image is derived from |
 | `MUGEN_VITA_ICON_SIZE` | `128` | `icon0.png` edge length (the Vita expects 128) |
@@ -517,7 +517,7 @@ blitmode   = hardware
 
 `960x544` is the native output/render default, set by `[Config]`
 `GameWidth/GameHeight` and `[Video]` `Width/Height` in
-`port/psvita/mugen.psvita.cfg`. For an explicit smaller software target, change
+`res/configs/mugen.psvita.cfg`. For an explicit smaller software target, change
 both pairs in that file (e.g. `480x272`) and rebuild. Native resolution
 performance must be measured on hardware; the successful game run reported
 below used 480x272.
@@ -1098,7 +1098,7 @@ port\psvita\build.bat
 ```
 
 The renderer and precache are not flags: they are `[Video] RenderMode = OpenGL`
-and `[Misc] Precache = 0` in `port/psvita/mugen.psvita.cfg`, and the configure
+and `[Misc] Precache = 0` in `res/configs/mugen.psvita.cfg`, and the configure
 log prints what it read from that file (`opengl 960x544, game 960x544,
 FullScreen 1, Precache 0`). Edit the file for `system` (the software SceGxm
 path) or to opt into `Precache = 1`; the separate worker stack fix is not part
@@ -1230,7 +1230,7 @@ live GXM context.
 ### 3D stage render scale (PS Vita performance regression)
 
 **Vita default: direct rendering, `[Video] Stage3DRenderScale = 100`.**
-The packed default in `port/psvita/mugen.psvita.cfg` and the fallback
+The packed default in `res/configs/mugen.psvita.cfg` and the fallback
 in `src/config.c` both use 100. The normal Vita build forces 100 even
 when another config asks for a smaller value; it logs the override once.
 Characters, effects, HUD and the 3D model all render to the normal game
@@ -1528,9 +1528,9 @@ cmake --build build/psvita-gl
 bash tools/test_vita_video.sh
 ```
 
-Keep `[Misc] Precache = 0` in `port/psvita/mugen.psvita.cfg` for the hardware
+Keep `[Misc] Precache = 0` in `res/configs/mugen.psvita.cfg` for the hardware
 test; the precache stack issue is separate. Nothing is rewritten at build time:
-check `port/psvita/mugen.psvita.cfg` itself before installing.
+check `res/configs/mugen.psvita.cfg` itself before installing.
 
 A Linux-hosted VitaSDK GCC 15.2.0 cross build, using the pinned SDK's dependency
 archives, completed through ELF, SELF and VPK with the splash, shader and

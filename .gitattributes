@@ -5,6 +5,10 @@
 *.bat   text eol=crlf
 *.cmd   text eol=crlf
 
+# Shell scripts must stay LF in every checkout: sh rejects a CRLF shebang line
+# and `set -eu` fails with "Illegal option -" when the file carries CR.
+*.sh    text eol=lf
+
 # Binary artefacts that must never be line-ending converted.
 *.png   binary
 *.ico   binary

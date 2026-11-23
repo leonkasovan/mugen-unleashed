@@ -28,6 +28,7 @@
 #include <pthread.h>
 
 #include "mugen.h"
+#include "configembed.h"
 
 #define WINDOW_ICON_ID 101     /* icon resource in mugen.exe */
 
@@ -198,6 +199,13 @@ void System_Init(void)
         }
     }
 
+    /*
+     * Port addition: the configurations are embedded in the executable. Write
+     * the ones the tree is missing before Config_Load opens them, so a tree (or
+     * an install/, APK or VPK payload) needs no config copied in by hand. An
+     * existing file is never touched.
+     */
+    Config_Embedded_Extract();
     Log_Printf("Reading configuration file...");
     if (!Config_Load()) {
         Error_Printf("Error reading %s\n", "data/mugen.cfg");

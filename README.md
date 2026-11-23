@@ -10,7 +10,7 @@ retired. Android and PS Vita retain their own CMake projects.
 | Platform | Entry point | Dependencies/rendering |
 |---|---|---|
 | Windows 32/64-bit | GNU Make + matching MinGW-w64 kit | Static SDL2, SDL2_mixer, SDL2_ttf; System/desktop GL |
-| Linux x86-64 | GNU Make | SDL2 development packages; System/desktop GL or GLES |
+| Linux x86-64 | `build.sh` (Linux) · GNU Make | SDL2 development packages; System/desktop GL or GLES |
 | Linux ARM64 | `port\arm64\build.bat` (cmd.exe) · `port\arm64\build.ps1` (PowerShell) | SDL2 target sysroot; System/GLES |
 | Android | `port\android\build.bat` (cmd.exe) · `port\android\build.ps1` (PowerShell) | Gradle/NDK CMake, native SDL2; System/GLES |
 | PS Vita | `port\psvita\build.bat` (cmd.exe) · `port\psvita\build.ps1` (PowerShell) | VitaSDK CMake, native SDL2; System/native vitaGL |
@@ -32,8 +32,9 @@ make check-toolchain
 ```
 
 The compiler triple selects the architecture. Outputs keep their existing
-names: `build/mingw-sdl2/mugen-mingw-win32-sdl2.exe` and
-`build/mingw64-sdl2/mugen-mingw-win64-sdl2.exe`. `make install` copies a stripped
+names: `build/mingw-sdl2/mugen-win32.exe` and
+`build/mingw64-sdl2/mugen-win64.exe` (a `DEBUG=1` build appends `-debug`).
+`make install` copies a stripped
 binary to `install/`. See [the MinGW guide](docs/BUILD-MINGW.md) and
 [the Win64 notes](docs/BUILD-MINGW64.md).
 
@@ -42,10 +43,25 @@ binary to `install/`. See [the MinGW guide](docs/BUILD-MINGW.md) and
 ```sh
 sudo apt-get install build-essential pkg-config libsdl2-dev libsdl2-mixer-dev \
     libsdl2-ttf-dev libpng-dev zlib1g-dev libglu1-mesa-dev
+./build.sh              # check packages, fetch game data if absent, build, install
+./build.sh --check      # report the target and verify the packages; build nothing
+```
+
+`build.sh` is the Linux counterpart of `build.bat`: there is no kit or
+dependency tree to install, because the distribution's `-dev` packages are the
+tree and Lua, glad, minizip, libresample and LZ4 build from `third_party/`. The
+target comes from the compiler's triple, so the same script builds
+`linux-arm64` on an ARM64 host. `--debug`, `--jobs N` and `--offline` are in
+[the Linux guide](docs/BUILD-LINUX.md).
+
+Or drive the Makefile directly:
+
+```sh
 make -j8
 ```
 
-The x86-64 output is `build/linux-x64-sdl2/mugen-linux-x64`. ARM64 defaults to
+The x86-64 output is `build/linux-x64-sdl2/mugen-linux-x64` (`-debug` is
+appended with `./build.sh --debug`). ARM64 defaults to
 GLES; `MUGEN_GLES=0|1` selects the desktop/GLES renderer. See
 [the Linux guide](docs/BUILD-LINUX.md) and [ARM64 setup](port/arm64/README.md).
 
@@ -60,9 +76,11 @@ enabled on Vita/GLES.
 ## Game data and settings
 
 The engine requires a compatible game tree in `install/`; existing assets and
-`mugen.cfg` settings are retained. `tools/fetch_game_data.sh` can populate an
-empty installation. Keyboard/gamepad binding numbers and resolution settings
-are unchanged by the SDL2-only transition.
+`mugen.cfg` settings are retained. `data/mugen.cfg` and the platform overlay are
+embedded in the binary and written only when the tree lacks them, so no config
+has to be copied in by hand. `tools/fetch_game_data.sh` can populate an empty
+installation. Keyboard/gamepad binding numbers and resolution settings are
+unchanged by the SDL2-only transition.
 
 ## Validation and migration record
 

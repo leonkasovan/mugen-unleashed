@@ -45,7 +45,7 @@ cd install
 ```
 
 Use the actual Makefile BUILD path if overridden. On Windows the equivalent
-executable is `mugen-mingw-win32-sdl2.exe` or `mugen-mingw-win64-sdl2.exe` in
+executable is `mugen-win32.exe` or `mugen-win64.exe` in
 its build directory. The character definition remains upstream's
 `chars/kfm_zss/kfm_zss.def`; tests must not silently replace its primary state
 file or remove unsupported controllers to report a pass.

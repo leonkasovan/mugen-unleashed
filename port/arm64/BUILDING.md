@@ -14,7 +14,7 @@ ssh ark@192.168.7.2 'uname -m; ldd --version | head -1'
 
 ArkOS on the RG351MP uses glibc 2.30. Use the default Arm GNU 9.2
 toolchain for that device. The port defaults to GLES and writes
-`build/linux-arm64-aarch64-none-linux-gnu-sdl2/mugen-linux-arm64-aarch64-none-linux-gnu`.
+`build/linux-arm64-aarch64-none-linux-gnu-sdl2/mugen-linux-arm64`.
 See the [port README](README.md) for toolchain overrides, offline builds,
 and dependency setup.
 
@@ -51,7 +51,7 @@ scratch copy, so it does not replace the launcher's executable.
 
 ```powershell
 ssh ark@192.168.7.2 'cd /roms/ports/hdbz_indigo && mkdir -p build/tmp/arm64-test'
-tar.exe -cf - -C build/tmp/arm64-test mugen-linux-arm64-aarch64-none-linux-gnu |
+tar.exe -cf - -C build/tmp/arm64-test mugen-linux-arm64 |
   ssh ark@192.168.7.2 'cd /roms/ports/hdbz_indigo/build/tmp/arm64-test && tar -xf -'
 ```
 
@@ -75,9 +75,9 @@ From an SSH session on the device:
 
 ```sh
 cd /roms/ports/hdbz_indigo
-chmod +x build/tmp/arm64-test/mugen-linux-arm64-aarch64-none-linux-gnu
+chmod +x build/tmp/arm64-test/mugen-linux-arm64
 MUGEN_SPRITEBATCH=1 MUGEN_FRAME_TRACE=build/tmp/arm64-test/match.csv \
-  build/tmp/arm64-test/mugen-linux-arm64-aarch64-none-linux-gnu \
+  build/tmp/arm64-test/mugen-linux-arm64 \
   -nosound -sessionseed 12345 -p1 GohanZ2 -p2 VegetaZ2 -s hdbz_lookout
 ```
 

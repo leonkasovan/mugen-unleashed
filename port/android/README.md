@@ -246,8 +246,8 @@ SpriteBatch = 1
 ```
 
 The config is under `Android/data/org.mugen_unleashed.mugen/files/mugen/` on
-app-specific external storage. For a fresh install, the same settings can be
-staged using `GAME_CFG`. APK updates preserve an existing edited `mugen.cfg`.
+app-specific external storage. A fresh install gets the embedded default; APK
+updates preserve an existing edited `mugen.cfg`.
 
 `SpriteAtlas` packs eligible indexed SFF sprites into shared textures.
 `SpriteBatch` combines compatible consecutive atlas draws while preserving
@@ -322,9 +322,10 @@ regenerate the PNGs with the two
 `tools/iconpack.py` subcommands before building with it.
 `--clean` removes generated app build/CMake output; it does not uninstall tools.
 
-Output: **`build/android/mugen-android-arm64-v8a.apk`**.
-Only arm64-v8a is currently supported by Gradle; another `ANDROID_ABI` is rejected
-rather than producing a mislabeled arm64 APK.
+Output: **`build/android/mugen-android-arm64-v8a.apk`**; with `--debug`,
+`build/android/mugen-android-arm64-v8a-debug.apk`. Only arm64-v8a is currently
+supported by Gradle; another `ANDROID_ABI` is rejected rather than producing a
+mislabeled arm64 APK.
 
 After sourcing the tool environment, use the SDK's adb:
 
@@ -388,13 +389,14 @@ mismatched pixels. Offscreen indexed font surfaces remain supported. Text scalin
 
 ### `data/mugen.cfg` is the project default, with an Android overlay
 
-`build.bat` stages `res/mugen.cfg` -- the same default configuration `make
-install` puts in the game tree and the Vita VPK packs -- as the APK's
-`data/mugen.cfg`. `GAME_CFG=<path>` stages a different file.
+`res/configs/mugen.cfg` -- the same default configuration every target embeds
+-- is compiled into `libmain.so` and written as the APK's `data/mugen.cfg` when
+the extracted asset tree has none (`src/configembed.c`). `build.bat` stages no
+configuration, and `GAME_CFG` is gone.
 
 Nothing Android-specific is in it. The device's settings are in
-`port/android/mugen.android.cfg`, which the build stages beside it as
-`data/mugen.android.cfg` and the engine merges over `data/mugen.cfg` per key at
+`res/configs/mugen.android.cfg`, which is embedded too and written as
+`data/mugen.android.cfg`; the engine merges it over `data/mugen.cfg` per key at
 start-up (`src/configmerge.c`): `RenderMode`, `FullScreen`, `KeepAspect`,
 `StageFit`/`SystemFit`, `GameWidth`/`GameHeight`, `FirstRun` and the sound
 cache. A key the overlay does not name keeps the game tree's value, so a tree

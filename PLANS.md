@@ -13,8 +13,8 @@ lands; keep the research sections true to the findings they were based on.
 | Area | State |
 |---|---|
 | Windows build (MSVC/CMake) | **done, verified** — `build/x86-release/mugen-msvc-win32-sdl1.exe`; `docs/BUILD-MSVC.md` |
-| Windows static build (GNU Make + MinGW-x86) | **done, verified** — `mugen-mingw-win32-sdl2.exe` by default, `mugen-mingw-win32-sdl1.exe` with `SDL_BACKEND=1`; no game DLLs needed; `docs/BUILD-MINGW.md` |
-| Windows 64-bit (GNU Make, experimental) | **done, log-verified** — `MUGEN_TARGET=win64` → `mugen-mingw-win64-sdl2.exe`; `mugen.log` identical to the win32 build after numeric normalisation, over both a quick VS and a 2-round AI-vs-AI match; the only residual difference is the SDL *revision* string, which comes from each kit's own SDL build. `docs/BUILD-MINGW64.md` |
+| Windows static build (GNU Make + MinGW-x86) | **done, verified** — `mugen-win32.exe` by default (`mugen-win32-debug.exe` with `DEBUG=1`); no game DLLs needed; `docs/BUILD-MINGW.md` |
+| Windows 64-bit (GNU Make, experimental) | **done, log-verified** — `MUGEN_TARGET=win64` → `mugen-win64.exe`; `mugen.log` identical to the win32 build after numeric normalisation, over both a quick VS and a 2-round AI-vs-AI match; the only residual difference is the SDL *revision* string, which comes from each kit's own SDL build. `docs/BUILD-MINGW64.md` |
 | SDL backend | **SDL2 is the default** (`SDL_BACKEND=2`: `src/sdl2compat.c`, `src/sdl2surface.c`); SDL 1.2 (`SDL_BACKEND=1`) is built on Windows for the differential log/render comparisons |
 | libresample | **vendored and ported** to multi-channel; `third_party/libresample/VENDORED.md` |
 | Lua | **done** — `lmode`/`lexec` implemented, full API documented in `docs/LUA.md` |
@@ -115,7 +115,7 @@ from (see "Goal" and "Float precision per architecture").
 ## Static build (done)
 
 `make` (there is no `static` branch any more; `sdl2` is the main line)
-produces **`mugen-mingw-win32-sdl2.exe`**, and `make SDL_BACKEND=1` the
+produces **`mugen-win32.exe`**, and `make SDL_BACKEND=1` the
 SDL 1.2 variant `mugen-mingw-win32-sdl1.exe`: one self-contained 32-bit
 Windows executable either way. The SDL2 build's entire import table is
 
@@ -369,8 +369,8 @@ Four targets, all from the existing `Makefile`:
 
 | Target | Detection | Output | Fidelity |
 |---|---|---|---|
-| Windows i686 | `uname -s` = `Windows_NT`/`MINGW*`/`MSYS*` **and** triple `i686-w64-mingw32` | `mugen-mingw-win32-sdl2.exe` (`-sdl1` for SDL 1.2) | **reference**: layouts and x87 bit-identical to the original |
-| Windows x86-64 (experimental) | compiler triple `x86_64-w64-mingw32` (64-bit kit on `PATH`; `MUGEN_TARGET=win64` pins it) | `mugen-mingw-win64-sdl2.exe` | **functional**: layouts are natural, not the original's; not log-verified yet |
+| Windows i686 | `uname -s` = `Windows_NT`/`MINGW*`/`MSYS*` **and** triple `i686-w64-mingw32` | `mugen-win32.exe` | **reference**: layouts and x87 bit-identical to the original |
+| Windows x86-64 (experimental) | compiler triple `x86_64-w64-mingw32` (64-bit kit on `PATH`; `MUGEN_TARGET=win64` pins it) | `mugen-win64.exe` | **functional**: layouts are natural, not the original's; not log-verified yet |
 | Linux x86-64 | `uname -s` = `Linux`, triple `x86_64-*-linux-gnu` | `mugen-linux-x64` | **faithful**: x87 reproducible via `-mfpmath=387` (verified, see below) |
 | Linux arm64 | `uname -s` = `Linux`, triple `aarch64-*-linux-gnu` | `mugen-linux-arm64` | **functional**: no x87 exists, float drift accepted and log-diffed |
 
@@ -421,7 +421,7 @@ Only these differ; the file lists and the engine are shared.
 
 | Variable | win32 | linux-x64 | linux-arm64 |
 |---|---|---|---|
-| `TARGET` | `mugen-mingw-win32-sdl2.exe` (`-sdl1` with `SDL_BACKEND=1`) | `mugen-linux-x64` | `mugen-linux-arm64` |
+| `TARGET` | `mugen-win32.exe` (`mugen-win32-debug.exe` with `DEBUG=1`) | `mugen-linux-x64` | `mugen-linux-arm64` |
 | `SDL_BACKEND` | `2` by default, `1` for the SDL 1.2 reference backend | `2` only | `2` only |
 | `-m32` / `-m64` | `-m32` | none (native) | none (native) |
 | float flags | `-mfpmath=387 -fexcess-precision=standard` | **same** — x87 still exists on x86-64 | **none** — no x87; SSE/NEON gives `FLT_EVAL_METHOD == 0` |

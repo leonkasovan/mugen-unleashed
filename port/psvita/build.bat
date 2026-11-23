@@ -51,8 +51,9 @@ rem                              then PATH)
 rem
 rem  Output: build\psvita\mugen-psvita.self   the runnable module
 rem          build\psvita\mugen-psvita.vpk    installable homebrew (VitaShell)
+rem          (both gain a -debug suffix with --debug)
 rem
-rem  The Vita's configuration is port\psvita\mugen.psvita.cfg, packed as
+rem  The Vita's configuration is res\configs\mugen.psvita.cfg, packed as
 rem  data/mugen.psvita.cfg and merged over the game's data/mugen.cfg at
 rem  start-up. RenderMode, Precache, GameWidth/GameHeight and the video size
 rem  are read from that file; the flags that used to write them
@@ -60,9 +61,10 @@ rem  (--renderer, --precache, --resolution, --game-resolution,
 rem  --output-resolution) fail with a message naming the file rather than being
 rem  silently ignored.
 rem
-rem  data/mugen.cfg in the VPK is res\mugen.cfg, the project default that make
-rem  install puts in the game tree and the Android build stages. --data is the
-rem  exception: a tree the caller supplied ships with its own mugen.cfg.
+rem  data/mugen.cfg in the VPK is res\configs\mugen.cfg, the project default.
+rem  Both files are also embedded in the executable, which writes them into a
+rem  tree that lacks them. --data is the exception: a tree the caller supplied
+rem  ships with its own mugen.cfg.
 rem
 rem  Nothing here writes outside the repository except VITASDK itself, which is
 rem  not our artefact and cannot work anywhere else: downloads are cached in
@@ -170,7 +172,7 @@ if /I "!ARG!"=="--no-shader-compiler" ( set "SHADER_COMPILER_SET=1" & set "SHADE
 if /I "!ARG!"=="--no-data"           ( set "DATA_SET=1" & set "DATA_DIR=" & shift & goto parse )
 
 rem Retired with the build-time config patch: these values live in
-rem port\psvita\mugen.psvita.cfg now, which the VPK packs verbatim and the
+rem res\configs\mugen.psvita.cfg now, which the VPK packs verbatim and the
 rem engine merges over data/mugen.cfg. Failing here beats accepting a flag that
 rem no longer has anything to change.
 if /I "!ARGNAME!"=="--resolution"        goto retired_size
@@ -358,17 +360,17 @@ if defined DATA_DIR set "DATA_FWD=%DATA_DIR:\=/%"
 rem Which mugen.cfg goes into the VPK as data/mugen.cfg.
 rem
 rem The default tree is this project's own install/, and what ships with it is
-rem res\mugen.cfg -- the documented default that `make install` puts in the
-rem tree and port\android\build.bat stages into the APK, so all three carry one
-rem configuration with one set of comments. The Vita's own values are not in it:
-rem they are in mugen.psvita.cfg, merged over it per key at start-up.
+rem res\configs\mugen.cfg -- the documented default every target embeds and
+rem extracts, so all of them carry one configuration with one set of comments.
+rem The Vita's own values are not in it: they are in mugen.psvita.cfg, merged
+rem over it per key at start-up.
 rem
 rem --data names a tree the caller supplied, and that tree's own data/mugen.cfg
 rem is what gets packed: their tree, their config. Nothing is rewritten on
 rem disk either way; the substitution happens only in the VPK's file list.
 set "GAME_CFG="
 set "GAME_CFG_FWD="
-if not "%DATA_ARG%"=="1" set "GAME_CFG=%ROOT%\res\mugen.cfg"
+if not "%DATA_ARG%"=="1" set "GAME_CFG=%ROOT%\res\configs\mugen.cfg"
 if defined GAME_CFG set "GAME_CFG_FWD=%GAME_CFG:\=/%"
 
 rem ------------------------------------------------------------------ build
@@ -449,7 +451,7 @@ if errorlevel 1 goto fail
 rem Port fix: every -D value is passed with forward slashes. A backslash inside
 rem a -D argument is an escape once it reaches CMake, and CMakeLists.txt appends
 rem "/arm-vita-eabi" to the paths it reads, so the mixed form is what breaks.
-set "CFG_ARG=%PORTDIR:\=/%/mugen.psvita.cfg"
+set "CFG_ARG=%ROOT:\=/%/res/configs/mugen.psvita.cfg"
 
 set "CMAKE_ARGS=-S "%PORTDIR%" -B "%OUT%" -G "%GENERATOR%""
 set "CMAKE_ARGS=%CMAKE_ARGS% "-DCMAKE_TOOLCHAIN_FILE=%TOOLCHAIN_FILE_WIN%""
@@ -498,8 +500,10 @@ echo     jobs      %JOBS%
 cmake.exe --build "%OUT%" --parallel %JOBS%
 if errorlevel 1 goto build_failed
 
-set "SELF=%OUT%\mugen-psvita.self"
-set "VPK=%OUT%\mugen-psvita.vpk"
+set "VITA_SUFFIX="
+if /I "%BUILD_TYPE%"=="Debug" set "VITA_SUFFIX=-debug"
+set "SELF=%OUT%\mugen-psvita%VITA_SUFFIX%.self"
+set "VPK=%OUT%\mugen-psvita%VITA_SUFFIX%.vpk"
 if not exist "%SELF%" (
     echo error: the build reported success but "%SELF%" is missing.
     goto fail
@@ -525,7 +529,7 @@ for %%A in ("%VPK%") do echo     bytes     %%~zA  %%~nxA
 echo     sha256    %HASH%
 echo.
 echo     Copy the VPK to the console and install it with VitaShell:
-echo       ux0:/  ^(USB or FTP mode^), then VitaShell -^> select mugen-psvita.vpk -^> Install
+echo       ux0:/  ^(USB or FTP mode^), then VitaShell -^> select mugen-psvita%VITA_SUFFIX%.vpk -^> Install
 echo.
 echo     The SELF cannot run on this machine; see port\psvita\README.md for
 echo     diagnosing a failed start on the console.
@@ -1020,16 +1024,16 @@ exit /b 2
 :retired_size
 echo error: %ARGNAME% is retired: the game and output sizes are [Config]
 echo        GameWidth/GameHeight and [Video] Width/Height in
-echo        %PORTDIR%\mugen.psvita.cfg. Edit that file.
+echo        %ROOT%\res\configs\mugen.psvita.cfg. Edit that file.
 exit /b 1
 :retired_renderer
 echo error: %ARGNAME% is retired: the renderer is [Video] RenderMode in
-echo        %PORTDIR%\mugen.psvita.cfg ^(system ^| opengl ^| openglscreen^).
+echo        %ROOT%\res\configs\mugen.psvita.cfg ^(system ^| opengl ^| openglscreen^).
 echo        Edit that file.
 exit /b 1
 :retired_precache
 echo error: %ARGNAME% is retired: precache is [Misc] Precache in
-echo        %PORTDIR%\mugen.psvita.cfg ^(0 is the confirmed hardware workaround^).
+echo        %ROOT%\res\configs\mugen.psvita.cfg ^(0 is the confirmed hardware workaround^).
 exit /b 1
 :configure_failed
 echo.

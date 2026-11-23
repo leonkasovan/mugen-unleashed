@@ -27,12 +27,13 @@ rem  downloads SDL2's release tarball with BITS. Nothing is fetched with git.
 rem  --check-tools never downloads; --setup stops after the tools
 rem  and libraries are in place, and --download-tools continues to the APK.
 rem
-rem  The packaged data/mugen.cfg is res\mugen.cfg, the project's documented
-rem  default, so the APK ships the same config make install and the Vita VPK do.
-rem  GAME_CFG=path stages a different one. The device's own settings -- full
-rem  screen, the panel's resolution, RenderMode -- live in
-rem  port\android\mugen.android.cfg, which the engine merges over it per key.
+rem  No configuration is staged: data/mugen.cfg and the Android overlay are
+rem  embedded in libmain.so, and the engine writes whichever is missing into the
+rem  extracted asset tree on first run (src/configembed.c). The device's own
+rem  settings -- full screen, the panel's resolution, RenderMode -- live in
+rem  res\configs\mugen.android.cfg, merged over the base per key.
 rem  Output: build\android\mugen-android-arm64-v8a.apk
+rem          build\android\mugen-android-arm64-v8a-debug.apk with --debug
 rem
 rem  Environment:
 rem    ANDROID_ABI              must stay arm64-v8a; app/build.gradle packages
@@ -45,7 +46,6 @@ rem    SDL2_DEPS_DIR            SDL2 prefix, default build\android\sdl2\abi
 rem    SDL2_COMPANION_DIR       mixer/ttf prefix, default android-deps\abi
 rem    FFMPEG_DEPS_DIR           optional WebM prefix, default build\android\ffmpeg\abi
 rem    GAME_DATA_DIR            game tree to copy, default install\
-rem    GAME_CFG                 staged data/mugen.cfg, default res\mugen.cfg
 rem    GRADLE_USER_HOME         default build\android\gradle-user-home
 rem    ANDROID_USER_HOME        default build\android\toolchains\android-user-home
 rem    MUGEN_ANDROID_TOOLS_DIR  default build\android\toolchains
@@ -312,7 +312,9 @@ if not "%NAPK%"=="1" (
     echo error: Multiple APKs in %APK_DIR%; select an output explicitly
     goto fail
 )
-set "DEST=%OUT%\mugen-android-%ANDROID_ABI%.apk"
+set "DEST=%OUT%\mugen-android-%ANDROID_ABI%"
+if /I "%BUILD_TYPE%"=="debug" set "DEST=%DEST%-debug"
+set "DEST=%DEST%.apk"
 copy /y "%APK%" "%DEST%" >nul
 if errorlevel 1 (
     echo error: cannot copy %APK% to %DEST%
@@ -865,6 +867,9 @@ for /f "usebackq delims=" %%F in (`dir /b /s /a-d`) do (
     if /I "!NAME!"=="stdout.txt" set "SKIP=1"
     if /I "!NAME!"=="stderr.txt" set "SKIP=1"
     if /I "!REL:~0,19!"=="Elecbyte.MUGEN.libs" set "SKIP=1"
+    rem The engine extracts its embedded default when this is absent; staging
+    rem the tree's copy would keep the project default from ever being used.
+    if /I "!REL!"=="data\mugen.cfg" set "SKIP=1"
     if "!SKIP!"=="0" (
         set "RD=%%~dpF"
         set "RD=!RD:%GAME_DATA_DIR%\=!"
@@ -885,35 +890,11 @@ rem The GLES shader dialect is embedded in the native library (src/shaders/gles/
 rem compiled by CMake's mugen_enable_sprite_shaders). Nothing is staged into the
 rem APK's data\gles: src/gles_render.c reads the compiled-in literals.
 
-rem Platform config: res\mugen.cfg is the project's default configuration, the
-rem same file make install puts in the game tree and the Vita VPK packs, so the
-rem APK ships the documented defaults. GAME_CFG stages a different file instead.
-rem What is Android-specific is not here: FullScreen, the panel's resolution and
-rem RenderMode live in port\android\mugen.android.cfg below, which the engine
-rem merges over this file per key at start-up, so the game tree's own values
-rem survive everywhere the device has no opinion.
-if defined GAME_CFG (
-    for %%I in ("%GAME_CFG%") do set "GAME_CFG=%%~fI"
-) else (
-    set "GAME_CFG=%ROOT%\res\mugen.cfg"
-)
-if not exist "%GAME_CFG%" (
-    rem Name the expected file, not just the path: a caller who deleted the
-    rem template needs to know what to restore.
-    echo error: staged mugen.cfg not found at %GAME_CFG%
-    echo        set GAME_CFG=path, or restore res\mugen.cfg
-    exit /b 1
-)
-if not exist "%ASSETS%\data" mkdir "%ASSETS%\data"
-copy /y "%GAME_CFG%" "%ASSETS%\data\mugen.cfg" >nul
-echo     data/mugen.cfg ^<- %GAME_CFG%
-rem The platform overlay, merged over data/mugen.cfg per key at start-up
-rem (src/configmerge.c). It carries only the keys whose right value depends on
-rem the hardware, so a game tree's own settings survive everywhere else.
-if exist "%PORTDIR%\mugen.android.cfg" (
-    copy /y "%PORTDIR%\mugen.android.cfg" "%ASSETS%\data\mugen.android.cfg" >nul
-    echo     data/mugen.android.cfg ^<- port\android\mugen.android.cfg
-)
+rem No configuration is staged. The base data/mugen.cfg and the Android overlay
+rem are embedded in libmain.so and written into the extracted asset tree when
+rem absent (src/configembed.c); the tree's own data\mugen.cfg was skipped above,
+rem so a fresh install gets the documented default and an existing one is
+rem preserved by the extractor's user-owned-file rule.
 
 rem the MSYS2 build.sh that was removed finishes with `sort -o` on the manifest. Port fix: sort.exe and
 rem find.exe are named explicitly, because Git for Windows puts a GNU sort and a

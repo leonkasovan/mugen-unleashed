@@ -20,6 +20,7 @@
 #  Outputs (in the build directory):
 #      mugen-psvita.self  the executable, runnable from ux0:app/MUGEN0001/
 #      mugen-psvita.vpk   installable homebrew, data/ included
+#      (both gain -debug with CMAKE_BUILD_TYPE=Debug)
 #
 #  Notes on the source set (read before changing anything):
 #      * The engine compiles from ../src with the non-Windows compat layer
@@ -109,16 +110,17 @@ set(MUGEN_VITA_VERSION "01.00"     CACHE STRING "APP_VER, format ##.##")
 #
 #   cmake ... -DMUGEN_VITA_DATA_DIR=C:/mugen-1.1b1
 #
-# An empty value still produces a usable mugen-psvita.vpk -- install the game tree
+# An empty value still produces a usable VPK -- install the game tree
 # under ux0:data/mugen/ afterwards (see README.md).
 set(MUGEN_VITA_DATA_DIR "" CACHE PATH
     "M.U.G.E.N directory to pack into the VPK (optional: its contents go to data/)")
 
 # ------------------------------------------------------- platform config --
 #
-# The Vita's settings live in port/psvita/mugen.psvita.cfg, which the VPK packs
+# The Vita's settings live in res/configs/mugen.psvita.cfg, which the VPK packs
 # as data/mugen.psvita.cfg exactly as written -- no build step and no flag
-# rewrites a value in it. The engine merges it over the game tree's own
+# rewrites a value in it. The engine also embeds it (src/configembed.c) and
+# writes it when the tree lacks it. It merges over the game tree's own
 # data/mugen.cfg at start-up, per key (src/configmerge.c): a key the platform
 # file names wins, everything else keeps the game's value.
 #
@@ -143,7 +145,7 @@ set(MUGEN_VITA_DATA_DIR "" CACHE PATH
 # The file is required: a VPK without it starts with the desktop values above
 # and dies before the first frame, so a missing or invalid one is a configure
 # error rather than a silent downgrade.
-set(MUGEN_VITA_CFG "${CMAKE_CURRENT_SOURCE_DIR}/mugen.psvita.cfg" CACHE FILEPATH
+set(MUGEN_VITA_CFG "${CMAKE_CURRENT_SOURCE_DIR}/../../res/configs/mugen.psvita.cfg" CACHE FILEPATH
     "platform config packed verbatim as data/mugen.psvita.cfg")
 if(NOT MUGEN_VITA_CFG)
   message(FATAL_ERROR
@@ -216,11 +218,11 @@ message(STATUS "      ${_vita_renderer} ${_vita_out_w}x${_vita_out_h}, game "
 
 # ------------------------------------------------------- game config --
 #
-# data/mugen.cfg in the VPK is res/mugen.cfg, the project's documented default:
-# the same file `make install` puts in the game tree and port\android\build.bat
-# stages into the APK, so all three ship one configuration with one set of
-# comments. The Vita's own settings are NOT here -- they are in the platform
-# file above, merged over it per key at start-up.
+# data/mugen.cfg in the VPK is res/configs/mugen.cfg, the project's documented
+# default: the same file every target embeds and extracts, so all of them ship
+# one configuration with one set of comments. The Vita's own settings are NOT
+# here -- they are in the platform file above, merged over it per key at
+# start-up.
 #
 # This decides what ships, not what the console keeps. The options screen writes
 # back into the packed data/mugen.cfg, so a player's saved values survive a
@@ -229,7 +231,7 @@ message(STATUS "      ${_vita_renderer} ${_vita_out_w}x${_vita_out_h}, game "
 # Set it empty to pack the game tree's own data/mugen.cfg instead, which is what
 # port\psvita\build.bat does when --data names a tree the caller supplied: their
 # tree, their config.
-set(MUGEN_VITA_GAME_CFG "${CMAKE_CURRENT_SOURCE_DIR}/../../res/mugen.cfg" CACHE FILEPATH
+set(MUGEN_VITA_GAME_CFG "${CMAKE_CURRENT_SOURCE_DIR}/../../res/configs/mugen.cfg" CACHE FILEPATH
     "config packed as data/mugen.cfg (empty: the game tree's own copy)")
 if(MUGEN_VITA_GAME_CFG AND
    (NOT EXISTS "${MUGEN_VITA_GAME_CFG}" OR IS_DIRECTORY "${MUGEN_VITA_GAME_CFG}"))
@@ -239,9 +241,9 @@ if(MUGEN_VITA_GAME_CFG AND
 endif()
 if(MUGEN_VITA_GAME_CFG)
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${MUGEN_VITA_GAME_CFG}")
-  message(STATUS "mugen-psvita.vpk packs ${MUGEN_VITA_GAME_CFG} as data/mugen.cfg")
+  message(STATUS "the Vita VPK packs ${MUGEN_VITA_GAME_CFG} as data/mugen.cfg")
 else()
-  message(STATUS "mugen-psvita.vpk packs the game tree's own data/mugen.cfg")
+  message(STATUS "the Vita VPK packs the game tree's own data/mugen.cfg")
 endif()
 
 # Memory budget for the process, in KiB, passed to vita-make-fself as -m.
@@ -482,6 +484,11 @@ endif()
 # absent. No data/ substitution any more.
 include("${MUGEN_ROOT}/port/cmake/Model3D.cmake")
 mugen_enable_sprite_shaders(mugen "${MUGEN_ROOT}" vita desktop)
+
+# The base config and the Vita overlay are embedded in the executable; the
+# engine writes whichever is missing into the game tree at start-up.
+include("${MUGEN_ROOT}/port/cmake/EmbedConfigs.cmake")
+mugen_embed_configs(mugen "${MUGEN_ROOT}")
 
 target_include_directories(mugen PRIVATE
   "${MUGEN_SRC}"                                  # engine headers
@@ -811,15 +818,23 @@ set_target_properties(mugen PROPERTIES OUTPUT_NAME mugen)
 #
 # MEMSIZE must stay inside vita-make-fself's accepted range; see the option's
 # comment above.
+# A debug build installs beside the release one, so the SELF and VPK say which
+# is which (mugen-psvita-debug.vpk).
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  set(MUGEN_VITA_SUFFIX "-debug")
+else()
+  set(MUGEN_VITA_SUFFIX "")
+endif()
+
 if(MUGEN_VITA_MEMSIZE GREATER 0)
   # A system-mode budget was requested explicitly.
-  vita_create_self(mugen-psvita.self mugen
+  vita_create_self(mugen-psvita${MUGEN_VITA_SUFFIX}.self mugen
     UNSAFE
     MEMSIZE ${MUGEN_VITA_MEMSIZE})
 else()
   # Normal app: no -m at all, so the system sizes the process. This is what the
   # VitaSDK samples do, and it is what GXM and vitaGL expect.
-  vita_create_self(mugen-psvita.self mugen
+  vita_create_self(mugen-psvita${MUGEN_VITA_SUFFIX}.self mugen
     UNSAFE)
 endif()
 
@@ -863,10 +878,10 @@ if(MUGEN_VITA_DATA_DIR)
 
   # --- the platform config -------------------------------------------------
   #
-  # data/mugen.cfg is res/mugen.cfg (MUGEN_VITA_GAME_CFG, set above): the
-  # project's documented default, the same file `make install` puts in the game
-  # tree and the Android build stages. The Vita's own settings are
-  # port/psvita/mugen.psvita.cfg, packed beside it as data/mugen.psvita.cfg and
+  # data/mugen.cfg is res/configs/mugen.cfg (MUGEN_VITA_GAME_CFG, set above):
+  # the project's documented default, the same file every target embeds. The
+  # Vita's own settings are res/configs/mugen.psvita.cfg, packed beside it as
+  # data/mugen.psvita.cfg and
   # merged over it per key by the engine (src/configmerge.c, called from
   # Config_Load and Options_Load). Nothing is rewritten here, which is what
   # keeps the packed file the user's once it is on the console: the options
@@ -881,10 +896,10 @@ if(MUGEN_VITA_DATA_DIR)
   # data/*.{vert,frag}: the game's data/ files are irrelevant to this renderer,
   # which reads the embedded vitaGL dialect (src/glrender.c, Glr_EmbeddedShader).
 
-  message(STATUS "mugen-psvita.vpk packs ${MUGEN_VITA_DATA_DIR} as /data")
+  message(STATUS "the Vita VPK packs ${MUGEN_VITA_DATA_DIR} as /data")
 else()
   message(STATUS
-    "mugen-psvita.vpk packs no game data (set MUGEN_VITA_DATA_DIR to include a "
+    "the Vita VPK packs no game data (set MUGEN_VITA_DATA_DIR to include a "
     "M.U.G.E.N 1.1b1 install; see port/psvita/README.md)")
 endif()
 
@@ -895,11 +910,11 @@ endif()
 # --add accepts "src=dst" for directories directly. Building the SFO and the
 # archive explicitly keeps that in one command.
 #
-# Outputs mirror what vita_create_vpk would produce: mugen-psvita.vpk next to
-# mugen-psvita.self, in the build directory.
-set(MUGEN_VITA_VPK          "${CMAKE_CURRENT_BINARY_DIR}/mugen-psvita.vpk")
+# Outputs mirror what vita_create_vpk would produce: the VPK next to the SELF,
+# in the build directory (both with a -debug suffix in a Debug build).
+set(MUGEN_VITA_VPK          "${CMAKE_CURRENT_BINARY_DIR}/mugen-psvita${MUGEN_VITA_SUFFIX}.vpk")
 set(MUGEN_VITA_SFO          "${CMAKE_CURRENT_BINARY_DIR}/param.sfo")
-set(MUGEN_VITA_EBOOT        "${CMAKE_CURRENT_BINARY_DIR}/mugen-psvita.self")
+set(MUGEN_VITA_EBOOT        "${CMAKE_CURRENT_BINARY_DIR}/mugen-psvita${MUGEN_VITA_SUFFIX}.self")
 
 add_custom_command(
   OUTPUT ${MUGEN_VITA_SFO}
@@ -907,7 +922,7 @@ add_custom_command(
           -s APP_VER=${MUGEN_VITA_VERSION}
           -s TITLE_ID=${MUGEN_VITA_TITLEID}
           "${VITA_APP_NAME}" ${MUGEN_VITA_SFO}
-  COMMENT "Generating param.sfo for mugen-psvita.vpk"
+  COMMENT "Generating param.sfo for the Vita VPK"
   VERBATIM)
 
 # Port addition: privately bundle a compiler supplied by the person building.
@@ -966,14 +981,20 @@ if(MUGEN_VITA_DATA_DIR)
   # so a stale mugen-msvc-win32-sdl1.exe (a 1.7 MB Windows PE) would otherwise be
   # packed into the VPK. The tree itself is left alone.
   set(_mugen_data_exclude
-    # current output names (see the naming scheme in the root CMakeLists.txt
-    # and the Makefile) plus legacy names from before the rename, so a stale
-    # binary left behind in install/ never gets packed as game data
+    # current output names (see the naming scheme in the root Makefile) plus
+    # legacy names from before the rename, so a stale binary left behind in
+    # install/ never gets packed as game data
+    mugen-win32.exe mugen-win64.exe
+    mugen-win32-debug.exe mugen-win64-debug.exe
+    mugen-win32-stripped.exe mugen-win64-stripped.exe
+    mugen-linux-x64 mugen-linux-arm64 mugen-linux-x86
+    mugen-linux-x64-debug mugen-linux-arm64-debug mugen-linux-x86-debug
+    mugen-linux-x64-stripped mugen-linux-arm64-stripped
+    # legacy (pre-rename)
     mugen-msvc-win32-sdl1.exe mugen-msvc-win32-sdl1.pdb
     mugen-mingw-win32-sdl2.exe mugen-mingw-win32-sdl1.exe
     mugen-mingw-win64-sdl2.exe
     mugen-mingw-win32-sdl2-stripped.exe mugen-mingw-win32-sdl1-stripped.exe
-    mugen-linux-x64 mugen-linux-arm64 mugen-linux-x86
     # legacy (pre-rename)
     mugen_unleashed.exe mugen_unleashed.pdb
     mugen-msvc-win32-sdl2.exe mugen-msvc-win32-sdl2.pdb
@@ -1036,11 +1057,11 @@ endif()
 add_custom_command(
   OUTPUT ${MUGEN_VITA_VPK}
   COMMAND ${VITA_PACK_VPK} ${_mugen_vpk_args} ${MUGEN_VITA_VPK}
-  DEPENDS ${MUGEN_VITA_SFO} ${MUGEN_VITA_EBOOT} mugen-psvita.self
+  DEPENDS ${MUGEN_VITA_SFO} ${MUGEN_VITA_EBOOT}
           ${MUGEN_VITA_ICON_PNG} ${MUGEN_VITA_BG_PNG} ${MUGEN_VITA_STARTUP_PNG}
           ${MUGEN_VITA_CFG} ${MUGEN_VITA_GAME_CFG} ${MUGEN_VITA_SHADER_COMPILER}
           "${MUGEN_VITA_SCE_SYS}/livearea/contents/template.xml"
-  COMMENT "Building mugen-psvita.vpk"
+  COMMENT "Building the Vita VPK"
   VERBATIM)
 
 add_custom_target(mugen-vpk ALL DEPENDS ${MUGEN_VITA_VPK})
@@ -1055,8 +1076,8 @@ message(STATUS "  SDL2         ${MUGEN_VITA_PKGS_sdl2_VERSION} (VitaSDK arm-vita
 message(STATUS "  vitaGL       ${MUGEN_VITA_VITAGL_LIB}")
 message(STATUS "  Title        ${VITA_APP_NAME} (${MUGEN_VITA_TITLEID} v${MUGEN_VITA_VERSION})")
 message(STATUS "  Memory       budget ${MUGEN_VITA_MEMSIZE} KiB, newlib heap ${MUGEN_VITA_HEAP_MIB} MiB")
-message(STATUS "  Output       ${CMAKE_CURRENT_BINARY_DIR}/mugen-psvita.self")
-message(STATUS "               ${CMAKE_CURRENT_BINARY_DIR}/mugen-psvita.vpk")
+message(STATUS "  Output       ${MUGEN_VITA_EBOOT}")
+message(STATUS "               ${MUGEN_VITA_VPK}")
 message(STATUS "")
 message(STATUS "  Renderer: ${_vita_renderer} from ${MUGEN_VITA_CFG}")
 message(STATUS "            packed as data/mugen.psvita.cfg and merged over the game's")

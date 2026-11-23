@@ -6,6 +6,7 @@
  */
 #include "mugen.h"
 #include "configmerge.h"
+#include "configembed.h"
 #include "gles_render.h"
 #include "render_policy.h"
 #include "soundcache.h"
@@ -53,28 +54,23 @@ void Config_ApplyJoystickSlot(int player);
  * Port addition: the platform's own configuration file, merged over
  * data/mugen.cfg by Config_OpenConfig below.
  *
- * The reference build has none, so on it Config_OpenConfig is exactly the
- * original's "open data/mugen.cfg": a second layer there would be a behaviour
- * change nothing asks for. A port ships its file beside the game's:
+ * Every target now has one, and every one lives in res/configs/. It is embedded
+ * in the executable and written into data/ when absent (src/configembed.c), so
+ * a game tree needs no configuration copied into it by hand:
  *
- *   PS Vita      data/mugen.psvita.cfg   port/psvita/mugen.psvita.cfg
- *   Android      data/mugen.android.cfg  port/android/mugen.android.cfg
- *   Linux arm64  data/mugen.arm64.cfg    port/arm64/mugen.arm64.cfg
+ *   PS Vita      data/mugen.psvita.cfg      res/configs/mugen.psvita.cfg
+ *   Android      data/mugen.android.cfg     res/configs/mugen.android.cfg
+ *   Linux arm64  data/mugen.linux_arm64.cfg res/configs/mugen.linux_arm64.cfg
+ *   Linux x64    data/mugen.linux_x64.cfg   res/configs/mugen.linux_x64.cfg
+ *   Windows 64   data/mugen.win64.cfg       res/configs/mugen.win64.cfg
+ *   Windows 32   data/mugen.win32.cfg       res/configs/mugen.win32.cfg
  *
- * Absent is normal and not an error: the game's file is then used unmodified,
- * which is also what happens on a tree copied without the platform file.
- * CONFIG_PORT_PATH can be predefined from the command line, which is how a host
- * test drives the merge.
+ * CONFIG_PORT_PATH comes from configembed.h, which owns that mapping (and the
+ * embedded default Config_Embedded_Extract writes). Absent is still normal and
+ * not an error: the game's file is then used unmodified, which is also what
+ * happens when a tree has no platform file. CONFIG_PORT_PATH can be predefined
+ * from the command line, which is how a host test drives the merge.
  */
-#ifndef CONFIG_PORT_PATH
-#if defined(MUGEN_VITA_GL)
-#define CONFIG_PORT_PATH "data/mugen.psvita.cfg"
-#elif defined(ANDROID_PORT)
-#define CONFIG_PORT_PATH "data/mugen.android.cfg"
-#elif defined(__aarch64__) || defined(_M_ARM64)
-#define CONFIG_PORT_PATH "data/mugen.arm64.cfg"
-#endif
-#endif
 
 static const char *const ai_ramp_modes[3] = { "arcade", "team", "survival" };
 

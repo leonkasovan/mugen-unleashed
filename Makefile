@@ -22,13 +22,14 @@
 # linked instead of the kit's static archives, so the executable is
 # mugen-<target> and both checks below follow the platform being built.
 #
-#   make              build $(TARGET): mugen-mingw-<target>-sdl2.exe on
-#                     Windows, mugen-<target> on Linux (SDL2 is the only
+#   make              build $(TARGET): mugen-win32.exe / mugen-win64.exe on
+#                     Windows, mugen-linux-<arch> on Linux (SDL2 is the only
 #                     backend there)
 # (verify with "make help")
 #   make -j8          parallel build
-#   make install      strip and copy the executable into install/, and install
-#                     res/mugen.cfg as its data/mugen.cfg when the tree has none
+#   make install      strip and copy the executable into install/; the engine
+#                     writes its embedded data/mugen.cfg (and platform overlay)
+#                     there on first run when the tree has none
 #   make V=1          show the full command lines
 #   make clean        remove the object files of $(BUILD)
 #   make distclean    remove $(BUILD) entirely
@@ -44,9 +45,6 @@
 #                                         instead (needs python3;
 #                                         tools/extract_icon.py)
 #   make MUGEN_ICONS=res/icons/1.ico      a different icon, or several to merge
-#   make MUGEN_CFG_FORCE=1                replace install/data/mugen.cfg, which
-#                                         is otherwise the player's to keep
-#   make MUGEN_CFG=<path>                 install a different config file
 #   make BUILD=build/mingw-debug DEBUG=1  unoptimised build with debug info
 #   make MUGEN_GLES=0                     force the desktop-GL renderer on a
 #                                         Linux GLES target (see below)
@@ -204,6 +202,11 @@ PYTHON3 ?= $(firstword $(foreach p,python3 python py,$(if $(shell $(p) -c "pass"
 
 DEBUG    ?=
 
+# A debug build is installed beside the release one, so its name says which is
+# which: mugen-win32-debug.exe, mugen-linux-x64-debug. build.sh and the port
+# scripts use the same suffix.
+MUGEN_DEBUG_SUFFIX := $(if $(filter-out 0,$(DEBUG)),-debug,)
+
 MUGEN_GAME_DIR ?=
 
 # SDL2 is the only backend. Reject stale SDL1 build commands explicitly.
@@ -284,12 +287,12 @@ ifeq ($(MUGEN_TARGET),win32)
   MUGEN_FAMILY := win32
   MUGEN_PTRBITS := 32
   BUILD    ?= build/mingw-sdl2
-  TARGET   := $(BUILD)/mugen-mingw-win32-sdl2.exe
+  TARGET   := $(BUILD)/mugen-win32$(MUGEN_DEBUG_SUFFIX).exe
 else ifeq ($(MUGEN_TARGET),win64)
   MUGEN_FAMILY := win32
   MUGEN_PTRBITS := 64
   BUILD    ?= build/mingw64-sdl2
-  TARGET   := $(BUILD)/mugen-mingw-win64-sdl2.exe
+  TARGET   := $(BUILD)/mugen-win64$(MUGEN_DEBUG_SUFFIX).exe
 else
   MUGEN_FAMILY := linux
   MUGEN_PTRBITS := $(if $(findstring 64,$(MUGEN_TARGET)),64,32)
@@ -299,7 +302,7 @@ else
     MUGEN_CROSS_TAG := -$(patsubst %-,%,$(CROSS_COMPILE))
   endif
   BUILD    ?= build/$(MUGEN_TARGET)$(MUGEN_CROSS_TAG)-sdl2
-  TARGET   := $(BUILD)/mugen-$(MUGEN_TARGET)$(MUGEN_CROSS_TAG)
+  TARGET   := $(BUILD)/mugen-$(MUGEN_TARGET)$(MUGEN_DEBUG_SUFFIX)
 endif
 
 # A target picked from the compiler, rather than asked for, is announced: on a
@@ -650,6 +653,19 @@ endif
 SPRITE_SHADER_HEADERS := $(addprefix $(SHADER_HDR_DIR)/,$(addsuffix .h,$(SPRITE_SHADER_NAMES)))
 CPPFLAGS += -I$(SHADER_HDR_DIR)
 
+# --- embedded configuration --------------------------------------------------
+#
+# res/configs/ is the one place the shipped configurations live: the base
+# mugen.cfg plus one overlay per platform. tools/embed_configs.sh turns them
+# into C string literals and src/configembed.c writes the missing ones into
+# data/ at start-up, so `make install` (and every port package) needs no
+# configuration copied into the game tree by hand. src/configembed.h selects the
+# overlay for the target.
+CONFIG_HDR_DIR := $(BUILD)/configs
+CONFIG_HDR     := $(CONFIG_HDR_DIR)/config_data.h
+CONFIG_SRCS    := $(wildcard res/configs/*.cfg)
+CPPFLAGS += -I$(CONFIG_HDR_DIR)
+
 # Desktop GL is the reference. GLES model support is opt-in until device qualification.
 MUGEN_MODEL3D ?= $(if $(filter 1,$(MUGEN_GLES)),0,1)
 ifneq ($(filter-out 0 1,$(MUGEN_MODEL3D)),)
@@ -930,6 +946,15 @@ $(SHADER_HDR_DIR)/%.h: $(SRC_DIR)/shaders/% tools/embed_shader.sh
 	$(Q)sh tools/embed_shader.sh "$<" "$@" "g_shader_$(subst /,_,$(subst .,_,$*))"
 	$(Q)touch "$@" # Acknowledge newer prerequisites even when shader bytes agree.
 
+# The embedded configuration header. The engine writes these files into data/
+# when they are absent (src/configembed.c), so a content change is a binary
+# change even though no source file was edited.
+$(CONFIG_HDR): $(CONFIG_SRCS) tools/embed_configs.sh
+	@echo "  CONFIG  $@"
+	$(Q)sh tools/embed_configs.sh res/configs "$@"
+
+$(OBJ_DIR)/src/configembed.o: $(SRC_DIR)/configembed.c $(CONFIG_HDR)
+
 # The renderers that include the generated headers must rebuild when one changes.
 $(OBJ_DIR)/src/gles_render.o: $(SRC_DIR)/gles_render.c $(SPRITE_SHADER_HEADERS)
 $(OBJ_DIR)/src/glrender.o: $(SRC_DIR)/glrender.c $(SPRITE_SHADER_HEADERS)
@@ -1069,56 +1094,33 @@ $(RC_OBJ): $(ALL_RC) $(CONFIG_STAMP)
 # a failed download only warns.
 # install/ is the shipped M.U.G.E.N 1.1b1 tree (git-ignored). The installed
 # name follows $(TARGET), so it is never the original's mugen.exe and never a
-# Windows name on Linux: mugen-mingw-*.exe on Windows, mugen-linux-<arch> on
+# Windows name on Linux: mugen-win*.exe on Windows, mugen-linux-<arch> on
 # Linux (an ELF binary called .exe was the old behaviour here). The name marks
-# the backend, so installing one backend never clobbers the other.
+# the platform, so installing one target never clobbers another.
 #
-# data/mugen.cfg is res/mugen.cfg, the project's documented default (see its
-# header for what every key does). It is installed when the tree has no config
-# -- i.e. on a fresh clone, right after the fetch -- and NOT over one that is
-# already there, because that file is the player's: the options screen rewrites
-# [Options], the volumes, the joystick type and the key groups in place, so
-# replacing it on every install would discard every setting the player saved.
-# MUGEN_CFG_FORCE=1 replaces it anyway, and MUGEN_CFG=<path> installs a
-# different file.
+# No configuration is copied: the base data/mugen.cfg and the platform overlay
+# (data/mugen.<platform>.cfg) are embedded in the executable, and the engine
+# writes whichever is missing on first run (src/configembed.c). That keeps an
+# existing tree's config -- the player's -- untouched, and it is the same file
+# every other target extracts, so res/configs/ stays the single source.
 
 INSTALL_DIR  ?= install
 INSTALL_NAME ?= $(notdir $(TARGET))
 STRIPPED     := $(BUILD)/$(basename $(INSTALL_NAME))-stripped$(suffix $(INSTALL_NAME))
-
-# The default configuration. Absolute, so the recipe works from any directory
-# and the existence check names the same file the copy reads.
-MUGEN_CFG       ?= $(CURDIR)/res/mugen.cfg
-MUGEN_CFG_FORCE ?= 0
 
 $(STRIPPED): $(TARGET)
 	@echo "  STRIP   $@"
 	$(Q)$(STRIP) -o $@ $(TARGET)
 
 install: $(STRIPPED)
-	@fresh=0; \
-	if [ ! -f "$(INSTALL_DIR)/data/mugen.cfg" ]; then \
-	    fresh=1; \
+	@if [ ! -f "$(INSTALL_DIR)/data/mugen.cfg" ]; then \
 	    echo "  DATA    $(INSTALL_DIR)/ (default M.U.G.E.N assets)"; \
 	    sh tools/fetch_game_data.sh --dest "$(INSTALL_DIR)" || \
 	        echo "  WARN    no game data: the binary will exit at start"; \
-	fi; \
-	if [ ! -f "$(MUGEN_CFG)" ]; then \
-	    echo "  ERROR   MUGEN_CFG=$(MUGEN_CFG) does not exist"; exit 1; \
-	fi; \
-	mkdir -p $(INSTALL_DIR)/data; \
-	if [ "$$fresh" = 1 ] || [ "$(MUGEN_CFG_FORCE)" != "0" ]; then \
-	    echo "  CFG     $(INSTALL_DIR)/data/mugen.cfg <- $(notdir $(MUGEN_CFG))"; \
-	    cp -f "$(MUGEN_CFG)" "$(INSTALL_DIR)/data/mugen.cfg"; \
-	else \
-	    echo "  CFG     $(INSTALL_DIR)/data/mugen.cfg kept (MUGEN_CFG_FORCE=1 to replace)"; \
 	fi
+	@mkdir -p $(INSTALL_DIR)/data
 	@echo "  INSTALL $(INSTALL_DIR)/$(INSTALL_NAME)"
 	$(Q)cp $(STRIPPED) $(INSTALL_DIR)/$(INSTALL_NAME)
-ifeq ($(MUGEN_TARGET),linux-arm64)
-	$(Q)mkdir -p $(INSTALL_DIR)/data
-	$(Q)cp port/arm64/mugen.arm64.cfg $(INSTALL_DIR)/data/mugen.arm64.cfg
-endif
 	@echo "  done: run it from $(INSTALL_DIR)"
 ifeq ($(MUGEN_FAMILY),win32)
 	@echo "        (no Elecbyte.MUGEN.libs needed)"

@@ -46,7 +46,8 @@ GAME_DATA_DIR=/path/to/game-tree port\android\build.bat
 GAME_DATA_DIR=install port\android\build.bat
 ```
 
-Output: `build/android/mugen-android-arm64-v8a.apk`.
+Output: `build/android/mugen-android-arm64-v8a.apk` (with `--debug`,
+`build/android/mugen-android-arm64-v8a-debug.apk`).
 
 ## Build variants
 

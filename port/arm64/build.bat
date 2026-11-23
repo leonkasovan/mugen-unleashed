@@ -44,7 +44,7 @@ rem    MUGEN_WIN_KIT            kit to take make/sh/sed from (autodetected:
 rem                             C:\w64devkit, C:\x86devkit, then PATH)
 rem
 rem  Output: build\linux-arm64-aarch64-none-linux-gnu-sdl2\
-rem            mugen-linux-arm64-aarch64-none-linux-gnu
+rem            mugen-linux-arm64  (mugen-linux-arm64-debug with --debug)
 rem ===========================================================================
 
 setlocal EnableExtensions EnableDelayedExpansion
@@ -54,7 +54,7 @@ for %%I in ("%~dp0.") do set "PORTDIR=%%~fI"
 for %%I in ("%~dp0..\..") do set "ROOT=%%~fI"
 
 set "OUT_NAME=build\linux-arm64-aarch64-none-linux-gnu-sdl2"
-set "BIN=mugen-linux-arm64-aarch64-none-linux-gnu"
+set "BIN=mugen-linux-arm64"
 set "CROSS=aarch64-none-linux-gnu-"
 
 rem --------------------------------------------------------------- defaults
@@ -72,7 +72,6 @@ set "MODEL3D=1"
 set "DEBUG_BUILD=0"
 if not defined DEVICE set "DEVICE=ark@192.168.7.2"
 if not defined DEVICE_DIR set "DEVICE_DIR=mugen"
-if not defined DEVICE_BIN set "DEVICE_BIN=mugen-linux-arm64"
 
 rem ------------------------------------------------------------------- args
 :parse
@@ -249,6 +248,11 @@ if "%VIDEO_BG%"=="1" (
     call :ensure_submodule
     if errorlevel 1 goto fail
 )
+
+rem A debug build gets the Makefile's -debug suffix; the upload name follows it
+rem unless --device-bin named another.
+if "%DEBUG_BUILD%"=="1" set "BIN=%BIN%-debug"
+if not defined DEVICE_BIN set "DEVICE_BIN=%BIN%"
 
 rem ---------------------------------------------------------------- account
 echo.

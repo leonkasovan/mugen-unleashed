@@ -30,7 +30,8 @@ too. It forwards to `build.bat` -- one implementation, two front doors -- and
 PowerShell may need `-ExecutionPolicy Bypass` (or `Unblock-File build.ps1`)
 before it will run a local script.
 
-→ `build/linux-arm64-aarch64-none-linux-gnu-sdl2/mugen-linux-arm64-aarch64-none-linux-gnu`
+→ `build/linux-arm64-aarch64-none-linux-gnu-sdl2/mugen-linux-arm64`
+(`mugen-linux-arm64-debug` with `--debug`)
 
 This is the same `linux-arm64` target `make MUGEN_TARGET=linux-arm64` builds
 natively on Linux; the port only supplies the toolchain and the dependencies.
@@ -269,7 +270,7 @@ not a flag here.
 cd install
 LD_LIBRARY_PATH=/path/to/aarch64/libs \
 SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
-  qemu-aarch64 -L /path/to/arm64/sysroot ./mugen-linux-arm64-aarch64-none-linux-gnu \
+  qemu-aarch64 -L /path/to/arm64/sysroot ./mugen-linux-arm64 \
   -nosound -p1 kfm -p2 kfm
 ```
 

@@ -61,10 +61,12 @@ third_party/    Lua 5.1.4, libpng 1.2.38, glad 2.1, minizip 0.15, lz4 1.10.0
                 cgltf-1.14 and stb (upstream desktop 3D model support)
 port/*/cmake/   platform-only CMake helpers; no root MSVC build
 build.bat       installs the two Windows devkits + dependency trees, then builds
+build.sh        the same job natively on Linux: verifies the -dev packages,
+                fetches the game data, builds and installs
 res/icons/      the window/bubble icon as one .ico per size (see below)
-res/mugen.cfg   the default configuration: the one file every target ships as
-                data/mugen.cfg (make install, the Android assets, the Vita VPK),
-                with a comment on every key. See "The default configuration"
+res/configs/    the shipped configurations: mugen.cfg (the default, embedded and
+                extracted as data/mugen.cfg) plus one overlay per target, with a
+                comment on every key. See "The default configuration"
 src/shaders/    every shader, embedded into the binary as C string literals for
                 all targets: glTF model shaders at the root, and the sprite
                 dialects gles/, vita/, desktop/ (see "Shaders" below)
@@ -89,15 +91,15 @@ Each entry point owns its own subtree and never writes into another's.
 
 | Path | Written by | Contents |
 |---|---|---|
-| `build/mingw-sdl2/` | root `Makefile` (Windows, default) | `obj/`, `lib/`, `mugen-mingw-win32-sdl2.exe`, `-stripped.exe` (SDL2 backend) |
+| `build/mingw-sdl2/` | root `Makefile` (Windows, default) | `obj/`, `lib/`, `mugen-win32.exe`, `-stripped.exe` (SDL2 backend) |
 
-| `build/mingw64-sdl2/` | plain `make` with the 64-bit kit on `PATH`, or `make MUGEN_TARGET=win64` (Windows, experimental) | the same shape, `mugen-mingw-win64-sdl2.exe` |
+| `build/mingw64-sdl2/` | plain `make` with the 64-bit kit on `PATH`, or `make MUGEN_TARGET=win64` (Windows, experimental) | the same shape, `mugen-win64.exe` |
 | `build/<linux-target>-sdl2/` | root `Makefile` (Linux) | same shape, `mugen-linux-<arch>` |
 | `build/<linux-target>-<cross-prefix>-<sdl>/` | root `Makefile` with `CROSS_COMPILE=`/`XSYSROOT=` (via `port\arm64\build.bat`) | same shape, `mugen-linux-<arch>-<prefix>`; the dependency tree it links against is `build/sysroots/arm64-sysroot/` |
 | `build/mingw-debug/` | `make DEBUG=1 BUILD=build/mingw-debug` | an explicit `BUILD=` override |
 | `build/linux-arm64-<prefix>-sdl2-debug/` | `port\arm64\build.bat --debug` | the same shape, built `-O0 -g3 -DMUGEN_DEBUG`; a separate tree on purpose, since the config stamp does not include `DEBUG=` and the two would otherwise overwrite each other's objects |
-| `build/psvita*/` | `port\psvita\build.bat` or `port\psvita\build.bat` (default `build/psvita/`) or `port/psvita/CMakeLists.txt` by hand (`BUILD=<dir>` picks another) | `mugen`, `mugen-psvita.self`, `mugen-psvita.vpk`, `vita-mugen.cfg` |
-| `build/android/` | `port\android\build.bat` or `port\android\build.bat` | `toolchains/` (JDK/SDK/NDK/CMake, `env.sh`/`env.bat`), `sdl2/<abi>/`, `android-deps/<abi>/`, `android-deps-src/`, `sources/`, `build-sdl2/`, `gradle-user-home/`, `asset-list.txt`, `mugen-unleashed-<abi>.apk` |
+| `build/psvita*/` | `port\psvita\build.bat` (default `build/psvita/`) or `port/psvita/CMakeLists.txt` by hand (`BUILD=<dir>` picks another) | `mugen`, `mugen-psvita[-debug].self`, `mugen-psvita[-debug].vpk`, `vita-mugen.cfg` |
+| `build/android/` | `port\android\build.bat` or `port\android\build.bat` | `toolchains/` (JDK/SDK/NDK/CMake, `env.sh`/`env.bat`), `sdl2/<abi>/`, `android-deps/<abi>/`, `android-deps-src/`, `sources/`, `build-sdl2/`, `gradle-user-home/`, `asset-list.txt`, `mugen-android-<abi>[-debug].apk` |
 | `build/baseline/` | hand-made, kept on purpose | SDL1 reference binary and log used by the log-comparison workflow |
 
 Three of those are not any single entry point's private output, so they are named
@@ -175,8 +177,11 @@ chooses it: `x86devkit`'s `i686-w64-mingw32` gcc builds win32, `w64devkit`'s
 still overrides. See `PLANS.md` for what is still outstanding on the 64-bit side,
 and do not describe either as verified until the offsets above are dealt with.
 
-Output names: `mugen-mingw-win32-sdl2.exe`,
-`mugen-mingw-win64-sdl2.exe`, `mugen-linux-<arch>`.
+Output names: `mugen-win32.exe`, `mugen-win64.exe`, `mugen-linux-<arch>`;
+a `DEBUG=1` build appends `-debug` (`mugen-win32-debug.exe`,
+`mugen-linux-x64-debug`). The ports follow the same rule (`mugen-android-<abi>`
+and `mugen-android-<abi>-debug`, `mugen-psvita.vpk` and
+`mugen-psvita-debug.vpk`).
 SDL2 is the only backend; root MSVC/CMake is removed. Android and Vita retain
 platform CMake. See `docs/SDL2_ONLY_PLAN.md` for the implementation record.
 
@@ -186,6 +191,7 @@ The `Makefile` also builds Linux targets, chosen from `uname` + the compiler's
 triple. See `docs/BUILD-LINUX.md` for the dependency list.
 
 ```sh
+./build.sh            # check, fetch game data if absent, build, install
 make -j8              # build/linux-x64/mugen-linux-x64
 make install          # → install/mugen-linux-x64 (not a .exe)
 ```
@@ -332,9 +338,9 @@ Driving `make` by hand still works, from a shell that has the kit first:
 export PATH=/c/x86devkit/bin:$PATH      # MSYS2/Git Bash: the 32-bit kit, not w64devkit
 make check-toolchain
 make -j8
-make install                            # strips and copies into install/,
-                                        # installing res/mugen.cfg if the tree
-                                        # has no data/mugen.cfg
+make install                            # strips and copies into install/; the
+                                        # engine extracts its embedded configs
+                                        # on first run
 ```
 
 ```bat
@@ -342,7 +348,7 @@ set "PATH=C:\x86devkit\bin;%PATH%"      :: or cmd.exe, with the same effect
 make check-toolchain
 ```
 
-→ `build/mingw/mugen-mingw-win32-sdl2.exe`, and `install/mugen-mingw-win32-sdl2.exe` after
+→ `build/mingw-sdl2/mugen-win32.exe`, and `install/mugen-win32.exe` after
 `make install`.
 
 This build links **everything statically** (SDL2, SDL2_mixer, SDL2_ttf, zlib,
@@ -434,23 +440,26 @@ temp-file rule above. It is a complete SDK: `sdl2`, `sdl2_mixer`,
 `sdl2_ttf`, `zlib`, `libpng`, `vitaGL` and vitaGL's helpers are already in it, so
 a clean machine needs no `vdpm` run; the script checks the artefacts and only
 calls `vdpm` for something genuinely missing. Output is
-`build/psvita/mugen-psvita.{self,vpk}`, and the VPK packs `install/` as `/data`
+`build/psvita/mugen-psvita[-debug].{self,vpk}`, and the VPK packs `install/` as `/data`
 unless `--no-data` is given. The build needs Windows (the SDK's compiler is
 `arm-vita-eabi-gcc.exe`); `--offline` forbids every download. Details:
 `port/psvita/README.md`.
 
 The VPK carries two configs: the game tree's `data/mugen.cfg` unchanged, and
-`data/mugen.psvita.cfg` packed verbatim from `port/psvita/mugen.psvita.cfg` (no
+`data/mugen.psvita.cfg` packed verbatim from `res/configs/mugen.psvita.cfg` (no
 build step and no flag rewrites a value in it; edit the file and rebuild). At
 start-up `src/configmerge.c` layers the platform file over the game's **per key**
 — a key the platform file names wins, everything else comes from the game's
 file — and never writes the result anywhere. It also refuses to force the groups
 the engine writes back at runtime (`[Options]`, `[P<n> Keys]`, `[P<n> Joystick]`,
 `[P<n> Gamepad]`, the volume keys, `p1/p2.joystick.type`), because a forced
-value there would be reverted by the next `Options_Save`. Android and Linux
-arm64 look for `data/mugen.android.cfg` / `data/mugen.arm64.cfg` the same way;
-neither is packaged yet, so both are inert. Do not reintroduce a wholesale
-`data/mugen.cfg` replacement in a port: it discards whatever the user set.
+value there would be reverted by the next `Options_Save`. Every target has such
+an overlay in `res/configs/` (`mugen.android.cfg`, `mugen.linux_arm64.cfg`,
+`mugen.linux_x64.cfg`, `mugen.win32.cfg`, `mugen.win64.cfg`), and all of them
+are embedded in the executable: the engine writes whichever config file a tree
+lacks on start-up (`src/configembed.c`), so no build step copies one in. Do not
+reintroduce a wholesale `data/mugen.cfg` replacement in a port: it discards
+whatever the user set.
 
 The vitaGL shader compiler is a decrypted Sony module, so it is **not tracked**
 in this repository. It is the `lib-for-vita.zip` release asset: `build.bat`
@@ -623,16 +632,17 @@ each sprite shader: both loaders replace the first occurrence with the variant
 
 ## The default configuration
 
-`res/mugen.cfg` is the one default configuration, and every target ships it as
-`data/mugen.cfg`:
+`res/configs/mugen.cfg` is the one default configuration, and every target ships
+it as `data/mugen.cfg`:
 
 | Target | How |
 |---|---|
-| `make install` | copied when the tree has no `data/mugen.cfg`; `MUGEN_CFG_FORCE=1` replaces an existing one, `MUGEN_CFG=<path>` installs another |
-| Android | `port\android\build.bat` stages it as the APK's `data/mugen.cfg` (`GAME_CFG=` overrides) |
-| PS Vita | `MUGEN_VITA_GAME_CFG` (default `res/mugen.cfg`) is packed as `data/mugen.cfg`; `--data DIR` packs that tree's own instead |
+| All | Embedded in the executable; written as `data/mugen.cfg` when the tree has none (`src/configembed.c`) |
+| `make install` | Copies no config at all; the installed binary extracts it on first run |
+| Android | Embedded in `libmain.so`; the APK stages no `data/mugen.cfg` |
+| PS Vita | `MUGEN_VITA_GAME_CFG` (default `res/configs/mugen.cfg`) is packed as `data/mugen.cfg`, and also embedded; `--data DIR` packs that tree's own instead |
 
-It is the same file in all three so the values and the comments cannot drift,
+It is the same file everywhere so the values and the comments cannot drift,
 and it carries a comment on every key saying what it accepts, its range and its
 clamp, and what happens when it is absent — including the keys that are parsed
 but have no effect in this build (`[Video] Depth`, `[Input] ForceFeedback`,
@@ -640,13 +650,16 @@ but have no effect in this build (`[Video] Depth`, `[Input] ForceFeedback`,
 config key is added, removed or its handling changes**, and keep those
 "no effect" notes honest rather than dropping them.
 
-What is *not* in it is anything device-specific: the ports layer
-`data/mugen.psvita.cfg`, `data/mugen.android.cfg` and `data/mugen.arm64.cfg`
-over it per key at start-up (`src/configmerge.c`), and those files may not force
-the groups the engine writes back. The engine rewrites `[Options]`, the three
-`[Sound]` volumes, `[Input] p<n>.joystick.type` and the four `[P<n> Keys]` /
-`[P<n> Joystick]` groups in place, which is why `make install` does not
-overwrite an existing `data/mugen.cfg`: that file is the player's.
+What is *not* in it is anything device-specific: `res/configs/` holds one
+overlay per target (`mugen.psvita.cfg`, `mugen.android.cfg`,
+`mugen.linux_arm64.cfg`, `mugen.linux_x64.cfg`, `mugen.win32.cfg`,
+`mugen.win64.cfg`), and the engine writes the missing ones as
+`data/mugen.<platform>.cfg` and layers them over the base per key at start-up
+(`src/configmerge.c`). Those files may not force the groups the engine writes
+back. The engine rewrites `[Options]`, the three `[Sound]` volumes,
+`[Input] p<n>.joystick.type` and the four `[P<n> Keys]` / `[P<n> Joystick]`
+groups in place, which is why extraction never overwrites an existing
+`data/mugen.cfg`: that file is the player's.
 
 ## Testing
 
@@ -730,13 +743,13 @@ Behaviour is validated by **running both binaries on the same scenario and
 diffing `mugen.log`** (`docs/ANALYSIS.md`, "Validation").
 
 `install/` holds a real M.U.G.E.N 1.1b1 tree, so tests can be run end to end.
-`make install` puts the static executable there for you (and, on a fresh tree,
-`res/mugen.cfg` as its `data/mugen.cfg`):
+`make install` puts the static executable there for you; on first run it writes
+the embedded `data/mugen.cfg` and platform overlay into a tree that lacks them:
 
 ```sh
 make install
 cd install
-./mugen-mingw-win32-sdl2.exe          # startup/mode select
+./mugen-win32.exe                     # startup/mode select
 ```
 
 Copy the original `mugen.exe` log out of the way first, then compare:
@@ -751,7 +764,7 @@ regression or a deliberate change — decide which and say so.
 
 | Scenario | Command |
 |---|---|
-| startup → mode select | `./mugen-mingw-win32-sdl2.exe -nosound` (or `mugen-linux-x64` under Linux) |
+| startup → mode select | `./mugen-win32.exe -nosound` (or `mugen-linux-x64` under Linux) |
 | quick VS, one character per side | `-nosound -p1 kfm -p2 kfm` |
 | AI vs AI, two rounds | `-nosound -rounds 2 -p1.ai 1 -p2.ai 1` |
 

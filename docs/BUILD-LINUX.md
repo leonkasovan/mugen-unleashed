@@ -4,6 +4,34 @@
 from `uname` and the compiler's own triple. This page covers the Linux side;
 `BUILD-MINGW.md` covers the Windows static build, which is the reference.
 
+## Zero to build: `build.sh`
+
+`build.sh` is the Linux counterpart of `build.bat`: one command verifies the
+distribution's development packages, fetches the default game data when
+`install/` has no `data/mugen.cfg`, builds and installs a stripped binary.
+
+```sh
+./build.sh              # check, fetch game data if absent, build, install
+./build.sh --check      # verify the packages and report the target; build nothing
+./build.sh --setup      # fetch what is missing (the game data) and stop
+./build.sh --debug      # -O0 -g3 -DMUGEN_DEBUG in build/<target>-sdl2-debug/
+./build.sh --jobs N     # parallel make jobs (default: CPU count)
+./build.sh --offline    # never download; fail if the game data is absent
+```
+
+There is no toolchain or dependency tree to install: the `-dev` packages below
+*are* the tree, and Lua, glad, minizip, libresample and LZ4 build from
+`third_party/`. The target comes from the compiler's triple, so the same script
+builds `linux-x64` and, on an ARM64 host, `linux-arm64` (GLES by default there).
+
+It refuses to run off Linux (use `build.bat` or a port's `build.bat` there) and
+refuses `CROSS_COMPILE=`, which is a Makefile path for a tree built elsewhere.
+`--debug` uses a separate `build/<target>-sdl2-debug/` tree on purpose: the
+configuration stamp does not record `DEBUG=`, so one tree would hold both
+optimisation levels under a single stamp.
+
+Or drive the Makefile directly:
+
 ```sh
 make -j8
 make install          # strips and copies into install/mugen-linux-x64
@@ -38,6 +66,12 @@ triple against `MUGEN_TARGET` (`^x86_64-` for `linux-x64`, and so on) and that
 first, so a missing `-dev` package is reported before compiling rather than as
 undefined `Mix_*`/`TTF_*` symbols at the link.
 
+**Line endings.** A clone made on Linux is LF, but a Windows working tree
+shared into WSL through `/mnt/c` is CRLF, and `tools/embed_shader.sh` then fails
+with `set: Illegal option -` before anything compiles. `.gitattributes` forces
+`*.sh` to LF on checkout, so refresh an existing tree with
+`git checkout-index -f -a` (or re-clone).
+
 ## Target detection
 
 ```make
@@ -47,7 +81,7 @@ TRIPLE  := $(shell $(CC) -dumpmachine 2>/dev/null) # CPU + ABI
 
 | `uname -s` | `-dumpmachine` | Target | Output |
 |---|---|---|---|
-| `Windows_NT`, `MINGW*`, `MSYS*`, `CYGWIN*` | `i686-w64-mingw32` | `win32` | `mugen-mingw-win32-sdl2.exe` |
+| `Windows_NT`, `MINGW*`, `MSYS*`, `CYGWIN*` | `i686-w64-mingw32` | `win32` | `mugen-win32.exe` |
 | `Linux` | `x86_64-*-linux-gnu` | `linux-x64` | `mugen-linux-x64` |
 | `Linux` | `aarch64-*-linux-gnu` | `linux-arm64` | `mugen-linux-arm64` |
 | `Linux` | `i686-*-linux-gnu` | `linux-x86` | `mugen-linux-x86` |
@@ -282,7 +316,7 @@ port\arm64\build.bat --setup     # once: download the toolchain (~330 MB)
 port\arm64\build.bat             # build
 ```
 
-→ `build/linux-arm64-aarch64-none-linux-gnu-sdl2/mugen-linux-arm64-aarch64-none-linux-gnu`
+→ `build/linux-arm64-aarch64-none-linux-gnu-sdl2/mugen-linux-arm64`
 
 To build and copy it to the device in one step:
 
@@ -403,7 +437,7 @@ afterwards on the workstation with the cross `addr2line`:
 MUGEN_PROF=1 MUGEN_PROF_OUT=mugen.prof ./mugen-linux-arm64 -nosound ...
 # on the host
 python3 tools/prof_symbolize.py mugen.prof \
-    --binary build/linux-arm64-aarch64-none-linux-gnu-sdl2/mugen-linux-arm64-aarch64-none-linux-gnu
+    --binary build/linux-arm64-aarch64-none-linux-gnu-sdl2/mugen-linux-arm64
 ```
 
 It reports SELF (leaf frame: where the CPU was) and INCLUSIVE (anywhere on the
@@ -703,7 +737,7 @@ still named `.sha256asc`.
 cd /mnt/c/Projects/<repo>/install
 LD_LIBRARY_PATH=$PWD/../build/tmp/runroot \
 SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
-  qemu-aarch64 -L $PWD/../build/tmp/runroot ./mugen-linux-arm64-... -nosound -p1 kfm -p2 kfm
+  qemu-aarch64 -L $PWD/../build/tmp/runroot ./mugen-linux-arm64 -nosound -p1 kfm -p2 kfm
 ```
 
 Set `RenderMode = System` in `install/data/mugen.cfg` first: the dummy video
@@ -762,7 +796,7 @@ appear in a first attempt.
 | Symptom | Cause and fix |
 |---|---|
 | `run this from Windows … not from inside WSL` | `port\arm64\build.bat` drives the **Mingw-w64** toolchain, which WSL cannot execute — and WSL has no `/c/...` mount table or `cygpath` to address it, so Windows interop does not help either. Use `port\arm64\build.bat` from cmd.exe (it needs no POSIX shell), or build natively inside WSL: `make MUGEN_TARGET=linux-arm64 CROSS_COMPILE=aarch64-linux-gnu-`. |
-| `this is a native Windows shell, not an MSYS2/Cygwin one` | `build.sh` was run in `w64devkit`'s or `x86devkit`'s busybox `sh` (or from cmd.exe). That script needs MSYS2/Git Bash for its `/c/...` paths and `cygpath`; the kits' shell is what **`port\arm64\build.bat`** is for — it uses the kit only for `make`/`sh`/`sed` and nothing was downloaded. |
+| `this is a native Windows shell, not an MSYS2/Cygwin one` | the old `port/arm64/build.sh` (since removed) was run in `w64devkit`'s or `x86devkit`'s busybox `sh` (or from cmd.exe). That script needed MSYS2/Git Bash for its `/c/...` paths and `cygpath`; the kits' shell is what **`port\arm64\build.bat`** is for — it uses the kit only for `make`/`sh`/`sed` and nothing was downloaded. |
 | `… is installed but cannot run from this shell` | The compiler is there but the shell cannot execute it, so the tree is fine and the shell is wrong. Nothing was downloaded (an earlier version treated this as "missing" and re-fetched 330 MB). Use Git Bash/MSYS2; `--setup` replaces a tree deliberately. |
 | `download failed its vendor SHA-256` | The zip was truncated or altered in transit; nothing was extracted. Re-run `--setup` (the bad file is deleted first). |
 | `the archive did not produce …/gcc` | A half-extracted toolchain. Remove `TOOLCHAIN_DIR` and re-run `--setup`. |

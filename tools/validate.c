@@ -1344,7 +1344,7 @@ static void check_character_defs(const char *select_path, const char *motif_dir)
 
 static void check_config(char *motif, size_t motif_size)
 {
-    static const char *const names[] = { "data/mugen.cfg", "data/mugen.arm64.cfg" };
+    static const char *const names[] = { "data/mugen.cfg", "data/mugen.linux_arm64.cfg" };
     const char *cfg = NULL;
     char *content;
     char *line, *next;
