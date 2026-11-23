@@ -13,11 +13,22 @@ CC="${CC:-cc}"
 OUT="${OUT:-$PWD/build/tmp/gl-errors}"
 mkdir -p "$OUT/tmp" "$OUT/data/gles"
 export TMPDIR="$OUT/tmp"
+# The sprite shaders are embedded (src/shaders/<dialect>/*): generate the C
+# literal headers the renderers include. All three dialects are produced because
+# this harness compiles glrender.c (desktop, vita) and gles_render.c (gles).
+for dialect in gles desktop vita; do
+    for shader in src/shaders/$dialect/*.vert src/shaders/$dialect/*.frag; do
+        rel=${shader#src/shaders/}
+        mkdir -p "$OUT/shaders/$dialect"
+        sh tools/embed_shader.sh "$shader" "$OUT/shaders/$rel.h" \
+            "g_shader_$(printf '%s' "$rel" | tr '/.' '__')"
+    done
+done
 # This standalone GL mock does not link src/memprof.c; do not redirect the
 # engine's CRT allocations to the memory-profiler wrappers in this harness.
 FLAGS="$TARGET_FLAGS ${CFLAGS:-} -DMUGEN_MEMPROF_NO_WRAP=1 -std=gnu11 -O1 -g -UNDEBUG -Wall -Wextra -Wno-unused-parameter -ffunction-sections -fdata-sections"
 FLAGS="$FLAGS -fno-asynchronous-unwind-tables -DSDL_MAIN_HANDLED"
-FLAGS="$FLAGS -Iport/psvita/src -Isrc ${SDL_CFLAGS:-$(${PKG_CONFIG:-pkg-config} --cflags sdl2)} -idirafter third_party/sdk/include"
+FLAGS="$FLAGS -Iport/psvita/src -Isrc -I$OUT/shaders ${SDL_CFLAGS:-$(${PKG_CONFIG:-pkg-config} --cflags sdl2)} -idirafter third_party/sdk/include"
 FLAGS="$FLAGS -Ithird_party/glad-2.1 -Ithird_party/minizip-0.15 -Ithird_party/libpng-1.2.38"
 FLAGS="$FLAGS -Ithird_party/lua-5.1.4/src -Ithird_party/libresample/include"
 case "$($CC -dumpmachine)" in *mingw*) FLAGS="$FLAGS -flto=auto" ;; esac
@@ -35,7 +46,8 @@ for backend in desktop gles linux-gles vita; do
     esac
     $CC $FLAGS $SAN $DEFS tools/test_gl_errors.c src/perf.c src/gl_mvp.c "$OUT/globals.o" "$OUT/glad.o" \
         -Wl,--gc-sections ${LDFLAGS:-} -lm -o "$OUT/test_$backend"
-    cp res/shaders/gles/* "$OUT/data/gles/"
+    # The desktop/vita loader still prefers a data/ file, so keep the stubs it
+    # exercises; the GLES loader reads its embedded literals and ignores these.
     for name in indexed rgba; do
         printf 'void main(){}\n' > "$OUT/data/$name.vert"
         printf 'void main(){}\n' > "$OUT/data/$name.frag"

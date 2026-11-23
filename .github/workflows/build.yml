@@ -356,9 +356,8 @@ jobs:
           rem first ten annotations, so a plain tail would show only progress.
           powershell -NoProfile -ExecutionPolicy Bypass -File tools\fail_annotations.ps1 -Log build\tmp\port-arm64.log
           exit /b 1
-      # The GLES renderer reads its shaders from data/gles/*, and the platform
-      # config is data/mugen.arm64.cfg -- both ours, not game content, and both
-      # what `make install` puts beside the binary. Ship them with it, plus the
+      # The GLES shaders are embedded in the binary now; only the platform
+      # config (data/mugen.arm64.cfg) is ours and shipped beside it, plus the
       # binary stripped with the same toolchain that built it.
       - name: Package stripped executable
         shell: pwsh
@@ -369,13 +368,12 @@ jobs:
           if (-not (Test-Path $bin)) { throw "arm64 executable missing: $bin" }
           $dist = 'build/dist-arm64'
           Remove-Item -Recurse -Force $dist -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force "$dist/data/gles" | Out-Null
+          New-Item -ItemType Directory -Force "$dist/data" | Out-Null
           & "$env:TOOLCHAIN_DIR\bin\aarch64-none-linux-gnu-strip.exe" -o (Join-Path $dist $name) $bin
           if ($LASTEXITCODE -ne 0) { throw "aarch64 strip failed ($LASTEXITCODE)" }
           $thin = (Get-Item (Join-Path $dist $name)).Length
           $fat = (Get-Item $bin).Length
           if ($thin -ge $fat) { throw "the stripped binary ($thin) is not smaller than the build output ($fat)" }
-          Copy-Item res/shaders/gles/* "$dist/data/gles/"
           Copy-Item port/arm64/mugen.arm64.cfg "$dist/data/mugen.arm64.cfg"
           Copy-Item README.md $dist/
           Copy-Item third_party/README.md "$dist/THIRD_PARTY.md"
@@ -391,8 +389,8 @@ jobs:
               echo ''
               echo '    chmod +x mugen-linux-arm64-aarch64-none-linux-gnu'
               echo ''
-              echo 'Ship `data/gles/` and `data/mugen.arm64.cfg` next to the binary;'
-              echo 'the GLES renderer reads the shaders from there.'
+              echo 'Ship `data/mugen.arm64.cfg` next to the binary. The GLES shaders'
+              echo 'are embedded in the executable; no data/gles/ is needed.'
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:

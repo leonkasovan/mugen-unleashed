@@ -44,9 +44,48 @@
 #include "batchprof.h"
 #include "sffatlas.h"
 
+/*
+ * Port addition: the sprite shaders are embedded (src/shaders/). The game's own
+ * data/{indexed,rgba}.{vert,frag} are still loaded first when present -- they are
+ * Elecbyte content and fidelity validation compares against them -- so these
+ * literals are the fallback for an installation that lacks them. The Vita build
+ * reads its rewritten vitaGL dialect instead of the desktop one.
+ */
+#if defined(MUGEN_VITA_GL)
+#include "vita/indexed.vert.h"
+#include "vita/indexed.frag.h"
+#include "vita/rgba.vert.h"
+#include "vita/rgba.frag.h"
+#else
+#include "desktop/indexed.vert.h"
+#include "desktop/indexed.frag.h"
+#include "desktop/rgba.vert.h"
+#include "desktop/rgba.frag.h"
+#endif
+
 #ifndef MUGEN_VITA_GL
 static GlProgram atlas_indexed, atlas_rgba;
 #endif
+
+/* The embedded source for a sprite shader family+extension, or NULL. */
+static const char *Glr_EmbeddedShader(const char *name, const char *ext)
+{
+    int vert = strcmp(ext, ".vert") == 0;
+    int indexed = strcmp(name, "indexed") == 0;
+
+    if (indexed) {
+#if defined(MUGEN_VITA_GL)
+        return vert ? g_shader_vita_indexed_vert : g_shader_vita_indexed_frag;
+#else
+        return vert ? g_shader_desktop_indexed_vert : g_shader_desktop_indexed_frag;
+#endif
+    }
+#if defined(MUGEN_VITA_GL)
+    return vert ? g_shader_vita_rgba_vert : g_shader_vita_rgba_frag;
+#else
+    return vert ? g_shader_desktop_rgba_vert : g_shader_desktop_rgba_frag;
+#endif
+}
 
 static void Glr_ForgetFormat(const GlTex *tex);
 static int *Glr_FormatSlot(const GlTex *tex);
@@ -2295,15 +2334,53 @@ static char *atlas_fragment(const char *src, int indexed)
 }
 #endif
 
+/* Returns the shader source for name+ext as a malloc'd string (freed by the
+ * caller): the game's own data/ file when present, otherwise the embedded
+ * literal. *embedded is set to 1 when the literal was used. Atlas loads have no
+ * embedded equivalent (their source is derived from the stock file), so an
+ * atlas request with no file returns NULL. */
+static char *Glr_ShaderText(const char *name, const char *ext, int atlas, int *embedded)
+{
+    char path[MAX_PATH];
+    FILE *f;
+    char *text;
+    const char *literal;
+    size_t len;
+
+    *embedded = 0;
+    Glr_ShaderPath(path, name, ext);
+    f = fopen(path, "rb");
+    if (f != NULL) {
+        return Gl_ReadFile(f);
+    }
+    if (atlas) {
+        return NULL;
+    }
+    literal = Glr_EmbeddedShader(name, ext);
+    if (literal == NULL) {
+        return NULL;
+    }
+    len = strlen(literal);
+    text = malloc(len + 1);
+    if (text != NULL) {
+        memcpy(text, literal, len + 1);
+    }
+    *embedded = 1;
+    return text;
+}
+
 /* 0x0047C580: port fix: transactional read/compile/link, including cleanup. */
 static int Glr_LoadShader(const char **defines, GlProgram *prog, const char *name, int atlas)
 {
-    char defs[GLR_DEFINES_SIZE], path[MAX_PATH];
+    char defs[GLR_DEFINES_SIZE];
+#ifdef MUGEN_VITA_GL
+    char path[MAX_PATH];
+#endif
     size_t n = 0;
     int wrote;
     GLint linked = 0;
-    FILE *f;
     char *text, *src;
+    int embedded = 0;
     GlProgram built = {0};
 #ifdef MUGEN_VITA_GL
     int vita_palfx_disabled = 0;
@@ -2327,10 +2404,7 @@ static int Glr_LoadShader(const char **defines, GlProgram *prog, const char *nam
     }
     wrote = snprintf(defs + n, sizeof(defs) - n, "#define PREMUL\n");
     if (wrote < 0 || (size_t)wrote >= sizeof(defs) - n) return 0;
-    Glr_ShaderPath(path, name, ".vert");
-    f = fopen(path, "rb");
-    if (f == NULL) goto fail;
-    text = Gl_ReadFile(f);
+    text = Glr_ShaderText(name, ".vert", atlas, &embedded);
     if (text == NULL) goto fail;
 #ifndef MUGEN_VITA_GL
     if (atlas) {
@@ -2346,10 +2420,7 @@ static int Glr_LoadShader(const char **defines, GlProgram *prog, const char *nam
     if (src == NULL) goto fail;
     built.vert = Glr_CompileShader(GLR_VERTEX_SHADER, src);
     if (built.vert == 0) goto fail;
-    Glr_ShaderPath(path, name, ".frag");
-    f = fopen(path, "rb");
-    if (f == NULL) goto fail;
-    text = Gl_ReadFile(f);
+    text = Glr_ShaderText(name, ".frag", atlas, &embedded);
     if (text == NULL) goto fail;
 #ifndef MUGEN_VITA_GL
     if (atlas) {
@@ -2404,11 +2475,18 @@ static int Glr_LoadShader(const char **defines, GlProgram *prog, const char *nam
 #ifdef MUGEN_VITA_GL
     VitaDiag_Log("GAME SHADER READY family=%s program=%u mul_location=%i\n",name,built.program,built.mul);
 #endif
+    if (embedded) {
+#ifdef MUGEN_VITA_GL
+        VitaDiag_Log("GAME SHADER EMBEDDED family=%s\n", name);
+#endif
+        Log_Printf("GL: %s shader loaded from the embedded copy (data/ file absent)\n", name);
+    }
     Glr_FreeProgram(prog);
     *prog = built;
     return 1;
 fail:
 #ifdef MUGEN_VITA_GL
+    Glr_ShaderPath(path, name, ".vert");
     Log_Printf("GL: shader family %s failed (%s)\n", name, path);
     VitaDiag_Log("GAME SHADER FAILED family=%s path=%s\n",name,path);
 #endif

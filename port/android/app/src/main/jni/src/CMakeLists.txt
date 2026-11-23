@@ -175,6 +175,10 @@ if(MUGEN_GLES)
     target_compile_definitions(main PRIVATE MUGEN_GLES=1)
     target_include_directories(main PRIVATE "${MUGEN_ROOT}/third_party/glad-es-3.0")
     target_link_libraries(main PRIVATE GLESv3 EGL)
+    # The GLES sprite dialect is embedded in the binary (src/shaders/gles/), not
+    # staged into the APK's data/gles/; src/gles_render.c reads the literals.
+    include("${MUGEN_ROOT}/port/cmake/Model3D.cmake")
+    mugen_enable_sprite_shaders(main "${MUGEN_ROOT}" gles)
     message(STATUS "GLES 3.0 sprite renderer enabled; model3d=${MUGEN_MODEL3D}")
 endif()
 if(MUGEN_VIDEO_BG)

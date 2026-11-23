@@ -65,9 +65,9 @@ res/icons/      the window/bubble icon as one .ico per size (see below)
 res/mugen.cfg   the default configuration: the one file every target ships as
                 data/mugen.cfg (make install, the Android assets, the Vita VPK),
                 with a comment on every key. See "The default configuration"
-res/shaders/    project-owned shader dialects: gles/ (staged as data/gles by the
-                Android build) and vita/ (substituted into the VPK); the desktop
-                shaders are the game installation's own data/*.{vert,frag}
+src/shaders/    every shader, embedded into the binary as C string literals for
+                all targets: glTF model shaders at the root, and the sprite
+                dialects gles/, vita/, desktop/ (see "Shaders" below)
 tools/          extract_icon.py, iconpack.py, compare_logs.py,
                 validate.c (asset-path checker, `make validate`),
                 sffcli.c (standalone SFF inspector/exporter/optimizer, `make sffcli`),
@@ -199,8 +199,9 @@ desktop OpenGL: the handhelds that target exists for expose OpenGL ES only, and
 their `libGL.so.1` is the GLX stub, so `gladLoadGL()` resolves nothing against
 the EGL context SDL2 creates. That build compiles `third_party/glad-es-3.0`,
 excludes `src/glrender.c`/`src/gldetect.c` (they define the same `Gl_*` entry
-points as `src/gles_render.c`), links no `-lGL -lGLU`, and `make install` copies
-`res/shaders/gles/*` to `install/data/gles/`. `linux-x64` and the Windows
+points as `src/gles_render.c`), links no `-lGL -lGLU`, and embeds its GLSL ES
+programs from `src/shaders/gles/` into the binary (no `data/gles/` files).
+`linux-x64` and the Windows
 targets keep desktop GL — they are the reference builds. `make MUGEN_GLES=0`
 (or `=1`) overrides the default. See `PROBLEMS.md` (P1) and
 `docs/BUILD-LINUX.md`.
@@ -580,6 +581,45 @@ package. It is the only place that decodes `.ico` (BMP/DIB entries with an AND
 mask) and writes PNG; keep it that way rather than duplicating the decoder. Its
 `png` subcommand makes a square icon, `canvas` composes the artwork onto a
 larger frame (Vita LiveArea, Android adaptive foreground).
+
+## Shaders
+
+Every shader lives in `src/shaders/` and is **embedded into the binary as a C
+string literal for every target** — desktop GL, GLES 3.0 and PS Vita. Nothing is
+read from disk at run time and no port stages shader files any more.
+
+```
+src/shaders/
+  model.vert model.frag model_basic.vert model_basic.frag            glTF models
+  shadow.vert shadow.frag env.vert env_panorama.frag env_filter.frag
+  gles/indexed.vert gles/indexed.frag gles/rgba.vert gles/rgba.frag
+  vita/indexed.vert vita/indexed.frag vita/rgba.vert vita/rgba.frag
+  desktop/indexed.vert desktop/indexed.frag desktop/rgba.vert desktop/rgba.frag
+  README.md     the dialect and EB_DEFINES contract
+```
+
+`tools/embed_shader.sh` (GNU Make) and `port/cmake/Model3D.cmake` +
+`port/cmake/EmbedModelShader.cmake` (CMake ports) turn each file into a
+`g_shader_<flattened-name>` literal; `/` and `.` become `_`, so
+`gles/indexed.vert` is `g_shader_gles_indexed_vert` and cannot collide with the
+model shaders or another dialect. CMake entry points are `mugen_embed_shaders`,
+`mugen_enable_model3d` and `mugen_enable_sprite_shaders(<target> <root>
+[gles|vita|desktop]...)`.
+
+- **Model shaders** are shared by every renderer and read by `src/model.c`.
+- **GLES** (`src/gles_render.c`) and **Vita** (`src/glrender.c` under
+  `MUGEN_VITA_GL`) read their embedded dialect directly. The Vita VPK no longer
+  substitutes `data/*.{vert,frag}`, and there is no `data/gles/` directory.
+- **Desktop** keeps the game's own `data/{indexed,rgba}.{vert,frag}` as primary —
+  they are Elecbyte content and stay untracked in `install/`, so log-based
+  fidelity validation still compares against them. `desktop/` is a
+  reproduction of the same four shaders, used only when the file is absent;
+  `Glr_LoadShader` logs one line and skips the stock-file fingerprint/atlas
+  rewrite for that case (the atlas path has no embedded equivalent).
+
+The marker `////*EB_DEFINES*////` must stay verbatim and appear exactly once in
+each sprite shader: both loaders replace the first occurrence with the variant
+`#define` block. `src/shader_src.h` owns the marker.
 
 ## The default configuration
 

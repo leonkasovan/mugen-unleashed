@@ -473,10 +473,15 @@ endif()
 
 option(MUGEN_MODEL3D "Opt-in basic VitaGL glTF profile (no skinning, lighting or optional effects)" OFF)
 if(MUGEN_MODEL3D)
-  include("${MUGEN_ROOT}/port/cmake/Model3D.cmake")
   mugen_enable_model3d(mugen "${MUGEN_ROOT}")
   message(STATUS "Vita model3d BASIC profile enabled; device qualification required")
 endif()
+
+# Sprite shaders are embedded: src/glrender.c reads the vitaGL dialect, with the
+# desktop set as the fallback for the game's own data/*.{vert,frag} when they are
+# absent. No data/ substitution any more.
+include("${MUGEN_ROOT}/port/cmake/Model3D.cmake")
+mugen_enable_sprite_shaders(mugen "${MUGEN_ROOT}" vita desktop)
 
 target_include_directories(mugen PRIVATE
   "${MUGEN_SRC}"                                  # engine headers
@@ -871,30 +876,10 @@ if(MUGEN_VITA_DATA_DIR)
   # vita-pack-vpk refuses a destination already in the archive, so a stale copy
   # of mugen.psvita.cfg in the game tree is skipped where data/ is enumerated.
 
-  # --- replace the four renderer shaders with the vitaGL-compatible versions --
-  #
-  # data/{indexed,rgba}.{vert,frag} ship with M.U.G.E.N 1.1b1 and are written in
-  # GLSL 1.20 built-ins (gl_Vertex, gl_MultiTexCoord0, gl_TexCoord[0]) that
-  # vitaGL's translator does not handle, plus sampler1D/texture1D which its GLSL
-  # shim does not provide. res/shaders/vita/ holds rewritten equivalents whose
-  # PalFX maths is unchanged. They are substituted here rather than edited in the
-  # tree, so install/ stays pristine and the Windows/Linux builds keep using the
-  # originals.
-  #
-  # NOTE: these only matter once the renderer draws through shaders. As things
-  # stand the software renderer is the shipping path: vitaGL's immediate mode
-  # (glBegin/glEnd) always renders with its own fixed-function shaders and never
-  # consults a bound program, so src/glrender.c's glUseProgram has no effect
-  # there. See README.md, "The OpenGL renderer".
-  set(MUGEN_VITA_SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/../../res/shaders/vita")
-  foreach(_shader indexed.vert indexed.frag rgba.vert rgba.frag)
-    if(EXISTS "${MUGEN_VITA_SHADERS}/${_shader}")
-      set(MUGEN_VITA_SHADER_${_shader} "${MUGEN_VITA_SHADERS}/${_shader}")
-    else()
-      message(WARNING "${MUGEN_VITA_SHADERS}/${_shader} missing; the VPK keeps the original")
-      set(MUGEN_VITA_SHADER_${_shader} "")
-    endif()
-  endforeach()
+  # The sprite shaders are embedded in the binary (src/shaders/vita/), compiled
+  # by mugen_enable_sprite_shaders below. The VPK no longer substitutes any
+  # data/*.{vert,frag}: the game's data/ files are irrelevant to this renderer,
+  # which reads the embedded vitaGL dialect (src/glrender.c, Glr_EmbeddedShader).
 
   message(STATUS "mugen-psvita.vpk packs ${MUGEN_VITA_DATA_DIR} as /data")
 else()
@@ -1029,8 +1014,6 @@ if(MUGEN_VITA_DATA_DIR)
           # The project default replaces the tree's copy (MUGEN_VITA_GAME_CFG).
           list(APPEND _mugen_vpk_args -a "${MUGEN_VITA_GAME_CFG}=data/mugen.cfg")
           set(_mugen_packed_game_cfg 1)
-        elseif(MUGEN_VITA_SHADER_${_sub})
-          list(APPEND _mugen_vpk_args -a "${MUGEN_VITA_SHADER_${_sub}}=data/${_sub}")
         else()
           list(APPEND _mugen_vpk_args
                -a "${MUGEN_VITA_DATA_DIR}/data/${_sub}=data/${_sub}")
@@ -1057,8 +1040,6 @@ add_custom_command(
           ${MUGEN_VITA_ICON_PNG} ${MUGEN_VITA_BG_PNG} ${MUGEN_VITA_STARTUP_PNG}
           ${MUGEN_VITA_CFG} ${MUGEN_VITA_GAME_CFG} ${MUGEN_VITA_SHADER_COMPILER}
           "${MUGEN_VITA_SCE_SYS}/livearea/contents/template.xml"
-          ${MUGEN_VITA_SHADER_indexed.vert} ${MUGEN_VITA_SHADER_indexed.frag}
-          ${MUGEN_VITA_SHADER_rgba.vert} ${MUGEN_VITA_SHADER_rgba.frag}
   COMMENT "Building mugen-psvita.vpk"
   VERBATIM)
 

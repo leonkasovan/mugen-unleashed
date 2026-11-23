@@ -950,12 +950,13 @@ buy, concretely:
   entry texture lookup. Persistence, DSA, `glMultiDraw*` are conveniences, not
   speedups, for a few thousand quads a frame.
 - **Shaders** would go `#version 120` → 330 core (`in`/`out`, `texture()`). The
-  desktop shaders are **not in this repo** — they come from the game's
-  `data/<name>.vert|.frag` at runtime, with `#defines` injected by
-  `ShaderSrc_InsertDefines` at `////*EB_DEFINES*////`. The project does own the
-  GLES and vitaGL copies (`res/shaders/gles/`, `res/shaders/vita/`, same four
-  file names); a core-profile renderer would need a third desktop set and a
-  fallback, i.e. a data-side dependency the modding community would feel.
+  desktop shaders come from the game's `data/<name>.vert|.frag` at runtime when
+  present (with `#defines` injected by `ShaderSrc_InsertDefines` at
+  `////*EB_DEFINES*////`), and `src/shaders/desktop/` holds an embedded fallback.
+  The project also owns the GLES and vitaGL dialects (`src/shaders/gles/`,
+  `src/shaders/vita/`, same four file names), all embedded into the binary; a
+  core-profile renderer would need a further desktop variant, i.e. a data-side
+  dependency the modding community would feel.
 - **Context creation used to be the blocker**: with SDL 1.2 the game gets its
   context from `SDL_SetVideoMode` (`video.c:323`), which cannot request a core
   profile or a version. The default SDL2 backend already creates the window and

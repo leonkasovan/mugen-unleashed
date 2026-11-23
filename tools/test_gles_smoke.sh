@@ -6,20 +6,28 @@ set -eu
 cd "$(dirname "$0")/.."
 CC="${CC:-cc}"
 OUT="${OUT:-$PWD/build/tmp/gles-smoke}"
-mkdir -p "$OUT/tmp" "$OUT/data/gles"
+mkdir -p "$OUT/tmp"
 export TMPDIR="$OUT/tmp"
+# The sprite shaders are embedded (src/shaders/gles/*): generate the C literal
+# headers this script compiles against, exactly as the real build does. Header
+# paths keep the dialect subdirectory (gles/indexed.vert.h) to match the include.
+for shader in src/shaders/gles/*.vert src/shaders/gles/*.frag; do
+    rel=${shader#src/shaders/}
+    mkdir -p "$OUT/shaders/gles"
+    sh tools/embed_shader.sh "$shader" "$OUT/shaders/$rel.h" \
+        "g_shader_$(printf '%s' "$rel" | tr '/.' '__')"
+done
 SDL2_CFLAGS="${SDL2_CFLAGS:-$(pkg-config --cflags sdl2 SDL2_mixer SDL2_ttf)}"
 SDL2_LIBS="${SDL2_LIBS:-$(pkg-config --libs sdl2)}"
 EGL_CFLAGS="${EGL_CFLAGS:-$(pkg-config --cflags egl)}"
 EGL_LIBS="${EGL_LIBS:-$(pkg-config --libs egl)}"
 FLAGS="${CFLAGS:-} -DSDL_MAIN_HANDLED -std=gnu11 -O1 -g -UNDEBUG -Wall -Wno-unused-parameter -ffunction-sections -fdata-sections"
 FLAGS="$FLAGS -DANDROID_PORT -DMUGEN_GLES -DMUGEN_ANDROID_SW -Isrc"
-FLAGS="$FLAGS -Iport/android/app/src/main/jni/src -Ithird_party/glad-es-3.0"
+FLAGS="$FLAGS -I$OUT/shaders -Iport/android/app/src/main/jni/src -Ithird_party/glad-es-3.0"
 FLAGS="$FLAGS -Ithird_party/minizip-0.15 -Ithird_party/libpng-1.2.38 -Ithird_party/lua-5.1.4/src -Ithird_party/libresample/include"
 FLAGS="$FLAGS $SDL2_CFLAGS $EGL_CFLAGS"
 $CC $FLAGS -c src/globals.c -o "$OUT/globals.o"
 $CC $FLAGS tools/test_gles_smoke.c src/perf.c src/gl_mvp.c src/gputime.c src/memprof.c \
     third_party/glad-es-3.0/glad.c \
     "$OUT/globals.o" -Wl,--gc-sections ${LDFLAGS:-} $EGL_LIBS $SDL2_LIBS -lm -ldl -o "$OUT/test_gles_smoke"
-cp res/shaders/gles/* "$OUT/data/gles/"
 (cd "$OUT"; MUGEN_SPRITEATLAS=1 ./test_gles_smoke)

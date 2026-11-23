@@ -1,7 +1,7 @@
 /* GLES indexed fragment shader (GLSL ES 1.00).
  *
- * Lives in res/shaders/gles/ and is deployed next to the game data as
- * data/gles/indexed.frag, which is where src/gles_render.c loads it from.
+ * Lives in src/shaders/gles/ and is embedded into the binary at build time;
+ * src/gles_render.c reads it as the compiled-in literal g_shader_gles_indexed_frag.
  *
  * Port of indexed.frag with the desktop-only constructs replaced:
  * - sampler1D texunit1 -> sampler2D texunit1: GLES has no 1D textures.

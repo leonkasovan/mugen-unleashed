@@ -1,7 +1,7 @@
 /* GLES RGBA fragment shader (GLSL ES 1.00).
  *
- * Lives in res/shaders/gles/ and is deployed next to the game data as
- * data/gles/rgba.frag, which is where src/gles_render.c loads it from.
+ * Lives in src/shaders/gles/ and is embedded into the binary at build time;
+ * src/gles_render.c reads it as the compiled-in literal g_shader_gles_rgba_frag.
  *
  * Port of rgba.frag: gl_TexCoord[] -> varying v_texcoord, precision
  * declared, sampler2D only (already 2D upstream). PalFX equations and

@@ -881,23 +881,9 @@ for /f "usebackq delims=" %%F in (`dir /b /s /a-d`) do (
 popd
 echo     !COUNT! file^(s^)
 
-rem The GLES shader dialect is project code, not game data: staged into data\gles
-rem so src/gles_render.c finds it, and added to the manifest so the list covers
-rem what the APK carries.
-echo.
-echo ==^> Staging GLES shaders from res\shaders\gles
-if not exist "%ROOT%\res\shaders\gles" (
-    echo error: res/shaders/gles is missing; the GLES backend cannot load shaders
-    exit /b 1
-)
-if not exist "%ASSETS%\data\gles" mkdir "%ASSETS%\data\gles"
-set "SHCOUNT=0"
-for %%S in ("%ROOT%\res\shaders\gles\*") do if not exist "%%~fS\" (
-    copy /y "%%~fS" "%ASSETS%\data\gles\" >nul
-    echo data/gles/%%~nxS>>"%LIST%"
-    set /a SHCOUNT+=1
-)
-echo     !SHCOUNT! GLES shader^(s^)
+rem The GLES shader dialect is embedded in the native library (src/shaders/gles/,
+rem compiled by CMake's mugen_enable_sprite_shaders). Nothing is staged into the
+rem APK's data\gles: src/gles_render.c reads the compiled-in literals.
 
 rem Platform config: res\mugen.cfg is the project's default configuration, the
 rem same file make install puts in the game tree and the Vita VPK packs, so the

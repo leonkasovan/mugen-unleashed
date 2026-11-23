@@ -236,8 +236,9 @@ With `MUGEN_GLES=1` the build:
 - **excludes** `src/glrender.c` and `src/gldetect.c`; `src/gles_render.c`
   provides the same `Gl_*`/`Gfx_Gl*` entry points against GLES;
 - does not link `-lGL -lGLU` — EGL comes in through SDL2;
-- `make install` copies `res/shaders/gles/*` into `install/data/gles/`, which is
-  where `src/gles_render.c` loads its GLSL ES programs from.
+- embeds its GLSL ES programs from `src/shaders/gles/` into the binary (compiled
+  in by `tools/embed_shader.sh`); `src/gles_render.c` reads the literals, so no
+  `data/gles/` files are shipped or copied.
 
 Dependencies are the same minus the desktop GL ones: `libgl1-mesa-dev` and
 `libglu1-mesa-dev` are not needed (`libGLU` is only used by the desktop

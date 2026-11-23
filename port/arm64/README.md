@@ -166,9 +166,8 @@ What it does, and why:
   convention already used on the device), so a bad build rolls back on the
   device itself: `mv mugen-linux-arm64{.prev,}`. `--no-keep-old` skips it.
 - Only the binary is uploaded. Game data (`data/`, `chars/`, …) is yours; it is
-  not touched. For the GLES renderer the device also needs
-  `data/gles/*.{vert,frag}` — `make install MUGEN_GLES=1` copies them, or copy
-  `res/shaders/gles/` across by hand.
+  not touched. The GLES shaders are embedded in the binary, so no `data/gles/`
+  files are needed or shipped.
 
 `sshpass` is required locally (MSYS2: `pacman -S sshpass`). Without
 `DEVICE_PASS` the password is prompted for.

@@ -6,9 +6,9 @@
  * reintroducing sampler1D or gl_TexCoord) at build time.
  *
  * Usage: test_gles_shader <dir> [gles|vita]
- *   gles (default): res/shaders/gles, the GLSL ES 1.00 dialect the Android
- *                   renderer loads from data/gles/.
- *   vita:           res/shaders/vita, the vitaGL dialect. Same four file
+ *   gles (default): src/shaders/gles, the GLSL ES 1.00 dialect the Android
+ *                   renderer embeds.
+ *   vita:           src/shaders/vita, the vitaGL dialect. Same four file
  *                   names; it supplies a uMvp uniform instead of u_mvp
  *                   and uses its own attribute/varying
  *                   spelling, and vitaGL does not require a precision
@@ -204,7 +204,7 @@ int main(int argc, char **argv)
     int i;
 
     TEST_REPORT_ABI();
-    dir = argc > 1 ? argv[1] : "res/shaders/gles";
+    dir = argc > 1 ? argv[1] : "src/shaders/gles";
     which = argc > 2 ? argv[2] : "gles";
     if (strcmp(which, "gles") == 0) {
         d = &gles_dialect;

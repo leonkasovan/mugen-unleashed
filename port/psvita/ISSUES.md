@@ -350,8 +350,9 @@ is genuinely missing:
    rewrite of `Gl_DrawQuadIndexed`/`Gl_DrawQuadRgba`, not a shader edit.
 
 The shaders were rewritten to vitaGL-compatible GLSL anyway (see
-`res/shaders/vita/`, PalFX maths byte-identical), shipped in the VPK, because
-they are a prerequisite. They are not sufficient.
+`src/shaders/vita/`, PalFX maths byte-identical), now embedded in the binary
+rather than shipped as VPK files, because they are a prerequisite. They are not
+sufficient.
 
 **Flags selected** (all justified from vitaGL's source in
 `port/psvita/cmake/VitaGl.cmake`): `HAVE_UNPURE_TEXFORMATS`,

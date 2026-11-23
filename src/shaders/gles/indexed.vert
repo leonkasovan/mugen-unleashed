@@ -1,8 +1,8 @@
 /*
- * GLES vertex shader (GLSL ES 1.00) for 32-bit RGBA sprites.
+ * GLES vertex shader (GLSL ES 1.00) for paletted (8-bit indexed) sprites.
  *
- * Lives in res/shaders/gles/ and is deployed next to the game data as
- * data/gles/rgba.vert, which is where src/gles_render.c loads it from.
+ * Lives in src/shaders/gles/ and is embedded into the binary at build time;
+ * src/gles_render.c reads it as the compiled-in literal g_shader_gles_indexed_vert.
  *
  * The desktop indexed.vert/rgba.vert use GLSL 120 built-ins
  * (gl_MultiTexCoord0, gl_ModelViewProjectionMatrix, gl_TexCoord) that do
@@ -12,8 +12,10 @@
  * the Q component of the texcoord (PERSPECTIVE_* defines work the same).
  */
 ////*EB_DEFINES*////
+
 attribute vec4 a_position;
 varying vec4 v_texcoord;
+
 #ifdef SPRITE_ATLAS
 attribute mat4 a_instance_mvp;
 attribute vec4 a_atlas_rect;
@@ -30,12 +32,18 @@ varying highp vec4 v_atlas_fx;
 attribute vec4 a_texcoord;
 uniform mat4 u_mvp;
 #endif
+
 void main()
 {
 #ifdef SPRITE_ATLAS
     v_texcoord = vec4(a_position.xy, 0.0, 1.0);
     v_atlas_rect = a_atlas_rect;
+#ifdef SPRITE_ATLAS_INVERSE_SIZE
+    /* Share the reciprocal across fragments of an indexed sprite. */
+    v_atlas_params = vec4(1.0 / a_atlas_params.xy, a_atlas_params.zw);
+#else
     v_atlas_params = a_atlas_params;
+#endif
     v_atlas_add = a_atlas_add;
     v_atlas_mul = a_atlas_mul;
     v_atlas_fx = a_atlas_fx;

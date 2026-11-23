@@ -17,8 +17,8 @@
  * What is here:
  *   - the GlTex_* texture object over GLES (8-bit index, 24-bit RGB, RGBA),
  *     with the palette as a 256x1 2D texture because GLES has no 1D textures;
- *   - shader programs from the .vert/.frag files in res/shaders/gles (GLSL ES 1.00),
- *     deployed next to the game data as the .vert/.frag files in data/gles;
+ *   - shader programs from the embedded .vert/.frag sources in src/shaders/gles
+ *     (GLSL ES 1.00), compiled in by tools/embed_shader.sh;
  *   - the sprite path: CPU modelview (src/gl_mvp.c) + VBO quad submission
  *     (src/gles_draw.c);
  *   - the dispatch entries Gfx_SelectRenderer(RENDER_OPENGL) installs:
@@ -53,6 +53,12 @@
 #include "gles_draw.h"
 #include "gl_size.h"
 #include "shader_src.h"
+
+/* Embedded GLES sprite shaders (src/shaders/gles/, tools/embed_shader.sh). */
+#include "gles/indexed.vert.h"
+#include "gles/indexed.frag.h"
+#include "gles/rgba.vert.h"
+#include "gles/rgba.frag.h"
 
 #define STB_RECT_PACK_IMPLEMENTATION
 #include "../third_party/stb/stb_rect_pack.h"
@@ -965,22 +971,31 @@ static const char *gles_solid_frag_src =
     "uniform vec4 u_color;\n"
     "void main() { gl_FragColor = u_color; }\n";
 
-/* Reads a shader file from data/gles/, where the port stages the dialect
- * sources (res/shaders/gles/) next to the game data. */
-static char *gles_read_shader(const char *name)
+/* Returns the embedded source for a sprite shader by its file name (e.g.
+ * "indexed.vert"). The GLES dialects are compiled in (src/shaders/gles/), so
+ * there is no data/gles/ file to read; a name with no match returns NULL. The
+ * returned pointer is the static literal, not an allocation -- callers must not
+ * free it. */
+static const char *gles_read_shader(const char *name)
 {
-    char path[512];
-    FILE *f;
-    int n = snprintf(path, sizeof(path), "data/gles/%s", name);
-    if (n < 0 || (size_t)n >= sizeof(path)) return NULL;
-    f = fopen(path, "rb");
-    if (f == NULL) {
-        /* No trailing newline on purpose: the next GLES line starts with one,
-         * so two failures in a row do not leave a blank line between them. */
-        Log_Printf("\nGLES: cannot open %s", path);
-        return NULL;
+    static const struct {
+        const char *name;
+        const char *src;
+    } shaders[] = {
+        { "indexed.vert", g_shader_gles_indexed_vert },
+        { "indexed.frag", g_shader_gles_indexed_frag },
+        { "rgba.vert", g_shader_gles_rgba_vert },
+        { "rgba.frag", g_shader_gles_rgba_frag }
+    };
+    size_t i;
+
+    for (i = 0; i < sizeof(shaders) / sizeof(shaders[0]); i++) {
+        if (strcmp(shaders[i].name, name) == 0) return shaders[i].src;
     }
-    return ShaderSrc_ReadFile(f);
+    /* No trailing newline on purpose: the next GLES line starts with one, so
+     * two failures in a row do not leave a blank line between them. */
+    Log_Printf("\nGLES: no embedded shader named %s", name);
+    return NULL;
 }
 
 /*
@@ -1018,13 +1033,13 @@ static void gles_build_defines(char *out, size_t cap)
     }
 }
 
-/* Loads one program from the ES dialect files. */
+/* Loads one program from the embedded ES dialect sources. */
 static int gles_load_es_program(GlesProgram *prog, const char *name, int atlas)
 {
     char vert_name[64];
     char frag_name[64];
-    char *vert;
-    char *frag;
+    const char *vert;
+    const char *frag;
     char defines[256];
     int ok, inverse_size = 0;
 
@@ -1033,8 +1048,6 @@ static int gles_load_es_program(GlesProgram *prog, const char *name, int atlas)
     vert = gles_read_shader(vert_name);
     frag = gles_read_shader(frag_name);
     if (vert == NULL || frag == NULL) {
-        free(vert);
-        free(frag);
         return 0;
     }
     /*
@@ -1054,8 +1067,6 @@ static int gles_load_es_program(GlesProgram *prog, const char *name, int atlas)
      */
     gles_build_defines(defines, sizeof(defines));
     if (atlas && (!strstr(vert, "v_atlas_rect") || !strstr(frag, "v_atlas_rect"))) {
-        free(vert);
-        free(frag);
         return 0;
     }
     if (atlas) {
@@ -1069,8 +1080,6 @@ static int gles_load_es_program(GlesProgram *prog, const char *name, int atlas)
     }
     ok = GlesDraw_LoadProgram(prog, vert, frag, atlas ? "indexed atlas" : name, defines);
     if (prog == &g_glesProgramAtlas) g_indexed_atlas_inverse_size = ok && inverse_size;
-    free(vert);
-    free(frag);
     return ok;
 }
 

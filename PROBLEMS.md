@@ -67,7 +67,7 @@ Two GL loaders were in play, and the engine used the wrong one for this device.
 
 The engine already had a complete GLES 3.0 backend (`MUGEN_GLES`:
 `src/gles_render.c`, `gles_probe.c`, `gles_draw.c`, `gl_mvp.c`, GLSL ES shaders
-in `res/shaders/gles/`), but it was wired for Android only: `gles_render.c` was
+embedded from `src/shaders/gles/`), but it was wired for Android only: `gles_render.c` was
 guarded by `#if defined(ANDROID_PORT) && defined(MUGEN_GLES)`, `mugen.h` included
 `glad_es.h` only inside `#ifdef ANDROID_PORT`, the `Makefile` had no `MUGEN_GLES`
 option at all, and the render policy/fallback in `config.c` and `system.c` were
@@ -90,7 +90,7 @@ What changed, file by file:
 
 | File | Change |
 |---|---|
-| `Makefile` | New GLES block: default per target, `MUGEN_GLES` in `CONFIG_ID` (so switching recompiles), `-DMUGEN_GLES`, `GLAD_DIR`/`GLAD_SRC` switched to `third_party/glad-es-3.0`, `-lGL -lGLU` dropped from the link line, `glrender.c` + `gldetect.c` removed from `ENGINE_SRCS`, `make install` stages `res/shaders/gles/*` into `install/data/gles/` |
+| `Makefile` | New GLES block: default per target, `MUGEN_GLES` in `CONFIG_ID` (so switching recompiles), `-DMUGEN_GLES`, `GLAD_DIR`/`GLAD_SRC` switched to `third_party/glad-es-3.0`, `-lGL -lGLU` dropped from the link line, `glrender.c` + `gldetect.c` removed from `ENGINE_SRCS`; the shader dialect under `src/shaders/gles/` is embedded into the binary |
 | `src/mugen.h` | `#ifdef MUGEN_GLES` now selects `glad_es.h` before the `ANDROID_PORT` branch, so the dialect is chosen by `MUGEN_GLES` alone on every platform; plain Android still gets no GL declarations |
 | `src/glad_es.h` | Defines `__gl_h_` after including glad, so a system `<GL/gl.h>` read later (via `<GL/glu.h>` in `video.c`) self-suppresses instead of colliding with glad's `#define glClearColor glad_glClearColor` |
 | `src/sdl2compat.c` | Requests an **ES 3.0 context** (`SDL_GL_CONTEXT_PROFILE_MASK`/major/minor) before `SDL_CreateWindow`, and loads entry points with `gladLoadGLES2Loader(SDL_GL_GetProcAddress)` after `SDL_GL_CreateContext` — SDL's loader is the only one that resolves EGL entry points. Logs `video: <renderer>, GLES <major>.<minor>`. Adds `Sdl2_GLDrawableSize()` |
@@ -124,7 +124,7 @@ silent fallback.
 | Quick VS (`-p1 kfm -p2 kfm`) | match loads and runs, 1423 frames in 25 s |
 | Frame rate vs System, same scenario | 1423 vs 1440 frames — GLES is not slower |
 | Pixel output | screenshot of each renderer on the same match, decoded and compared: **99.6 % of pixels non-black** on GLES, mean absolute difference **3.5/255**, max 49. Low-magnitude differences are expected: System is RGB565 and the two runs are separate playthroughs, so they are close rather than bit-identical. **This row proved the renderer, not the screen** — `Gl_Capture` reads the render *target* (the screen-buffer FBO), so a missing present was invisible to it. See P3 |
-| Fallback when the ES shaders are missing | logs `GLES: cannot open data/gles/indexed.vert … failed. falling back to the system renderer.` and runs on System (exit 124 = still alive) |
+| Fallback when the ES shaders are missing | no longer reachable: the dialect is embedded in the binary, so a missing `data/gles/` file cannot disable the renderer. A genuine shader compile/link failure still falls back to System with a reason |
 | Strict renderer on that same scenario | exits 1: `strict renderer: requested mode 2 unavailable (effective 0)` |
 | Shutdown | `Successful program termination.`, GL resources released |
 
@@ -345,7 +345,7 @@ make MUGEN_TARGET=linux-arm64 BUILD=build/linux-arm64 \
      CC="$R/usr/bin/gcc --sysroot=$R -B$R/usr/bin -L$PWD/build/tmp/arm64-libs" -j8
 make MUGEN_TARGET=linux-arm64 BUILD=build/linux-arm64 \
      CC="$R/usr/bin/gcc --sysroot=$R -B$R/usr/bin -L$PWD/build/tmp/arm64-libs" \
-     STRIP=$R/usr/bin/strip install      # also copies data/gles/* into install/
+     STRIP=$R/usr/bin/strip install      # shaders are embedded; no data/gles/ copy
 ```
 
 On the device, from the game directory:

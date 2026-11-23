@@ -622,25 +622,44 @@ ifeq ($(MUGEN_GLES),1)
   GLAD_DIR := $(TP_DIR)/glad-es-3.0
   GLAD_SRC := $(GLAD_DIR)/glad.c
   ENGINE_EXCLUDE_SRCS := $(SRC_DIR)/glrender.c $(SRC_DIR)/gldetect.c
-  GLES_SHADER_SRCS := $(wildcard res/shaders/gles/*.vert res/shaders/gles/*.frag)
 else
   GLAD_DIR := $(TP_DIR)/glad-2.1
   GLAD_SRC := $(GLAD_DIR)/glad.c
   ENGINE_EXCLUDE_SRCS :=
-  GLES_SHADER_SRCS :=
 endif
+
+# --- embedded shaders --------------------------------------------------------
+#
+# Every shader lives in src/shaders/ and is compiled in as a C string literal by
+# tools/embed_shader.sh, for every target. Nothing is read from disk at run
+# time. The generated headers sit under $(SHADER_HDR_DIR), and the name flattens
+# '/' and '.' to '_', so gles/indexed.vert becomes g_shader_gles_indexed_vert and
+# cannot collide with the model shaders or another dialect. See
+# src/shaders/README.md for the dialects and the EB_DEFINES contract.
+#
+# Which sprite dialect is embedded follows the backend, exactly as the renderer
+# source does: the GLES build compiles src/gles_render.c (gles/), the desktop
+# build compiles src/glrender.c (desktop/, its fallback for the game's own
+# data/*.vert). Vita picks its dialect up in port/psvita/CMakeLists.txt.
+SHADER_HDR_DIR := $(BUILD)/shaders
+ifeq ($(MUGEN_GLES),1)
+  SPRITE_SHADER_NAMES := gles/indexed.vert gles/indexed.frag gles/rgba.vert gles/rgba.frag
+else
+  SPRITE_SHADER_NAMES := desktop/indexed.vert desktop/indexed.frag desktop/rgba.vert desktop/rgba.frag
+endif
+SPRITE_SHADER_HEADERS := $(addprefix $(SHADER_HDR_DIR)/,$(addsuffix .h,$(SPRITE_SHADER_NAMES)))
+CPPFLAGS += -I$(SHADER_HDR_DIR)
 
 # Desktop GL is the reference. GLES model support is opt-in until device qualification.
 MUGEN_MODEL3D ?= $(if $(filter 1,$(MUGEN_GLES)),0,1)
 ifneq ($(filter-out 0 1,$(MUGEN_MODEL3D)),)
   $(error MUGEN_MODEL3D must be 0 or 1)
 endif
-MODEL_SHADER_DIR := $(BUILD)/shaders/model
 MODEL_SHADER_NAMES := model.vert model.frag shadow.vert shadow.frag env.vert env_panorama.frag env_filter.frag model_basic.vert model_basic.frag
+MODEL_SHADER_HEADERS := $(addprefix $(SHADER_HDR_DIR)/,$(addsuffix .h,$(MODEL_SHADER_NAMES)))
 ifeq ($(MUGEN_MODEL3D),1)
   ENGINE_DEFS += -DMUGEN_MODEL3D
-  CPPFLAGS += -I$(TP_DIR)/cgltf-1.14 -I$(TP_DIR)/stb -I$(MODEL_SHADER_DIR)
-  MODEL_SHADER_HEADERS := $(addprefix $(MODEL_SHADER_DIR)/,$(addsuffix .h,$(MODEL_SHADER_NAMES)))
+  CPPFLAGS += -I$(TP_DIR)/cgltf-1.14 -I$(TP_DIR)/stb
   MODEL_TP_OBJS := $(OBJ_DIR)/model/cgltf.o $(OBJ_DIR)/model/stb_image.o
 endif
 CONFIG_ID += model3d=$(MUGEN_MODEL3D)
@@ -903,13 +922,20 @@ $(FFMPEG_STAMP): $(CONFIG_STAMP) $(wildcard $(FFMPEG_SRC)/configure) Makefile
 	$(Q)touch "$@"
 endif
 
+# Every generated shader header comes from its source file. The variable name is
+# the path with '/' and '.' flattened to '_' (g_shader_gles_indexed_vert), which
+# is what keeps the dialects and the model shaders from sharing a symbol.
+$(SHADER_HDR_DIR)/%.h: $(SRC_DIR)/shaders/% tools/embed_shader.sh
+	@echo "  SHADER  $<"
+	$(Q)sh tools/embed_shader.sh "$<" "$@" "g_shader_$(subst /,_,$(subst .,_,$*))"
+	$(Q)touch "$@" # Acknowledge newer prerequisites even when shader bytes agree.
+
+# The renderers that include the generated headers must rebuild when one changes.
+$(OBJ_DIR)/src/gles_render.o: $(SRC_DIR)/gles_render.c $(SPRITE_SHADER_HEADERS)
+$(OBJ_DIR)/src/glrender.o: $(SRC_DIR)/glrender.c $(SPRITE_SHADER_HEADERS)
+
 ifeq ($(MUGEN_MODEL3D),1)
 $(OBJ_DIR)/src/model.o: $(SRC_DIR)/model.c $(MODEL_SHADER_HEADERS)
-
-$(MODEL_SHADER_DIR)/%.h: $(SRC_DIR)/shaders/% tools/embed_shader.sh
-	@echo "  SHADER  $<"
-	$(Q)sh tools/embed_shader.sh "$<" "$@" "g_shader_$(subst .,_,$*)"
-	$(Q)touch "$@" # Acknowledge newer prerequisites even when shader bytes agree.
 
 $(OBJ_DIR)/model/cgltf.o: $(TP_DIR)/cgltf-1.14/cgltf.c $(CONFIG_STAMP)
 	$(Q)mkdir -p $(dir $@)
@@ -1092,15 +1118,6 @@ install: $(STRIPPED)
 ifeq ($(MUGEN_TARGET),linux-arm64)
 	$(Q)mkdir -p $(INSTALL_DIR)/data
 	$(Q)cp port/arm64/mugen.arm64.cfg $(INSTALL_DIR)/data/mugen.arm64.cfg
-endif
-ifeq ($(MUGEN_GLES),1)
-# The GLES renderer loads GLSL ES sources from data/gles/*, next to the game's
-# own data/ (src/gles_render.c gles_read_shader). They are ours, not game
-# content, so they ship with the binary rather than coming from the
-# installation -- the same reason port\android\build.bat stages them into the APK.
-	@echo "  SHADERS $(INSTALL_DIR)/data/gles"
-	$(Q)mkdir -p $(INSTALL_DIR)/data/gles
-	$(Q)cp -f $(GLES_SHADER_SRCS) $(INSTALL_DIR)/data/gles/
 endif
 	@echo "  done: run it from $(INSTALL_DIR)"
 ifeq ($(MUGEN_FAMILY),win32)
