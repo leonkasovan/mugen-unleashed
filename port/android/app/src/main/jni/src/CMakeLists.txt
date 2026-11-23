@@ -151,11 +151,13 @@ list(APPEND ANDROID_INCLUDES "${MUGEN_ROOT}/src" "${CMAKE_CURRENT_SOURCE_DIR}")
 
 add_library(main SHARED ${MUGEN_ENGINE_SOURCES})
 
-# Port addition: the base config and the Android overlay are embedded in
-# libmain.so; src/configembed.c writes them into the extracted asset tree when
-# they are absent, so the APK needs no configuration staged by hand.
-include("${MUGEN_ROOT}/port/cmake/EmbedConfigs.cmake")
+# Port addition: the base config, the Android overlay and the Lua helpers are
+# embedded in libmain.so; src/configembed.c and src/luascripts.c write them into
+# the extracted asset tree when they are absent, so the APK needs no resource
+# staged by hand.
+include("${MUGEN_ROOT}/port/cmake/EmbedResources.cmake")
 mugen_embed_configs(main "${MUGEN_ROOT}")
+mugen_embed_lua(main "${MUGEN_ROOT}")
 
 if(MUGEN_MODEL3D)
     include("${MUGEN_ROOT}/port/cmake/Model3D.cmake")

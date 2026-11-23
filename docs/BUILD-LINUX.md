@@ -37,24 +37,17 @@ make -j8
 make install          # strips and copies into install/mugen-linux-x64
 ```
 
-The executable embeds `res/lua_script.zip`. Before Lua initializes, a missing
-`data/vector.lua` triggers restoration of missing bundled scripts to `data/`.
-Existing scripts are preserved; a write failure stops Lua initialization with
-an error in `mugen.log`. This lets older game packs use the engine without
-manually copying its Lua helpers.
+The executable embeds the Lua helpers committed under `res/lua/`. Before Lua
+initializes, a missing `data/vector.lua` triggers restoration of the missing
+scripts to `data/`. Existing scripts are preserved; a write failure stops Lua
+initialization with an error in `mugen.log`. This lets older game packs use the
+engine without manually copying its Lua helpers.
 
-To refresh the bundle from the installed default game assets:
-
-```sh
-make install
-python3 tools/embed_lua_scripts.py --pack install/data
-make install
-python3 tools/test_luascripts.py
-```
-
-The ZIP and generated `res/lua_script_zip.h` are checked in together so CMake
-ports can embed the same resource without needing Python at build time.
-GNU Make also regenerates the header when the ZIP changes.
+Edit `res/lua/*.lua` to change a helper and rebuild. The build generates
+`lua_scripts_data.h` in the build tree (GNU Make through
+`tools/embed_resources.sh`, the CMake ports through
+`port/cmake/EmbedResources.cmake`), so there is no ZIP or Python packing step.
+`python3 tools/test_luascripts.py` exercises the extraction.
 
 → `build/linux-x64-sdl2/mugen-linux-x64` (or `build/linux-arm64-sdl2/…`), installed under
 the same name so an ELF binary never ends up called `.exe`.

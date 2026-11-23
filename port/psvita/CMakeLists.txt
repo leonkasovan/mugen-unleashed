@@ -485,10 +485,12 @@ endif()
 include("${MUGEN_ROOT}/port/cmake/Model3D.cmake")
 mugen_enable_sprite_shaders(mugen "${MUGEN_ROOT}" vita desktop)
 
-# The base config and the Vita overlay are embedded in the executable; the
-# engine writes whichever is missing into the game tree at start-up.
-include("${MUGEN_ROOT}/port/cmake/EmbedConfigs.cmake")
+# The base config, the Vita overlay and the Lua helpers are embedded in the
+# executable; the engine writes whichever is missing into the game tree at
+# start-up.
+include("${MUGEN_ROOT}/port/cmake/EmbedResources.cmake")
 mugen_embed_configs(mugen "${MUGEN_ROOT}")
+mugen_embed_lua(mugen "${MUGEN_ROOT}")
 
 target_include_directories(mugen PRIVATE
   "${MUGEN_SRC}"                                  # engine headers

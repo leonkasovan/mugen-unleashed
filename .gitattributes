@@ -9,6 +9,9 @@
 # and `set -eu` fails with "Illegal option -" when the file carries CR.
 *.sh    text eol=lf
 
+# Lua helpers are committed as text and embedded by the build.
+*.lua   text eol=lf
+
 # Binary artefacts that must never be line-ending converted.
 *.png   binary
 *.ico   binary

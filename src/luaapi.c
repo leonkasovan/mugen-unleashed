@@ -527,7 +527,7 @@ int Lua_Init(void)
         return 0;
     }
     if (restored > 0) {
-        Log_Printf("Restored missing Lua scripts from embedded lua_script.zip.\n");
+        Log_Printf("Restored missing Lua scripts from the embedded defaults.\n");
     }
     g_luaHook1 = (void *)Lua_LogError;
     g_luaHook2 = (void *)Log_Printf;

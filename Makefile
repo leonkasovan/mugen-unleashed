@@ -656,7 +656,7 @@ CPPFLAGS += -I$(SHADER_HDR_DIR)
 # --- embedded configuration --------------------------------------------------
 #
 # res/configs/ is the one place the shipped configurations live: the base
-# mugen.cfg plus one overlay per platform. tools/embed_configs.sh turns them
+# mugen.cfg plus one overlay per platform. tools/embed_resources.sh turns them
 # into C string literals and src/configembed.c writes the missing ones into
 # data/ at start-up, so `make install` (and every port package) needs no
 # configuration copied into the game tree by hand. src/configembed.h selects the
@@ -665,6 +665,17 @@ CONFIG_HDR_DIR := $(BUILD)/configs
 CONFIG_HDR     := $(CONFIG_HDR_DIR)/config_data.h
 CONFIG_SRCS    := $(wildcard res/configs/*.cfg)
 CPPFLAGS += -I$(CONFIG_HDR_DIR)
+
+# --- embedded Lua helpers ----------------------------------------------------
+#
+# res/lua/ holds the engine's Lua helpers. tools/embed_resources.sh turns them
+# into byte arrays and src/luascripts.c restores the missing ones into data/ at
+# start-up. vector.lua is emitted last so a partial restoration retries on the
+# next boot.
+LUA_HDR_DIR := $(BUILD)/lua
+LUA_HDR     := $(LUA_HDR_DIR)/lua_scripts_data.h
+LUA_RES_SRCS := $(wildcard res/lua/*.lua)
+CPPFLAGS += -I$(LUA_HDR_DIR)
 
 # Desktop GL is the reference. GLES model support is opt-in until device qualification.
 MUGEN_MODEL3D ?= $(if $(filter 1,$(MUGEN_GLES)),0,1)
@@ -898,12 +909,6 @@ $(CONFIG_STAMP): FORCE
 	$(Q)printf '%s\n' '$(CONFIG_ID)' > $@.tmp
 	$(Q)cmp -s $@.tmp $@ 2>/dev/null && rm -f $@.tmp || mv -f $@.tmp $@
 
-# Keep a checked-in header for the CMake ports as well as the Make build.
-res/lua_script_zip.h: res/lua_script.zip tools/embed_lua_scripts.py
-	$(Q)$(PYTHON3) tools/embed_lua_scripts.py
-
-$(OBJ_DIR)/src/luascripts.o: res/lua_script_zip.h
-
 $(OBJ_DIR)/src/%.o: $(SRC_DIR)/%.c $(CONFIG_STAMP)
 	@echo "  CC      $<"
 	$(Q)mkdir -p $(dir $@)
@@ -949,11 +954,16 @@ $(SHADER_HDR_DIR)/%.h: $(SRC_DIR)/shaders/% tools/embed_shader.sh
 # The embedded configuration header. The engine writes these files into data/
 # when they are absent (src/configembed.c), so a content change is a binary
 # change even though no source file was edited.
-$(CONFIG_HDR): $(CONFIG_SRCS) tools/embed_configs.sh
+$(CONFIG_HDR): $(CONFIG_SRCS) tools/embed_resources.sh
 	@echo "  CONFIG  $@"
-	$(Q)sh tools/embed_configs.sh res/configs "$@"
+	$(Q)sh tools/embed_resources.sh res/configs "$@" config string cfg
+
+$(LUA_HDR): $(LUA_RES_SRCS) tools/embed_resources.sh
+	@echo "  LUA     $@"
+	$(Q)sh tools/embed_resources.sh res/lua "$@" lua hex lua vector.lua
 
 $(OBJ_DIR)/src/configembed.o: $(SRC_DIR)/configembed.c $(CONFIG_HDR)
+$(OBJ_DIR)/src/luascripts.o: $(SRC_DIR)/luascripts.c $(LUA_HDR)
 
 # The renderers that include the generated headers must rebuild when one changes.
 $(OBJ_DIR)/src/gles_render.o: $(SRC_DIR)/gles_render.c $(SPRITE_SHADER_HEADERS)

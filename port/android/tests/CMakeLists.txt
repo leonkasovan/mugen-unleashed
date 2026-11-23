@@ -22,6 +22,9 @@ file(GLOB PLATFORM "${ROOT}/port/android/app/src/main/jni/src/android_*.c")
 list(FILTER PLATFORM EXCLUDE REGEX ".*/android_main\\.c$")
 add_library(android_native SHARED ${ENGINE} ${LUA} ${PNG} ${RESAMPLE} ${ZIP} ${LZ4} ${PLATFORM}
  "${CMAKE_CURRENT_LIST_DIR}/test_present_host.c")
+include("${ROOT}/port/cmake/EmbedResources.cmake")
+mugen_embed_configs(android_native "${ROOT}")
+mugen_embed_lua(android_native "${ROOT}")
 target_compile_definitions(android_native PRIVATE ANDROID_PORT=1 SDL_MAIN_HANDLED LIBRESAMPLE_STATIC=1)
 target_include_directories(android_native PRIVATE
  "${ROOT}/src" "${ROOT}/port/android/app/src/main/jni/src"
