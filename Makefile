@@ -202,10 +202,24 @@ PYTHON3 ?= $(firstword $(foreach p,python3 python py,$(if $(shell $(p) -c "pass"
 
 DEBUG    ?=
 
+# One canonical answer to "is this a debug build?", used by everything below:
+# the compiler flags, the executable name and the configuration stamp. It must
+# be a single definition, because three places asking the question three
+# different ways is exactly how a -debug binary came to be linked from release
+# objects.
+#
+# DEBUG=1 is the release spelling of "yes"; DEBUG=0 and an empty DEBUG are both
+# "no". Anything else -- DEBUG=yes, DEBUG=true, DEBUG=2 -- is treated as "no"
+# rather than "yes", matching the `ifeq ($(DEBUG),1)` the flags have always used,
+# so a value that used to build release still builds release. It is *recorded*
+# verbatim in the stamp below, so a change to any spelling recompiles.
+MUGEN_DEBUG := $(if $(filter 1,$(DEBUG)),1,0)
+
 # A debug build is installed beside the release one, so its name says which is
 # which: mugen-win32-debug.exe, mugen-linux-x64-debug. build.sh and the port
-# scripts use the same suffix.
-MUGEN_DEBUG_SUFFIX := $(if $(filter-out 0,$(DEBUG)),-debug,)
+# scripts use the same suffix. $(MUGEN_DEBUG) is the one condition; do not write
+# a second one here.
+MUGEN_DEBUG_SUFFIX := $(if $(filter 1,$(MUGEN_DEBUG)),-debug,)
 
 MUGEN_GAME_DIR ?=
 
@@ -283,15 +297,27 @@ endif
 # static dependency kit (SDL2, zlib, libpng16) with winpthreads instead of
 # pthreadVC2, and the engine has 64-bit-specific fixes in the BGM thread (native
 # pthread storage, pointer packing). See docs/BUILD-MINGW64.md.
+# A debug build gets its own default tree: $(MUGEN_DEBUG_SUFFIX) is appended to
+# the directory name as well as to the executable, so `make DEBUG=1` never
+# shares objects with a release build in the same directory -- which is the
+# trap this closes. Switching modes would otherwise reuse release objects under
+# the -debug name, because DEBUG is not part of the configuration stamp unless
+# it is named here (it is, see CONFIG_ID) and even then the stamp only forces a
+# rebuild, it does not separate the two trees' outputs.
+#
+# An explicit BUILD= still wins outright, as `?=` says. That is deliberate: the
+# stamp check below then catches a mode switch inside one caller-chosen
+# directory, so an explicit BUILD= is not a way to disable the protection, only
+# a way to place it yourself.
 ifeq ($(MUGEN_TARGET),win32)
   MUGEN_FAMILY := win32
   MUGEN_PTRBITS := 32
-  BUILD    ?= build/mingw-sdl2
+  BUILD    ?= build/mingw-sdl2$(MUGEN_DEBUG_SUFFIX)
   TARGET   := $(BUILD)/mugen-win32$(MUGEN_DEBUG_SUFFIX).exe
 else ifeq ($(MUGEN_TARGET),win64)
   MUGEN_FAMILY := win32
   MUGEN_PTRBITS := 64
-  BUILD    ?= build/mingw64-sdl2
+  BUILD    ?= build/mingw64-sdl2$(MUGEN_DEBUG_SUFFIX)
   TARGET   := $(BUILD)/mugen-win64$(MUGEN_DEBUG_SUFFIX).exe
 else
   MUGEN_FAMILY := linux
@@ -301,7 +327,7 @@ else
   ifneq ($(strip $(CROSS_COMPILE)),)
     MUGEN_CROSS_TAG := -$(patsubst %-,%,$(CROSS_COMPILE))
   endif
-  BUILD    ?= build/$(MUGEN_TARGET)$(MUGEN_CROSS_TAG)-sdl2
+  BUILD    ?= build/$(MUGEN_TARGET)$(MUGEN_CROSS_TAG)-sdl2$(MUGEN_DEBUG_SUFFIX)
   TARGET   := $(BUILD)/mugen-$(MUGEN_TARGET)$(MUGEN_DEBUG_SUFFIX)
 endif
 
@@ -457,6 +483,13 @@ CONFIG_STAMP := $(OBJ_DIR)/.config
 # $(MUGEN_TARGET) already distinguishes win32/win64/linux-<arch>, so it covers
 # the pointer width and architecture that ARCHFLAGS would add.
 CONFIG_ID    := backend=sdl2-native-v1 target=$(MUGEN_TARGET) gles=$(MUGEN_GLES)
+# The effective debug mode, and the raw DEBUG spelling that produced it. Both are
+# needed: the first separates -O0 -g3 -DMUGEN_DEBUG objects from -O2 ones when a
+# caller pins BUILD= by hand and the two modes therefore land in one directory
+# (an explicit BUILD= is not a way to switch the protection off), and the second
+# makes DEBUG=1 -> DEBUG=yes recompile even though both mean "yes", so no
+# spelling change can silently reuse the other's objects.
+CONFIG_ID += debug=$(MUGEN_DEBUG) debug_raw=$(DEBUG)
 ifneq ($(strip $(MUGEN_WIN_SYSROOT)),)
 # The dependency tree decides which headers and archives the objects were built
 # against, so switching trees (or switching between a tree and an augmented kit)

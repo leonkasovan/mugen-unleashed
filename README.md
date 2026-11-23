@@ -22,7 +22,13 @@ build.bat             :: install what is missing, then build win32 and win64
 build.bat /build32    :: only the reference build
 build.bat /build64    :: only the 64-bit build
 build.bat /setup      :: install what is missing, build nothing
+build.bat /clean      :: remove the build trees, build nothing
+build.bat /jobs N     :: parallel make jobs (default: the CPU count)
 ```
+
+Every flag is accepted as `/flag` or `--flag`, `/build32` and `--build32`
+alike: the ports and `build.sh` take `--flag`, so one spelling now works on
+every platform instead of the root script being the odd one out.
 
 Or put the desired kit on PATH and run `make check-toolchain` then `make -j8`:
 
@@ -51,7 +57,7 @@ sudo apt-get install build-essential pkg-config libsdl2-dev libsdl2-mixer-dev \
 dependency tree to install, because the distribution's `-dev` packages are the
 tree and Lua, glad, minizip, libresample and LZ4 build from `third_party/`. The
 target comes from the compiler's triple, so the same script builds
-`linux-arm64` on an ARM64 host. `--debug`, `--jobs N` and `--offline` are in
+`linux-arm64` on an ARM64 host. `--debug` and `--jobs N` are in
 [the Linux guide](docs/BUILD-LINUX.md).
 
 Or drive the Makefile directly:

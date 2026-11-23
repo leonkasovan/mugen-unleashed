@@ -784,7 +784,11 @@ if "%MUGEN_ACCEPT_LICENSES%"=="1" (
         exit /b 1
     )
 )
-call "%SDKM%" --sdk_root="%ANDROID_SDK_ROOT%" --install!MISSING!
+if "%MUGEN_ACCEPT_LICENSES%"=="1" (
+    call "%SDKM%" --sdk_root="%ANDROID_SDK_ROOT%" --install!MISSING! < "%YES%"
+) else (
+    call "%SDKM%" --sdk_root="%ANDROID_SDK_ROOT%" --install!MISSING!
+)
 if errorlevel 1 (
     echo error: sdkmanager failed; review its output and rerun port\android\build.bat --setup
     exit /b 1
@@ -867,9 +871,10 @@ for /f "usebackq delims=" %%F in (`dir /b /s /a-d`) do (
     if /I "!NAME!"=="stdout.txt" set "SKIP=1"
     if /I "!NAME!"=="stderr.txt" set "SKIP=1"
     if /I "!REL:~0,19!"=="Elecbyte.MUGEN.libs" set "SKIP=1"
-    rem The engine extracts its embedded default when this is absent; staging
-    rem the tree's copy would keep the project default from ever being used.
+    rem The engine extracts its embedded defaults when these are absent; staging
+    rem the tree's copies would keep the project defaults from ever being used.
     if /I "!REL!"=="data\mugen.cfg" set "SKIP=1"
+    if /I "!REL!"=="data\mugen.android.cfg" set "SKIP=1"
     if "!SKIP!"=="0" (
         set "RD=%%~dpF"
         set "RD=!RD:%GAME_DATA_DIR%\=!"
@@ -892,9 +897,10 @@ rem APK's data\gles: src/gles_render.c reads the compiled-in literals.
 
 rem No configuration is staged. The base data/mugen.cfg and the Android overlay
 rem are embedded in libmain.so and written into the extracted asset tree when
-rem absent (src/configembed.c); the tree's own data\mugen.cfg was skipped above,
-rem so a fresh install gets the documented default and an existing one is
-rem preserved by the extractor's user-owned-file rule.
+rem absent (src/configembed.c); the tree's own data\mugen.cfg and
+rem data\mugen.android.cfg were skipped above, so a fresh install gets the
+rem documented defaults and an existing one is preserved by the extractor's
+rem user-owned-file rule.
 
 rem the MSYS2 build.sh that was removed finishes with `sort -o` on the manifest. Port fix: sort.exe and
 rem find.exe are named explicitly, because Git for Windows puts a GNU sort and a

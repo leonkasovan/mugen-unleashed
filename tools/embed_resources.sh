@@ -50,9 +50,14 @@ emit()
         ;;
     hex)
         echo "static const unsigned char $variable[] = {"
+        # CR is dropped at byte level, matching port/cmake/EmbedResourcesFile.cmake:
+        # od prints one 0d for a real CR and pass 1 removes exactly those. Both
+        # generators must embed the same bytes, so neither may do this by string
+        # substitution on the values.
         od -An -v -tx1 "$file" | awk '
             {
                 for (i = 1; i <= NF; ++i) {
+                    if ($i == "0d") continue
                     if (n % 16 == 0) printf "    "
                     printf "0x%s,", $i
                     ++n

@@ -10,12 +10,22 @@
 #
 #   tools/fetch_game_data.sh               fetch into install/ if it is missing
 #   tools/fetch_game_data.sh --check       report only, exit 1 when missing
-#   tools/fetch_game_data.sh --offline     never download (a cached archive is used)
 #   tools/fetch_game_data.sh --dest DIR    a tree somewhere other than install/
 #
 # The archive is cached in build/downloads/ like every other fetch, and is
 # checked against a pinned SHA-256 before anything is unpacked. A tree that is
 # already there -- including a real M.U.G.E.N installation -- is never touched.
+#
+# A download happens only when both of these miss, in this order:
+#
+#   1. $DEST/data/mugen.cfg already exists -> nothing is fetched or written.
+#   2. build/downloads/$FILE already exists and matches the pinned SHA-256 ->
+#      the cached copy is unpacked, no network access at all.
+#
+# Only when neither holds is the archive downloaded. There is no flag to
+# suppress that: every build entry point is online, and a machine that is
+# genuinely offline fails at the download rather than silently building against
+# a tree it does not have.
 #
 # POSIX sh on purpose: port/psvita and port/android call it from bash, the
 # Makefile and build.bat from the w64devkit's sh.exe.
@@ -36,7 +46,6 @@ STAGE="$SCRATCH/game-data-stage"
 ARCHIVE="$DOWNLOADS/$FILE"
 
 CHECK=0
-OFFLINE=0
 
 say()  { printf '\n==> %s\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
@@ -46,7 +55,6 @@ usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' 
 while [ $# -gt 0 ]; do
     case "$1" in
         --check) CHECK=1 ;;
-        --offline) OFFLINE=1 ;;
         --dest) DEST="${2:-}"; [ -n "$DEST" ] || fail "--dest requires a directory"; shift ;;
         --dest=*) DEST="${1#*=}" ;;
         --help|-h) usage; exit 0 ;;
@@ -128,10 +136,9 @@ else
         printf '      if it is the asset you built, re-pin with\n' >&2
         printf '        GAME_ASSETS_SHA256=%s\n' "$_rejected_hash" >&2
     fi
-    if [ "$OFFLINE" = 1 ]; then
-        fail "--offline and $FILE is not cached
-       expected $ARCHIVE with sha256 $SHA256"
-    fi
+    # Nothing above this point touched the network: the destination tree was
+    # absent and no verified archive was cached, so the only way forward is a
+    # download. Offline builds are not supported on purpose.
     info "downloading $FILE (about 2.3 MB, 5 MB unpacked)"
     info "$URL"
     fetch "$URL" "$ARCHIVE"

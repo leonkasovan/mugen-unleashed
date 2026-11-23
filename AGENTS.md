@@ -96,8 +96,9 @@ Each entry point owns its own subtree and never writes into another's.
 | `build/mingw64-sdl2/` | plain `make` with the 64-bit kit on `PATH`, or `make MUGEN_TARGET=win64` (Windows, experimental) | the same shape, `mugen-win64.exe` |
 | `build/<linux-target>-sdl2/` | root `Makefile` (Linux) | same shape, `mugen-linux-<arch>` |
 | `build/<linux-target>-<cross-prefix>-<sdl>/` | root `Makefile` with `CROSS_COMPILE=`/`XSYSROOT=` (via `port\arm64\build.bat`) | same shape, `mugen-linux-<arch>-<prefix>`; the dependency tree it links against is `build/sysroots/arm64-sysroot/` |
+| `build/mingw-sdl2-debug/`, `build/mingw64-sdl2-debug/`, `build/<linux-target>-sdl2-debug/` | `make DEBUG=1` (no `BUILD=`) | the debug default, chosen by the Makefile itself |
 | `build/mingw-debug/` | `make DEBUG=1 BUILD=build/mingw-debug` | an explicit `BUILD=` override |
-| `build/linux-arm64-<prefix>-sdl2-debug/` | `port\arm64\build.bat --debug` | the same shape, built `-O0 -g3 -DMUGEN_DEBUG`; a separate tree on purpose, since the config stamp does not include `DEBUG=` and the two would otherwise overwrite each other's objects |
+| `build/linux-arm64-<prefix>-sdl2-debug/` | `port\arm64\build.bat --debug` | the same shape, built `-O0 -g3 -DMUGEN_DEBUG`. A separate tree is what keeps the two modes' objects apart; the config stamp also records `debug=`/`debug_raw=`, so even an explicit `BUILD=` shared by both modes recompiles instead of reusing release objects under the `-debug` name |
 | `build/psvita*/` | `port\psvita\build.bat` (default `build/psvita/`) or `port/psvita/CMakeLists.txt` by hand (`BUILD=<dir>` picks another) | `mugen`, `mugen-psvita[-debug].self`, `mugen-psvita[-debug].vpk`, `vita-mugen.cfg` |
 | `build/android/` | `port\android\build.bat` or `port\android\build.bat` | `toolchains/` (JDK/SDK/NDK/CMake, `env.sh`/`env.bat`), `sdl2/<abi>/`, `android-deps/<abi>/`, `android-deps-src/`, `sources/`, `build-sdl2/`, `gradle-user-home/`, `asset-list.txt`, `mugen-android-<abi>[-debug].apk` |
 | `build/baseline/` | hand-made, kept on purpose | SDL1 reference binary and log used by the log-comparison workflow |
@@ -371,7 +372,10 @@ the target (unless `MUGEN_TARGET` is given explicitly),
 verifies `pkg-config` resolves every package in `STATIC_PKGS`, and checks the
 static archives exist (not just `.pc` files). Under a Linux target it checks
 that triple instead and skips the archive/`windres` checks. `make DEBUG=1
-BUILD=build/mingw-debug` for an unoptimised build. Details:
+BUILD=build/mingw-debug` for an unoptimised build. `DEBUG` is read one way
+everywhere: `1` is a debug build, `0` and an empty value are not, and any other
+spelling (`yes`, `true`, `2`) is treated as `0` while still being recorded in the
+stamp, so changing it recompiles rather than silently reusing objects. Details:
 `docs/BUILD-MINGW.md`.
 
 Do not assume the shell's default `gcc` is the 32-bit one: this environment has
@@ -386,9 +390,12 @@ the 32-bit reference build, put `x86devkit` first or pass the compiler
 `build.bat` (repository root) installs both devkits and both dependency trees
 from nothing, verifies them and builds: with no arguments it does the whole
 job (install what is missing, then build win32 and win64); `/build`,
-`/build32`, `/build64`, `/setup`, `/check` and `/force` narrow it (`/setup`
-installs the kits and trees and builds nothing, which is what the CI port jobs
-need before they run a port's own `build.bat`). The kits go to
+`/build32`, `/build64`, `/setup`, `/check`, `/force`, `/jobs N` and `/clean`
+narrow it (`/setup` installs the kits and trees and builds nothing, which is
+what the CI port jobs need before they run a port's own `build.bat`; `/clean`
+removes the build trees and never touches `install/`, `build/downloads` or
+`build/sysroots`). Every flag takes `/flag` or `--flag` interchangeably, so the
+ports' and `build.sh`'s `--flag` spelling works here too. The kits go to
 `C:\w64devkit` and `C:\x86devkit`; the trees go to `build/sysroots/win64-sysroot`
 and `build/sysroots/win32-sysroot`.
 
@@ -442,7 +449,9 @@ a clean machine needs no `vdpm` run; the script checks the artefacts and only
 calls `vdpm` for something genuinely missing. Output is
 `build/psvita/mugen-psvita[-debug].{self,vpk}`, and the VPK packs `install/` as `/data`
 unless `--no-data` is given. The build needs Windows (the SDK's compiler is
-`arm-vita-eabi-gcc.exe`); `--offline` forbids every download. Details:
+`arm-vita-eabi-gcc.exe`). Every build entry point is online: an archive already
+in `build/downloads/` is reused after its checksum is verified, and only a miss
+downloads. Details:
 `port/psvita/README.md`.
 
 The VPK carries two configs: the game tree's `data/mugen.cfg` unchanged, and

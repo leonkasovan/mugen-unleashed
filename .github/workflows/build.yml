@@ -368,6 +368,7 @@ jobs:
           if (-not (Test-Path $bin)) { throw "arm64 executable missing: $bin" }
           $dist = 'build/dist-arm64'
           Remove-Item -Recurse -Force $dist -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $dist | Out-Null
           & "$env:TOOLCHAIN_DIR\bin\aarch64-none-linux-gnu-strip.exe" -o (Join-Path $dist $name) $bin
           if ($LASTEXITCODE -ne 0) { throw "aarch64 strip failed ($LASTEXITCODE)" }
           $thin = (Get-Item (Join-Path $dist $name)).Length

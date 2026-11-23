@@ -170,7 +170,9 @@ requirements; device gates remain pending even when host behavior is verified.
 
 Already implemented in this change:
 
-- `build.sh --setup / --download-tools / --check-tools / --offline`.
+- `build.sh --setup / --download-tools / --check-tools` (the `--offline` flag
+  this entry also listed has since been removed: every build entry point is
+  online, and a warm `build/downloads/` is what skips the network).
 - Repository-local default SDK/JDK/caches, HTTPS vendor downloads, archive
   checksums and staged extraction.
 - JDK 17 validation, exact SDK/NDK/CMake pins, an explicit external NDK property

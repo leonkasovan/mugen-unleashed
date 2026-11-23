@@ -16,7 +16,6 @@ distribution's development packages, fetches the default game data when
 ./build.sh --setup      # fetch what is missing (the game data) and stop
 ./build.sh --debug      # -O0 -g3 -DMUGEN_DEBUG in build/<target>-sdl2-debug/
 ./build.sh --jobs N     # parallel make jobs (default: CPU count)
-./build.sh --offline    # never download; fail if the game data is absent
 ```
 
 There is no toolchain or dependency tree to install: the `-dev` packages below
@@ -26,9 +25,11 @@ builds `linux-x64` and, on an ARM64 host, `linux-arm64` (GLES by default there).
 
 It refuses to run off Linux (use `build.bat` or a port's `build.bat` there) and
 refuses `CROSS_COMPILE=`, which is a Makefile path for a tree built elsewhere.
-`--debug` uses a separate `build/<target>-sdl2-debug/` tree on purpose: the
-configuration stamp does not record `DEBUG=`, so one tree would hold both
-optimisation levels under a single stamp.
+`--debug` uses a separate `build/<target>-sdl2-debug/` tree on purpose: switching
+between the two modes then recompiles nothing. The configuration stamp also
+records the mode (`debug=` and the raw `DEBUG=` spelling), so even a tree shared
+by both modes through an explicit `BUILD=` is rebuilt rather than reusing one
+mode's objects under the other's name.
 
 Or drive the Makefile directly:
 

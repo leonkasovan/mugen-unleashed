@@ -334,21 +334,26 @@ adb install -r build/android/mugen-android-arm64-v8a.apk
 adb logcat -s mugen
 ```
 
-### Offline builds
+### Building without network access
 
-There is no `--offline` flag. An offline build is an environment question: the
-toolchain (JDK, SDK, NDK, CMake) must already be installed, and Gradle needs a
-populated distribution and dependency cache from a previous online run. With
-those in place, `--check-tools` proves the toolchain is complete, and a normal
-build downloads nothing new.
+There is no `--offline` flag anywhere in this port, or in any other build entry
+point: building is online. What a machine without network access needs is an
+already-complete environment rather than a flag — the toolchain (JDK, SDK, NDK,
+CMake) must already be installed, and Gradle needs a populated distribution and
+dependency cache from a previous online run. With those in place,
+`--check-tools` proves the toolchain is complete, and a normal build downloads
+nothing new.
 
 ```sh
 port\android\build.bat --check-tools --no-assets
 ```
 
-The Gradle wrapper starts a distribution download whenever its cache key is
-missing, which is exactly what an offline machine cannot satisfy — warm the
-cache with one online build first.
+Every fetch that remains checks its local copies first — `build/downloads/` for
+the pinned archives, the extracted SDK and NDK trees for the tools — so a warm
+cache does not touch the network at all. The Gradle wrapper is the exception: it
+starts a distribution download whenever its cache key is missing, which is
+exactly what an offline machine cannot satisfy. Warm the cache with one online
+build first.
 
 ### Signing
 
@@ -390,13 +395,14 @@ mismatched pixels. Offscreen indexed font surfaces remain supported. Text scalin
 ### `data/mugen.cfg` is the project default, with an Android overlay
 
 `res/configs/mugen.cfg` -- the same default configuration every target embeds
--- is compiled into `libmain.so` and written as the APK's `data/mugen.cfg` when
-the extracted asset tree has none (`src/configembed.c`). `build.bat` stages no
+-- is compiled into `libmain.so` and written into the extracted asset tree as
+`data/mugen.cfg` when it is absent (`src/configembed.c`). `build.bat` stages no
 configuration, and `GAME_CFG` is gone.
 
 Nothing Android-specific is in it. The device's settings are in
-`res/configs/mugen.android.cfg`, which is embedded too and written as
-`data/mugen.android.cfg`; the engine merges it over `data/mugen.cfg` per key at
+`res/configs/mugen.android.cfg`, which is embedded too and written into the
+extracted asset tree as `data/mugen.android.cfg` when it is absent; the engine
+merges it over `data/mugen.cfg` per key at
 start-up (`src/configmerge.c`): `RenderMode`, `FullScreen`, `KeepAspect`,
 `StageFit`/`SystemFit`, `GameWidth`/`GameHeight`, `FirstRun` and the sound
 cache. A key the overlay does not name keeps the game tree's value, so a tree

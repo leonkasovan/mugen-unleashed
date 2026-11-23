@@ -41,13 +41,38 @@ cd "$GAMEDIR" || exit 1
 # mugen-linux-arm64-<triple> while the port ships it as mugen-linux-arm64, and a
 # launcher that silently ran the *old* file cost a whole debugging round: the
 # one actually starting is logged, with a short hash.
+# Release is tried before debug on purpose: a debug binary is a testing artefact
+# (built -O0 -g3) and must never be preferred over a shipped release that is
+# sitting in the same directory. MUGEN_DEBUG_BIN=1, or a MUGEN_BIN override,
+# selects the debug build explicitly when that is what is being tested.
+#
+# The -debug name was missing from this list when the build scripts gained it:
+# with --debug the upload installs mugen-linux-arm64-debug, this loop found only
+# the *.prev-then-older release (or nothing), and PortMaster either ran a stale
+# binary or reported "no mugen-linux-arm64* binary". The error text below already
+# says "mugen-linux-arm64*", so the loop now matches what it promises.
 BIN=""
-for candidate in "mugen-linux-arm64" "mugen-linux-arm64-aarch64-none-linux-gnu"; do
-  if [ -x "$GAMEDIR/$candidate" ]; then
-    BIN="$candidate"
-    break
+if [ -n "${MUGEN_BIN:-}" ]; then
+  if [ -x "$GAMEDIR/$MUGEN_BIN" ]; then
+    BIN="$MUGEN_BIN"
+  else
+    echo "error: MUGEN_BIN=$MUGEN_BIN is not executable in $GAMEDIR"
+    command -v pm_finish >/dev/null 2>&1 && pm_finish
+    exit 1
   fi
-done
+else
+  if [ "${MUGEN_DEBUG_BIN:-0}" = "1" ]; then
+    candidates="mugen-linux-arm64-debug mugen-linux-arm64 mugen-linux-arm64-aarch64-none-linux-gnu"
+  else
+    candidates="mugen-linux-arm64 mugen-linux-arm64-aarch64-none-linux-gnu mugen-linux-arm64-debug"
+  fi
+  for candidate in $candidates; do
+    if [ -x "$GAMEDIR/$candidate" ]; then
+      BIN="$candidate"
+      break
+    fi
+  done
+fi
 if [ -z "$BIN" ]; then
   echo "error: no mugen-linux-arm64* binary in $GAMEDIR"
   command -v pm_finish >/dev/null 2>&1 && pm_finish

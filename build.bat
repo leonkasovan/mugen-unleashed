@@ -9,7 +9,21 @@ rem   build.bat /build32    ... then build win32 only
 rem   build.bat /setup      install what is missing, build nothing
 rem   build.bat /check      only verify what is installed, install nothing
 rem   build.bat /force      re-download and re-extract even if installed
+rem   build.bat /jobs N     parallel make jobs (default: the CPU count)
+rem   build.bat /clean      remove the build trees, build nothing
 rem   build.bat /help
+rem
+rem Every flag is accepted in either spelling, /build32 and --build32 alike:
+rem the ports (port\arm64, port\psvita, port\android) and build.sh take --flag,
+rem while this script and the Windows convention use /flag. Accepting both costs
+rem nothing and means one spelling works everywhere, instead of a caller having
+rem to remember which platform wants which. -h and --help were already aliases
+rem for /help; the rest now match that.
+rem
+rem /clean is the destructive one and takes precedence over any build flag: it
+rem deletes build\mingw-sdl2, build\mingw64-sdl2 and build\tmp, never install\
+rem and never build\downloads or build\sysroots (those are caches and installed
+rem trees, and re-fetching them is a download).
 rem
 rem The Windows counterpart of port\arm64\build.bat, and named the same way: no
 rem arguments is "do the whole job". Installing and building live in one file
@@ -83,6 +97,8 @@ set "DO_BUILD32=0"
 set "DO_BUILD64=0"
 set "DO_FORCE=0"
 set "DO_CHECK=0"
+set "DO_CLEAN=0"
+set "JOBS=%NUMBER_OF_PROCESSORS%"
 set "FAILED="
 
 rem No arguments means the whole job: install what is missing and then build
@@ -93,13 +109,51 @@ if "%~1"=="" (
     set "DO_BUILD64=1"
 )
 
+rem /jobs N is pulled out before the flag loop, because it is the one flag that
+rem takes a value: a for-in over %* yields tokens, not pairs, so the N would be
+rem seen as a flag of its own (and ignored). This walks the argument list by
+rem shifting, which is the only way cmd exposes "the next token". --jobs is the
+rem same flag, as everywhere else.
+:jobs_scan
+if "%~1"=="" goto jobs_done
+if /i "%~1"=="/jobs"  goto jobs_take
+if /i "%~1"=="--jobs" goto jobs_take
+shift
+goto jobs_scan
+
+:jobs_take
+shift
+if "%~1"=="" (
+    echo WARNING: /jobs needs a number; using %NUMBER_OF_PROCESSORS% ^(the CPU count^)
+    goto jobs_done
+)
+rem A job count that is not a plain positive integer is not worth failing an
+rem otherwise valid setup over: warn and keep the CPU-count default.
+set "JOBS=%~1"
+set "JOBS_OK=0"
+for /f "delims=0123456789" %%d in ("%JOBS%") do set "JOBS_OK=1"
+if "%JOBS_OK%"=="1" (
+    echo WARNING: /jobs %JOBS% is not a number; using %NUMBER_OF_PROCESSORS% ^(the CPU count^)
+    set "JOBS=%NUMBER_OF_PROCESSORS%"
+)
+:jobs_done
+
+rem Every flag takes either spelling: /flag (this script's own convention, and
+rem the Windows one) or --flag (the ports' and build.sh's). Case-insensitive, as
+rem before. %%~a strips the quotes; the aliases are literal comparisons.
 for %%a in (%*) do (
     if /i "%%~a"=="/build" (
         set "DO_BUILD32=1"
         set "DO_BUILD64=1"
     )
+    if /i "%%~a"=="--build" (
+        set "DO_BUILD32=1"
+        set "DO_BUILD64=1"
+    )
     if /i "%%~a"=="/build32" set "DO_BUILD32=1"
+    if /i "%%~a"=="--build32" set "DO_BUILD32=1"
     if /i "%%~a"=="/build64" set "DO_BUILD64=1"
+    if /i "%%~a"=="--build64" set "DO_BUILD64=1"
     rem /setup is the "install, build nothing" form the port scripts have
     rem (--setup in port\arm64, port\psvita and port\android). It is the same
     rem state the script already reaches when no build flag is given, spelled
@@ -109,8 +163,28 @@ for %%a in (%*) do (
         set "DO_BUILD32=0"
         set "DO_BUILD64=0"
     )
+    if /i "%%~a"=="--setup" (
+        set "DO_BUILD32=0"
+        set "DO_BUILD64=0"
+    )
     if /i "%%~a"=="/force" set "DO_FORCE=1"
+    if /i "%%~a"=="--force" set "DO_FORCE=1"
     if /i "%%~a"=="/check" set "DO_CHECK=1"
+    if /i "%%~a"=="--check" set "DO_CHECK=1"
+    rem /clean is the destructive flag, so it also clears both build flags: a
+    rem run that says /clean must not go on to build something afterwards.
+    if /i "%%~a"=="/clean" (
+        set "DO_CLEAN=1"
+        set "DO_BUILD32=0"
+        set "DO_BUILD64=0"
+    )
+    if /i "%%~a"=="--clean" (
+        set "DO_CLEAN=1"
+        set "DO_BUILD32=0"
+        set "DO_BUILD64=0"
+    )
+    rem /jobs N was consumed by the :jobs_scan pre-pass above, so it is not
+    rem matched here: only its value could arrive, and that is ignored.
     if /i "%%~a"=="/help" goto :usage
     if /i "%%~a"=="-h" goto :usage
     if /i "%%~a"=="--help" goto :usage
@@ -124,6 +198,9 @@ echo   sysroots %SYSR64%
 echo            %SYSR86%
 echo   downloads %WINKIT_CACHE%
 echo.
+
+rem /clean stops here: it is destructive and must not go on to install or build.
+if "%DO_CLEAN%"=="1" goto :clean_builds
 
 if not exist "%ROOT%\build\tmp" mkdir "%ROOT%\build\tmp" >nul 2>&1
 if not exist "%ROOT%\build\sysroots" mkdir "%ROOT%\build\sysroots" >nul 2>&1
@@ -200,6 +277,32 @@ if "%DO_BUILD64%"=="1" echo   mugen-win64.exe
 exit /b 0
 
 rem ---------------------------------------------------------------- helpers --
+rem :clean_builds -- remove the build output trees and nothing else. What is
+rem deliberately NOT touched:
+rem
+rem   install\                the game tree and the built executables. An
+rem                           engine build is slower to reproduce than the kits.
+rem   build\downloads         the verified download cache. Deleting it turns the
+rem                           next run into a fresh download of ~330 MB.
+rem   build\sysroots          the installed dependency trees, same reason.
+rem
+rem The kit directories (C:\w64devkit, C:\x86devkit) are outside the repository
+rem and are never removed either: they are the toolchain.
+:clean_builds
+set "CLEANED=0"
+for %%d in ("%ROOT%\build\mingw-sdl2" "%ROOT%\build\mingw64-sdl2" "%ROOT%\build\mingw-debug" "%ROOT%\build\mingw64-debug" "%ROOT%\build\tmp") do (
+    if exist %%d (
+        echo   REMOVE  %%~d
+        rmdir /s /q %%d
+        set "CLEANED=1"
+    )
+)
+if "%CLEANED%"=="0" echo   nothing to clean
+if not exist "%ROOT%\build\tmp" mkdir "%ROOT%\build\tmp" >nul 2>&1
+echo.
+echo clean complete. build.bat to rebuild, build.bat /setup to reinstall first.
+exit /b 0
+
 :usage
 echo.
 echo build.bat - build mugen-unleashed for Windows (w64devkit 2.11.0)
@@ -211,6 +314,11 @@ echo   build.bat /build64    ... only the 64-bit build
 echo   build.bat /setup      install what is missing, build nothing
 echo   build.bat /check      only verify what is installed
 echo   build.bat /force      re-download and re-extract even if installed
+echo   build.bat /jobs N     parallel make jobs (default: the CPU count)
+echo   build.bat /clean      remove the build trees, build nothing
+echo.
+echo Every flag takes /flag or --flag (/build32 and --build32 alike), so the
+echo spelling used by build.sh and the platform ports works here too.
 echo.
 echo Overrides (environment variables):
 echo   W64DEVKIT_DIR   where the x64 kit goes          (default C:\w64devkit)
@@ -528,10 +636,10 @@ set "B_NAME=%~1"
 set "B_KIT=%W64DEVKIT_DIR%"
 if /i "%B_NAME%"=="win32" set "B_KIT=%X86DEVKIT_DIR%"
 echo.
-echo [build %B_NAME%] make -j%NUMBER_OF_PROCESSORS%
+echo [build %B_NAME%] make -j%JOBS%
 call :set_env "%B_KIT%"
 pushd "%ROOT%"
-make -j%NUMBER_OF_PROCESSORS%
+make -j%JOBS%
 set "B_RC=%ERRORLEVEL%"
 popd
 if not "%B_RC%"=="0" (

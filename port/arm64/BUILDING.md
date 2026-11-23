@@ -15,7 +15,7 @@ ssh ark@192.168.7.2 'uname -m; ldd --version | head -1'
 ArkOS on the RG351MP uses glibc 2.30. Use the default Arm GNU 9.2
 toolchain for that device. The port defaults to GLES and writes
 `build/linux-arm64-aarch64-none-linux-gnu-sdl2/mugen-linux-arm64`.
-See the [port README](README.md) for toolchain overrides, offline builds,
+See the [port README](README.md) for toolchain overrides, download caching,
 and dependency setup.
 
 For a sprite benchmark without 3D models or video backgrounds, use an

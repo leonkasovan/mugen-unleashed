@@ -52,13 +52,20 @@ foreach(_file IN LISTS _files)
     string(REPLACE "\n" "\\n\"\n    \"" _text "${_text}")
     file(APPEND "${OUTPUT}.tmp" "static const char ${_variable}[] =\n    \"${_text}\";\n")
   else()
+    # Read the bytes one per line, then strip CR at BYTE level. Doing this on
+    # file(READ ... HEX) is wrong: the hex dump is one flat string, so
+    # string(REPLACE "0d" "") deletes the 0d of any byte that merely ends in 0d
+    # (0xd0, 0x0d, 0x2d, ...) and corrupts the payload. That is what dropped
+    # 0xd0 from every UTF-8 Cyrillic character -- "-- " (2d 2d 20 d0 9f) came
+    # out as 2d 2d 20 9f. The Make generator (tools/embed_resources.sh) emits
+    # the file with od and never touches the values, so the two disagreed.
     file(READ "${_file}" _bytes HEX)
     if(_bytes STREQUAL "")
       message(FATAL_ERROR "empty resource: ${_file}")
     endif()
-    string(REPLACE "0d0a" "0a" _bytes "${_bytes}")
-    string(REPLACE "0d" "" _bytes "${_bytes}")
-    string(REGEX REPLACE "(..)" "0x\\1," _bytes "${_bytes}")
+    string(REGEX REPLACE "(..)" "\\1\n" _bytes "${_bytes}")
+    string(REGEX REPLACE "0d\n" "" _bytes "${_bytes}")
+    string(REGEX REPLACE "(..)\n" "0x\\1," _bytes "${_bytes}")
     file(APPEND "${OUTPUT}.tmp" "static const unsigned char ${_variable}[] = {${_bytes}};\n")
     string(APPEND _table "    { \"${_name}\", ${_variable}, sizeof(${_variable}) },\n")
   endif()

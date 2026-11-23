@@ -24,7 +24,7 @@ From PowerShell:
 ```
 
 `build.ps1` is the PowerShell front end for the same build: `-CheckTools`,
-`-Jobs N`, `-Debug`, `-Clean`, `-Offline`, `-NoData`/`-Data DIR` and friends,
+`-Jobs N`, `-Debug`, `-Clean`, `-NoData`/`-Data DIR` and friends,
 and anything unrecognised is passed through, so `\build.ps1 --video` works
 too. It forwards to `build.bat` -- one implementation, two front doors -- and
 PowerShell may need `-ExecutionPolicy Bypass` (or `Unblock-File build.ps1`)
@@ -191,10 +191,18 @@ Two things in the launcher are deliberate:
   whose database entry has no system buttons (the GO-Super Gamepad names only
   `b0..b11`). PortMaster's helper grabs the pad and re-publishes it as a virtual
   device, which changes the GUID that fixup is keyed on.
-- **Both binary names are accepted** and the one started is logged with a short
-  hash — `launcher: starting mugen-linux-arm64 (2cc89c08)`. A launcher that
-  silently ran an older file while the new build sat next to it cost a debugging
-  round once; the log line makes that impossible to miss.
+- **All three binary names are accepted**, release before debug, and the one
+  started is logged with a short hash — `launcher: starting mugen-linux-arm64
+  (2cc89c08)`. A launcher that silently ran an older file while the new build sat
+  next to it cost a debugging round once; the log line makes that impossible to
+  miss. Release is preferred so a `--debug` testing build sitting beside a
+  shipped release never silently becomes the one that runs; set
+  `MUGEN_DEBUG_BIN=1` (or `MUGEN_BIN=mugen-linux-arm64-debug`) to select the
+  debug build on purpose. `mugen-linux-arm64-debug` is the name
+  `build.bat --debug` installs, and it was missing from this list until it was
+  added — a `--debug` upload could therefore start a stale release or report
+  `no mugen-linux-arm64* binary`. `*.prev`, the rollback copy the upload keeps,
+  is still not matched.
 
 ## The dependency tree
 

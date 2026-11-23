@@ -20,7 +20,13 @@ build.bat /build64    :: ... only the 64-bit build
 build.bat /setup      :: install what is missing, build nothing
 build.bat /check      :: verify what is installed, install nothing
 build.bat /force      :: re-download and re-extract
+build.bat /jobs N     :: parallel make jobs (default: the CPU count)
+build.bat /clean      :: remove the build trees, build nothing
 ```
+
+Every flag is accepted as `/flag` or `--flag` (`/build32` and `--build32`
+alike), so the spelling used by the platform ports and `build.sh` works here
+too.
 
 It downloads the two 2.11.0 devkits from `github.com/skeeto/w64devkit` into
 `C:\w64devkit` and `C:\x86devkit` (`W64DEVKIT_DIR`/`X86DEVKIT_DIR` override),
@@ -111,7 +117,7 @@ Targets and variables:
 | `make` | build `$(TARGET)`; the SDL2 backend by default, so `build/mingw-sdl2/mugen-win32.exe` |
 | `make -j8` | parallel build, from scratch in ~30 s on a recent machine |
 | `make V=1` | print the full command lines |
-| `make DEBUG=1` | `-O0 -g3` build, in its own directory with `BUILD=build/mingw-debug` |
+| `make DEBUG=1` | `-O0 -g3` build; the directory becomes `build/mingw-sdl2-debug` (and `build/mingw64-sdl2-debug` for win64) unless `BUILD=` names another |
 | `make MUGEN_GAME_DIR=C:/mugen-1.1b1` | also embed the original's window icon |
 | `make clean` / `make distclean` | remove `$(BUILD)` objects / the whole `$(BUILD)` |
 | `make help` | the summary at the top of the Makefile |

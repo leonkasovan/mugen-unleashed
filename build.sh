@@ -9,7 +9,6 @@
 #   ./build.sh --debug      unoptimised build with debug info, in its own tree;
 #                           the output gains a -debug suffix
 #   ./build.sh --jobs N     parallel jobs (default: the CPU count)
-#   ./build.sh --offline    never download (a cached game-data archive is used)
 #   ./build.sh --help
 #
 # The Linux counterpart of build.bat, and named the same way: no arguments is
@@ -26,7 +25,9 @@
 #      GL/GLU for the desktop renderer)
 #   2. fetches the default M.U.G.E.N 1.1b1 tree into install/ when there is
 #      none (tools/fetch_game_data.sh; a failed download only warns, because
-#      the engine still builds without game data)
+#      the engine still builds without game data). Nothing is downloaded while
+#      install/ already holds a tree or build/downloads/ already holds a
+#      verified archive: both are checked first and a hit skips the network.
 #   3. runs `make -j<jobs>` and `make install`, then reports what it built
 #
 # Downloads are cached in build/downloads and unpacking happens in
@@ -54,7 +55,6 @@ cd "$ROOT"
 
 MODE=build
 DEBUG_BUILD=0
-OFFLINE=0
 JOBS=${JOBS:-}
 
 say()  { printf '\n==> %s\n' "$*"; }
@@ -72,7 +72,6 @@ while [ $# -gt 0 ]; do
         --setup)   MODE=setup ;;
         --check)   MODE=check ;;
         --debug)   DEBUG_BUILD=1 ;;
-        --offline) OFFLINE=1 ;;
         --jobs)    [ $# -ge 2 ] || fail "--jobs requires a number"
                    JOBS=$2
                    shift ;;
@@ -231,18 +230,13 @@ if [ -f install/data/mugen.cfg ]; then
 elif [ "$MODE" = check ]; then
     info "MISSING - run ./build.sh to fetch the default assets"
 else
-    if [ "$OFFLINE" = 1 ]; then
-        if sh tools/fetch_game_data.sh --offline --dest install; then
-            info "installed: $ROOT/install"
-        else
-            warn 'could not fetch the default game data (--offline and no cached archive)'
-        fi
+    # Always online: the default assets are fetched when the tree is absent.
+    # fetch_game_data.sh downloads nothing when build/downloads/ already holds
+    # a verified archive, so a warm cache never touches the network.
+    if sh tools/fetch_game_data.sh --dest install; then
+        info "installed: $ROOT/install"
     else
-        if sh tools/fetch_game_data.sh --dest install; then
-            info "installed: $ROOT/install"
-        else
-            warn 'could not fetch the default game data'
-        fi
+        warn 'could not fetch the default game data'
     fi
     if [ ! -f install/data/mugen.cfg ]; then
         warn 'the built binary will exit at start until install/ has a tree'

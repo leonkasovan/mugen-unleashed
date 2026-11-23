@@ -66,6 +66,7 @@ param(
     [switch]$Clean,
     [switch]$Debug,
     [switch]$NoAssets,
+    [switch]$Gles,
     [switch]$Model3d,
     [switch]$VideoBg
 )
@@ -88,6 +89,10 @@ if ($Clean)         { $argv.Add('--clean') }
 
 if ($Debug)         { $argv.Add('--debug') }
 if ($NoAssets)      { $argv.Add('--no-assets') }
+rem -Gles was documented but never declared, so it silently did nothing and the
+rem only way to reach --gles was the $args pass-through. Declared and forwarded
+rem now, like --model3d beside it.
+if ($Gles)          { $argv.Add('--gles') }
 if ($Model3d)       { $argv.Add('--model3d') }
 if ($VideoBg)       { $argv.Add('--video-bg') }
 if ($args)          { $argv.AddRange([string[]]$args) }

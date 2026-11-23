@@ -345,6 +345,24 @@ cmake -S port/psvita -B build/psvita -G Ninja \
 
 ### The bubble artwork
 
+### Upgrading an existing build directory
+
+`MUGEN_VITA_CFG` and `MUGEN_VITA_GAME_CFG` moved with the configurations into
+`res/configs/`. A build directory configured *before* that move kept the old
+default in its CMake cache, and a cache entry outranks the new default, so
+reconfiguring it failed with `MUGEN_VITA_CFG=... does not exist` even though
+nothing was passed on the command line. The configure now recognises that one
+stale default, says so, and updates it in place on the first run:
+
+```
+-- MUGEN_VITA_CFG: updating the old default to .../res/configs/mugen.psvita.cfg (the file moved in this revision)
+```
+
+Only the exact old default is remapped, and only while that file is gone. A path
+you set yourself is never rewritten, and a still-existing old default is left
+alone. `port\psvita\build.bat` passes both paths explicitly, so it was never
+affected — this is the direct `cmake -S port/psvita` entry point.
+
 `sce_sys/` is not hand-drawn: `cmake/Icon.cmake` derives all three images from
 `res/icons/1.ico` — the same artwork the Windows and Android builds use — at
 configure time, with `tools/iconpack.py` (standard library only):
@@ -1413,8 +1431,9 @@ port\psvita\build.bat --gl-selftest
 
 Or configure with `-DMUGEN_VITA_BUILD_VITAGL=ON` and
 `-DMUGEN_VITA_GL_SELFTEST=ON`. The script selects/fetches pinned vitaGL for this
-mode; offline builds require the source to be present. The self-test is OFF
-by default and the script resets that option on an ordinary build.
+mode; a build without network access requires the source to be present. The
+self-test is OFF by default and the script resets that option on an ordinary
+build.
 
 The smoke test runs once before `Gl_Init` establishes engine state. It checks
 real eager compilation/linking, the green pixel and accepted native scanout,

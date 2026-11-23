@@ -138,12 +138,14 @@ static void file_hash(const char *path, char out[17])
 
 /*
  * User-owned files that extraction must never overwrite. mugen.cfg holds
- * remaps and FirstRun state the engine rewrites at runtime; clobbering it
- * on every upgrade would destroy the player's configuration (B6).
+ * remaps and FirstRun state the engine rewrites at runtime, and
+ * mugen.android.cfg holds device-specific overlay settings; clobbering
+ * either on upgrade would destroy the player's configuration (B6).
  */
 static int is_user_owned(const char *rel)
 {
-    return strcmp(rel, "data/mugen.cfg") == 0;
+    return strcmp(rel, "data/mugen.cfg") == 0 ||
+           strcmp(rel, "data/mugen.android.cfg") == 0;
 }
 
 /*

@@ -145,6 +145,44 @@ set(MUGEN_VITA_DATA_DIR "" CACHE PATH
 # The file is required: a VPK without it starts with the desktop values above
 # and dies before the first frame, so a missing or invalid one is a configure
 # error rather than a silent downgrade.
+#
+# Port fix: a build directory configured before these defaults moved from
+# port/psvita and res/ into res/configs/ keeps the OLD default in its cache, and
+# a cache entry outranks the new set(... CACHE ...) default below -- so
+# reconfiguring an existing tree failed with "MUGEN_VITA_CFG=... does not exist"
+# even though nothing was passed on the command line. The existence check was
+# firing on a stale path rather than on a real mistake.
+#
+# This is not a function on purpose: a function-local set(... CACHE ... FORCE)
+# does not reliably override a -D<var> from the command line for the pass it
+# runs in, so the migration has to happen at directory scope to take effect on
+# the first configure rather than the second.
+#
+# The remap is deliberately narrow: it rewrites a value only when it is exactly
+# the old default AND that file is gone. A path the caller chose by hand --
+# including a custom tree that happens to sit under port/psvita -- is never
+# touched, and neither is an old default that still exists.
+#
+# A macro, not a function, and that is load-bearing. A function body gets its
+# own variable scope, where set(... CACHE ... FORCE) does not take effect for the
+# pass it runs in when the value arrived as -D<var> on the command line -- the
+# migration then only applied on the *second* configure, which is precisely the
+# broken first run this exists to repair. A macro expands at directory scope and
+# takes effect immediately. Verified with absolute old/default paths: the stale
+# default migrates on the first configure, an explicit -D path is preserved, and
+# a still-present old default is left alone.
+macro(mugen_vita_migrate_cfg var old_value new_value)
+  if("${${var}}" STREQUAL "${old_value}" AND NOT EXISTS "${${var}}")
+    message(STATUS
+      "${var}: updating the old default to ${new_value} "
+      "(the file moved in this revision)")
+    set(${var} "${new_value}" CACHE FILEPATH "" FORCE)
+  endif()
+endmacro()
+
+mugen_vita_migrate_cfg(MUGEN_VITA_CFG
+  "${CMAKE_CURRENT_SOURCE_DIR}/mugen.psvita.cfg"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../res/configs/mugen.psvita.cfg")
 set(MUGEN_VITA_CFG "${CMAKE_CURRENT_SOURCE_DIR}/../../res/configs/mugen.psvita.cfg" CACHE FILEPATH
     "platform config packed verbatim as data/mugen.psvita.cfg")
 if(NOT MUGEN_VITA_CFG)
@@ -231,9 +269,11 @@ message(STATUS "      ${_vita_renderer} ${_vita_out_w}x${_vita_out_h}, game "
 # Set it empty to pack the game tree's own data/mugen.cfg instead, which is what
 # port\psvita\build.bat does when --data names a tree the caller supplied: their
 # tree, their config.
+mugen_vita_migrate_cfg(MUGEN_VITA_GAME_CFG
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../res/mugen.cfg"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../res/configs/mugen.cfg")
 set(MUGEN_VITA_GAME_CFG "${CMAKE_CURRENT_SOURCE_DIR}/../../res/configs/mugen.cfg" CACHE FILEPATH
-    "config packed as data/mugen.cfg (empty: the game tree's own copy)")
-if(MUGEN_VITA_GAME_CFG AND
+    "config packed as data/mugen.cfg (empty: the game tree's own copy)")if(MUGEN_VITA_GAME_CFG AND
    (NOT EXISTS "${MUGEN_VITA_GAME_CFG}" OR IS_DIRECTORY "${MUGEN_VITA_GAME_CFG}"))
   message(FATAL_ERROR
     "MUGEN_VITA_GAME_CFG=${MUGEN_VITA_GAME_CFG} does not exist. Point it at a "
