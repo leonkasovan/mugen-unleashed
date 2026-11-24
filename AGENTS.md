@@ -764,8 +764,9 @@ diffing `mugen.log`** (`docs/ANALYSIS.md`, "Validation").
 the embedded `data/mugen.cfg` and platform overlay into a tree that lacks them
 without replacing existing files. Windows and Linux/Android normally publish
 a completed temporary file without replacement. Vita and filesystems without an
-atomic no-replace operation use exclusive creation instead: write failures are
-cleaned up, but a process killed mid-write can leave a partial config:
+atomic no-replace operation use exclusive creation instead, which reports a
+failed write rather than deleting what is at the destination; a process killed
+mid-write can leave a partial config there:
 
 ```sh
 make install

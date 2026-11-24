@@ -53,13 +53,13 @@ static void ConfigEmbedded_ReportError(const char *path, int err)
     }
 }
 
-#if !defined(_WIN32)
 /* Port fix: Vita's link() is an ENOSYS stub. On Vita and on filesystems
- * without either atomic publication primitive, use exclusive creation rather
- * than a clobbering rename. A reported write failure is cleaned up, but unlike
- * the temporary-file path this fallback cannot hide a write from readers or
- * recover automatically if the process is killed mid-write. */
-static int ConfigEmbedded_WriteExclusive(const char *path, const char *data, size_t size)
+ * without either atomic publication primitive, fall back to exclusive
+ * creation. It reports failure rather than replacing anything that appeared
+ * while this ran, and a process killed mid-write can leave a partial file
+ * behind. */
+#if !defined(_WIN32)
+static int ConfigEmbedded_PublishExclusive(const char *path, const char *data, size_t size)
 {
     int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0666);
     FILE *file;
@@ -71,12 +71,14 @@ static int ConfigEmbedded_WriteExclusive(const char *path, const char *data, siz
     file = fdopen(fd, "wb");
     if (file == NULL) {
         close(fd);
-    } else if (ConfigEmbedded_WriteAndClose(file, data, size)) {
-        return 1;
+        Log_Printf("config: could not open %s\n", path);
+        return 0;
     }
-    remove(path);
-    Log_Printf("config: could not write %s\n", path);
-    return 0;
+    if (!ConfigEmbedded_WriteAndClose(file, data, size)) {
+        Log_Printf("config: could not write %s\n", path);
+        return 0;
+    }
+    return 1;
 }
 #endif
 
@@ -114,16 +116,18 @@ static int ConfigEmbedded_Publish(const char *tmp, const char *path,
                                   const char *data, size_t size)
 {
 #if defined(_WIN32)
-    DWORD err;
     if (MoveFileExA(tmp, path, 0) != 0) {
         return 1;
     }
-    err = GetLastError();
-    if (err == ERROR_ALREADY_EXISTS || err == ERROR_FILE_EXISTS) {
-        ConfigEmbedded_ReportError(path, EEXIST);
-    } else {
-        Log_Printf("config: could not publish %s (Windows error %lu)\n",
-                   path, (unsigned long)err);
+    {
+        unsigned long err = (unsigned long)GetLastError();
+        if (err == (unsigned long)ERROR_ALREADY_EXISTS ||
+            err == (unsigned long)ERROR_FILE_EXISTS) {
+            ConfigEmbedded_ReportError(path, EEXIST);
+        } else {
+            Log_Printf("config: could not publish %s (Windows error %lu)\n",
+                       path, err);
+        }
     }
 #else
     int err;
@@ -133,7 +137,9 @@ static int ConfigEmbedded_Publish(const char *tmp, const char *path,
         return 1;
     }
     err = errno;
-    if (err != ENOSYS && err != EINVAL && err != EOPNOTSUPP) {
+    /* EPERM as well as ENOSYS/EINVAL/EOPNOTSUPP: a sandbox may deny
+     * renameat2 while link() still works. */
+    if (err != ENOSYS && err != EINVAL && err != EOPNOTSUPP && err != EPERM) {
         ConfigEmbedded_ReportError(path, err);
         return 0;
     }
@@ -143,7 +149,7 @@ static int ConfigEmbedded_Publish(const char *tmp, const char *path,
     }
     err = errno;
     if (err == ENOSYS || err == EOPNOTSUPP || err == EPERM) {
-        return ConfigEmbedded_WriteExclusive(path, data, size);
+        return ConfigEmbedded_PublishExclusive(path, data, size);
     }
     ConfigEmbedded_ReportError(path, err);
 #endif
@@ -165,7 +171,7 @@ static void ConfigEmbedded_Write(const char *path, const char *data, size_t size
         return;
     }
 #if defined(__vita__)
-    if (!ConfigEmbedded_WriteExclusive(path, data, size)) {
+    if (!ConfigEmbedded_PublishExclusive(path, data, size)) {
         return;
     }
 #else
