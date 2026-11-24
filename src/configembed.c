@@ -15,6 +15,8 @@
  * The bytes compiled in are written as-is; the generators normalise line
  * endings to LF, so every target extracts the same text.
  */
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -22,129 +24,183 @@
 #include "configembed.h"
 #include "config_data.h"        /* generated: g_config_mugen_* */
 
-/*
- * The two platform primitives the default's publication rests on.
- *
- * Both are port additions, and both are here rather than in a platform file
- * because configembed.c is compiled by every target (Windows, Linux x64/arm64,
- * Android, Vita) and the extraction happens before anything else exists.
- */
 #if defined(_WIN32)
-#include <process.h>
+#include <io.h>
 #include <windows.h>
-#define ConfigEmbedded_Pid()     ((unsigned long)_getpid())
 #else
 #include <unistd.h>
-#define ConfigEmbedded_Pid()     ((unsigned long)getpid())
+#if !defined(__vita__)
+#include <sys/syscall.h>
+#endif
 #endif
 
-/*
- * Publishes tmp at path without ever replacing what is already there.
- *
- * Returns 0 on success, -1 when path already exists (the winner's file is left
- * untouched) or on any other failure. rename() is deliberately NOT used: it
- * would silently replace a file created between the absence check and this
- * call, which on Linux and Android is exactly the player's own config.
- *
- * Windows has no link(), and MinGW-w64's io.h declares neither link nor _link,
- * so the Win32 call is used directly. CreateHardLinkA is the same primitive and
- * fails with ERROR_ALREADY_EXISTS without touching the existing file; both the
- * Windows targets here run on NTFS, which supports it.
- */
-static int ConfigEmbedded_Publish(const char *tmp, const char *path)
+#ifndef O_BINARY
+#define O_BINARY 0
+#endif
+
+static int ConfigEmbedded_WriteAndClose(FILE *file, const char *data, size_t size)
+{
+    size_t written = fwrite(data, 1, size, file);
+    return fclose(file) == 0 && written == size;
+}
+
+static void ConfigEmbedded_ReportError(const char *path, int err)
+{
+    if (err == EEXIST) {
+        Log_Printf("config: %s appeared while writing; kept it\n", path);
+    } else {
+        Log_Printf("config: could not create %s: %s\n", path, strerror(err));
+    }
+}
+
+#if !defined(_WIN32)
+/* Port fix: Vita's link() is an ENOSYS stub. On Vita and on filesystems
+ * without either atomic publication primitive, use exclusive creation rather
+ * than a clobbering rename. A reported write failure is cleaned up, but unlike
+ * the temporary-file path this fallback cannot hide a write from readers or
+ * recover automatically if the process is killed mid-write. */
+static int ConfigEmbedded_WriteExclusive(const char *path, const char *data, size_t size)
+{
+    int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0666);
+    FILE *file;
+
+    if (fd < 0) {
+        ConfigEmbedded_ReportError(path, errno);
+        return 0;
+    }
+    file = fdopen(fd, "wb");
+    if (file == NULL) {
+        close(fd);
+    } else if (ConfigEmbedded_WriteAndClose(file, data, size)) {
+        return 1;
+    }
+    remove(path);
+    Log_Printf("config: could not write %s\n", path);
+    return 0;
+}
+#endif
+
+#if !defined(__vita__)
+static int ConfigEmbedded_OpenTemp(const char *path, char *tmp, size_t capacity)
 {
 #if defined(_WIN32)
-    if (CreateHardLinkA(path, tmp, NULL) == 0) {
-        return -1;
+    unsigned int attempt;
+    for (attempt = 0; attempt < 100; ++attempt) {
+        int n = snprintf(tmp, capacity, "%s.%lu.%u.tmp", path,
+                         (unsigned long)GetCurrentProcessId(), attempt);
+        int fd;
+        if (n < 0 || (size_t)n >= capacity) {
+            errno = ENAMETOOLONG;
+            return -1;
+        }
+        fd = _open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_BINARY, 0666);
+        if (fd >= 0 || errno != EEXIST) {
+            return fd;
+        }
     }
-    return 0;
+    errno = EAGAIN;
+    return -1;
 #else
-    if (link(tmp, path) != 0) {
+    int n = snprintf(tmp, capacity, "%s.XXXXXX", path);
+    if (n < 0 || (size_t)n >= capacity) {
+        errno = ENAMETOOLONG;
         return -1;
     }
-    return 0;
+    return mkstemp(tmp);
 #endif
 }
 
-/*
- * Port fix: an interrupted write must not look like a finished one, and a write
- * that loses a race must not replace the winner.
- *
- * The extractor used to open the destination directly, so a short write or a
- * failed close left a truncated or empty file there. The next start found that
- * file, took it for the player's own and skipped extraction for good -- a
- * transient disk-full or a kill during start-up turned into a broken instal-
- * lation that only deleting the file could repair.
- *
- * The default is now written to a temporary beside the destination and
- * published only after fwrite and fclose both succeeded, so a partial file never
- * survives under the real name. Publishing uses link()+unlink() rather than
- * rename(), because rename() would *replace* a file that appeared after the
- * absence check -- on Linux and Android a second instance, or the player's own
- * editor, could have created the very file this is supposed to leave alone.
- * link() fails with EEXIST in that case and the temporary is discarded.
- *
- * The temporary's name carries the process id, so two instances starting at
- * once write different files instead of interleaving into one. A leftover from
- * a killed process is overwritten by the next start with the same pid, and its
- * content could only have been a partial default that is never linked into
- * place.
- */
+static int ConfigEmbedded_Publish(const char *tmp, const char *path,
+                                  const char *data, size_t size)
+{
+#if defined(_WIN32)
+    DWORD err;
+    if (MoveFileExA(tmp, path, 0) != 0) {
+        return 1;
+    }
+    err = GetLastError();
+    if (err == ERROR_ALREADY_EXISTS || err == ERROR_FILE_EXISTS) {
+        ConfigEmbedded_ReportError(path, EEXIST);
+    } else {
+        Log_Printf("config: could not publish %s (Windows error %lu)\n",
+                   path, (unsigned long)err);
+    }
+#else
+    int err;
+#if defined(SYS_renameat2)
+    /* Linux RENAME_NOREPLACE (1) also works on filesystems without hard links. */
+    if (syscall(SYS_renameat2, AT_FDCWD, tmp, AT_FDCWD, path, 1U) == 0) {
+        return 1;
+    }
+    err = errno;
+    if (err != ENOSYS && err != EINVAL && err != EOPNOTSUPP) {
+        ConfigEmbedded_ReportError(path, err);
+        return 0;
+    }
+#endif
+    if (link(tmp, path) == 0) {
+        return 1;
+    }
+    err = errno;
+    if (err == ENOSYS || err == EOPNOTSUPP || err == EPERM) {
+        return ConfigEmbedded_WriteExclusive(path, data, size);
+    }
+    ConfigEmbedded_ReportError(path, err);
+#endif
+    return 0;
+}
+#endif
+
 static void ConfigEmbedded_Write(const char *path, const char *data, size_t size)
 {
-    FILE *file;
-    size_t written;
+    FILE *file = fopen(path, "rb");
+#if !defined(__vita__)
     char tmp[512];
-    int tmplen;
-    int ok;
+    int fd;
     int published;
+#endif
 
-    file = fopen(path, "rb");
     if (file != NULL) {
         fclose(file);
-        return;             /* the tree's own file wins */
-    }
-    /*
-     * The temporary lives in the same directory as the destination, so it is on
-     * the same filesystem and link() cannot fail with EXDEV. data/ exists by
-     * now in every target that gets this far; a path too long to name a sibling
-     * is refused rather than silently using the plain name, which would lose
-     * both guarantees this exists for.
-     */
-    tmplen = snprintf(tmp, sizeof(tmp), "%s.%lu.tmp", path,
-                      (unsigned long)ConfigEmbedded_Pid());
-    if (tmplen < 0 || tmplen >= (int)sizeof(tmp)) {
-        Log_Printf("config: path too long to write safely: %s\n", path);
         return;
     }
-
-    file = fopen(tmp, "wb");
+#if defined(__vita__)
+    if (!ConfigEmbedded_WriteExclusive(path, data, size)) {
+        return;
+    }
+#else
+    /* Write to a unique sibling before publishing without replacement. */
+    fd = ConfigEmbedded_OpenTemp(path, tmp, sizeof(tmp));
+    if (fd < 0) {
+        ConfigEmbedded_ReportError(path, errno);
+        return;
+    }
+#if defined(_WIN32)
+    file = _fdopen(fd, "wb");
+#else
+    file = fdopen(fd, "wb");
+#endif
     if (file == NULL) {
-        Log_Printf("config: could not create %s\n", tmp);
+#if defined(_WIN32)
+        _close(fd);
+#else
+        close(fd);
+#endif
+        remove(tmp);
+        Log_Printf("config: could not open temporary file for %s\n", path);
         return;
     }
-    written = fwrite(data, 1, size, file);
-    ok = (fclose(file) == 0) && (written == size);
-    if (!ok) {
+    if (!ConfigEmbedded_WriteAndClose(file, data, size)) {
         remove(tmp);
         Log_Printf("config: could not write %s\n", path);
         return;
     }
-    /*
-     * link() then remove(), not rename(): the destination must not be replaced
-     * if something created it while this was being written.
-     *
-     * The temporary is removed whether or not publication succeeded -- on
-     * success it is a second name for the file now at path, on failure it is
-     * the only copy of a default nobody wants. Both are unlink()s of a file
-     * that is never the destination.
-     */
-    published = (ConfigEmbedded_Publish(tmp, path) == 0);
+    published = ConfigEmbedded_Publish(tmp, path, data, size);
     remove(tmp);
     if (!published) {
-        Log_Printf("config: %s appeared while writing; kept it\n", path);
         return;
     }
+#endif
     Log_Printf("config: wrote %s from the embedded default\n", path);
 }
 

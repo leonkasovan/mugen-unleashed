@@ -212,14 +212,19 @@ fi
 # player's file is never a temporary the copy can overwrite, whatever happens.
 mkdir -p "$DEST"
 ARCHIVE_CFG="$STAGE/data/mugen.cfg"
+CFG_INCOMING=
 if [ -f "$DEST/data/mugen.cfg" ]; then
     CFG_INCOMING="$SCRATCH/game-data-mugen.cfg.incoming"
     mkdir -p "$SCRATCH"
     mv "$ARCHIVE_CFG" "$CFG_INCOMING" ||
         { rm -rf "$STAGE"; fail "cannot set aside $ARCHIVE_CFG"; }
 fi
-cp -R "$STAGE"/. "$DEST"/ || { rm -rf "$STAGE"; fail "cannot copy the tree into $DEST"; }
-if [ -f "$DEST/data/mugen.cfg" ]; then
+if ! cp -R "$STAGE"/. "$DEST"/; then
+    [ -z "$CFG_INCOMING" ] || rm -f "$CFG_INCOMING"
+    rm -rf "$STAGE"
+    fail "cannot copy the tree into $DEST"
+fi
+if [ -n "$CFG_INCOMING" ]; then
     info "kept the existing $DEST/data/mugen.cfg (the player's settings)"
     info "the archive's copy is at data/mugen.cfg.incoming"
     cp "$CFG_INCOMING" "$DEST/data/mugen.cfg.incoming"

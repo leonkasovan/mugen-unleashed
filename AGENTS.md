@@ -762,11 +762,10 @@ diffing `mugen.log`** (`docs/ANALYSIS.md`, "Validation").
 `install/` holds a real M.U.G.E.N 1.1b1 tree, so tests can be run end to end.
 `make install` puts the static executable there for you; on first run it writes
 the embedded `data/mugen.cfg` and platform overlay into a tree that lacks them
-(the write goes to a temporary beside the destination and is published only
-after a successful close, and only if nothing created the destination in the
-meantime — a link, not a rename, so a file that appeared meanwhile is never
-replaced — so an interrupted start-up cannot leave a truncated file that the
-next run would take for the player's own):
+without replacing existing files. Windows and Linux/Android normally publish
+a completed temporary file without replacement. Vita and filesystems without an
+atomic no-replace operation use exclusive creation instead: write failures are
+cleaned up, but a process killed mid-write can leave a partial config:
 
 ```sh
 make install
