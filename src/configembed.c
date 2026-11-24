@@ -23,7 +23,52 @@
 #include "config_data.h"        /* generated: g_config_mugen_* */
 
 /*
- * Port fix: an interrupted write must not look like a finished one.
+ * The two platform primitives the default's publication rests on.
+ *
+ * Both are port additions, and both are here rather than in a platform file
+ * because configembed.c is compiled by every target (Windows, Linux x64/arm64,
+ * Android, Vita) and the extraction happens before anything else exists.
+ */
+#if defined(_WIN32)
+#include <process.h>
+#include <windows.h>
+#define ConfigEmbedded_Pid()     ((unsigned long)_getpid())
+#else
+#include <unistd.h>
+#define ConfigEmbedded_Pid()     ((unsigned long)getpid())
+#endif
+
+/*
+ * Publishes tmp at path without ever replacing what is already there.
+ *
+ * Returns 0 on success, -1 when path already exists (the winner's file is left
+ * untouched) or on any other failure. rename() is deliberately NOT used: it
+ * would silently replace a file created between the absence check and this
+ * call, which on Linux and Android is exactly the player's own config.
+ *
+ * Windows has no link(), and MinGW-w64's io.h declares neither link nor _link,
+ * so the Win32 call is used directly. CreateHardLinkA is the same primitive and
+ * fails with ERROR_ALREADY_EXISTS without touching the existing file; both the
+ * Windows targets here run on NTFS, which supports it.
+ */
+static int ConfigEmbedded_Publish(const char *tmp, const char *path)
+{
+#if defined(_WIN32)
+    if (CreateHardLinkA(path, tmp, NULL) == 0) {
+        return -1;
+    }
+    return 0;
+#else
+    if (link(tmp, path) != 0) {
+        return -1;
+    }
+    return 0;
+#endif
+}
+
+/*
+ * Port fix: an interrupted write must not look like a finished one, and a write
+ * that loses a race must not replace the winner.
  *
  * The extractor used to open the destination directly, so a short write or a
  * failed close left a truncated or empty file there. The next start found that
@@ -31,20 +76,28 @@
  * transient disk-full or a kill during start-up turned into a broken instal-
  * lation that only deleting the file could repair.
  *
- * The default is now written beside the destination and renamed into place
- * only after fwrite and fclose both succeeded. rename() over an existing file
- * is atomic on every target here, and it is reached only when the destination
- * was absent a moment earlier, so a file that appeared in between (a second
- * instance starting at the same time) is still not replaced: the tmp file is
- * discarded instead. A partial file never survives under the real name.
+ * The default is now written to a temporary beside the destination and
+ * published only after fwrite and fclose both succeeded, so a partial file never
+ * survives under the real name. Publishing uses link()+unlink() rather than
+ * rename(), because rename() would *replace* a file that appeared after the
+ * absence check -- on Linux and Android a second instance, or the player's own
+ * editor, could have created the very file this is supposed to leave alone.
+ * link() fails with EEXIST in that case and the temporary is discarded.
+ *
+ * The temporary's name carries the process id, so two instances starting at
+ * once write different files instead of interleaving into one. A leftover from
+ * a killed process is overwritten by the next start with the same pid, and its
+ * content could only have been a partial default that is never linked into
+ * place.
  */
 static void ConfigEmbedded_Write(const char *path, const char *data, size_t size)
 {
     FILE *file;
     size_t written;
     char tmp[512];
-    size_t pathlen;
+    int tmplen;
     int ok;
+    int published;
 
     file = fopen(path, "rb");
     if (file != NULL) {
@@ -52,19 +105,18 @@ static void ConfigEmbedded_Write(const char *path, const char *data, size_t size
         return;             /* the tree's own file wins */
     }
     /*
-     * The temporary lives in the same directory as the destination, so the
-     * rename cannot cross a filesystem boundary. data/ exists by now in every
-     * target that gets this far; a path too long to name a sibling is refused
-     * rather than silently using the plain name (which would lose the
-     * atomicity this exists for).
+     * The temporary lives in the same directory as the destination, so it is on
+     * the same filesystem and link() cannot fail with EXDEV. data/ exists by
+     * now in every target that gets this far; a path too long to name a sibling
+     * is refused rather than silently using the plain name, which would lose
+     * both guarantees this exists for.
      */
-    pathlen = strlen(path);
-    if (pathlen + 5 > sizeof(tmp)) {
+    tmplen = snprintf(tmp, sizeof(tmp), "%s.%lu.tmp", path,
+                      (unsigned long)ConfigEmbedded_Pid());
+    if (tmplen < 0 || tmplen >= (int)sizeof(tmp)) {
         Log_Printf("config: path too long to write safely: %s\n", path);
         return;
     }
-    memcpy(tmp, path, pathlen);
-    memcpy(tmp + pathlen, ".tmp", 5);
 
     file = fopen(tmp, "wb");
     if (file == NULL) {
@@ -78,9 +130,19 @@ static void ConfigEmbedded_Write(const char *path, const char *data, size_t size
         Log_Printf("config: could not write %s\n", path);
         return;
     }
-    if (rename(tmp, path) != 0) {
-        remove(tmp);
-        Log_Printf("config: could not write %s\n", path);
+    /*
+     * link() then remove(), not rename(): the destination must not be replaced
+     * if something created it while this was being written.
+     *
+     * The temporary is removed whether or not publication succeeded -- on
+     * success it is a second name for the file now at path, on failure it is
+     * the only copy of a default nobody wants. Both are unlink()s of a file
+     * that is never the destination.
+     */
+    published = (ConfigEmbedded_Publish(tmp, path) == 0);
+    remove(tmp);
+    if (!published) {
+        Log_Printf("config: %s appeared while writing; kept it\n", path);
         return;
     }
     Log_Printf("config: wrote %s from the embedded default\n", path);

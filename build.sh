@@ -247,23 +247,32 @@ fi
 SDLVER=$(pkg-config --modversion sdl2 2>/dev/null || true)
 
 # -------------------------------------------------------------- game data --
-# install/ is the game tree the binary runs inside. A failure only warns: the
-# engine builds and the binary reports the missing tree at start-up.
+# install/ is the game tree the binary runs inside. In build mode a fetch
+# failure only warns -- the engine builds and the binary reports the missing
+# tree at start-up -- but --setup fails, because fetching is all it does.
+#
+# The presence test is fetch_game_data.sh --check, not `-f data/mugen.cfg`: the
+# engine writes that file into any tree it starts in, so a config left behind by
+# a run that failed on missing assets used to read as a complete installation and
+# the download was never retried. The same test the fetcher itself uses is the
+# only one guaranteed to agree with it.
 say 'game data'
-if [ -f install/data/mugen.cfg ]; then
+if sh tools/fetch_game_data.sh --check --dest install >/dev/null 2>&1; then
     info "present: $ROOT/install"
 elif [ "$MODE" = check ]; then
-    info "MISSING - run ./build.sh to fetch the default assets"
+    info 'MISSING - run ./build.sh to fetch the default assets'
 else
     # Always online: the default assets are fetched when the tree is absent.
     # fetch_game_data.sh downloads nothing when build/downloads/ already holds
     # a verified archive, so a warm cache never touches the network.
     if sh tools/fetch_game_data.sh --dest install; then
         info "installed: $ROOT/install"
+    elif [ "$MODE" = setup ]; then
+        fail 'could not fetch the default game data, and --setup does nothing else'
     else
         warn 'could not fetch the default game data'
     fi
-    if [ ! -f install/data/mugen.cfg ]; then
+    if ! sh tools/fetch_game_data.sh --check --dest install >/dev/null 2>&1; then
         warn 'the built binary will exit at start until install/ has a tree'
         warn '(see tools/fetch_game_data.sh --help)'
     fi
@@ -327,7 +336,7 @@ file_size() {
 say 'done'
 printf '  built      %s (%s bytes)\n' "$BIN" "$(file_size "$BIN")"
 printf '  installed  %s (%s bytes)\n' "$INSTALLED" "$(file_size "$INSTALLED")"
-if [ -f install/data/mugen.cfg ]; then
+if sh tools/fetch_game_data.sh --check --dest install >/dev/null 2>&1; then
     printf '  data       %s\n' "$ROOT/install"
 else
     printf '  data       MISSING - the binary exits at start until install/ has a tree\n'

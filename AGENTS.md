@@ -762,9 +762,11 @@ diffing `mugen.log`** (`docs/ANALYSIS.md`, "Validation").
 `install/` holds a real M.U.G.E.N 1.1b1 tree, so tests can be run end to end.
 `make install` puts the static executable there for you; on first run it writes
 the embedded `data/mugen.cfg` and platform overlay into a tree that lacks them
-(the write goes to a temporary beside the destination and is renamed into place
-after a successful close, so an interrupted start-up cannot leave a truncated
-file that the next run would take for the player's own):
+(the write goes to a temporary beside the destination and is published only
+after a successful close, and only if nothing created the destination in the
+meantime — a link, not a rename, so a file that appeared meanwhile is never
+replaced — so an interrupted start-up cannot leave a truncated file that the
+next run would take for the player's own):
 
 ```sh
 make install

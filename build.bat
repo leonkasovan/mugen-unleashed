@@ -277,7 +277,8 @@ echo Done.
 echo.
 if "%DO_BUILD32%"=="1" call :report_exe win32 "install\mugen-win32.exe"
 if "%DO_BUILD64%"=="1" call :report_exe win64 "install\mugen-win64.exe"
-if exist "%ROOT%\install\data\mugen.cfg" (
+"%W64DEVKIT_DIR%\bin\sh.exe" "%ROOT%\tools\fetch_game_data.sh" --check >nul 2>&1
+if not errorlevel 1 (
     echo   data   %ROOT%\install
 ) else (
     echo   data   MISSING - the binary exits at start until install\ has a tree
@@ -631,10 +632,20 @@ rem :build <name> - win32 or win64; the kit follows from the name
 rem :game_data -> install\ holds a M.U.G.E.N tree (the default assets when the
 rem clone has none). /check only reports; a failed download is a warning, not a
 rem failed setup, because the engine still builds without game data.
+rem
+rem Port fix: "present" is the fetcher's own test (--check), not the existence of
+rem data\mugen.cfg. The engine writes that config into any tree it starts in, so
+rem a config left by a run that failed on missing assets read as a complete
+rem installation and the download was never retried.
 :game_data
 echo.
 echo [game data] %ROOT%\install
-if exist "%ROOT%\install\data\mugen.cfg" (
+if not exist "%ROOT%\tools\fetch_game_data.sh" (
+    echo   WARNING: tools\fetch_game_data.sh is missing
+    exit /b 0
+)
+"%W64DEVKIT_DIR%\bin\sh.exe" "%ROOT%\tools\fetch_game_data.sh" --check
+if not errorlevel 1 (
     echo   present
     exit /b 0
 )
@@ -642,10 +653,7 @@ if "%DO_CHECK%"=="1" (
     echo   MISSING  run build.bat /build to fetch the default assets
     exit /b 0
 )
-if not exist "%ROOT%\tools\fetch_game_data.sh" (
-    echo   WARNING: tools\fetch_game_data.sh is missing
-    exit /b 0
-)
+rem The fetcher's own --check printed why above; the download follows.
 "%W64DEVKIT_DIR%\bin\sh.exe" "%ROOT%\tools\fetch_game_data.sh"
 if errorlevel 1 (
     echo   WARNING: could not fetch the default game data

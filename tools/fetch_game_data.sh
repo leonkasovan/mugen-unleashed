@@ -199,25 +199,31 @@ fi
 [ -f "$STAGE/data/system.def" ] && [ -f "$STAGE/data/mugen.cfg" ] ||
     { rm -rf "$STAGE"; fail "$FILE does not look like a M.U.G.E.N tree (no data/system.def)"; }
 
-# Port fix: never overwrite a file the player owns. data/mugen.cfg is rewritten
-# in place by the options screen and the key/joystick bindings, so a tree that
-# already has one keeps it -- the same rule every other entry point follows
-# (src/configembed.c extracts only a missing file, and the Android stager skips
-# the tree's copy). Unpacking over it discarded saved settings silently.
+# Never overwrite a file the player owns. data/mugen.cfg is rewritten in place by
+# the options screen and the key/joystick bindings, so a tree that already has
+# one keeps it -- the same rule every other entry point follows (src/configembed.c
+# extracts only a missing file, and the Android stager skips the tree's copy).
+#
+# Port fix: the config is now held back from the copy rather than restored after
+# it. Backing it up and copying the backup back only survives a copy that
+# finishes; when the copy failed on any *other* path the live file was left
+# holding the archive's value, so a failed restore discarded the player's
+# settings as its last act. Moving the archive's copy aside first means the
+# player's file is never a temporary the copy can overwrite, whatever happens.
 mkdir -p "$DEST"
+ARCHIVE_CFG="$STAGE/data/mugen.cfg"
 if [ -f "$DEST/data/mugen.cfg" ]; then
-    KEEP_CFG=1
-    CFG_BACKUP="$SCRATCH/game-data-mugen.cfg"
+    CFG_INCOMING="$SCRATCH/game-data-mugen.cfg.incoming"
     mkdir -p "$SCRATCH"
-    cp "$DEST/data/mugen.cfg" "$CFG_BACKUP"
-    cp -R "$STAGE"/. "$DEST"/ || { rm -rf "$STAGE"; fail "cannot copy the tree into $DEST"; }
-    cp "$CFG_BACKUP" "$DEST/data/mugen.cfg"
-    rm -f "$CFG_BACKUP"
+    mv "$ARCHIVE_CFG" "$CFG_INCOMING" ||
+        { rm -rf "$STAGE"; fail "cannot set aside $ARCHIVE_CFG"; }
+fi
+cp -R "$STAGE"/. "$DEST"/ || { rm -rf "$STAGE"; fail "cannot copy the tree into $DEST"; }
+if [ -f "$DEST/data/mugen.cfg" ]; then
     info "kept the existing $DEST/data/mugen.cfg (the player's settings)"
     info "the archive's copy is at data/mugen.cfg.incoming"
-    cp "$STAGE/data/mugen.cfg" "$DEST/data/mugen.cfg.incoming"
-else
-    cp -R "$STAGE"/. "$DEST"/ || { rm -rf "$STAGE"; fail "cannot copy the tree into $DEST"; }
+    cp "$CFG_INCOMING" "$DEST/data/mugen.cfg.incoming"
+    rm -f "$CFG_INCOMING"
 fi
 COUNT=$(find "$DEST" -type f | wc -l | tr -d '[:space:]')
 rm -rf "$STAGE"

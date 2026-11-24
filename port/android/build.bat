@@ -900,11 +900,6 @@ for /f "usebackq delims=" %%F in (`dir /b /s /a-d`) do (
     set "REL=!REL:%GAME_DATA_DIR%\=!"
     set "NAME=%%~nxF"
     set "EXT=%%~xF"
-    rem Whether the file carries a directory at all: the data\*.def/st/sff/snd
-    rem set is identified by that, so a char\kfm\system.def is never mistaken for
-    rem the game's own.
-    set "LDEPTH=0"
-    for /f "delims=" %%D in ("!REL!") do if not "%%~nxD"=="%%D" set "LDEPTH=1"
     set "SKIP=0"
     if /I "!EXT!"==".exe" set "SKIP=1"
     if /I "!EXT!"==".dll" set "SKIP=1"
@@ -920,7 +915,15 @@ for /f "usebackq delims=" %%F in (`dir /b /s /a-d`) do (
     rem not also arrive through this loop -- two copies would race and the
     rem manifest would list a file that is not the staged one.
     if "!REL!"=="!GAME_CFG_REL!" set "SKIP=1"
-    if "!SKIP!"=="0" if "!LDEPTH!"=="1" if /I "!NAME!"=="system.def" set "SKIP=1"
+    rem A data\*.def/st/sff/snd of *any* depth is game data and is staged.
+    rem
+    rem This loop has no filter on system.def. An earlier revision dropped a
+    rem nested data\mugen1\system.def, believing it belonged to a motif; it does
+    rem not. The shipped default configuration points its motif at exactly that
+    rem file (res/configs/mugen.cfg, "motif = data/mugen1/system.def"), so
+    rem removing it produced an APK that installed, started, and had no
+    rem start-up motif. Keep every data file: the engine's own paths decide
+    rem what is game data, not this stager.
     if "!SKIP!"=="0" (
         set "RD=%%~dpF"
         set "RD=!RD:%GAME_DATA_DIR%\=!"
