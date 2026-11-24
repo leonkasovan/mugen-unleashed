@@ -46,6 +46,10 @@ rem    SDL2_DEPS_DIR            SDL2 prefix, default build\android\sdl2\abi
 rem    SDL2_COMPANION_DIR       mixer/ttf prefix, default android-deps\abi
 rem    FFMPEG_DEPS_DIR           optional WebM prefix, default build\android\ffmpeg\abi
 rem    GAME_DATA_DIR            game tree to copy, default install\
+rem    GAME_CFG                 base config staged as data\mugen.cfg; default
+rem                             the embedded project default (nothing staged)
+rem    GAME_DATA_OK             deprecated; the complete-tree test now reads the
+rem                             game's own data\*.def/st/sff/snd files
 rem    GRADLE_USER_HOME         default build\android\gradle-user-home
 rem    ANDROID_USER_HOME        default build\android\toolchains\android-user-home
 rem    MUGEN_ANDROID_TOOLS_DIR  default build\android\toolchains
@@ -833,7 +837,18 @@ if defined GAME_DATA_DIR ( set "GAME_DATA_EXPLICIT=1" ) else (
 )
 for %%I in ("%GAME_DATA_DIR%") do set "GAME_DATA_DIR=%%~fI"
 if "!GAME_DATA_DIR:~-1!"=="\" set "GAME_DATA_DIR=!GAME_DATA_DIR:~0,-1!"
-if not exist "%GAME_DATA_DIR%\data\mugen.cfg" if "%GAME_DATA_EXPLICIT%"=="0" (
+rem Port fix: a tree is a tree, not a config file. data\mugen.cfg is written by
+rem the engine on first run and is skipped from the APK, so testing for it here
+rem said "present" for a directory holding nothing else -- and after a run even
+rem for a failed download, which then stopped working. TREE_OK is set from the
+rem game's own files below: data\*.def, .st, .sff and .snd, the set KFM's
+rem definition needs, and the same incomplete-tree proof fetch_game_data.sh
+rem makes before it copies a tree into place.
+set "TREE_CFG=1"
+if not exist "%GAME_DATA_DIR%\data\mugen.cfg" set "TREE_CFG=0"
+set "TREE_OK=0"
+for %%E in (def st sff snd) do if exist "%GAME_DATA_DIR%\data\*.%%E" set "TREE_OK=1"
+if "!TREE_CFG!"=="0" if "!TREE_OK!"=="0" (
     echo.
     echo ==^> No game tree in %GAME_DATA_DIR%
     rem Port fix: the MSYS2 build.sh that was removed ran tools/fetch_game_data.sh here. That script is
@@ -842,12 +857,33 @@ if not exist "%GAME_DATA_DIR%\data\mugen.cfg" if "%GAME_DATA_EXPLICIT%"=="0" (
     echo     the default tree is absent and this script cannot fetch it ^(bash^);
     echo     download the mugen_elecbyte_assets release zip into
     echo     "%ROOT%\install", or set GAME_DATA_DIR to a prepared game tree.
+    echo error: no game data in GAME_DATA_DIR=%GAME_DATA_DIR%
+    echo        expected the game's own files ^(data\*.def, .st, .sff, .snd^) there;
+    echo        supply a game tree or use --no-assets
+    exit /b 1
 )
 echo.
 echo ==^> Staging game data from %GAME_DATA_DIR%
-if not exist "%GAME_DATA_DIR%\data\mugen.cfg" (
-    echo error: data/mugen.cfg missing in GAME_DATA_DIR=%GAME_DATA_DIR%; supply game data or use --no-assets
-    exit /b 1
+if "!TREE_CFG!"=="0" (
+    echo     no data\mugen.cfg in the tree; the embedded default will be used
+)
+if "!TREE_OK!"=="0" (
+    rem A config-only tree is the shape a failed download leaves behind. The
+    rem config alone does not start a game, so say so rather than staging an
+    rem APK that exits at the mode select.
+    echo warning: no data\*.def/st/sff/snd in %GAME_DATA_DIR%; staging the config only
+)
+rem GAME_CFG is resolved here, before the copy loop, so the loop can skip the
+rem tree-relative name it will be staged under.
+set "GAME_CFG_REL="
+if defined GAME_CFG (
+    for %%I in ("%GAME_CFG%") do set "GAME_CFG=%%~fI"
+    if not exist "!GAME_CFG!" (
+        echo error: GAME_CFG=!GAME_CFG! does not exist
+        exit /b 1
+    )
+    set "GAME_CFG_REL=!GAME_CFG:%GAME_DATA_DIR%=!"
+    if "!GAME_CFG_REL:~0,1!"=="\" set "GAME_CFG_REL=!GAME_CFG_REL:~1!"
 )
 if not exist "%OUT%" mkdir "%OUT%"
 set "LIST=%OUT%\asset-list.txt"
@@ -864,6 +900,11 @@ for /f "usebackq delims=" %%F in (`dir /b /s /a-d`) do (
     set "REL=!REL:%GAME_DATA_DIR%\=!"
     set "NAME=%%~nxF"
     set "EXT=%%~xF"
+    rem Whether the file carries a directory at all: the data\*.def/st/sff/snd
+    rem set is identified by that, so a char\kfm\system.def is never mistaken for
+    rem the game's own.
+    set "LDEPTH=0"
+    for /f "delims=" %%D in ("!REL!") do if not "%%~nxD"=="%%D" set "LDEPTH=1"
     set "SKIP=0"
     if /I "!EXT!"==".exe" set "SKIP=1"
     if /I "!EXT!"==".dll" set "SKIP=1"
@@ -875,6 +916,11 @@ for /f "usebackq delims=" %%F in (`dir /b /s /a-d`) do (
     rem the tree's copies would keep the project defaults from ever being used.
     if /I "!REL!"=="data\mugen.cfg" set "SKIP=1"
     if /I "!REL!"=="data\mugen.android.cfg" set "SKIP=1"
+    rem Port fix: the file GAME_CFG names is copied explicitly below, so it must
+    rem not also arrive through this loop -- two copies would race and the
+    rem manifest would list a file that is not the staged one.
+    if "!REL!"=="!GAME_CFG_REL!" set "SKIP=1"
+    if "!SKIP!"=="0" if "!LDEPTH!"=="1" if /I "!NAME!"=="system.def" set "SKIP=1"
     if "!SKIP!"=="0" (
         set "RD=%%~dpF"
         set "RD=!RD:%GAME_DATA_DIR%\=!"
@@ -895,12 +941,32 @@ rem The GLES shader dialect is embedded in the native library (src/shaders/gles/
 rem compiled by CMake's mugen_enable_sprite_shaders). Nothing is staged into the
 rem APK's data\gles: src/gles_render.c reads the compiled-in literals.
 
-rem No configuration is staged. The base data/mugen.cfg and the Android overlay
-rem are embedded in libmain.so and written into the extracted asset tree when
-rem absent (src/configembed.c); the tree's own data\mugen.cfg and
-rem data\mugen.android.cfg were skipped above, so a fresh install gets the
+rem No configuration is staged by default. The base data/mugen.cfg and the
+rem Android overlay are embedded in libmain.so and written into the extracted
+rem asset tree when absent (src/configembed.c); the tree's own data\mugen.cfg
+rem and data\mugen.android.cfg were skipped above, so a fresh install gets the
 rem documented defaults and an existing one is preserved by the extractor's
 rem user-owned-file rule.
+rem
+rem Port fix: GAME_CFG overrides that default, which is what a tree with a
+rem custom motif needs -- the project default's motif is not on the device, so
+rem a fresh install would open on a missing file. The chosen file is staged as
+rem data\mugen.cfg instead of the embedded one; the engine only writes its
+rem default when the file is absent, so a staged GAME_CFG wins.
+if not defined GAME_CFG goto :stage_no_cfg
+if not exist "%ASSETS%\data" mkdir "%ASSETS%\data"
+copy /y "!GAME_CFG!" "%ASSETS%\data\mugen.cfg" >nul
+if errorlevel 1 (
+    echo error: cannot stage GAME_CFG=!GAME_CFG! as data\mugen.cfg
+    exit /b 1
+)
+echo     data/mugen.cfg ^<- !GAME_CFG! ^(GAME_CFG^)
+rem The loop above fixed COUNT before this copy, so the staged config is added
+rem to both here. It is never named twice: the loop skipped its tree-relative
+rem name (GAME_CFG_REL), so this is the file's only manifest line.
+set /a COUNT+=1
+echo(data/mugen.cfg>>"%LIST%"
+:stage_no_cfg
 
 rem the MSYS2 build.sh that was removed finishes with `sort -o` on the manifest. Port fix: sort.exe and
 rem find.exe are named explicitly, because Git for Windows puts a GNU sort and a

@@ -182,16 +182,45 @@ static Ini *Config_OpenConfig(void)
     int len = 0;
     int keys = 0;
     int skipped = 0;
+    int empty = 0;
 
     if (base == NULL) {
         return NULL;        /* the caller keeps its own error message */
     }
     over = Config_ParseFile(CONFIG_PORT_PATH);
+#ifdef CONFIG_PORT_LEGACY
+    /*
+     * Port fix: fall back to the file this target shipped as before the
+     * linux_/win naming unification. An installation upgraded in place has
+     * its overlay under the old name only, and without this the merge
+     * reported "not present" and the player's device settings silently
+     * reverted to the shipped defaults. The new name wins when both exist,
+     * which is what Config_Embedded_Extract leaves behind (it writes a new
+     * default only when neither file is there).
+     */
+    if (over == NULL) {
+        over = Config_ParseFile(CONFIG_PORT_LEGACY);
+    }
+#endif
     if (over == NULL) {
         Log_Printf("config: %s not present; %s used as is\n", CONFIG_PORT_PATH, CONFIG_PATH);
         return base;
     }
-    if (!ConfigMerge_Text(base, over, &text, &len, &keys, &skipped)) {
+    if (!ConfigMerge_Text(base, over, &text, &len, &keys, &skipped, &empty)) {
+        if (empty) {
+            /*
+             * Port fix: a comment-only overlay is the normal case for the
+             * targets that force no device value at all (mugen.win32.cfg,
+             * mugen.win64.cfg, mugen.linux_x64.cfg are comments and nothing
+             * else). Saying "could not be merged" here made every ordinary
+             * start-up look like a failure and printed a line the original
+             * never writes, which the log comparator reports as a difference.
+             */
+            Log_Printf("config: %s has no settings; %s used as is\n",
+                       CONFIG_PORT_PATH, CONFIG_PATH);
+            Ini_Free(over);
+            return base;
+        }
         Log_Printf("config: %s could not be merged; %s used as is\n", CONFIG_PORT_PATH, CONFIG_PATH);
         Ini_Free(over);
         return base;

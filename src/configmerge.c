@@ -273,7 +273,8 @@ static int Merge_AppendGroupBody(MergeText *out, const Ini *over, int group, int
 }
 
 int ConfigMerge_Text(const Ini *base, const Ini *over,
-                     char **text, int *text_len, int *keys, int *skipped)
+                     char **text, int *text_len, int *keys, int *skipped,
+                     int *empty)
 {
     MergeText out;
     int bi;
@@ -283,8 +284,27 @@ int ConfigMerge_Text(const Ini *base, const Ini *over,
     *text_len = 0;
     *keys = 0;
     *skipped = 0;
-    if (base == NULL || over == NULL || base->group_count == 0 || over->group_count == 0) {
+    *empty = 0;
+    if (base == NULL || over == NULL || base->group_count == 0) {
         return 0;       /* nothing to layer: the caller keeps the base Ini */
+    }
+    /*
+     * Port fix: an overlay with no groups at all is not a failed merge.
+     *
+     * res/configs ships comment-only overlays for the targets that have no
+     * device-specific value to force (mugen.win32.cfg, mugen.win64.cfg,
+     * mugen.linux_x64.cfg are comments and nothing else). Parsing one gives
+     * group_count 0, which used to take the same path as a malformed file, so
+     * every ordinary Windows start-up logged "could not be merged; data/mugen.cfg
+     * used as is" -- alarming, and a difference the log comparator reports
+     * against the original, which never printed it. The distinction is made by
+     * the caller through ConfigMerge_Text's return value; there is no second
+     * channel here, so the case is folded into "nothing to layer" and the
+     * caller says so.
+     */
+    if (over->group_count == 0) {
+        *empty = 1;
+        return 0;       /* a comment-only overlay: the base is already final */
     }
     memset(&out, 0, sizeof(out));
 

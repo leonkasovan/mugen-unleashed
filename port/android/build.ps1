@@ -38,14 +38,12 @@
 .PARAMETER NoAssets
     Package no game data.
 
-.PARAMETER Gles
-    Build the GLES 3.0 renderer (M8).
-
 .PARAMETER Model3d
-    Opt-in glTF renderer; implies -Gles.
+    Opt-in glTF renderer; implies the GLES renderer (build.bat rewrites --model3d
+    into --gles).
 
 .PARAMETER VideoBg
-    Enable WebM backgrounds from a prepared Android FFmpeg prefix; implies -Gles.
+    Enable WebM backgrounds from a prepared Android FFmpeg prefix.
 
 .EXAMPLE
     .\build.ps1 -CheckTools
@@ -57,7 +55,13 @@
 # attribute would inject -Debug/-Verbose/-ErrorAction as common parameters,
 # and -Debug is the name this build's flag has everywhere else (build.bat
 # --debug). A plain param block also means anything unrecognised lands in
-# $args, so the build.bat spelling (--gles 0) passes straight through.
+# $args, so the build.bat spelling (--model3d and the rest) passes straight
+# through.
+#
+# Port fix: no -Gles switch. build.bat rejects --gles outright (this port always
+# builds the GLES 3.0 renderer), so a switch declared here would forward a value
+# the batch file then failed on. An unrecognised --gles still reaches build.bat
+# through the $args pass-through and gets that error.
 param(
     [switch]$Help,
     [switch]$CheckTools,
@@ -66,7 +70,6 @@ param(
     [switch]$Clean,
     [switch]$Debug,
     [switch]$NoAssets,
-    [switch]$Gles,
     [switch]$Model3d,
     [switch]$VideoBg
 )
@@ -89,10 +92,10 @@ if ($Clean)         { $argv.Add('--clean') }
 
 if ($Debug)         { $argv.Add('--debug') }
 if ($NoAssets)      { $argv.Add('--no-assets') }
-rem -Gles was documented but never declared, so it silently did nothing and the
-rem only way to reach --gles was the $args pass-through. Declared and forwarded
-rem now, like --model3d beside it.
-if ($Gles)          { $argv.Add('--gles') }
+# PowerShell comments, not batch ones: this file is parsed by PowerShell, which
+# does not know `rem` and aborts before build.bat is reached (with
+# $ErrorActionPreference = 'Stop' the first one is a terminating error).
+# --model3d implies --gles in build.bat, which is why no -Gles switch exists.
 if ($Model3d)       { $argv.Add('--model3d') }
 if ($VideoBg)       { $argv.Add('--video-bg') }
 if ($args)          { $argv.AddRange([string[]]$args) }

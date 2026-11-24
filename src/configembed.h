@@ -28,6 +28,17 @@
 #define CONFIG_PORT_EMBEDDED g_config_mugen_win32_cfg
 #elif defined(__aarch64__) || defined(_M_ARM64)
 #define CONFIG_PORT_PATH "data/mugen.linux_arm64.cfg"
+/*
+ * Port fix: the arm64 target shipped as data/mugen.arm64.cfg before the
+ * linux_/win naming unification (8185d03 renamed it and the res/configs entry
+ * with it), so an installation upgraded in place still has its settings --
+ * RenderScale, the render mode -- in the old file, which nothing reads any
+ * more. Config_Embedded_Extract consults CONFIG_PORT_LEGACY before writing the
+ * fresh default, and config.c's merge does the same, so an upgrader keeps them
+ * and only a tree with neither file gets the shipped values. Same spelling as
+ * port/arm64/mugen.arm64.cfg, the path that was documented and packed then.
+ */
+#define CONFIG_PORT_LEGACY "data/mugen.arm64.cfg"
 #define CONFIG_PORT_EMBEDDED g_config_mugen_linux_arm64_cfg
 #elif defined(__x86_64__) || defined(_M_X64)
 #define CONFIG_PORT_PATH "data/mugen.linux_x64.cfg"

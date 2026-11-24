@@ -456,7 +456,11 @@ downloads. Details:
 
 The VPK carries two configs: the game tree's `data/mugen.cfg` unchanged, and
 `data/mugen.psvita.cfg` packed verbatim from `res/configs/mugen.psvita.cfg` (no
-build step and no flag rewrites a value in it; edit the file and rebuild). At
+build step and no flag rewrites a value in it; edit the file and rebuild). The
+overlay is packed whether or not a game tree is — `--no-data` installs onto a
+memory card that already holds the game, so a VPK without it would leave the
+console merging nothing and falling back to defaults for exactly the settings
+the port has an opinion about (`RenderMode`, the panel size). At
 start-up `src/configmerge.c` layers the platform file over the game's **per key**
 — a key the platform file names wins, everything else comes from the game's
 file — and never writes the result anywhere. It also refuses to force the groups
@@ -466,7 +470,11 @@ value there would be reverted by the next `Options_Save`. Every target has such
 an overlay in `res/configs/` (`mugen.android.cfg`, `mugen.linux_arm64.cfg`,
 `mugen.linux_x64.cfg`, `mugen.win32.cfg`, `mugen.win64.cfg`), and all of them
 are embedded in the executable: the engine writes whichever config file a tree
-lacks on start-up (`src/configembed.c`), so no build step copies one in. Do not
+lacks on start-up (`src/configembed.c`), so no build step copies one in. An
+arm64 tree upgraded from before the `linux_`/`win` naming unification keeps its
+settings: the old `data/mugen.arm64.cfg` is read when the new name is absent
+(`CONFIG_PORT_LEGACY`, in both `src/configembed.c` and the `config.c` merge), and
+the new default is not extracted beside it. Do not
 reintroduce a wholesale `data/mugen.cfg` replacement in a port: it discards
 whatever the user set.
 
@@ -753,7 +761,10 @@ diffing `mugen.log`** (`docs/ANALYSIS.md`, "Validation").
 
 `install/` holds a real M.U.G.E.N 1.1b1 tree, so tests can be run end to end.
 `make install` puts the static executable there for you; on first run it writes
-the embedded `data/mugen.cfg` and platform overlay into a tree that lacks them:
+the embedded `data/mugen.cfg` and platform overlay into a tree that lacks them
+(the write goes to a temporary beside the destination and is renamed into place
+after a successful close, so an interrupted start-up cannot leave a truncated
+file that the next run would take for the player's own):
 
 ```sh
 make install

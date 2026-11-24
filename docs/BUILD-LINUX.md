@@ -8,7 +8,13 @@ from `uname` and the compiler's own triple. This page covers the Linux side;
 
 `build.sh` is the Linux counterpart of `build.bat`: one command verifies the
 distribution's development packages, fetches the default game data when
-`install/` has no `data/mugen.cfg`, builds and installs a stripped binary.
+`install/` has no game tree, builds and installs a stripped binary.
+
+"Has no game tree" means the game's own files (`data/system.def`, the
+`*.sff`/`*.snd` set, `data/*.st`), not `data/mugen.cfg`: the engine writes that
+config into any tree it starts in, so a run that failed on missing assets left a
+file that used to be read as a complete installation. `--check` uses the same
+test.
 
 ```sh
 ./build.sh              # check, fetch game data if absent, build, install
@@ -25,6 +31,14 @@ builds `linux-x64` and, on an ARM64 host, `linux-arm64` (GLES by default there).
 
 It refuses to run off Linux (use `build.bat` or a port's `build.bat` there) and
 refuses `CROSS_COMPILE=`, which is a Makefile path for a tree built elsewhere.
+`DEBUG` is read the way the Makefile reads it: `1` is a debug build, `0` and an
+empty value are not, and any other spelling is treated as `0` with a warning.
+The mode is handed to `make` explicitly (`DEBUG=0` as well as `DEBUG=1`), so the
+tree name this script checks and the tree make writes can never disagree.
+`--jobs` rejects `0` (make refuses `-j0`). `--setup` fails when the game data
+cannot be provisioned: it does nothing else, so a warning would be a silent
+success. In build mode the fetch still only warns, because the engine builds
+either way and the binary reports the missing tree at start-up.
 `--debug` uses a separate `build/<target>-sdl2-debug/` tree on purpose: switching
 between the two modes then recompiles nothing. The configuration stamp also
 records the mode (`debug=` and the raw `DEBUG=` spelling), so even a tree shared

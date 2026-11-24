@@ -534,7 +534,11 @@ ICON_DIR  := $(BUILD)/icon
 ENGINE_WARN := -Wall -Wno-unused-parameter -Wno-unused-result \
                -Wno-stringop-truncation -Wno-format-truncation
 
-ifeq ($(DEBUG),1)
+# The one condition is $(MUGEN_DEBUG), not $(DEBUG): `filter` matches any word in
+# a list, so DEBUG='1 0' named the tree -debug above (MUGEN_DEBUG=1) while
+# `ifeq ($(DEBUG),1)` here was false and built -O2 without -DMUGEN_DEBUG -- a
+# debug-named release binary. Both now read the normalised value.
+ifeq ($(MUGEN_DEBUG),1)
   OPT     := -O0 -g3
   BUILD_DEFS := -DMUGEN_DEBUG
 else

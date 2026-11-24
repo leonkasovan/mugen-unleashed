@@ -27,7 +27,7 @@ int main(void)
         char base_text[1024], over_text[1024];
         Ini *base, *over, *merged;
         char *text = NULL;
-        int len, keys, skipped;
+        int len, keys, skipped, empty;
         snprintf(base_text, sizeof base_text,
             "[%s]\nValue=10\n[%s.%s]\nValue=11\n"
             "[Video]\nWidth=640\nKeep=7\n[Sound]\nMasterVolume=60\n"
@@ -40,7 +40,7 @@ int main(void)
             groups[i], locales[j], groups[i]);
         Ini_SetLanguage(locales[j]);
         base = parse(base_text); over = parse(over_text);
-        assert(ConfigMerge_Text(base, over, &text, &len, &keys, &skipped));
+        assert(ConfigMerge_Text(base, over, &text, &len, &keys, &skipped, &empty));
         assert(text && len == (int)strlen(text) && skipped >= 2);
         merged = parse(text);
         assert(Ini_SelectGroup(merged, groups[i]) != -1);
@@ -74,8 +74,8 @@ int main(void)
                 "Snd.Cache.AutoGrow=0\nSnd.Cache.InitialMB=16\nSnd.Cache.MaxMB=64\n";
             Ini *base = parse(base_text), *over = Ini_Open(paths[i]), *merged;
             char *text = NULL;
-            int len, keys, skipped, value;
-            assert(over && ConfigMerge_Text(base, over, &text, &len, &keys, &skipped));
+            int len, keys, skipped, empty, value;
+            assert(over && ConfigMerge_Text(base, over, &text, &len, &keys, &skipped, &empty));
             merged = parse(text);
             assert(Ini_SelectGroup(merged, "Sound") != -1);
             assert(Ini_GetInt(merged, "MasterVolume", &value) && value == 60);
@@ -84,6 +84,25 @@ int main(void)
             Ini_Free(merged); Ini_Free(over); Ini_Free(base); free(text);
         }
         puts("ok: ARM64/Android/Vita sound cache overlays override cache keys and preserve volumes");
+    }
+
+    /*
+     * A comment-only overlay must be reported as "nothing to layer", not as a
+     * failed merge: res/configs ships those for the targets that force no
+     * device value (mugen.win32.cfg, mugen.win64.cfg, mugen.linux_x64.cfg), and
+     * config.c logs the two cases differently so an ordinary start-up does not
+     * claim the merge failed.
+     */
+    {
+        char base_text[] = "[Video]\nWidth=640\n";
+        char over_text[] = "; only a comment\n; and another\n";
+        Ini *base = parse(base_text), *over = parse(over_text);
+        char *text = NULL;
+        int len = -1, keys = -1, skipped = -1, empty = -1;
+        assert(!ConfigMerge_Text(base, over, &text, &len, &keys, &skipped, &empty));
+        assert(empty == 1 && text == NULL && keys == 0 && skipped == 0);
+        Ini_Free(over); Ini_Free(base);
+        puts("ok: a comment-only overlay reports empty, not a failed merge");
     }
     return 0;
 }

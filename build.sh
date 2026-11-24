@@ -57,6 +57,28 @@ MODE=build
 DEBUG_BUILD=0
 JOBS=${JOBS:-}
 
+# Port fix: DEBUG is read exactly the way the Makefile reads it (1 is a debug
+# build; 0 and an empty value are not; anything else is treated as 0 while
+# still being recorded in the build stamp). The Makefile does this itself, so
+# an exported `DEBUG=yes` used to make make build the -debug tree while this
+# script checked the release path: a clean tree failed after building, and a
+# stale release binary could make the check pass. Normalising here keeps the
+# tree name, the -debug suffix and the make line in agreement.
+is_debug()
+{
+    case "${1:-}" in
+        1) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+if [ -n "${DEBUG:-}" ] && [ "${DEBUG}" != 0 ] && ! is_debug "$DEBUG"; then
+    printf 'WARNING: DEBUG="%s" is not 1; treating it as 0 (the Makefile does the same)\n' \
+        "$DEBUG" >&2
+fi
+if is_debug "${DEBUG:-}"; then
+    DEBUG_BUILD=1
+fi
+
 say()  { printf '\n==> %s\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
 warn() { printf '    WARNING: %s\n' "$*" >&2; }
@@ -164,6 +186,9 @@ fi
 case "$JOBS" in
     ''|*[!0-9]*) fail "--jobs must be a positive number, not \"$JOBS\"" ;;
 esac
+# Port fix: 0 passed the digit-only test and reached make as -j0, which make
+# rejects outright.
+[ "$JOBS" -gt 0 ] || fail "--jobs must be a positive number, not \"$JOBS\""
 
 for t in make ar strip; do
     command -v "$t" >/dev/null 2>&1 ||
@@ -271,11 +296,10 @@ fi
 # was given into the generated .d files, and an absolute POSIX spelling makes
 # every header dependency name a target make never matches.
 run_make() {
-    if [ "$DEBUG_BUILD" = 1 ]; then
-        make -j"$JOBS" DEBUG=1 BUILD="$BUILD_DIR" "$@"
-    else
-        make -j"$JOBS" BUILD="$BUILD_DIR" "$@"
-    fi
+    # DEBUG is handed over explicitly, including 0. A bare `make` and
+    # `make DEBUG=0` are the same build, so this changes nothing except that the
+    # recipe and this script's tree/suffix choice can never disagree.
+    make -j"$JOBS" DEBUG="$DEBUG_BUILD" BUILD="$BUILD_DIR" "$@"
 }
 
 say "build $TARGET_NAME"

@@ -273,7 +273,9 @@ mugen_vita_migrate_cfg(MUGEN_VITA_GAME_CFG
   "${CMAKE_CURRENT_SOURCE_DIR}/../../res/mugen.cfg"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../res/configs/mugen.cfg")
 set(MUGEN_VITA_GAME_CFG "${CMAKE_CURRENT_SOURCE_DIR}/../../res/configs/mugen.cfg" CACHE FILEPATH
-    "config packed as data/mugen.cfg (empty: the game tree's own copy)")if(MUGEN_VITA_GAME_CFG AND
+    "config packed as data/mugen.cfg (empty: the game tree's own copy)")
+
+if(MUGEN_VITA_GAME_CFG AND
    (NOT EXISTS "${MUGEN_VITA_GAME_CFG}" OR IS_DIRECTORY "${MUGEN_VITA_GAME_CFG}"))
   message(FATAL_ERROR
     "MUGEN_VITA_GAME_CFG=${MUGEN_VITA_GAME_CFG} does not exist. Point it at a "
@@ -1096,10 +1098,43 @@ if(MUGEN_VITA_DATA_DIR)
   endforeach()
 endif()
 
+# Port fix: the platform overlay is packed whether or not a game tree is.
+#
+# It used to be added inside the data loop above, so `--no-data` (an empty
+# MUGEN_VITA_DATA_DIR, the supported way to install onto a memory card that
+# already holds the game) shipped a VPK with no data/mugen.psvita.cfg at all.
+# The console then merged nothing and fell back to the embedded defaults for
+# the very settings the port needs a value for -- RenderMode above all, which
+# CMake validated from this file at configure time and which the summary below
+# reports as coming from it. The two disagreed with no diagnostic.
+#
+# data/ is created by the packer as needed, so one unconditional entry is
+# enough; the branch above still adds it for the tree cases, and vita-pack-vpk
+# rejects a duplicate destination, so the append is guarded.
+set(_mugen_packed_port_cfg 0)
+foreach(_arg IN LISTS _mugen_vpk_args)
+  if(_arg STREQUAL "${MUGEN_VITA_CFG}=data/mugen.psvita.cfg")
+    set(_mugen_packed_port_cfg 1)
+  endif()
+endforeach()
+if(NOT _mugen_packed_port_cfg)
+  list(APPEND _mugen_vpk_args -a "${MUGEN_VITA_CFG}=data/mugen.psvita.cfg")
+endif()
+
+# The VPK packs the SELF and both configs. The SELF is what has to be worked
+# out per CMake version: vita_create_self copies it into place from a target
+# rather than producing it as a build output, so on CMake older than 3.20 the
+# file has no rule and depending on it alone fails a clean build with "no rule
+# to make .../mugen-psvita.self". 1855446e depended on the self target here;
+# 8185d03 replaced that with the file itself, which is correct only where
+# VitaSDK's BYPRODUCTS branch applies. Depends on both, exactly as 1855446e did:
+# an extra dependency is harmless, a missing one is a broken build on the
+# versions the project says it supports (cmake_minimum_required 3.16).
 add_custom_command(
   OUTPUT ${MUGEN_VITA_VPK}
   COMMAND ${VITA_PACK_VPK} ${_mugen_vpk_args} ${MUGEN_VITA_VPK}
-  DEPENDS ${MUGEN_VITA_SFO} ${MUGEN_VITA_EBOOT}
+  DEPENDS mugen-psvita${MUGEN_VITA_SUFFIX}.self ${MUGEN_VITA_EBOOT}
+          ${MUGEN_VITA_SFO}
           ${MUGEN_VITA_ICON_PNG} ${MUGEN_VITA_BG_PNG} ${MUGEN_VITA_STARTUP_PNG}
           ${MUGEN_VITA_CFG} ${MUGEN_VITA_GAME_CFG} ${MUGEN_VITA_SHADER_COMPILER}
           "${MUGEN_VITA_SCE_SYS}/livearea/contents/template.xml"

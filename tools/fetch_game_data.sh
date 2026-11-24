@@ -68,8 +68,29 @@ case "$DEST" in
     *) DEST="$ROOT/$DEST" ;;
 esac
 
-# A M.U.G.E.N tree is recognised by the file the engine opens first.
-present() { [ -f "$DEST/data/mugen.cfg" ]; }
+# A M.U.G.E.N tree is recognised by the game's own files, not by data/mugen.cfg.
+#
+# Port fix: the config is the wrong witness. The engine writes its embedded
+# default into a tree that lacks one as soon as it starts, so a single run --
+# even one that then fails on the missing assets -- left a directory holding
+# nothing but data/mugen.cfg that this script and every other entry point read
+# as "game data present", and the download that would have fixed it was never
+# retried. data/mugen.cfg is therefore neither necessary (a tree without one is
+# complete, the engine supplies it) nor sufficient. TREE_FILES is the set KFM's
+# own definition needs, which is exactly what the mode select opens.
+TREE_FILES="data/system.def data/kfm.sff data/kfm.def data/kfm.snd"
+
+tree_present()
+{
+    for f in $TREE_FILES; do
+        # A *.def, .sff, .snd, and the *.st stages under chars/<name>/, so a
+        # plain -f test per name is enough for the shipped tree.
+        [ -f "$1/$f" ] && return 0
+    done
+    return 1
+}
+
+present() { tree_present "$DEST"; }
 
 if present; then
     info "game data present: $DEST"
@@ -77,7 +98,7 @@ if present; then
 fi
 
 if [ "$CHECK" = 1 ]; then
-    printf 'game data missing: %s/data/mugen.cfg\n' "$DEST" >&2
+    printf 'game data missing: %s (no data/system.def, .sff or .snd)\n' "$DEST" >&2
     exit 1
 fi
 
@@ -175,11 +196,29 @@ else
     tar -xf "$ARCHIVE" -C "$STAGE" 2>/dev/null ||
         { rm -rf "$STAGE"; fail "unzip is required to unpack $ARCHIVE (MSYS2: pacman -S unzip)"; }
 fi
-[ -f "$STAGE/data/mugen.cfg" ] && [ -f "$STAGE/data/system.def" ] ||
-    { rm -rf "$STAGE"; fail "$FILE does not look like a M.U.G.E.N tree (no data/mugen.cfg)"; }
+[ -f "$STAGE/data/system.def" ] && [ -f "$STAGE/data/mugen.cfg" ] ||
+    { rm -rf "$STAGE"; fail "$FILE does not look like a M.U.G.E.N tree (no data/system.def)"; }
 
+# Port fix: never overwrite a file the player owns. data/mugen.cfg is rewritten
+# in place by the options screen and the key/joystick bindings, so a tree that
+# already has one keeps it -- the same rule every other entry point follows
+# (src/configembed.c extracts only a missing file, and the Android stager skips
+# the tree's copy). Unpacking over it discarded saved settings silently.
 mkdir -p "$DEST"
-cp -R "$STAGE"/. "$DEST"/ || { rm -rf "$STAGE"; fail "cannot copy the tree into $DEST"; }
+if [ -f "$DEST/data/mugen.cfg" ]; then
+    KEEP_CFG=1
+    CFG_BACKUP="$SCRATCH/game-data-mugen.cfg"
+    mkdir -p "$SCRATCH"
+    cp "$DEST/data/mugen.cfg" "$CFG_BACKUP"
+    cp -R "$STAGE"/. "$DEST"/ || { rm -rf "$STAGE"; fail "cannot copy the tree into $DEST"; }
+    cp "$CFG_BACKUP" "$DEST/data/mugen.cfg"
+    rm -f "$CFG_BACKUP"
+    info "kept the existing $DEST/data/mugen.cfg (the player's settings)"
+    info "the archive's copy is at data/mugen.cfg.incoming"
+    cp "$STAGE/data/mugen.cfg" "$DEST/data/mugen.cfg.incoming"
+else
+    cp -R "$STAGE"/. "$DEST"/ || { rm -rf "$STAGE"; fail "cannot copy the tree into $DEST"; }
+fi
 COUNT=$(find "$DEST" -type f | wc -l | tr -d '[:space:]')
 rm -rf "$STAGE"
 info "unpacked into $DEST"

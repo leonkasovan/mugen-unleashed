@@ -114,10 +114,19 @@ rem takes a value: a for-in over %* yields tokens, not pairs, so the N would be
 rem seen as a flag of its own (and ignored). This walks the argument list by
 rem shifting, which is the only way cmd exposes "the next token". --jobs is the
 rem same flag, as everywhere else.
+rem
+rem Port fix: the arguments are collected into FLAGS here, and the flag loop
+rem below iterates that instead of %*. %* is the raw command line, so a value
+rem that was consumed and rejected here (build.bat /jobs "/clean") came back in
+rem the loop and was acted on -- the run warned about a bad job count and then
+rem cleaned the tree anyway. Every argument is seen once, in one pass, and the
+rem consumed value never reaches the second one.
+set "FLAGS="
 :jobs_scan
 if "%~1"=="" goto jobs_done
 if /i "%~1"=="/jobs"  goto jobs_take
 if /i "%~1"=="--jobs" goto jobs_take
+set "FLAGS=%FLAGS% "%~1""
 shift
 goto jobs_scan
 
@@ -128,20 +137,24 @@ if "%~1"=="" (
     goto jobs_done
 )
 rem A job count that is not a plain positive integer is not worth failing an
-rem otherwise valid setup over: warn and keep the CPU-count default.
+rem otherwise valid setup over: warn and keep the CPU-count default. 0 is not
+rem positive: GNU make reads -j0 as an error, so it is treated the same way.
 set "JOBS=%~1"
 set "JOBS_OK=0"
 for /f "delims=0123456789" %%d in ("%JOBS%") do set "JOBS_OK=1"
+if "%JOBS%"=="0" set "JOBS_OK=1"
 if "%JOBS_OK%"=="1" (
-    echo WARNING: /jobs %JOBS% is not a number; using %NUMBER_OF_PROCESSORS% ^(the CPU count^)
+    echo WARNING: /jobs %JOBS% is not a positive number; using %NUMBER_OF_PROCESSORS% ^(the CPU count^)
     set "JOBS=%NUMBER_OF_PROCESSORS%"
 )
+shift
+goto jobs_scan
 :jobs_done
 
 rem Every flag takes either spelling: /flag (this script's own convention, and
 rem the Windows one) or --flag (the ports' and build.sh's). Case-insensitive, as
 rem before. %%~a strips the quotes; the aliases are literal comparisons.
-for %%a in (%*) do (
+for %%a in (%FLAGS%) do (
     if /i "%%~a"=="/build" (
         set "DO_BUILD32=1"
         set "DO_BUILD64=1"
@@ -285,12 +298,23 @@ rem                           engine build is slower to reproduce than the kits.
 rem   build\downloads         the verified download cache. Deleting it turns the
 rem                           next run into a fresh download of ~330 MB.
 rem   build\sysroots          the installed dependency trees, same reason.
+rem   build\tmp               other entry points stage and log there too
+rem                           (port\arm64, port\android, port\psvita, the test
+rem                           scripts). build.bat owns no part of it, so it is
+rem                           left alone; only the kit staging it did itself,
+rem                           build\tmp\winkit-stage, is removed.
 rem
 rem The kit directories (C:\w64devkit, C:\x86devkit) are outside the repository
 rem and are never removed either: they are the toolchain.
+rem
+rem Port fix: the list is the trees this script itself builds, including the
+rem -debug ones. It used build\mingw-debug and build\mingw64-debug, which are
+rem not what `make DEBUG=1` produces here -- the Makefile's own default debug
+rem trees are build\mingw-sdl2-debug and build\mingw64-sdl2-debug, and those
+rem were the two that survived a /clean.
 :clean_builds
 set "CLEANED=0"
-for %%d in ("%ROOT%\build\mingw-sdl2" "%ROOT%\build\mingw64-sdl2" "%ROOT%\build\mingw-debug" "%ROOT%\build\mingw64-debug" "%ROOT%\build\tmp") do (
+for %%d in ("%ROOT%\build\mingw-sdl2" "%ROOT%\build\mingw-sdl2-debug" "%ROOT%\build\mingw64-sdl2" "%ROOT%\build\mingw64-sdl2-debug" "%ROOT%\build\mingw-debug" "%ROOT%\build\mingw64-debug" "%ROOT%\build\tmp\winkit-stage") do (
     if exist %%d (
         echo   REMOVE  %%~d
         rmdir /s /q %%d
