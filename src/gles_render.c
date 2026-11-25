@@ -958,7 +958,13 @@ static GlesProgram g_glesProgramIndexed;
 static GlesProgram g_glesProgramRgba;
 static GlesProgram g_glesProgramSolid;
 static GlesBuffer g_glesBuffer;
-static unsigned int g_glesCaps;
+/* Fix: the probe's texture-size limit. dfefbd6 renamed both callers' locals
+ * from "int max_texture_size" to "unsigned int caps" and copied the value
+ * here, so Gles_Probe(&caps) passed an unsigned int* to an int* parameter --
+ * the -Wpointer-sign warning the arm64 GLES build reports. The value is a
+ * GL_MAX_TEXTURE_SIZE, not a capability bitfield, and is kept as int so the
+ * type matches the probe's contract. */
+static int g_glesMaxTextureSize;
 
 /* A solid-colour program for the primitive path (rects, lines, pixels). */
 static const char *gles_solid_vert_src =
@@ -1208,7 +1214,7 @@ void Gles_OnContextLost(void)
  */
 int Gles_OnContextRestore(int drawable_w, int drawable_h)
 {
-    unsigned int caps = 0;
+    int max_texture_size = 0;
 
     if (g_glesReady) {
         return 1;
@@ -1229,11 +1235,11 @@ int Gles_OnContextRestore(int drawable_w, int drawable_h)
             return 0;
         }
     }
-    if (!Gles_Probe(&caps)) {
+    if (!Gles_Probe(&max_texture_size)) {
         Log_Printf("GLES: restore failed: no usable context\n");
         return 0;
     }
-    g_glesCaps = caps;
+    g_glesMaxTextureSize = max_texture_size;
     if (!gles_build_programs()) {
         /* The replacement context is live; delete partial programs on it. */
         gles_free_programs();
@@ -1252,10 +1258,10 @@ int Gles_OnContextRestore(int drawable_w, int drawable_h)
     return 1;
 }
 
-/* The capability bits the probe resolved, for the Android video layer. */
-unsigned int Gles_LastCaps(void)
+/* The texture-size limit the probe resolved, for the Android video layer. */
+int Gles_LastMaxTextureSize(void)
 {
-    return g_glesCaps;
+    return g_glesMaxTextureSize;
 }
 
 int Gles_IsReady(void)
@@ -1318,7 +1324,7 @@ static int gles_build_programs(void)
 
 int Gl_Init(int framebuffers)
 {
-    unsigned int caps = 0;
+    int max_texture_size = 0;
 
     if (g_glesReady) {
         return 1;
@@ -1331,11 +1337,11 @@ int Gl_Init(int framebuffers)
      * impossible: the caller saw "unavailable" while nothing had been tried.
      */
     Gl_Deinit();
-    if (!Gles_Probe(&caps)) {
+    if (!Gles_Probe(&max_texture_size)) {
         Log_Printf("\nGLES: capability probe failed; GL mode unavailable\n");
         return 0;
     }
-    g_glesCaps = caps;
+    g_glesMaxTextureSize = max_texture_size;
     if (!gles_build_programs()) {
         Gl_Deinit();
         return 0;
