@@ -515,17 +515,24 @@ if(MUGEN_VITA_PROFILE)
   message(STATUS "MUGEN_DEBUG diagnostics enabled (profile build)")
 endif()
 
+# Sprite shaders are embedded: src/glrender.c reads the vitaGL dialect, with the
+# desktop set as the fallback for the game's own data/*.{vert,frag} when they are
+# absent. No data/ substitution any more.
+#
+# Fix: this include must precede the MUGEN_MODEL3D block below. Both
+# mugen_enable_model3d and mugen_enable_sprite_shaders are defined by this file,
+# and the option defaults to ON (build.bat passes -DMUGEN_MODEL3D=ON), so a
+# later include left the configure failing with "Unknown CMake command
+# mugen_enable_model3d". The include is unconditional because the sprite
+# shaders are embedded either way.
+include("${MUGEN_ROOT}/port/cmake/Model3D.cmake")
+mugen_enable_sprite_shaders(mugen "${MUGEN_ROOT}" vita desktop)
+
 option(MUGEN_MODEL3D "Opt-in basic VitaGL glTF profile (no skinning, lighting or optional effects)" OFF)
 if(MUGEN_MODEL3D)
   mugen_enable_model3d(mugen "${MUGEN_ROOT}")
   message(STATUS "Vita model3d BASIC profile enabled; device qualification required")
 endif()
-
-# Sprite shaders are embedded: src/glrender.c reads the vitaGL dialect, with the
-# desktop set as the fallback for the game's own data/*.{vert,frag} when they are
-# absent. No data/ substitution any more.
-include("${MUGEN_ROOT}/port/cmake/Model3D.cmake")
-mugen_enable_sprite_shaders(mugen "${MUGEN_ROOT}" vita desktop)
 
 # The base config, the Vita overlay and the Lua helpers are embedded in the
 # executable; the engine writes whichever is missing into the game tree at
