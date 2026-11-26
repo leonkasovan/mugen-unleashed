@@ -2338,16 +2338,30 @@ static char *atlas_fragment(const char *src, int indexed)
  * caller): the game's own data/ file when present, otherwise the embedded
  * literal. *embedded is set to 1 when the literal was used. Atlas loads have no
  * embedded equivalent (their source is derived from the stock file), so an
- * atlas request with no file returns NULL. */
+ * atlas request with no file returns NULL.
+ *
+ * Port fix (PS Vita): the embedded vitaGL dialect is used unconditionally and
+ * data/ is never opened. The game's data/{indexed,rgba}.{vert,frag} are GLSL
+ * 1.20 written with gl_Vertex, gl_MultiTexCoordN and gl_TexCoord[N], none of
+ * which vitaGL's translator handles, so preferring the file made every sprite
+ * shader fail to compile ("Vita vertex shader compilation failed (GL error
+ * 0x0)") and aborted start-up. src/shaders/vita/ is our rewrite, not Elecbyte
+ * content, so there is no file to prefer -- see src/shaders/README.md. The
+ * VPK used to substitute these four files into data/; that staging was removed
+ * when the dialects were embedded, which is what exposed the file-first read.
+ * Desktop keeps the game's file primary for fidelity validation. */
 static char *Glr_ShaderText(const char *name, const char *ext, int atlas, int *embedded)
 {
+#ifndef MUGEN_VITA_GL
     char path[MAX_PATH];
     FILE *f;
+#endif
     char *text;
     const char *literal;
     size_t len;
 
     *embedded = 0;
+#ifndef MUGEN_VITA_GL
     Glr_ShaderPath(path, name, ext);
     f = fopen(path, "rb");
     if (f != NULL) {
@@ -2356,6 +2370,9 @@ static char *Glr_ShaderText(const char *name, const char *ext, int atlas, int *e
     if (atlas) {
         return NULL;
     }
+#else
+    (void)atlas;
+#endif
     literal = Glr_EmbeddedShader(name, ext);
     if (literal == NULL) {
         return NULL;
@@ -2478,8 +2495,10 @@ static int Glr_LoadShader(const char **defines, GlProgram *prog, const char *nam
     if (embedded) {
 #ifdef MUGEN_VITA_GL
         VitaDiag_Log("GAME SHADER EMBEDDED family=%s\n", name);
-#endif
+        Log_Printf("GL: %s shader loaded from the embedded vitaGL dialect\n", name);
+#else
         Log_Printf("GL: %s shader loaded from the embedded copy (data/ file absent)\n", name);
+#endif
     }
     Glr_FreeProgram(prog);
     *prog = built;
