@@ -219,6 +219,14 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
     protected static SDLGenericMotionListener_API12 mMotionListener;
     protected static HIDDeviceManager mHIDDeviceManager;
 
+    /*
+     * On-screen virtual controller (port/android/virtual-keyboard-plan.md).
+     * Sits above the SDL surface and injects a virtual joystick, so touch-only
+     * play goes through the same controller pipeline a physical pad uses.
+     * Null when the overlay could not be created.
+     */
+    protected static TouchControllerOverlay mTouchController;
+
     // This is what SDL runs in. It invokes SDL_main(), eventually
     protected static Thread mSDLThread;
 
@@ -302,6 +310,7 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
         mSurface = null;
         mTextEdit = null;
         mLayout = null;
+        mTouchController = null;
         mClipboardHandler = null;
         mCursors = new Hashtable<Integer, PointerIcon>();
         mLastCursorID = 0;
@@ -397,6 +406,25 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
 
         mLayout = new RelativeLayout(this);
         mLayout.addView(mSurface);
+
+        /*
+         * The virtual controller goes on top of the surface. It is a
+         * full-screen RelativeLayout that absorbs every touch, so it has to be
+         * added after the surface -- and it hides itself while a physical pad
+         * is connected (see TouchControllerOverlay.updateVisibility).
+         *
+         * A failure here must not take the game down: without an overlay the
+         * port behaves exactly as it did before, which is a pad-only build.
+         */
+        try {
+            mTouchController = new TouchControllerOverlay(this);
+            mLayout.addView(mTouchController, new RelativeLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT));
+        } catch (Throwable t) {
+            mTouchController = null;
+            Log.e(TAG, "virtual controller overlay unavailable: " + t);
+        }
 
         // Get our current screen orientation and pass it down.
         mCurrentOrientation = SDLActivity.getCurrentOrientation();

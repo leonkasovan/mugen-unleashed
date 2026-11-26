@@ -1,0 +1,197 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  On-screen virtual controller overlay for mugen-unleashed Android port.
+
+  Layout (landscape):
+    Left side  : D-pad (150dp circle, angle-based 8-way hit detection)
+    Left-centre: Left analog stick (125dp, axis 0/1)
+    Right side : 6 attack buttons in a staggered arc (A B C / X Y Z)
+    Bottom     : Start + Menu (Select) buttons, centred
+
+  All groups have splitMotionEvents="true" so Android distributes pointer
+  events to the correct child even when multiple fingers are down.
+-->
+<RelativeLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:splitMotionEvents="true">
+
+    <!-- ===== D-Pad ===== -->
+    <RelativeLayout
+        android:id="@+id/vctrl_dpad"
+        android:layout_width="150dp"
+        android:layout_height="150dp"
+        android:layout_alignParentBottom="true"
+        android:layout_alignParentLeft="true"
+        android:layout_marginLeft="40dp"
+        android:layout_marginBottom="50dp"
+        android:background="@drawable/vctrl_dpad_bg"
+        android:splitMotionEvents="true">
+
+        <Button
+            android:id="@+id/vctrl_dp_up"
+            android:text="↑"
+            android:layout_width="50dp"
+            android:layout_height="50dp"
+            android:layout_centerHorizontal="true"
+            android:layout_alignParentTop="true"
+            android:alpha="0.5"
+            android:background="#00000000" />
+
+        <Button
+            android:id="@+id/vctrl_dp_left"
+            android:text="←"
+            android:layout_width="50dp"
+            android:layout_height="50dp"
+            android:layout_centerVertical="true"
+            android:layout_alignParentLeft="true"
+            android:alpha="0.5"
+            android:background="#00000000" />
+
+        <Button
+            android:id="@+id/vctrl_dp_down"
+            android:text="↓"
+            android:layout_width="50dp"
+            android:layout_height="50dp"
+            android:layout_centerHorizontal="true"
+            android:layout_alignParentBottom="true"
+            android:alpha="0.5"
+            android:background="#00000000" />
+
+        <Button
+            android:id="@+id/vctrl_dp_right"
+            android:text="→"
+            android:layout_width="50dp"
+            android:layout_height="50dp"
+            android:layout_centerVertical="true"
+            android:layout_alignParentRight="true"
+            android:alpha="0.5"
+            android:background="#00000000" />
+    </RelativeLayout>
+
+    <!-- ===== Left analog stick ===== -->
+    <org.libsdl.app.AnalogStickView
+        android:id="@+id/vctrl_left_stick"
+        android:layout_width="125dp"
+        android:layout_height="125dp"
+        android:layout_toRightOf="@id/vctrl_dpad"
+        android:layout_alignTop="@id/vctrl_dpad"
+        android:layout_marginLeft="30dp"
+        app:axisX="0"
+        app:axisY="1" />
+
+    <!-- ===== 6-button attack grid (3 × 2 staggered arc) ===== -->
+    <!--
+      Standard M.U.G.E.N 6-button layout:
+        Top row (high):   X  Y  Z(LB)
+        Bottom row (low): A  B  C(RB)
+      Each column is offset vertically to form an arc, matching arcade stick ergonomics.
+    -->
+    <!--
+            The six attack buttons, anchored individually to this overlay
+            rather than to an intermediate 280dp block. That block was
+            measured 55dp narrower than declared (one button width), on a
+            device whose window is narrower than the physical panel (the
+            P50 Pro cutout leaves 2464 px of 2700), and Z and C collapsed
+            to a sliver at the right edge: invisible and unhittable.
+            Each button now measures against the overlay itself, which is
+            the full window width. Right column 15dp, middle 74dp, left
+            133dp; rows from the bottom 175/153/131 and 101/79/57dp.
+        -->
+<Button
+            android:id="@+id/vctrl_btn_z"
+            android:text="Z"
+            android:layout_width="55dp"
+            android:layout_height="55dp"
+            android:layout_alignParentRight="true"
+            android:layout_alignParentBottom="true"
+            android:layout_marginRight="15dp"
+            android:layout_marginBottom="175dp"
+            android:background="@drawable/vctrl_button" />
+
+        <Button
+            android:id="@+id/vctrl_btn_y"
+            android:text="Y"
+            android:layout_width="55dp"
+            android:layout_height="55dp"
+            android:layout_alignParentRight="true"
+            android:layout_alignParentBottom="true"
+            android:layout_marginRight="74dp"
+            android:layout_marginBottom="153dp"
+            android:background="@drawable/vctrl_button" />
+
+        <Button
+            android:id="@+id/vctrl_btn_x"
+            android:text="X"
+            android:layout_width="55dp"
+            android:layout_height="55dp"
+            android:layout_alignParentRight="true"
+            android:layout_alignParentBottom="true"
+            android:layout_marginRight="133dp"
+            android:layout_marginBottom="131dp"
+            android:background="@drawable/vctrl_button" />
+
+        <Button
+            android:id="@+id/vctrl_btn_c"
+            android:text="C"
+            android:layout_width="55dp"
+            android:layout_height="55dp"
+            android:layout_alignParentRight="true"
+            android:layout_alignParentBottom="true"
+            android:layout_marginRight="15dp"
+            android:layout_marginBottom="101dp"
+            android:background="@drawable/vctrl_button" />
+
+        <Button
+            android:id="@+id/vctrl_btn_b"
+            android:text="B"
+            android:layout_width="55dp"
+            android:layout_height="55dp"
+            android:layout_alignParentRight="true"
+            android:layout_alignParentBottom="true"
+            android:layout_marginRight="74dp"
+            android:layout_marginBottom="79dp"
+            android:background="@drawable/vctrl_button" />
+
+        <Button
+            android:id="@+id/vctrl_btn_a"
+            android:text="A"
+            android:layout_width="55dp"
+            android:layout_height="55dp"
+            android:layout_alignParentRight="true"
+            android:layout_alignParentBottom="true"
+            android:layout_marginRight="133dp"
+            android:layout_marginBottom="57dp"
+            android:background="@drawable/vctrl_button" />
+
+
+    <!-- ===== Start + Menu (Select) ===== -->
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_centerHorizontal="true"
+        android:layout_alignParentBottom="true"
+        android:layout_marginBottom="15dp"
+        android:orientation="horizontal"
+        android:splitMotionEvents="true">
+
+        <Button
+            android:id="@+id/vctrl_btn_select"
+            android:text="Menu"
+            android:layout_width="60dp"
+            android:layout_height="45dp"
+            android:layout_margin="5dp"
+            android:background="@drawable/vctrl_button" />
+
+        <Button
+            android:id="@+id/vctrl_btn_start"
+            android:text="Start"
+            android:layout_width="60dp"
+            android:layout_height="45dp"
+            android:layout_margin="5dp"
+            android:background="@drawable/vctrl_button" />
+    </LinearLayout>
+
+</RelativeLayout>

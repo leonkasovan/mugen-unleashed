@@ -84,7 +84,7 @@ pristine reference installation or silently rewriting user configuration.
 | RWops | Shared SDL2-signature code exists | Correct size/offset behavior and decoder-specific lifetime tests |
 | Assets | Final files written directly and existing files skipped | Atomic, verified extraction/update reconciliation |
 | Shutdown | Android objects destroyed after `System_Deinit -> SDL_Quit` | One valid destruction order before subsystem teardown |
-| Touch/UI | No on-screen control implementation | Explicit optional feature gate, never implied by SDL2 linkage |
+| Touch/UI | On-screen pad in `TouchControllerOverlay`/`AnalogStickView`, injected as a virtual joystick (no `src/` change) | Same, with the viewport/letterbox mapping in 5.1 still open |
 
 The findings are described in REVIEW.md as A01–A09. The existing documentation's
 claim that all statically detectable defects were fixed is not an acceptance
@@ -574,20 +574,39 @@ and documented, and the previous installation/data can be restored.
 
 ### 5.1 Touch controls and data import
 
-Touch support is not currently implemented. A phone-only usability claim
-requires its own completion gate; core migration can otherwise qualify only
-the declared keyboard/gamepad input profile.
+**Implemented** (see `virtual-keyboard-plan.md`): `TouchControllerOverlay` plus
+`AnalogStickView` put a landscape overlay over the SDL surface and register a
+virtual joystick, so touch travels the same controller path a physical pad does
+and `[P<n> Gamepad]` applies. Verified on a P50 Pro: mapped as an Xbox 360
+controller on slot 0, d-pad and all six attack buttons plus Start/Select
+arriving as engine codes 1/4/5/6/7/8/9/10/11/12, stick as `LEFTX/LEFTY -> dir`,
+multitouch (hold a direction, press an attack) working, and the overlay hiding
+itself while a physical pad is attached.
 
-- Design a landscape overlay with d-pad, six attack buttons, Start and menu
-  controls, independently configurable from game resolution.
+The items below are what is still open against this feature; the first two are
+the ones that matter.
+
+- Convert physical touch coordinates using the actual viewport/letterbox and
+  density; the overlay must not change game logical dimensions. **Open:** the
+  overlay assumes the window fills the panel, so it applies the window insets
+  (cutout, system bars) as padding but does not map the game's letterboxed
+  viewport. Buttons are fixed dp sizes, so on a very small or very large panel
+  they are not scaled relative to the game image.
+- Define whether touches outside the game viewport are overlay controls or
+  ignored, and prevent duplicate SDL touch-to-mouse/gamepad actions. **Partly
+  open:** the overlay returns true from `onInterceptTouchEvent`, so it absorbs
+  every touch and the surface never sees one, which rules out duplicates by
+  construction; the "outside the viewport" policy is still whatever the fixed
+  layout places there.
 - Route actions through the tested engine/SDL2 input boundary, with explicit
   per-screen confirm/cancel behavior rather than arbitrary keyboard constants.
+  **Done:** the overlay sends Android `KEYCODE_BUTTON_*` through
+  `onNativePadDown/Up`, `onNativeHat` and `onNativeJoy`; SDL maps them to
+  controller buttons and `pads.c` to engine codes. No keyboard constants.
 - Support multitouch, held combinations, sliding between buttons and release
-  on cancellation/focus loss. Do not synthesize presses without matching releases.
-- Convert physical touch coordinates using the actual viewport/letterbox and
-  density; the overlay must not change game logical dimensions.
-- Define whether touches outside the game viewport are overlay controls or
-  ignored, and prevent duplicate SDL touch-to-mouse/gamepad actions.
+  on cancellation/focus loss. Do not synthesize presses without matching
+  releases. **Done:** per-pointer button sets, `ACTION_CANCEL` handling, and
+  `releaseAll()` on hide and detach.
 - Add app-owned/SAF import and export workflows for game data without assuming
   all file managers can edit `Android/data` or requesting broad storage access
   as a substitute for a tested import flow.

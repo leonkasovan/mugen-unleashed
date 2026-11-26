@@ -454,7 +454,25 @@ Native SDL2 joystick events use instance IDs and runtime topology. Controller
 insertion/removal preserves existing slots and releases removed-device inputs.
 Android no longer installs Vita pad defaults or its synthetic-key bridge.
 User P1/P2 bindings are retained; configure the actual Android controller in
-the key configuration menu. Touch-only play is not implemented.
+the key configuration menu.
+
+**Touch-only play works.** `TouchControllerOverlay` draws an on-screen pad
+(d-pad, left stick, six attack buttons, Start and Select) over the SDL surface
+and registers a virtual joystick through `SDLControllerManager.nativeAddJoystick`,
+so touch input travels the same path a physical pad does: SDL reports it as an
+Xbox 360 controller, `pads.c` maps it through `pad_ctrl_map[]`, and the
+`[P<n> Gamepad]` groups in `mugen.cfg` apply. Nothing in `src/` is
+Android-specific for it. Verified on a P50 Pro: `mapped=1`, attached to slot 0
+(player 1), d-pad and all six attack buttons and Start/Select arriving as codes
+1/4/5/6/7/8/9/10/11/12, and the stick as `LEFTX/LEFTY -> dir`.
+
+The overlay hides itself while a physical gamepad is connected and returns when
+it is removed (`InputManager.InputDeviceListener`), releasing any held button as
+it goes. It also applies the window insets as padding, so controls are not
+placed under a display cutout; without that a right-anchored button on a P50 Pro
+was laid out at the panel's 2700 px width and clipped to one pixel by the
+2464 px the notch leaves usable. The layout is landscape, assumes no safe area
+beyond those insets, and does not scale its buttons with screen size.
 
 Android BGM uses one built-in SDL2_mixer backend for **WAV, OGG/Vorbis and MP3**.
 Windows `[Music]` plugin DLL selections are replaced by that Android backend;

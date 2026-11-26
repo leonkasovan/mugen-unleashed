@@ -421,6 +421,17 @@ int main(int argc, char *argv[])
      * without rebuilding.
      */
 
+    /*
+     * The accelerometer must not be a joystick.
+     *
+     * SDL defaults SDL_ACCELEROMETER_AS_JOYSTICK to on, which adds a phantom
+     * "Android Accelerometer" joystick at slot 0 on every device. Nothing in
+     * this engine reads it, but it still consumes a player slot: the on-screen
+     * virtual controller (TouchControllerOverlay) then attached to slot 1 and
+     * played as player 2. Turn it off so the first real controller -- virtual
+     * or physical -- is player 1. Must be set before SDL_Init.
+     */
+    SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");
     if (SDL_Init(0) != 0) {
         __android_log_print(ANDROID_LOG_ERROR, ALOG_TAG, "SDL_Init(0): %s", SDL_GetError());
     }
