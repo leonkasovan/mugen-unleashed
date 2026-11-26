@@ -107,7 +107,7 @@ void GlBatch_Flush(void) {}
 #endif
 #endif
 static size_t review_gpu_limit;
-static GLenum pending;
+static GLenum mock_gl_error;
 static unsigned next_id = 10, binding, color_attachment, depth_attachment;
 static int image_calls, sub_calls, fail_image, fail_read, fail_depth, fail_fbo, fail_bind_null;
 static int gen_calls, fail_gen_at;
@@ -154,7 +154,7 @@ void Log_Printf(const char *fmt, ...)
 }
 void MatchLog_Printf(int level, const char *fmt, ...) { (void)level; (void)fmt; }
 Uint64 SDLCALL SDL_GetPerformanceCounter(void) { return 0; }
-static GLenum APIENTRY error_get(void) { GLenum e = pending; pending = 0; return e; }
+static GLenum APIENTRY error_get(void) { GLenum e = mock_gl_error; mock_gl_error = 0; return e; }
 static void APIENTRY gen(GLsizei n, GLuint *p)
 { while (n--) { gen_calls++; *p++ = gen_calls == fail_gen_at ? 0 : next_id++; } }
 static void APIENTRY del_tex(GLsizei n, const GLuint *p) { deleted_textures += n; }
@@ -162,14 +162,14 @@ static void APIENTRY del_depth(GLsizei n, const GLuint *p) { deleted_depth += n;
 static void APIENTRY del_fbo(GLsizei n, const GLuint *p) { deleted_fbos += n; }
 static void APIENTRY bind_tex(GLenum t, GLuint id) {}
 static void APIENTRY parameter(GLenum t, GLenum p, GLint v)
-{ parameter_calls++; if (v == -123) pending = GL_INVALID_ENUM; }
+{ parameter_calls++; if (v == -123) mock_gl_error = GL_INVALID_ENUM; }
 static void APIENTRY pixel_store(GLenum t, GLint v) {}
 static void APIENTRY image(GLenum t, GLint l, GLint i, GLsizei w, GLsizei h, GLint b, GLenum f, GLenum ty, const void *p)
 { image_calls++;
-  if (review_gpu_limit && g_glTexMemory + (size_t)w*h*(f==GL_RGBA?4:f==GL_RGB?3:1) > review_gpu_limit) pending=GL_OUT_OF_MEMORY;
-  if (fail_image) { fail_image = 0; pending = GL_OUT_OF_MEMORY; } }
+  if (review_gpu_limit && g_glTexMemory + (size_t)w*h*(f==GL_RGBA?4:f==GL_RGB?3:1) > review_gpu_limit) mock_gl_error=GL_OUT_OF_MEMORY;
+  if (fail_image) { fail_image = 0; mock_gl_error = GL_OUT_OF_MEMORY; } }
 static void APIENTRY subimage(GLenum t, GLint l, GLint x, GLint y, GLsizei w, GLsizei h, GLenum f, GLenum ty, const void *p)
-{ sub_calls++; if (fail_image) { fail_image = 0; pending = GL_OUT_OF_MEMORY; } }
+{ sub_calls++; if (fail_image) { fail_image = 0; mock_gl_error = GL_OUT_OF_MEMORY; } }
 static void APIENTRY get_int(GLenum p, GLint *v)
 {
     if (p == GL_FRAMEBUFFER_BINDING_EXT) *v = binding;
@@ -182,7 +182,7 @@ static void APIENTRY bind_fbo(GLenum t, GLuint id)
 {
     /* fail_bind_null: a driver refusing the default framebuffer. Distinguishes
      * "cannot restore the frame" from "cannot bind the offscreen target". */
-    if (fail_bind_null && id == 0) { pending = GL_INVALID_OPERATION; return; }
+    if (fail_bind_null && id == 0) { mock_gl_error = GL_INVALID_OPERATION; return; }
     binding = id;
 }
 static void APIENTRY attach_tex(GLenum a, GLenum b, GLenum c, GLuint id, GLint l) { color_attachment = id; }
@@ -190,12 +190,12 @@ static void APIENTRY attach_depth(GLenum a, GLenum b, GLenum c, GLuint id) { dep
 static GLenum APIENTRY fbo_status(GLenum t)
 { return fail_fbo ? GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT_EXT : GL_FRAMEBUFFER_COMPLETE_EXT; }
 static void APIENTRY depth_store(GLenum t, GLenum f, GLsizei w, GLsizei h)
-{ if (fail_depth) pending = GL_OUT_OF_MEMORY; }
+{ if (fail_depth) mock_gl_error = GL_OUT_OF_MEMORY; }
 static void APIENTRY read_pixels(GLint x, GLint y, GLsizei w, GLsizei h, GLenum f, GLenum t, void *p)
 {
     size_t i;
     unsigned int *out = p;
-    if (fail_read) { pending = GL_INVALID_OPERATION; return; }
+    if (fail_read) { mock_gl_error = GL_INVALID_OPERATION; return; }
     for (i = 0; i < (size_t)w*h; i++) out[i] = read_mode == 1 ? 0xFF000000u :
         (read_mode == 2 ? 0xFFFFFFFFu : ((i & 1) ? 0xFF000000u : 0xFFFFFFFFu));
 }
@@ -212,7 +212,7 @@ static void APIENTRY compile(GLuint s)
 {
     compile_calls++;
 #ifdef TEST_VITA
-    if (compiler_missing || compile_error_only) pending = GL_INVALID_OPERATION;
+    if (compiler_missing || compile_error_only) mock_gl_error = GL_INVALID_OPERATION;
 #endif
 }
 static void APIENTRY shader_iv(GLuint s, GLenum p, GLint *v)
@@ -690,8 +690,48 @@ static void test_programs_lifetime(void)
 #endif
     { unsigned id=p.program; shader_ok=0;assert(!Gl_LoadShader(defs,&p,"rgba") && p.program == id);shader_ok=1; }
     Glr_FreeProgram(&p);
-    assert(remove("data/rgba.frag") == 0);assert(!Gl_LoadShaders());
-    assert(g_glProgramsIndexed[0].program == 0); Gl_Deinit();
+    /*
+     * The stock data/ shaders are not required any more: Glr_ShaderText falls
+     * back to the embedded dialect -- always on the Vita, and on the desktop
+     * when the file is absent. Removing all of them must therefore load a
+     * complete set.
+     *
+     * This pins the Vita regression: before e20ff92 the loader preferred the
+     * file, so a real game tree's stock GLSL 1.20 won, vitaGL could not
+     * translate gl_Vertex, and start-up aborted. The desktop half pins its own
+     * fallback, which is what the old `!Gl_LoadShaders()` asserted before the
+     * embedded desktop dialect existed.
+     */
+    assert(remove("data/rgba.frag") == 0);
+    assert(remove("data/indexed.vert") == 0);
+    assert(remove("data/indexed.frag") == 0);
+    assert(Gl_LoadShaders());
+    assert(g_glProgramsIndexed[0].program != 0 && g_glProgramsRgba[0].program != 0);
+#ifndef TEST_VITA
+    /* The atlas programs are the exception: they are adapted from the game's
+     * own file and have no embedded equivalent, so they stay unloaded. (Guarded
+     * by TEST_VITA, not MUGEN_VITA_GL: this harness undefines the latter before
+     * including gfx.c, so only the test's own macro still distinguishes the
+     * backends here.) */
+    assert(atlas_indexed.program == 0 && atlas_rgba.program == 0);
+#endif
+    /* A failed load is atomic and leaves the previous set intact. */
+    {
+        unsigned keep = g_glProgramsIndexed[0].program;
+
+        shader_ok = 0;
+        assert(!Gl_LoadShaders());
+        shader_ok = 1;
+        assert(g_glProgramsIndexed[0].program == keep);
+    }
+    Gl_Deinit();
+    assert(g_glProgramsIndexed[0].program == 0);
+    /* The Gl_ReadFile check below reads this file; put its stub back. */
+    {
+        FILE *restore = fopen("data/indexed.vert", "wb");
+        assert(restore != NULL && fputs("void main(){}\n", restore) >= 0);
+        assert(fclose(restore) == 0);
+    }
     /* A partially owned resource must be cleaned even without ready=true. */
     g_glSysTex[0]=GlTex_Create(); assert(g_glSysTex[0]);g_glInitialized=0;n=deleted_textures;
     Gl_Deinit();assert(deleted_textures == n+1 && g_glSysTex[0] == NULL);

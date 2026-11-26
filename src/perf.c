@@ -338,11 +338,16 @@ void Perf_PresentDone(void)
                 }
             }
         }
-        /* Keep the worst present of the second with its full breakdown. A
-         * zero total means Gl_Present returned before presenting, so it is not
-         * a candidate. */
-        if (perf_vita_current.total_us > 0 &&
-            perf_vita_current.total_us >= perf_vita_worst.total_us) {
+        /* Keep the worst present of the second with its full breakdown.
+         *
+         * Ranked by the whole of Screen_Present, not by the part of it inside
+         * Gl_Present: a stall outside Gl_Present (the screenshot path, the
+         * KeepAspect maths, the platform present) is still the frame the log
+         * has to explain, and ranking by the GL span alone would drop it. A
+         * zero present means the frame drew nothing, so it is not a candidate.
+         * When Gl_Present did not run its span is 0 and `outside` reports the
+         * whole present, which is the honest reading. */
+        if (perf_present_ms > 0.0 && perf_present_ms >= perf_vita_worst.present_ms) {
             perf_vita_worst.frames++;
             perf_vita_worst.game_frames =
                 g_game != NULL ? (unsigned long long)g_game->frames : 0;

@@ -1077,6 +1077,15 @@ if(MUGEN_VITA_DATA_DIR)
       file(GLOB _mugen_data_files RELATIVE "${MUGEN_VITA_DATA_DIR}/data"
            "${MUGEN_VITA_DATA_DIR}/data/*")
       set(_mugen_packed_game_cfg 0)
+      # The platform overlays every target writes into a shared tree, listed by
+      # the exact names src/configembed.h gives CONFIG_PORT_PATH and
+      # CONFIG_PORT_LEGACY. Only these are foreign: any other mugen.<name>.cfg
+      # is game content (a motif's [Files] select may name one), so it is packed.
+      # An exact list, not a pattern -- a pattern has to guess where "platform"
+      # ends, and it would drop a content file that happens to fit the shape.
+      set(_mugen_foreign_overlays
+        mugen.android.cfg mugen.win32.cfg mugen.win64.cfg
+        mugen.linux_x64.cfg mugen.linux_arm64.cfg mugen.arm64.cfg)
       foreach(_sub IN LISTS _mugen_data_files)
         if(_sub STREQUAL "mugen.psvita.cfg")
           # The port's file is packed below; a copy left in the game tree would
@@ -1085,15 +1094,14 @@ if(MUGEN_VITA_DATA_DIR)
           # copy is never the one packed -- see the note at the end of this
           # loop.)
           continue()
-        elseif(_sub MATCHES "^mugen\\.[a-z0-9_]+\\.cfg$")
+        elseif(_sub IN_LIST _mugen_foreign_overlays)
           # Another target's platform overlay. Every target writes its own
           # data/mugen.<platform>.cfg into the game tree on first run
           # (src/configembed.c), and install/ is shared by all of them, so a
           # Windows or Android build leaves one behind here. The Vita merges
           # mugen.psvita.cfg and nothing else, so packing e.g. mugen.win32.cfg
           # would ship a dead 636-byte file (and the real VPK did, until this
-          # skip). mugen.cfg is matched below, not here: the pattern requires
-          # the dot-separated platform segment.
+          # skip). mugen.cfg is handled below, not here.
           message(STATUS "  not packing data/${_sub} (another target's overlay)")
           continue()
         elseif(_sub STREQUAL "mugen.cfg" AND MUGEN_VITA_GAME_CFG)

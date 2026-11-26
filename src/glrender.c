@@ -2200,19 +2200,24 @@ void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
          * Port fix (PS Vita): the post-flip clear is skipped when the window
          * was already cleared above, which is the normal path.
          *
-         * The original clears the back buffer after the flip. On vitaGL that
-         * clear begins a new scene on the display framebuffer immediately
-         * after vglSwapBuffers() queued the flip, and beginning a scene there
-         * blocks until the display catches up. Measured on hardware it took
-         * ~1009 ms (60 vblanks) per occurrence: 23 such stalls in a 29-second
-         * match, which is why a 2D stage reported an average of 12 fps with
-         * every other phase under 1 ms.
+         * The original clears the back buffer after the flip. Measured on
+         * hardware, that clear took ~1009 ms per occurrence -- 60 vblanks --
+         * with every other phase of the present under 1 ms, 23 times in a
+         * 29-second match. That is why a 2D stage averaged 12 fps; it was never
+         * about the 3D model.
          *
-         * The clear is redundant: Gl_Present already clears colour and depth
-         * before blitting the screen buffer, and the next frame's scene begins
-         * in Gfx_SetRenderTarget() after the frame limiter has waited. Leaving
-         * the buffer uncleared here lets the limiter absorb that wait instead
-         * of a blocking scene begin.
+         * The leading explanation, not a proven one: the clear begins a new
+         * scene on the display framebuffer immediately after the swap queued
+         * the flip, and a scene begin there waits for the display. The timers
+         * are wall-clock spans and localise the wait to this call; they cannot
+         * show which call inside the driver blocked.
+         *
+         * The clear is redundant either way: Gl_Present already clears colour
+         * and depth before blitting the screen buffer, and the next frame's
+         * scene begins in Gfx_SetRenderTarget() after the frame limiter has
+         * waited, so that wait moves to the limiter instead of blocking here.
+         * Confirmed on hardware: no present above 100 ms remained, and the 2D
+         * stage went from 11.84 to 59.47 drawn fps.
          *
          * Kept for the set == NULL / non-texture path, where the clear above
          * did not run. On the desktop builds `cleared` is never set, so this is
@@ -2292,7 +2297,9 @@ char *Gl_InsertDefines(const char *src, const char *defines)
     return ShaderSrc_InsertDefines(src, defines);
 }
 
-/* path = "data/" name ext, as the original builds it with strncat. */
+#ifndef MUGEN_VITA_GL
+/* path = "data/" name ext, as the original builds it with strncat. Desktop
+ * only: the Vita never opens a data/ shader, so it has no path to build. */
 static void Glr_ShaderPath(char *path, const char *name, const char *ext)
 {
     size_t len;
@@ -2308,6 +2315,7 @@ static void Glr_ShaderPath(char *path, const char *name, const char *ext)
         strncat(path, ext, MAX_PATH - 1 - len);
     }
 }
+#endif
 
 /* Creates and compiles a shader from src (freed). */
 static unsigned int Glr_CompileShader(unsigned int type, char *src)
@@ -2442,9 +2450,6 @@ static char *Glr_ShaderText(const char *name, const char *ext, int atlas, int *e
 static int Glr_LoadShader(const char **defines, GlProgram *prog, const char *name, int atlas)
 {
     char defs[GLR_DEFINES_SIZE];
-#ifdef MUGEN_VITA_GL
-    char path[MAX_PATH];
-#endif
     size_t n = 0;
     int wrote;
     GLint linked = 0;
@@ -2557,9 +2562,10 @@ static int Glr_LoadShader(const char **defines, GlProgram *prog, const char *nam
     return 1;
 fail:
 #ifdef MUGEN_VITA_GL
-    Glr_ShaderPath(path, name, ".vert");
-    Log_Printf("GL: shader family %s failed (%s)\n", name, path);
-    VitaDiag_Log("GAME SHADER FAILED family=%s path=%s\n",name,path);
+    /* No data/ path: the Vita compiles the embedded dialect only, so naming a
+     * file here would point at something this build never opened. */
+    Log_Printf("GL: shader family %s failed (embedded vitaGL dialect)\n", name);
+    VitaDiag_Log("GAME SHADER FAILED family=%s source=embedded-vita\n", name);
 #endif
     Glr_FreeProgram(&built);
     return 0;
