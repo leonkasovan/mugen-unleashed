@@ -1081,6 +1081,20 @@ if(MUGEN_VITA_DATA_DIR)
         if(_sub STREQUAL "mugen.psvita.cfg")
           # The port's file is packed below; a copy left in the game tree would
           # be a duplicate destination, and vita-pack-vpk rejects those.
+          # (The canonical copy is res/configs/mugen.psvita.cfg, so the tree's
+          # copy is never the one packed -- see the note at the end of this
+          # loop.)
+          continue()
+        elseif(_sub MATCHES "^mugen\\.[a-z0-9_]+\\.cfg$")
+          # Another target's platform overlay. Every target writes its own
+          # data/mugen.<platform>.cfg into the game tree on first run
+          # (src/configembed.c), and install/ is shared by all of them, so a
+          # Windows or Android build leaves one behind here. The Vita merges
+          # mugen.psvita.cfg and nothing else, so packing e.g. mugen.win32.cfg
+          # would ship a dead 636-byte file (and the real VPK did, until this
+          # skip). mugen.cfg is matched below, not here: the pattern requires
+          # the dot-separated platform segment.
+          message(STATUS "  not packing data/${_sub} (another target's overlay)")
           continue()
         elseif(_sub STREQUAL "mugen.cfg" AND MUGEN_VITA_GAME_CFG)
           # The project default replaces the tree's copy (MUGEN_VITA_GAME_CFG).
