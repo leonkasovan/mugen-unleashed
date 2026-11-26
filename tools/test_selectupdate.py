@@ -154,6 +154,30 @@ try:
         tests += 1
     print("PASS: blocked staging/backup destinations preserve original and existing files")
 
+    original = b"; Vita roster\r\n[Characters]\r\nkfm, stages/kfm.def\r\n[ExtraStages]\r\n[Options]\r\nx=1"
+    root = fixture("memory-roster", original)
+    character(root, "Hero")
+    stage(root, "KOFXI_Shuttle_1.def"); stage(root, "KOFXI_Esaka_1.def")
+    data = root / "data"
+    # Contend every staging/backup path; a disk update would fail here.
+    for name in ("select.def.update", "select.def.bak", "select.def.bak.update"):
+        put(root, f"data/{name}", b"keep")
+    before = {p.name: p.read_bytes() for p in data.iterdir()}
+    cmd = [str(binary), "data/select.def", "0", "1", "memory"]
+    for _ in range(2):
+        result = subprocess.run(cmd, cwd=root, capture_output=True, text=True, check=True)
+        assert "2 stages added (in memory)" in result.stdout
+        assert (root / "merged.def").read_bytes() == original.replace(
+            b"[Options]", b"stages/KOFXI_Esaka_1.def\r\nstages/KOFXI_Shuttle_1.def\r\n[Options]")
+        assert {p.name: p.read_bytes() for p in data.iterdir()} == before
+        (root / "merged.def").unlink()
+        tests += 1
+    cmd[3] = "0"
+    subprocess.run(cmd, cwd=root, check=True)
+    assert not (root / "merged.def").exists()
+    tests += 1
+    print("PASS: Vita-style in-memory merge is repeatable and leaves bundled files untouched")
+
     features = subprocess.check_output([str(binary), "--features"], text=True)
     if "faults" in features:
         for failure in ("write", "flush", "close", "rename"):

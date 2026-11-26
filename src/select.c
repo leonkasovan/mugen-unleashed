@@ -39,7 +39,11 @@ int Select_OpenDef(const char *path)
     GameVars *g = g_game;
     char found[0x200];
     Ini *ini;
-    Stream *s;
+    Stream *s = NULL;
+#ifdef __vita__
+    char *roster;
+    int roster_size;
+#endif
 
     g_selectRows = g->select_info.rows;
     g_selectInfo = &g->select_info;
@@ -50,13 +54,26 @@ int Select_OpenDef(const char *path)
         return 0;
     }
     /* Port addition: update the motif's actual roster before parsing it. */
+#ifdef __vita__
+    /* Port fix: app0: is not writable. Use the discovered entries this launch
+     * without modifying the bundled select.def or moving its asset paths. */
+    roster = SelectUpdate_BuildAuto(found, &roster_size);
+    if (roster != NULL) {
+        s = Stream_OpenMemory(roster, roster_size);
+        if (s == NULL) Log_Printf("select-update: could not open merged roster; using existing roster\n");
+    }
+#else
     SelectUpdate_Auto(found);
+#endif
     ini = NULL;
-    s = Stream_OpenFile(found, "rt");
+    if (s == NULL) s = Stream_OpenFile(found, "rt");
     if (s != NULL) {
         ini = Ini_Parse(s, INI_MODE_READ);
         Stream_Close(s);
     }
+#ifdef __vita__
+    free(roster);
+#endif
     g_selectIni = ini;
     return ini != NULL;
 }
@@ -80,13 +97,16 @@ int Select_Init(void)
         }
         Log_Printf("OK");
         Log_Printf("\n");
-    } else if (SelectUpdate_Enabled()) {
+    }
+#ifndef __vita__
+    else if (SelectUpdate_Enabled()) {
         /* Port addition: quick VS skips the select loader, but an explicitly
-         * requested discovery pass still uses the active motif's roster. */
+         * requested persistent discovery pass still uses the active motif's roster. */
         char found[0x200];
         if (File_Find(g_game->select_info.def_file, found, NULL, NULL))
             SelectUpdate_Auto(found);
     }
+#endif
     return 1;
 }
 

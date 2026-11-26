@@ -84,6 +84,19 @@ int main(int argc, char **argv)
         SelectUpdate_Configure(characters, stages);
         SelectUpdate_Auto(argv[1]); return 0;
     }
+    if (argc > 4 && strcmp(argv[4], "memory") == 0) {
+        int size, ok;
+        char *text;
+        FILE *fp;
+        SelectUpdate_Configure(characters, stages);
+        text = SelectUpdate_BuildAuto(argv[1], &size);
+        if (text == NULL) return size != 0;
+        fp = fopen("merged.def", "wb");
+        ok = fp != NULL && fwrite(text, 1, (size_t)size, fp) == (size_t)size;
+        if (fp != NULL && fclose(fp) != 0) ok = 0;
+        free(text);
+        return !ok;
+    }
     if (characters && !stages) result = Select_UpdateCharInSelectDef(argv[1]);
     else if (stages && !characters) result = Select_UpdateStageInSelectDef(argv[1]);
     else result = Select_UpdateSelectDef(argv[1], characters, stages);

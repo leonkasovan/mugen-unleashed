@@ -2,7 +2,8 @@
  * Port addition: automatic select.def discovery, based on updateCharInSelectDef
  * and updateStageInSelectDef in leonkasovan/Ikemen-GO stable/src/main.go.
  * Scan chars/<name>/<name>.def and stage .def files, append missing entries, and
- * keep a .bak. This does not change the original select loader or grid layout.
+ * keep a .bak on writable installs. Vita automatic discovery reads the merged
+ * roster in memory instead. Neither path changes the original grid layout.
  * Unlike the reference updater, preserve the existing bytes and commit both
  * sections together, only after discovery and all file writes have succeeded.
  */
@@ -282,24 +283,65 @@ static int replace_file(const char *from, const char *to)
     return rename(from, to) == 0;
 #endif
 }
-static int write_additions(FILE *fp, const UpdateList *list, const char *eol,
-                           const char *text, size_t pos, int missing, const char *group)
+static char *render_roster(const char *text, size_t length, const size_t insert[2],
+                           const int seen[2], const UpdateList additions[2],
+                           const char *eol, int *size)
 {
-    size_t i;
-    if (list->count == 0) return 1;
-    if (pos > 0 && text[pos - 1] != '\n' && fputs(eol, fp) == EOF) return 0;
-    if (missing && (fprintf(fp, "[%s]%s", group, eol) < 0)) return 0;
-    for (i = 0; i < list->count; ++i)
-        if (fprintf(fp, "%s%s", list->items[i], eol) < 0) return 0;
-    return 1;
+    const char *groups[2] = {"[Characters]", "[ExtraStages]"};
+    size_t eol_len = strlen(eol), total = length, offset = 0, i, j;
+    size_t first = insert[0] < insert[1] ||
+        (insert[0] == insert[1] && (seen[0] || !seen[1])) ? 0 : 1;
+    char *out, *p;
+
+    for (i = 0; i < 2; ++i) {
+        if (!additions[i].count) continue;
+        if (insert[i] > 0 && text[insert[i] - 1] != '\n') total += eol_len;
+        if (!seen[i]) total += strlen(groups[i]) + eol_len;
+        for (j = 0; j < additions[i].count; ++j) {
+            size_t n = strlen(additions[i].items[j]) + eol_len;
+            if (total > UPDATE_MAX_FILE || n > UPDATE_MAX_FILE - total) {
+                errno = EFBIG; return NULL;
+            }
+            total += n;
+        }
+    }
+    out = malloc(total);
+    if (out == NULL) { errno = ENOMEM; return NULL; }
+    p = out;
+    for (i = 0; i < 2; ++i) {
+        size_t which = i == 0 ? first : 1 - first;
+        size_t at = insert[which];
+        memcpy(p, text + offset, at - offset); p += at - offset;
+        offset = at;
+        if (!additions[which].count) continue;
+        if (at > 0 && text[at - 1] != '\n') {
+            memcpy(p, eol, eol_len); p += eol_len;
+        }
+        if (!seen[which]) {
+            size_t n = strlen(groups[which]);
+            memcpy(p, groups[which], n); p += n;
+            memcpy(p, eol, eol_len); p += eol_len;
+        }
+        for (j = 0; j < additions[which].count; ++j) {
+            size_t n = strlen(additions[which].items[j]);
+            memcpy(p, additions[which].items[j], n); p += n;
+            memcpy(p, eol, eol_len); p += eol_len;
+        }
+    }
+    memcpy(p, text + offset, length - offset);
+    *size = (int)total;
+    return out;
 }
-int Select_UpdateSelectDef(const char *path, int characters, int stages)
+
+static int update_roster(const char *path, int characters, int stages,
+                         char **memory, int *memory_size)
 {
     UpdateList existing[2] = {{0}, {0}}, additions[2] = {{0}, {0}};
     const char *eol = "\n";
-    size_t length = 0, pos = 0, insert[2] = {SIZE_MAX, SIZE_MAX}, offset = 0, i;
+    size_t length = 0, pos = 0, insert[2] = {SIZE_MAX, SIZE_MAX}, i;
     int section = 0, seen[2] = {0}, result = -1, saved = 0, created = 0, created_backup = 0;
-    char *text = NULL, *check = NULL;
+    int merged_size = 0;
+    char *text = NULL, *check = NULL, *merged = NULL;
     char update[UPDATE_PATH + 16], backup[UPDATE_PATH + 16], backup_update[UPDATE_PATH + 32];
     FILE *fp = NULL;
     struct stat st;
@@ -342,21 +384,18 @@ int Select_UpdateSelectDef(const char *path, int characters, int stages)
     if ((characters && !discover(1, &existing[0], &additions[0])) ||
         (stages && !discover(0, &existing[1], &additions[1]))) goto done;
     if (additions[0].count == 0 && additions[1].count == 0) { result = 0; goto done; }
+    merged = render_roster(text, length, insert, seen, additions, eol, &merged_size);
+    if (merged == NULL) goto done;
+    if (memory != NULL) {
+        *memory = merged;
+        *memory_size = merged_size;
+        merged = NULL;
+        goto added;
+    }
     fp = create_temp(update);
     if (fp == NULL) goto done;
     created = 1;
-    /* Insert in source order, independent of section order or presence. */
-    for (i = 0; i < 2; ++i) {
-        size_t first = insert[0] < insert[1] ||
-            (insert[0] == insert[1] && (seen[0] || !seen[1])) ? 0 : 1;
-        size_t which = i == 0 ? first : 1 - first;
-        size_t at = insert[which];
-        if (!write_bytes(fp, text + offset, at - offset) ||
-            !write_additions(fp, &additions[which], eol, text, at, !seen[which],
-                             which == 0 ? "Characters" : "ExtraStages")) goto done;
-        offset = at;
-    }
-    if (!write_bytes(fp, text + offset, length - offset)) goto done;
+    if (!write_bytes(fp, merged, (size_t)merged_size)) goto done;
     if (!finish_file(fp)) { fp = NULL; goto done; }
     fp = NULL;
     if (chmod(update, st.st_mode & 0777) != 0) goto done;
@@ -379,25 +418,39 @@ int Select_UpdateSelectDef(const char *path, int characters, int stages)
     created_backup = 0;
     if (!replace_file(update, path)) goto done;
     created = 0;
+added:
     result = (int)(additions[0].count + additions[1].count);
     for (i = 0; i < 2; ++i) {
         size_t j;
         for (j = 0; j < additions[i].count; ++j)
             Log_Printf("select-update: added %s: %s\n", i == 0 ? "character" : "stage", additions[i].items[j]);
     }
-    Log_Printf("select-update: %s: %zu characters, %zu stages added; backup: %s\n",
-               path, additions[0].count, additions[1].count, backup);
+    Log_Printf("select-update: %s: %u characters, %u stages added%s%s\n",
+               path, (unsigned)additions[0].count, (unsigned)additions[1].count,
+               memory != NULL ? " (in memory)" : "; backup: ",
+               memory != NULL ? "" : backup);
 done:
     saved = errno;
     if (fp != NULL) fclose(fp);
     if (created) remove(update);
     if (created_backup) remove(backup_update);
-    free(check); free(text);
+    free(merged); free(check); free(text);
     for (i = 0; i < 2; ++i) { list_free(&existing[i]); list_free(&additions[i]); }
     if (result < 0) Log_Printf("select-update: could not update %s: %s; using existing roster\n",
                               path, strerror(saved ? saved : EIO));
     errno = saved;
     return result;
+}
+int Select_UpdateSelectDef(const char *path, int characters, int stages)
+{
+    return update_roster(path, characters, stages, NULL, NULL);
+}
+char *SelectUpdate_BuildAuto(const char *path, int *size)
+{
+    char *text = NULL;
+    *size = 0;
+    update_roster(path, auto_characters, auto_stages, &text, size);
+    return text;
 }
 int Select_UpdateCharInSelectDef(const char *path) { return Select_UpdateSelectDef(path, 1, 0); }
 int Select_UpdateStageInSelectDef(const char *path) { return Select_UpdateSelectDef(path, 0, 1); }
