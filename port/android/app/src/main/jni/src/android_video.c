@@ -150,7 +150,23 @@ SDL_Surface *Android_CreateDisplayGL(int width, int height, int depth, int keep_
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
         SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-        SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 16);
+        /*
+         * Port change: 24-bit depth, not 16.
+         *
+         * Only the glTF stage renderer (src/model.c) reads or writes the depth
+         * buffer -- the 2D sprite path never enables GL_DEPTH_TEST. A 3D stage
+         * has to sort its geometry through this buffer, and a 16-bit one cannot:
+         * the shipped KOF XI stages use near = 34.95 / far = 1386
+         * (stages/KOFXI_Concert_1_OG.def [Camera]), and those exports stack
+         * coplanar billboards -- 29 nodes of KOFXI_Concert_1_OG.glb carry
+         * kof_flipbook_copy_of, i.e. a second copy of the same quad at the same
+         * depth. At 16 bits the depth resolution near the far plane is around
+         * 0.4 stage units, so a panning camera flips those copies from front to
+         * back per frame: the crowd/tree billboards shimmer, and whichever copy
+         * wins decides whether the cutout alpha reads as transparent.
+         * 24 bits is the desktop default and is universally available on GLES 3.
+         */
+        SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
         display_window = SDL_CreateWindow("M.U.G.E.N", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, width,
                                           height, SDL_WINDOW_OPENGL | SDL_WINDOW_FULLSCREEN_DESKTOP |
                                                       SDL_WINDOW_ALLOW_HIGHDPI);

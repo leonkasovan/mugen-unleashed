@@ -1363,6 +1363,18 @@ int Gl_Init(int framebuffers)
      * whichever of them came last (mugen.log is read line by line).
      */
     Log_Printf("\nGLES: renderer ready (indexed+rgba+solid, max texture %d)\n", g_glMaxTextureSize);
+    /*
+     * The depth buffer belongs to the window, not to us, so the bits actually
+     * granted are the driver's answer to SDL_GL_DEPTH_SIZE -- not what the port
+     * asked for. The glTF stage renderer (src/model.c) is the only user, and it
+     * sorts its geometry entirely through this buffer, so a 16-bit grant is
+     * worth seeing in the log rather than inferring from a shimmering stage.
+     */
+    {
+        GLint depth_bits = 0;
+        glGetIntegerv(GL_DEPTH_BITS, &depth_bits);
+        Log_Printf("GLES: depth buffer %d bit\n", (int)depth_bits);
+    }
     return 1;
 }
 
@@ -2055,12 +2067,29 @@ static int gles_quad_is_culled(const float *mvp16, const float *pos8)
     if (all_behind) {
         return 1;
     }
-    /* NDC -> pixels, the inverse of what the projection and viewport apply. */
+    /*
+     * NDC -> pixels, the inverse of what the projection and viewport apply.
+     *
+     * The y direction is not fixed: GlMvp_SetupView gives the window an ortho
+     * with top = 0 (y up in NDC) and a render target the ordinary one (y down
+     * in NDC), and the two need opposite conversions. This used to apply the
+     * window's conversion unconditionally, so everything drawn into a render
+     * target had its pixel range mirrored about the vertical centre. A quad
+     * whose real position was below the middle landed above it, and once that
+     * mirrored range fell outside the clip rectangle the quad was dropped
+     * before it was ever drawn -- which is why only the first mode-select row
+     * survived: it happened to straddle the clip edge. Read the orientation
+     * from the same flag the projection was built with, and the size from the
+     * same expression glViewport uses.
+     */
     {
-        float px1 = (minx * 0.5f + 0.5f) * (float)g_targetWidth;
-        float px2 = (maxx * 0.5f + 0.5f) * (float)g_targetWidth;
-        float py1 = (0.5f - maxy * 0.5f) * (float)g_targetHeight;
-        float py2 = (0.5f - miny * 0.5f) * (float)g_targetHeight;
+        int y_down = g_glBoundFramebuffer != 0;
+        float vw = (float)(g_glBoundFramebuffer ? g_glesTargetWidth : g_targetWidth);
+        float vh = (float)(g_glBoundFramebuffer ? g_glesTargetHeight : g_targetHeight);
+        float px1 = (minx * 0.5f + 0.5f) * vw;
+        float px2 = (maxx * 0.5f + 0.5f) * vw;
+        float py1 = (y_down ? (miny * 0.5f + 0.5f) : (0.5f - maxy * 0.5f)) * vh;
+        float py2 = (y_down ? (maxy * 0.5f + 0.5f) : (0.5f - miny * 0.5f)) * vh;
 
         if (px2 < (float)g_clipX1 || px1 > (float)g_clipX2 ||
             py2 < (float)g_clipY1 || py1 > (float)g_clipY2) {
