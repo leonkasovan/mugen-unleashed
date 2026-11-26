@@ -2118,15 +2118,23 @@ int GlVbuf_Bind(GlTex *vbuf)
  */
 void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
 {
+#ifdef MUGEN_VITA_GL
+    /* Port addition (Esaka stall diagnosis): timers for the parts of
+     * presentation that had none, plus the whole call. Instrumentation only --
+     * nothing drawn, sized or ordered changes.
+     *
+     * BLIT now starts after the initial glClear instead of before it, so
+     * `clear` and `blit` no longer overlap and the parts sum to the total. */
+    Uint64 vita_total = SDL_GetPerformanceCounter();
+    Uint64 vita_start = vita_total, vita_clear = 0, vita_pre = 0, vita_post = 0;
+#endif
+    int cleared = 0;
     GlBatch_Flush();
     if (set != NULL) {
         Sprite *spr = Glr_SpriteAt(set, sprite);
         SpriteSet *target;
         int target_sprite;
         DrawParams dp;
-#ifdef MUGEN_VITA_GL
-        Uint64 vita_start;
-#endif
         if (spr == NULL || spr->format != SPRITE_FORMAT_TEXTURE) {
             return;
         }
@@ -2136,9 +2144,6 @@ void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
         }
         target = g_renderTarget;
         target_sprite = g_renderTargetSprite;
-#ifdef MUGEN_VITA_GL
-        vita_start = SDL_GetPerformanceCounter();
-#endif
         Gfx_SetRenderTarget(NULL, 0);
 #ifdef MUGEN_VITA_GL
         Perf_VitaSpan(PERF_VITA_PRESENT_BIND, vita_start);
@@ -2148,6 +2153,11 @@ void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
         glClearDepth(1.0);
         glDisable(GL_SCISSOR_TEST);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+#ifdef MUGEN_VITA_GL
+        cleared = 1;
+        vita_clear = SDL_GetPerformanceCounter() - vita_start;
+        vita_start = SDL_GetPerformanceCounter();
+#endif
         DrawParams_Init(&dp);
         dp.x = x;
         dp.y = y;
@@ -2168,8 +2178,15 @@ void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
     if (g_gfxPrePresent != NULL) {
         SpriteSet *target = g_renderTarget;
         int target_sprite = g_renderTargetSprite;
+#ifdef MUGEN_VITA_GL
+        vita_start = SDL_GetPerformanceCounter();
+#endif
         g_gfxPrePresent(NULL, 0);
         Gfx_SetRenderTarget(target, target_sprite);
+#ifdef MUGEN_VITA_GL
+        Perf_VitaSpan(PERF_VITA_PRESENT_PREPRESENT, vita_start);
+        vita_pre = SDL_GetPerformanceCounter() - vita_start;
+#endif
     }
     if (g_videoFlags & VIDEO_HWBLIT) {
         if (g_videoSdlFlags & DISPLAY_DOUBLEBUF) {
@@ -2179,11 +2196,46 @@ void Gl_Present(SpriteSet *set, int sprite, float x, float y, float w, float h)
                 Sdl2_Flip();
             }
         }
-        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-        glClearDepth(1.0);
-        glDisable(GL_SCISSOR_TEST);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        /*
+         * Port fix (PS Vita): the post-flip clear is skipped when the window
+         * was already cleared above, which is the normal path.
+         *
+         * The original clears the back buffer after the flip. On vitaGL that
+         * clear begins a new scene on the display framebuffer immediately
+         * after vglSwapBuffers() queued the flip, and beginning a scene there
+         * blocks until the display catches up. Measured on hardware it took
+         * ~1009 ms (60 vblanks) per occurrence: 23 such stalls in a 29-second
+         * match, which is why a 2D stage reported an average of 12 fps with
+         * every other phase under 1 ms.
+         *
+         * The clear is redundant: Gl_Present already clears colour and depth
+         * before blitting the screen buffer, and the next frame's scene begins
+         * in Gfx_SetRenderTarget() after the frame limiter has waited. Leaving
+         * the buffer uncleared here lets the limiter absorb that wait instead
+         * of a blocking scene begin.
+         *
+         * Kept for the set == NULL / non-texture path, where the clear above
+         * did not run. On the desktop builds `cleared` is never set, so this is
+         * the original clear, unchanged.
+         */
+        if (!cleared) {
+            glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+            glClearDepth(1.0);
+            glDisable(GL_SCISSOR_TEST);
+#ifdef MUGEN_VITA_GL
+            vita_start = SDL_GetPerformanceCounter();
+#endif
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+#ifdef MUGEN_VITA_GL
+            Perf_VitaSpan(PERF_VITA_PRESENT_POSTCLEAR, vita_start);
+            vita_post = SDL_GetPerformanceCounter() - vita_start;
+#endif
+        }
     }
+#ifdef MUGEN_VITA_GL
+    Perf_VitaPresentParts(Perf_UsOf(vita_clear), Perf_UsOf(vita_pre), Perf_UsOf(vita_post),
+                          Perf_UsOf(SDL_GetPerformanceCounter() - vita_total));
+#endif
 }
 
 /*

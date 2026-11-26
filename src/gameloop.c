@@ -1276,6 +1276,44 @@ static void Game_PerfLog(void)
                        perf.vita_ms[PERF_VITA_PRESENT_BLIT],
                        perf.vita_ms[PERF_VITA_PRESENT_RESTORE],
                        perf.vita_ms[PERF_VITA_SWAP]);
+            /*
+             * Port addition (Esaka stall diagnosis): the worst present of the
+             * second, decomposed. The lines above are means over a mixed
+             * population (drawn and skipped iterations), so a one-frame stall
+             * disappears into them; this reports the stall itself.
+             *
+             *   present   whole Screen_Present for that frame
+             *   gl        the whole of Gl_Present inside it
+             *   outside   present - gl: the rest of Screen_Present (screenshot
+             *             check, KeepAspect maths, Sdl2_PresentFrame)
+             *   other     gl - the parts listed: work inside Gl_Present that no
+             *             timer covers
+             */
+            {
+                PerfVitaWorst worst;
+
+                Perf_VitaWorstTake(&worst);
+                if (worst.frames > 0) {
+                    double gl_ms = (double)worst.total_us / 1000.0;
+                    double parts_ms = (double)(worst.bind_us + worst.clear_us +
+                                               worst.blit_us + worst.restore_us +
+                                               worst.pre_us + worst.swap_us +
+                                               worst.post_us) / 1000.0;
+
+                    Log_Printf("vphase-worst: frame=%llu present=%.2fms gl=%.2fms "
+                               "outside=%.2fms other=%.2fms | bind=%.2f clear=%.2f "
+                               "blit=%.2f restore=%.2f pre=%.2f swap=%.2f post=%.2f\n",
+                               worst.game_frames, worst.present_ms, gl_ms,
+                               worst.present_ms - gl_ms, gl_ms - parts_ms,
+                               (double)worst.bind_us / 1000.0,
+                               (double)worst.clear_us / 1000.0,
+                               (double)worst.blit_us / 1000.0,
+                               (double)worst.restore_us / 1000.0,
+                               (double)worst.pre_us / 1000.0,
+                               (double)worst.swap_us / 1000.0,
+                               (double)worst.post_us / 1000.0);
+                }
+            }
             Log_Printf("vphase-max: game=%.1f back=%.1f front=%.1f bind=%.1f clear=%.1f model=%.1f restore=%.1f composite=%.1f direct=%.1f present bind=%.1f blit=%.1f restore=%.1f swap=%.1fms\n",
                        perf.vita_max_ms[PERF_VITA_GAME_DRAW],
                        perf.vita_max_ms[PERF_VITA_STAGE_BACK],

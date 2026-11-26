@@ -38,6 +38,14 @@ enum {
     PERF_VITA_PRESENT_BLIT,
     PERF_VITA_PRESENT_RESTORE,
     PERF_VITA_SWAP,
+    /* Port addition (Esaka stall diagnosis): the three parts of Gl_Present that
+     * had no timer. `present` in the perf line is the whole of Screen_Present,
+     * and BIND/BLIT/RESTORE/SWAP account for only part of it; a stalled frame
+     * could therefore report present=1043ms with every measured part at 0.2ms.
+     * These close that gap without changing what is drawn. */
+    PERF_VITA_PRESENT_CLEAR,        /* the glClear before the screen-buffer quad */
+    PERF_VITA_PRESENT_PREPRESENT,   /* g_gfxPrePresent: PAUSED box, debug, console */
+    PERF_VITA_PRESENT_POSTCLEAR,    /* the glClear after the swap */
     PERF_VITA_PHASE_COUNT
 };
 
@@ -87,4 +95,33 @@ unsigned int Perf_TriangleCount(unsigned int mode, unsigned int count);
  * are incomplete or too few to be worth printing. */
 int Perf_TakeAverages(PerfAverages *out);
 
+/* Port addition: present-phase microsecond breakdown of the worst frame in the
+ * current second, and how many times a present was observed. A stall is a
+ * property of ONE frame; a per-second mean hides it, which is how "present=
+ * 1043ms with blit=0.2ms" stayed unexplained. Reading these at the same point
+ * as Perf_TakeAverages reports the stall rather than the average.
+ *
+ * Fields are microseconds so a sub-millisecond part is not rounded to 0.0.
+ * `slowest_*` describe the single worst present of the second. */
+typedef struct PerfVitaWorst {
+    unsigned long long frames;      /* >0 once any present was measured; counts
+                                     * how often the worst was replaced */
+    unsigned long long game_frames; /* engine frame number of the worst */
+    double present_ms;              /* whole Screen_Present for that frame */
+    unsigned long long total_us;    /* whole Gl_Present for that frame */
+    unsigned long long bind_us;
+    unsigned long long clear_us;    /* the glClear before the screen-buffer quad */
+    unsigned long long blit_us;     /* the screen-buffer quad itself */
+    unsigned long long restore_us;
+    unsigned long long pre_us;      /* g_gfxPrePresent */
+    unsigned long long swap_us;
+    unsigned long long post_us;     /* the glClear after the swap */
+} PerfVitaWorst;
+
+void Perf_VitaWorstTake(PerfVitaWorst *out);
+/* Records one Gl_Present's parts; called from the present path. */
+void Perf_VitaPresentParts(unsigned long long clear_us, unsigned long long pre_us,
+                           unsigned long long post_us, unsigned long long total_us);
+/* Counter ticks to microseconds, for callers outside this module. */
+unsigned long long Perf_UsOf(unsigned long long ticks);
 #endif /* MUGEN_PERF_H */

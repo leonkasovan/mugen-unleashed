@@ -210,6 +210,47 @@ void Perf_VitaSpan(int phase, unsigned long long start)
 #endif
 }
 
+unsigned long long Perf_UsOf(unsigned long long ticks)
+{
+    return (unsigned long long)((double)ticks * 1000000.0 / Perf_Frequency());
+}
+
+#ifdef MUGEN_VITA_GL
+/*
+ * Port addition (Esaka stall diagnosis): the worst present of the second.
+ *
+ * `present` in the perf line is the whole of Screen_Present, but BIND, BLIT,
+ * RESTORE and SWAP cover only parts of Gl_Present, and the pre-swap callback
+ * and the two clears had no timer at all. A stalled frame therefore reported
+ * present=1043ms with every measured part near 0.2ms. A stall is a property of
+ * ONE frame, so a per-second mean cannot show it; these record the single worst
+ * present and its full breakdown, which separates time inside Gl_Present from
+ * time in the rest of Screen_Present.
+ */
+static PerfVitaWorst perf_vita_worst;
+static struct {
+    unsigned long long clear_us, pre_us, post_us, total_us;
+} perf_vita_current;
+
+void Perf_VitaPresentParts(unsigned long long clear_us, unsigned long long pre_us,
+                           unsigned long long post_us, unsigned long long total_us)
+{
+    perf_vita_current.clear_us = clear_us;
+    perf_vita_current.pre_us = pre_us;
+    perf_vita_current.post_us = post_us;
+    perf_vita_current.total_us = total_us;
+}
+
+void Perf_VitaWorstTake(PerfVitaWorst *out)
+{
+    if (out == NULL) {
+        return;
+    }
+    *out = perf_vita_worst;
+    memset(&perf_vita_worst, 0, sizeof(perf_vita_worst));
+}
+#endif
+
 void Perf_BeginFrame(void)
 {
     Uint64 now;
@@ -297,6 +338,26 @@ void Perf_PresentDone(void)
                 }
             }
         }
+        /* Keep the worst present of the second with its full breakdown. A
+         * zero total means Gl_Present returned before presenting, so it is not
+         * a candidate. */
+        if (perf_vita_current.total_us > 0 &&
+            perf_vita_current.total_us >= perf_vita_worst.total_us) {
+            perf_vita_worst.frames++;
+            perf_vita_worst.game_frames =
+                g_game != NULL ? (unsigned long long)g_game->frames : 0;
+            perf_vita_worst.present_ms = perf_present_ms;
+            perf_vita_worst.total_us = perf_vita_current.total_us;
+            perf_vita_worst.clear_us = perf_vita_current.clear_us;
+            perf_vita_worst.pre_us = perf_vita_current.pre_us;
+            perf_vita_worst.post_us = perf_vita_current.post_us;
+            perf_vita_worst.bind_us = (unsigned long long)(perf_vita_frame[PERF_VITA_PRESENT_BIND] * 1000.0);
+            perf_vita_worst.blit_us = (unsigned long long)(perf_vita_frame[PERF_VITA_PRESENT_BLIT] * 1000.0);
+            perf_vita_worst.restore_us = (unsigned long long)(perf_vita_frame[PERF_VITA_PRESENT_RESTORE] * 1000.0);
+            perf_vita_worst.swap_us = (unsigned long long)(perf_vita_frame[PERF_VITA_SWAP] * 1000.0);
+        }
+        perf_vita_current.clear_us = perf_vita_current.pre_us = 0;
+        perf_vita_current.post_us = perf_vita_current.total_us = 0;
 #endif
         perf_frames++;
     }
