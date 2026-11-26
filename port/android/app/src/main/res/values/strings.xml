@@ -8,4 +8,6 @@
     <!-- Shown after the folder is saved: the working directory is resolved once,
          before the engine starts, so the change needs a fresh launch. -->
     <string name="game_folder_saved">Folder saved. Quit and reopen M.U.G.E.N to use it.</string>
+    <!-- Shown while the engine reloads itself into the newly chosen folder. -->
+    <string name="game_folder_switching">Switching game folder\u2026</string>
 </resources>

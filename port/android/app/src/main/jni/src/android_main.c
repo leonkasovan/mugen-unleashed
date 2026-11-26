@@ -10,6 +10,7 @@
 #ifdef __ANDROID__
 
 #include <android/log.h>
+#include <jni.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,6 +43,14 @@
 
 #define ALOG_TAG "mugen"
 
+/*
+ * Engine global (src/globals.c): the folder picker chose a new tree, so main.c
+ * should tear the engine down and run it again. Declared here rather than by
+ * including symbols.h, which needs the whole engine type graph -- this is the
+ * platform layer, and this is the only engine global it touches.
+ */
+extern int g_folderReloadRequested;
+
 /* The engine entry point, from src/main.c. That module is compiled for its
  * helpers too (Camera_GetX, Rng_Seed, ...), so its main() is renamed and called
  * from here instead of SDL_main. */
@@ -67,6 +76,8 @@ int Mugen_Main(int argc, char *argv[]);
 
 /* Whether the tree came from the player's picker rather than the default. */
 static int g_game_folder_chosen;
+/* Whether chosen_game_folder() has read the marker yet. */
+static int g_chosen_checked;
 
 /*
  * The folder named by GAME_FOLDER_MARKER, or NULL when there is none.
@@ -76,15 +87,14 @@ static int g_game_folder_chosen;
 static const char *chosen_game_folder(void)
 {
     static char path[1024];
-    static int checked;
     const char *base;
     char marker[1200];
     FILE *f;
 
-    if (checked) {
+    if (g_chosen_checked) {
         return g_game_folder_chosen ? path : NULL;
     }
-    checked = 1;
+    g_chosen_checked = 1;
 
     base = SDL_AndroidGetExternalStoragePath();
     if (base == NULL || base[0] == '\0') {
@@ -115,6 +125,19 @@ static const char *chosen_game_folder(void)
     }
     g_game_folder_chosen = 1;
     return path;
+}
+
+/*
+ * Re-read the marker from disk.
+ *
+ * chosen_game_folder() caches its answer because every relative path in the
+ * engine asks for it. Switching folders has to invalidate that cache, or the
+ * restart would resolve the tree it was just told to leave.
+ */
+static void chosen_game_folder_forget(void)
+{
+    g_game_folder_chosen = 0;
+    g_chosen_checked = 0;
 }
 
 /*
@@ -164,14 +187,21 @@ static int tree_present(const char *dir)
     return 0;
 }
 
+static char g_assets_buf[1024];
+
 static const char *assets_dir(void)
 {
-    static char buf[1024];
+    /*
+     * g_assets_buf is used directly, never through a `char *buf = ...` alias:
+     * the alias made sizeof(buf) the size of a pointer, so snprintf kept only
+     * the first 7 bytes ("/storag") and the engine looked for its tree there.
+     * The buffer lives at file scope only so the folder picker can reset it.
+     */
     const char *base;
     const char *chosen;
 
-    if (buf[0] != '\0') {
-        return buf;
+    if (g_assets_buf[0] != '\0') {
+        return g_assets_buf;
     }
     /*
      * A folder the player picked wins over the default. This is what makes
@@ -180,8 +210,8 @@ static const char *assets_dir(void)
      */
     chosen = chosen_game_folder();
     if (chosen != NULL) {
-        snprintf(buf, sizeof(buf), "%s", chosen);
-        return buf;
+        snprintf(g_assets_buf, sizeof(g_assets_buf), "%s", chosen);
+        return g_assets_buf;
     }
     /*
      * SDL_AndroidGetExternalStoragePath returns a directory the app can write to
@@ -196,11 +226,11 @@ static const char *assets_dir(void)
         base = SDL_AndroidGetInternalStoragePath();
     }
     if (base == NULL || base[0] == '\0') {
-        snprintf(buf, sizeof(buf), "/data/local/tmp/mugen");
+        snprintf(g_assets_buf, sizeof(g_assets_buf), "/data/local/tmp/mugen");
     } else {
-        snprintf(buf, sizeof(buf), "%s/mugen", base);
+        snprintf(g_assets_buf, sizeof(g_assets_buf), "%s/mugen", base);
     }
-    return buf;
+    return g_assets_buf;
 }
 
 static int mkdir_p(const char *path)
@@ -379,6 +409,70 @@ static int extract_asset(const char *rel, long expect_size, const char *expect_h
     return 1;
 }
 
+static void extract_assets(void);
+
+/*
+ * Select Game Folder: resolve the chosen tree and make it the working directory.
+ *
+ * main.c calls this before System_Init, so every relative path the engine
+ * opens -- data/mugen.cfg included -- resolves inside the tree the player
+ * picked. Doing it here rather than through a JNI call is deliberate: the
+ * working directory has to be settled before the engine starts, and Java cannot
+ * reach into a process that is already past that point.
+ */
+void Android_ApplyChosenFolder(void)
+{
+    const char *cwd;
+
+    chosen_game_folder_forget();
+    g_assets_buf[0] = '\0';
+
+    if (!g_game_folder_chosen) {
+        __android_log_print(ANDROID_LOG_INFO, ALOG_TAG,
+                            "assets: no chosen folder; using the default tree");
+    }
+    cwd = assets_dir();
+    /*
+     * Extract, then chdir -- the order the original main() used. The payload
+     * and manifest are APK assets, which SDL_RWFromFile resolves through its
+     * Android asset path rather than the working directory, so extraction does
+     * not need to be inside the tree. Swapping these two ran the extraction
+     * from the wrong directory and the engine then failed to open
+     * data/mugen.cfg.
+     */
+    extract_assets();
+    if (chdir(cwd) != 0) {
+        __android_log_print(ANDROID_LOG_ERROR, ALOG_TAG, "chdir(%s) failed", cwd);
+    } else {
+        __android_log_print(ANDROID_LOG_INFO, ALOG_TAG, "working directory: %s", cwd);
+    }
+}
+
+/*
+ * Called from Java (via JNI) after the player picked a new folder.
+ *
+ * Only sets a flag and moves the process into the new tree: the engine may be
+ * several frames deep in a gameflow at this point, so tearing it down here from
+ * a UI thread would free state the SDL thread is still using. main.c notices the
+ * flag when the gameflow returns and re-runs the engine from the top.
+ */
+void Android_RequestFolderRestart(void)
+{
+    const char *cwd;
+
+    chosen_game_folder_forget();
+    g_assets_buf[0] = '\0';
+    cwd = assets_dir();
+    if (chdir(cwd) != 0) {
+        __android_log_print(ANDROID_LOG_ERROR, ALOG_TAG,
+                            "folder switch: chdir(%s) failed", cwd);
+        return;
+    }
+    __android_log_print(ANDROID_LOG_INFO, ALOG_TAG,
+                        "folder switch requested; engine restarting in %s", cwd);
+    g_folderReloadRequested = 1;
+}
+
 /*
  * Extracts the asset payload on first run (or after an upgrade).
  *
@@ -546,8 +640,6 @@ static void extract_assets(void)
  */
 int main(int argc, char *argv[])
 {
-    char cwd[1024];
-
     SDL_SetMainReady();
     /*
      * M5: argv arrives from SDLActivity's Java side, which SDL2 has already
@@ -571,12 +663,13 @@ int main(int argc, char *argv[])
     if (SDL_Init(0) != 0) {
         __android_log_print(ANDROID_LOG_ERROR, ALOG_TAG, "SDL_Init(0): %s", SDL_GetError());
     }
-    extract_assets();
-
-    snprintf(cwd, sizeof(cwd), "%s", assets_dir());
-    if (chdir(cwd) != 0) {
-        __android_log_print(ANDROID_LOG_ERROR, ALOG_TAG, "chdir(%s) failed", cwd);
-    }
+    /*
+     * The working directory and the extracted tree are settled by
+     * Android_ApplyChosenFolder(), which the engine's main() calls before
+     * System_Init -- it has to happen there because that is where a chosen
+     * folder takes effect, and doing it in both places ran the extraction
+     * twice with the second run in a directory that no longer had the payload.
+     */
 
     /*
      * The engine's own command line. It parses -nosound, -rounds, -p1 ... exactly
@@ -618,10 +711,23 @@ int main(int argc, char *argv[])
 }
 
 /*
- * No JNI exports are needed here: SDLActivity dlopen()s libmain.so and dlsym()s
- * "SDL_main" (getMainFunction() in SDLActivity.java), so the entry point below
+ * JNI exports.
+ *
+ * The engine entry point needs none: SDLActivity dlopen()s libmain.so and
+ * dlsym()s "SDL_main" (getMainFunction() in SDLActivity.java), so main() above
  * is reached by name. An earlier revision exported an empty
  * Java_org_libsdl_app_SDLActivity_nativeInit for a symbol SDLActivity does not
  * define; it has been removed.
+ *
+ * "Select Game Folder" does need one, because the player can pick a folder while
+ * the engine is running and the choice has to reach a process that is already
+ * past the point where its working directory was decided.
  */
+JNIEXPORT void JNICALL
+Java_org_libsdl_app_SDLActivity_nativeApplyGameFolder(JNIEnv *env, jclass cls)
+{
+    (void)env;
+    (void)cls;
+    Android_RequestFolderRestart();
+}
 #endif /* __ANDROID__ */

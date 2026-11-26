@@ -359,6 +359,9 @@ extern int g_bufferedRead; /* 0x00504274 */
 extern int g_iniCaseSensitive; /* 0x00504278 */
 extern char g_iniLang[3]; /* 0x0050427c */
 extern int g_quitRequested; /* 0x00504280 */
+/* Port addition: the Android folder picker chose a new tree; tear the engine
+ * down and re-run it in this process (main.c). */
+extern int g_folderReloadRequested;
 /* Port addition (M8): a GL renderer failed to restore; re-run System_Init. */
 /* Port addition (M8): rebuilds video on the recovered renderer. */
 void __cdecl System_ReinitVideo(void);

@@ -369,6 +369,17 @@ int g_quitRequested; /* 0x00504280 */
  */
 int g_rendererFallbackRequested;
 /*
+ * Port addition: set when the player picked a new game folder from the Android
+ * overlay. Gameflow_Run returns so Main_Run can tear the engine down and set it
+ * up again in this same process, resuming at the folder's own entry point.
+ *
+ * Deliberately not g_quitRequested (which ends the program) and not
+ * g_rendererFallbackRequested (which resumes at the interrupted screen on the
+ * same tree): both would be wrong here, the first by exiting and the second by
+ * resuming a screen that belongs to a folder no longer selected.
+ */
+int g_folderReloadRequested;
+/*
  * Port addition: [Debug] Verbose, the switch for this project's per-event
  * tracing (default off, and absent from a stock mugen.cfg).
  *

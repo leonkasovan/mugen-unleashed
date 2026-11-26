@@ -98,6 +98,18 @@ int main(int argc, char *argv[])
     if (g_cmdline == NULL) {
         return 0;
     }
+    /*
+     * Android: the folder picker writes the chosen tree to a marker file, and
+     * this is what moves the process into it. It has to run before Log_Init(),
+     * because Log_Init opens mugen.log relative to the working directory --
+     * resolving the folder afterwards left the log in one tree and the engine
+     * in another, and the engine then failed to find data/mugen.cfg at all.
+     */
+#ifdef ANDROID_PORT
+    Android_ApplyChosenFolder();
+    /* Set by Android_RequestFolderRestart once the engine is running. */
+    int reload_attempts = 0;
+#endif
     Log_Init();
 #ifdef MUGEN_VITA_GL
     /*
@@ -111,6 +123,7 @@ int main(int argc, char *argv[])
     Log_Printf("Parsing command line...\n");
     CmdLine_Parse(argc, argv);
     Log_Printf("Parse command line OK\n");
+restart:
     /* Port addition: allocate in the counter's lifetime, not before it. */
     Memprof_Start();
     Log_Printf("Initializing...\n");
@@ -169,6 +182,46 @@ int main(int argc, char *argv[])
         } while (1);
         Log_Printf("Returned from gameflow loop");
         Log_Printf("\n");
+#ifdef ANDROID_PORT
+        /*
+         * The player picked a different game folder. The process is already in
+         * the new tree (Android_RequestFolderRestart chdir'd to it), so tear the
+         * engine down and set it up again from the top. This re-reads
+         * data/mugen.cfg and every character and stage from the new tree, which
+         * is the only way to honour the new folder completely: the loaded sets,
+         * fonts, palettes and input bindings all belong to the tree that was
+         * open, and reusing them across trees is how a character ends up with a
+         * palette from somewhere else.
+         */
+        if (g_folderReloadRequested) {
+            g_folderReloadRequested = 0;
+            Log_Printf("Game folder changed: restarting the engine.\n");
+            System_Deinit();
+            /*
+             * The old log belongs to the tree being left, and the new tree gets
+             * its own mugen.log -- that is the only way to tell the two runs
+             * apart afterwards. Log_Close first so the handle is not leaked.
+             */
+            Log_Close();
+            g_log = NULL;
+            Log_Init();
+            /*
+             * Bounded: a folder that fails to load must not spin here forever
+             * restarting the engine.
+             */
+            if (++reload_attempts > 4) {
+                Log_Printf("Game folder changed repeatedly; not restarting again.\n");
+                Log_Printf("Deinitializing...\n");
+                System_Deinit();
+                free(g_cmdline);
+                Log_Printf("Successful program termination.\n");
+                Log_Close();
+                g_log = NULL;
+                return 0;
+            }
+            goto restart;
+        }
+#endif
     }
 
     Log_Printf("Deinitializing...\n");

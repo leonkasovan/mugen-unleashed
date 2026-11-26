@@ -69,6 +69,16 @@ void Gameflow_Run(void)
             Log_Printf("Renderer fallback: leaving the gameflow loop at state %i.\n", *state);
             break;
         }
+        /*
+         * The player picked a different game folder. Nothing here belongs to
+         * the new tree, so leave the loop entirely; main.c restarts the engine
+         * and the gameflow begins again at the new tree's entry point rather
+         * than resuming this screen.
+         */
+        if (g_folderReloadRequested) {
+            Log_Printf("Game folder changed: leaving the gameflow loop at state %i.\n", *state);
+            break;
+        }
         Log_Printf("Gameflow %i\n", *state);
         switch (*state) {
         case 0:

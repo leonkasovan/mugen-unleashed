@@ -824,7 +824,34 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
             Toast.makeText(this, "Could not save the folder choice", Toast.LENGTH_LONG).show();
             return;
         }
-        promptRestart();
+        applyGameFolder();
+    }
+
+    /**
+     * Asks the running engine to reload itself in the new folder.
+     *
+     * The native side chdir()s and raises a flag; main.c tears the engine down
+     * and runs it again from the top when the gameflow returns, so the new tree
+     * is loaded without the player having to quit. Where that is not possible
+     * -- the engine thread has not started, has exited, or the library is
+     * missing -- say so instead of silently doing nothing.
+     */
+    private void applyGameFolder() {
+        boolean asked = false;
+        if (mSDLThread != null) {
+            try {
+                /* The native library is already loaded; this only sets a flag. */
+                nativeApplyGameFolder();
+                asked = true;
+            } catch (Throwable e) {
+                Log.e(TAG, "cannot ask the engine to reload: " + e);
+            }
+        }
+        if (asked) {
+            Toast.makeText(this, R.string.game_folder_switching, Toast.LENGTH_SHORT).show();
+        } else {
+            promptRestart();
+        }
     }
 
     /**
@@ -917,17 +944,18 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
     }
 
     /**
-     * Asks the player to reopen the game so the new folder takes effect.
+     * Fallback: asks the player to reopen the game so the new folder takes effect.
      *
-     * The working directory is resolved once, in C, before this class can hand
-     * anything over, so there is no way to switch folders inside a running
-     * process. The old version started the launcher intent and immediately
-     * killed the process, which is unreliable: the activity is singleInstance,
-     * so the intent can be delivered back to the instance that is still alive
-     * instead of starting a fresh process. Say so plainly and let the player
-     * restart it, rather than leaving them unsure whether the choice was saved.
+     * Only used when the running engine cannot be asked to reload itself (see
+     * applyGameFolder). Restarting a singleInstance activity from inside itself
+     * is unreliable -- the launcher intent can be delivered back to the live
+     * instance instead of starting a fresh process -- so this says so plainly
+     * rather than killing the process and hoping.
      */
     private void promptRestart() {
+        if (isFinishing()) {
+            return;
+        }
         new AlertDialog.Builder(this)
                 .setTitle(R.string.game_folder_str)
                 .setMessage(R.string.game_folder_saved)
@@ -1269,6 +1297,14 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
     public static native void nativeLowMemory();
     public static native void nativeSendQuit();
     public static native void nativeQuit();
+
+    /**
+     * Applies the folder the player just chose (libmain.so, android_main.c).
+     *
+     * Sets the engine's reload flag; the engine restarts itself when it next
+     * returns to its main loop rather than being torn down from this thread.
+     */
+    public static native void nativeApplyGameFolder();
     public static native void nativePause();
     public static native void nativeResume();
     public static native void nativeFocusChanged(boolean hasFocus);

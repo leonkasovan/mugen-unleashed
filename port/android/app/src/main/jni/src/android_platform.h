@@ -38,4 +38,14 @@ void Android_VideoQuit(void);
 int Android_SetFullscreen(int fullscreen);
 void Android_PadDeviceEvent(const SDL_Event *event);
 
+/*
+ * Select Game Folder support (android_main.c).
+ *
+ * ApplyChosenFolder reads the marker the Java side wrote and chdir()s to it;
+ * main.c calls it before System_Init. RequestFolderRestart is called from a
+ * later launch to reload the engine in place once the marker has changed.
+ */
+void Android_ApplyChosenFolder(void);
+void Android_RequestFolderRestart(void);
+
 #endif

@@ -496,6 +496,27 @@ A chosen folder must also be writable, not just listable -- the engine writes
 `mugen.log` and its config into the tree -- so the picker rejects one that fails
 a write probe instead of restarting into an error dialog.
 
+Selecting a folder **restarts the engine in place**, it does not ask the player
+to quit. Java calls `nativeApplyGameFolder`, which chdir()s into the new tree and
+sets `g_folderReloadRequested`; `Gameflow_Run` returns at its next frame and
+`Mugen_Main` tears the engine down with `System_Deinit()` and re-runs it from the
+top, reopening `mugen.log` in the new tree. The SDL thread and the window are
+left alone, so this is a full reload without a process restart. It is done that
+way because the loaded sets, fonts, palettes and input bindings all belong to
+the tree that was open, and reusing them across trees is how a character ends up
+with another tree's palette.
+
+Two ordering rules this depends on, both found by breaking them on the device:
+
+- `Android_ApplyChosenFolder()` must run before `Log_Init()`. Resolving the tree
+  afterwards left the log in one folder and the engine in another.
+- The working directory has to be settled inside the engine entry point, not in
+  `android_main.c`'s `main()`, because that is where a chosen folder takes
+  effect. Doing it in both places ran extraction twice.
+- `assets_dir()` must keep writing into `g_assets_buf` by name. An intermediate
+  `char *buf = g_assets_buf` alias made `sizeof(buf)` a pointer, so `snprintf`
+  truncated the path to "/storag" and the engine looked for its tree there.
+
 Android BGM uses one built-in SDL2_mixer backend for **WAV, OGG/Vorbis and MP3**.
 Windows `[Music]` plugin DLL selections are replaced by that Android backend;
 the desktop configuration file is not rewritten. Native SDL2 RWops are owned
