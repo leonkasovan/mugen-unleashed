@@ -528,7 +528,11 @@ Ordering rules this depends on, each found by breaking it on the device:
 - `<tree>/cmdline` is read in `Mugen_Main` after the tree is open (via
   `CmdLine_AppendFile`), not in `android_main.c` before it. Read earlier, the
   handle resolved against whatever directory the process started in, so the
-  selected tree's file was silently ignored. It is re-read on every switch.
+  selected tree's file was silently ignored. The read sits *after* the `restart:`
+  label so a switch re-parses the new tree's file; above it, only a cold start
+  ever read one. The argv the tree's options are appended to is rebuilt from the
+  caller's original argv each pass, so a switch cannot accumulate the previous
+  tree's options.
 
 Android BGM uses one built-in SDL2_mixer backend for **WAV, OGG/Vorbis and MP3**.
 Windows `[Music]` plugin DLL selections are replaced by that Android backend;

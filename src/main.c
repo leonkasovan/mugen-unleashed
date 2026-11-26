@@ -145,6 +145,15 @@ int main(int argc, char *argv[])
      * in another, and the engine then failed to find data/mugen.cfg at all.
      */
 #ifdef ANDROID_PORT
+    /*
+     * The caller's own argv, kept so a restart rebuilds from it rather than
+     * from the argv the previous pass produced -- appending "<tree>/cmdline"
+     * to that would carry the old tree's options forward and grow the list on
+     * every switch.
+     */
+    int base_argc = argc;
+    char **base_argv = argv;
+
     Android_ApplyChosenFolder();
 #endif
     Log_Init();
@@ -157,13 +166,16 @@ int main(int argc, char *argv[])
      */
     VitaPower_Init();
 #endif
+restart:
     /*
-     * Android: "<tree>/cmdline" adds engine options without a shell. Read here,
-     * not in android_main.c, because this only runs once the chosen folder is
-     * open -- reading it before the chdir resolved the handle against the
-     * directory the process happened to start in and ignored the selected
-     * tree's file. Re-read on every folder switch, so the new tree's options
-     * apply to the run they belong to.
+     * Everything from here on is per-run, and that includes the command line.
+     *
+     * Android's "<tree>/cmdline" adds engine options without a shell. It is
+     * read here rather than in android_main.c for two reasons: android_main.c
+     * runs before the chosen folder is opened, so the handle resolved against
+     * whatever directory the process started in; and a folder switch jumps back
+     * to this label, so anything above it is parsed only on a cold start --
+     * which made the file ignored for the tree the player switched to.
      */
 #ifdef ANDROID_PORT
     {
@@ -173,11 +185,11 @@ int main(int argc, char *argv[])
          */
         static char *android_argv[64];
         static char android_store[512];
-        int n = argc < 63 ? argc : 63;
+        int n = base_argc < 63 ? base_argc : 63;
         int i;
 
         for (i = 0; i < n; i++) {
-            android_argv[i] = argv[i];
+            android_argv[i] = base_argv[i];
         }
         argc = CmdLine_AppendFile(android_argv, n, 63, android_store, sizeof(android_store), "cmdline");
         android_argv[argc] = NULL;
@@ -187,7 +199,6 @@ int main(int argc, char *argv[])
     Log_Printf("Parsing command line...\n");
     CmdLine_Parse(argc, argv);
     Log_Printf("Parse command line OK\n");
-restart:
     /* Port addition: allocate in the counter's lifetime, not before it. */
     Memprof_Start();
     Log_Printf("Initializing...\n");
