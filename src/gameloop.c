@@ -944,6 +944,20 @@ int Screen_Tick(ScreenLoop *screen)
         screen->fade_ticks = 0;
         screen->done = 1;
     }
+    /*
+     * A game-folder switch requested from the Android overlay is consumed at the
+     * frame boundary for the same reason as the renderer fallback above: the
+     * request used to be noticed only between gameflow states, which on a title
+     * screen with the attract demo disabled can be indefinitely. Ending the
+     * screen through the normal fields makes the loop break and run its usual
+     * cleanup before the engine is torn down and reopened in the new tree.
+     */
+    if (g_folderReloadRequested && screen->fade_out == 0) {
+        Log_Printf("Game folder change requested; unwinding the current screen.\n");
+        screen->fade_out = 1;
+        screen->fade_ticks = 0;
+        screen->done = 1;
+    }
     if (screen->fade_out != 0 && screen->fade_ticks > 0 && !paused) {
         screen->fade_ticks--;
     }

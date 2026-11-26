@@ -41,11 +41,19 @@ void Android_PadDeviceEvent(const SDL_Event *event);
 /*
  * Select Game Folder support (android_main.c).
  *
- * ApplyChosenFolder reads the marker the Java side wrote and chdir()s to it;
- * main.c calls it before System_Init. RequestFolderRestart is called from a
- * later launch to reload the engine in place once the marker has changed.
+ * ApplyChosenFolder opens the folder the marker names and chdir()s to it; main.c
+ * calls it on a cold start, before Log_Init.
+ *
+ * A live switch is a three-step handshake, because the working directory is
+ * process-wide and the UI thread must not move it out from under a running
+ * game: RequestFolderRestart (UI thread) only records the path and raises the
+ * flag; the engine unwinds, and main.c then calls TakeFolderRequest (engine
+ * thread) once nothing is reading the old tree, followed by
+ * OpenRequestedFolder, which opens the new tree exactly as a cold start would.
  */
 void Android_ApplyChosenFolder(void);
-void Android_RequestFolderRestart(void);
+void Android_RequestFolderRestart(const char *path);
+int Android_TakeFolderRequest(char *out, size_t out_size);
+void Android_OpenRequestedFolder(const char *path);
 
 #endif

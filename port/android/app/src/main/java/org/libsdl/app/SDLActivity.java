@@ -824,24 +824,25 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
             Toast.makeText(this, "Could not save the folder choice", Toast.LENGTH_LONG).show();
             return;
         }
-        applyGameFolder();
+        applyGameFolder(path);
     }
 
     /**
      * Asks the running engine to reload itself in the new folder.
      *
-     * The native side chdir()s and raises a flag; main.c tears the engine down
-     * and runs it again from the top when the gameflow returns, so the new tree
-     * is loaded without the player having to quit. Where that is not possible
-     * -- the engine thread has not started, has exited, or the library is
-     * missing -- say so instead of silently doing nothing.
+     * The native side only records the request. The engine moves itself into the
+     * new tree after it has torn the running session down -- deliberately not
+     * from here, because the working directory is process-wide and a game is
+     * still running in the tree being left. Where that is not possible -- the
+     * engine thread has not started, has exited, or the library is missing --
+     * say so instead of silently doing nothing.
      */
-    private void applyGameFolder() {
+    private void applyGameFolder(String path) {
         boolean asked = false;
-        if (mSDLThread != null) {
+        if (mSDLThread != null && mSDLThread.isAlive()) {
             try {
-                /* The native library is already loaded; this only sets a flag. */
-                nativeApplyGameFolder();
+                /* The native library is already loaded; this only records the request. */
+                nativeApplyGameFolder(path);
                 asked = true;
             } catch (Throwable e) {
                 Log.e(TAG, "cannot ask the engine to reload: " + e);
@@ -1301,10 +1302,12 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
     /**
      * Applies the folder the player just chose (libmain.so, android_main.c).
      *
-     * Sets the engine's reload flag; the engine restarts itself when it next
-     * returns to its main loop rather than being torn down from this thread.
+     * Only records the request; the engine thread moves the working directory
+     * itself once the running session has been torn down, because the working
+     * directory is process-wide and this is called from the UI thread while a
+     * game is still running in the tree being left.
      */
-    public static native void nativeApplyGameFolder();
+    public static native void nativeApplyGameFolder(String path);
     public static native void nativePause();
     public static native void nativeResume();
     public static native void nativeFocusChanged(boolean hasFocus);

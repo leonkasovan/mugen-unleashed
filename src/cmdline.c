@@ -48,6 +48,62 @@ static void CmdLine_Copy(char *dst, const char *src)
 }
 
 /*
+ * Port addition (Android): append the whitespace-separated options in `path` to
+ * argv and return the new count.
+ *
+ * The list is copied into caller-owned storage that outlives this call, because
+ * CmdLine_Parse keeps pointers into argv (player names, file names). The caller
+ * supplies both buffers; when the file is missing or empty the count is
+ * unchanged, which is the normal case -- most installs have no cmdline file.
+ *
+ * A file that cannot be opened is not an error: a tree without one simply has
+ * no extra options, exactly as on desktop.
+ */
+int CmdLine_AppendFile(char **argv, int argc, int argv_max,
+                       char *store, size_t store_size, const char *path)
+{
+    FILE *f;
+    char *tok;
+    size_t used;
+
+    if (argv == NULL || store == NULL || store_size < 2 || argc < 1 || path == NULL) {
+        return argc;
+    }
+    f = fopen(path, "rb");
+    if (f == NULL) {
+        return argc;            /* no cmdline file: no extra options */
+    }
+    /*
+     * Read the whole file, not one line: fgets would stop at the first newline
+     * and silently drop the rest of a multi-line cmdline, and a file longer than
+     * the buffer would be cut mid-token and then parsed as a valid option with
+     * the wrong value. Reading it all and refusing to parse a truncated buffer
+     * are both better than a half-applied command line.
+     */
+    used = fread(store, 1, store_size - 1, f);
+    if (ferror(f) || (!feof(f) && used >= store_size - 1)) {
+        fclose(f);
+        store[0] = '\0';
+        Log_Printf("cmdline file is too large or unreadable; ignoring it\n");
+        return argc;
+    }
+    fclose(f);
+    store[used] = '\0';
+
+    tok = strtok(store, " \t\r\n");
+    while (tok != NULL) {
+        if (argc >= argv_max - 1) {
+            /* Keep argv NUL-terminated; the remaining tokens are dropped. */
+            Log_Printf("cmdline has more than %d options; ignoring the rest\n", argv_max - 1);
+            break;
+        }
+        argv[argc++] = tok;
+        tok = strtok(NULL, " \t\r\n");
+    }
+    return argc;
+}
+
+/*
  * 0x0040B070. Unknown options show the usage and quit. Quirks kept from the
  * original: "-log" only checks that an argument follows and does not consume
  * it (it then counts as a player name), "-rubric" is an alias of "-r", and

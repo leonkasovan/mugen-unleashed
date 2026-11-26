@@ -496,26 +496,39 @@ A chosen folder must also be writable, not just listable -- the engine writes
 `mugen.log` and its config into the tree -- so the picker rejects one that fails
 a write probe instead of restarting into an error dialog.
 
-Selecting a folder **restarts the engine in place**, it does not ask the player
-to quit. Java calls `nativeApplyGameFolder`, which chdir()s into the new tree and
-sets `g_folderReloadRequested`; `Gameflow_Run` returns at its next frame and
-`Mugen_Main` tears the engine down with `System_Deinit()` and re-runs it from the
-top, reopening `mugen.log` in the new tree. The SDL thread and the window are
-left alone, so this is a full reload without a process restart. It is done that
-way because the loaded sets, fonts, palettes and input bindings all belong to
-the tree that was open, and reusing them across trees is how a character ends up
-with another tree's palette.
+Selecting a folder **reloads the engine in place**, it does not ask the player
+to quit. The handshake is three steps: Java calls `nativeApplyGameFolder(path)`,
+which only records the request under a mutex and raises a flag; the engine
+unwinds the current screen at a frame boundary; and `Mugen_Main` then tears the
+session down with `System_Deinit()` and calls `Android_OpenRequestedFolder()`,
+which opens the new tree exactly as a cold start does. The SDL thread and the
+window are left alone, so this is a full reload without a process restart.
 
-Two ordering rules this depends on, both found by breaking them on the device:
+The UI thread deliberately does **not** `chdir`. The working directory is
+process-wide and a game is still running in the tree being left, so moving it
+there would make every relative load or save in that window resolve against the
+new tree -- a save from the options screen would land in the pack the player had
+just selected. The engine thread moves itself, after teardown.
 
-- `Android_ApplyChosenFolder()` must run before `Log_Init()`. Resolving the tree
-  afterwards left the log in one folder and the engine in another.
-- The working directory has to be settled inside the engine entry point, not in
-  `android_main.c`'s `main()`, because that is where a chosen folder takes
-  effect. Doing it in both places ran extraction twice.
-- `assets_dir()` must keep writing into `g_assets_buf` by name. An intermediate
-  `char *buf = g_assets_buf` alias made `sizeof(buf)` a pointer, so `snprintf`
-  truncated the path to "/storag" and the engine looked for its tree there.
+The reload is consumed at the frame boundary (`Screen_Tick`), not only between
+gameflow states, because a title screen with the attract demo disabled can sit in
+one state indefinitely. The standalone `-storyboard` path handles it separately,
+since that path never enters the gameflow.
+
+Ordering rules this depends on, each found by breaking it on the device:
+
+- `Android_ApplyChosenFolder()` runs before `Log_Init()`. Resolving the tree
+  afterwards put the log in one folder and the engine in another.
+- The working directory is settled inside `Mugen_Main`, not in
+  `android_main.c`'s `main()`, so a chosen folder takes effect. Doing both ran
+  extraction twice.
+- `assets_dir()` writes into `g_assets_buf` by name. An intermediate
+  `char *buf = g_assets_buf` alias made `sizeof(buf)` a pointer size, so a
+  `snprintf` kept only "/storag" and the engine looked for its tree there.
+- `<tree>/cmdline` is read in `Mugen_Main` after the tree is open (via
+  `CmdLine_AppendFile`), not in `android_main.c` before it. Read earlier, the
+  handle resolved against whatever directory the process started in, so the
+  selected tree's file was silently ignored. It is re-read on every switch.
 
 Android BGM uses one built-in SDL2_mixer backend for **WAV, OGG/Vorbis and MP3**.
 Windows `[Music]` plugin DLL selections are replaced by that Android backend;

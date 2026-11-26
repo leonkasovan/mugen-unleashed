@@ -29,6 +29,44 @@ static int Vita_StdioDiscard(void *cookie, const char *buf,
 }
 #endif
 
+#ifdef ANDROID_PORT
+/*
+ * Applies a pending game-folder switch: tears the running session down, then
+ * opens the tree the request names, ready for Mugen_Main to start again.
+ *
+ * Returns 1 when the caller should goto restart, 0 when the request could not be
+ * honoured (in which case the engine is already down and the caller must unwind).
+ *
+ * Order matters and is the point of this function. The old session is freed
+ * FIRST, while every relative path still means what it meant when the engine
+ * opened it; only then is the working directory moved. Doing it the other way
+ * round is what let a save during the switch land in the pack just selected.
+ */
+static int Folder_SwitchPending(void)
+{
+    char switch_to[1024];
+
+    g_folderReloadRequested = 0;
+    Log_Printf("Game folder changed: restarting the engine.\n");
+    System_Deinit();
+    /*
+     * The old log belongs to the tree being left; the new tree gets its own
+     * mugen.log, which is the only way to tell the two runs apart afterwards.
+     */
+    Log_Close();
+    g_log = NULL;
+    if (!Android_TakeFolderRequest(switch_to, sizeof(switch_to))) {
+        /* The flag was seen but the path is gone: there is nothing to open. */
+        Log_Printf("Game folder request lost the path; not restarting.\n");
+        free(g_cmdline);
+        return 0;
+    }
+    Android_OpenRequestedFolder(switch_to);
+    Log_Init();
+    return 1;
+}
+#endif
+
 /* 0x00421500 (SDL.h renames main to SDL_main) */
 #if defined(MUGEN_NO_ENTRY)
 /*
@@ -40,6 +78,7 @@ static int Vita_StdioDiscard(void *cookie, const char *buf,
  * one symbol is a link error rather than a choice. Nothing calls Mugen_Main in
  * a tool build, so it is dropped by --gc-sections.
  */
+
 int Mugen_Main(int argc, char *argv[])
 #elif defined(ANDROID_PORT)
 /*
@@ -107,8 +146,6 @@ int main(int argc, char *argv[])
      */
 #ifdef ANDROID_PORT
     Android_ApplyChosenFolder();
-    /* Set by Android_RequestFolderRestart once the engine is running. */
-    int reload_attempts = 0;
 #endif
     Log_Init();
 #ifdef MUGEN_VITA_GL
@@ -119,6 +156,33 @@ int main(int argc, char *argv[])
      * it was honoured. The clocks still apply to everything that loads below.
      */
     VitaPower_Init();
+#endif
+    /*
+     * Android: "<tree>/cmdline" adds engine options without a shell. Read here,
+     * not in android_main.c, because this only runs once the chosen folder is
+     * open -- reading it before the chdir resolved the handle against the
+     * directory the process happened to start in and ignored the selected
+     * tree's file. Re-read on every folder switch, so the new tree's options
+     * apply to the run they belong to.
+     */
+#ifdef ANDROID_PORT
+    {
+        /*
+         * The engine's own argv storage: CmdLine_Parse keeps pointers into it,
+         * so it must outlive this function and be rebuilt on every switch.
+         */
+        static char *android_argv[64];
+        static char android_store[512];
+        int n = argc < 63 ? argc : 63;
+        int i;
+
+        for (i = 0; i < n; i++) {
+            android_argv[i] = argv[i];
+        }
+        argc = CmdLine_AppendFile(android_argv, n, 63, android_store, sizeof(android_store), "cmdline");
+        android_argv[argc] = NULL;
+        argv = android_argv;
+    }
 #endif
     Log_Printf("Parsing command line...\n");
     CmdLine_Parse(argc, argv);
@@ -142,9 +206,31 @@ restart:
     g_game->start_ticks = (int)Timer_GetTicks();
     Log_Printf("OK\n");
 
+#ifdef ANDROID_PORT
+    /* A folder switch requested while a storyboard ran: skip the gameflow. */
+    int reload_pending = 0;
+#endif
     if (g_cmdline->storyboard[0] != '\0') {
         Storyboard_PlayFile(g_cmdline->storyboard);
+        Log_Printf("\n");
+        /*
+         * A storyboard is a fixed run, not a gameflow, so it never reaches the
+         * reload check below. Without this a folder switch requested while one
+         * was playing would sit on the flag until the next launch.
+         */
+#ifdef ANDROID_PORT
+        if (g_folderReloadRequested) {
+            if (!Folder_SwitchPending()) {
+                return 0;
+            }
+            reload_pending = 1;
+        }
+#endif
+#ifdef ANDROID_PORT
+    } else if (!reload_pending) {
+#else
     } else {
+#endif
         /*
          * Port addition (M8, RENDERING_PLAN 12.6): a GL renderer that cannot be
          * rebuilt after Android destroyed its context sets
@@ -184,45 +270,25 @@ restart:
         Log_Printf("\n");
 #ifdef ANDROID_PORT
         /*
-         * The player picked a different game folder. The process is already in
-         * the new tree (Android_RequestFolderRestart chdir'd to it), so tear the
-         * engine down and set it up again from the top. This re-reads
-         * data/mugen.cfg and every character and stage from the new tree, which
-         * is the only way to honour the new folder completely: the loaded sets,
-         * fonts, palettes and input bindings all belong to the tree that was
-         * open, and reusing them across trees is how a character ends up with a
-         * palette from somewhere else.
+         * The player picked a different game folder. This is the only place a
+         * live switch is acted on: the UI thread recorded the path and raised the
+         * flag but did not touch the working directory, so everything up to here
+         * still ran in the tree being left.
          */
         if (g_folderReloadRequested) {
-            g_folderReloadRequested = 0;
-            Log_Printf("Game folder changed: restarting the engine.\n");
-            System_Deinit();
-            /*
-             * The old log belongs to the tree being left, and the new tree gets
-             * its own mugen.log -- that is the only way to tell the two runs
-             * apart afterwards. Log_Close first so the handle is not leaked.
-             */
-            Log_Close();
-            g_log = NULL;
-            Log_Init();
-            /*
-             * Bounded: a folder that fails to load must not spin here forever
-             * restarting the engine.
-             */
-            if (++reload_attempts > 4) {
-                Log_Printf("Game folder changed repeatedly; not restarting again.\n");
-                Log_Printf("Deinitializing...\n");
-                System_Deinit();
-                free(g_cmdline);
-                Log_Printf("Successful program termination.\n");
-                Log_Close();
-                g_log = NULL;
+            if (!Folder_SwitchPending()) {
                 return 0;
             }
-            goto restart;
+            reload_pending = 1;
         }
 #endif
     }
+#ifdef ANDROID_PORT
+    /* Both branches converge here, so the restart has exactly one site. */
+    if (reload_pending) {
+        goto restart;
+    }
+#endif
 
     Log_Printf("Deinitializing...\n");
     if (g_game != NULL && g_game->game_dir[0] != '\0') {

@@ -411,66 +411,120 @@ static int extract_asset(const char *rel, long expect_size, const char *expect_h
 
 static void extract_assets(void);
 
-/*
- * Select Game Folder: resolve the chosen tree and make it the working directory.
- *
- * main.c calls this before System_Init, so every relative path the engine
- * opens -- data/mugen.cfg included -- resolves inside the tree the player
- * picked. Doing it here rather than through a JNI call is deliberate: the
- * working directory has to be settled before the engine starts, and Java cannot
- * reach into a process that is already past that point.
- */
-void Android_ApplyChosenFolder(void)
+/* Discards every cached answer about which folder to use. */
+static void forget_folder_choice(void)
 {
-    const char *cwd;
-
     chosen_game_folder_forget();
     g_assets_buf[0] = '\0';
+}
 
+/*
+ * Opens a folder: extracts the bundled assets into it if it has none, then makes
+ * it the working directory.
+ *
+ * Called for a cold start and for a live switch, so a folder means the same
+ * thing either way -- the versions that differed let a folder bootstrap from the
+ * launcher but not from the overlay.
+ *
+ * Extract, then chdir: the payload and manifest are APK assets, which
+ * SDL_RWFromFile resolves through its Android asset path rather than the working
+ * directory. Swapping these two ran the extraction from the wrong directory and
+ * the engine then failed to open data/mugen.cfg.
+ */
+static void open_folder(const char *dir, const char *why)
+{
+    snprintf(g_assets_buf, sizeof(g_assets_buf), "%s", dir);
+    extract_assets();
+    if (chdir(dir) != 0) {
+        __android_log_print(ANDROID_LOG_ERROR, ALOG_TAG, "%s: chdir(%s) failed", why, dir);
+        return;
+    }
+    __android_log_print(ANDROID_LOG_INFO, ALOG_TAG, "%s: working directory %s", why, dir);
+}
+
+void Android_ApplyChosenFolder(void)
+{
+    const char *dir;
+
+    forget_folder_choice();
+    dir = assets_dir();
     if (!g_game_folder_chosen) {
         __android_log_print(ANDROID_LOG_INFO, ALOG_TAG,
                             "assets: no chosen folder; using the default tree");
     }
-    cwd = assets_dir();
-    /*
-     * Extract, then chdir -- the order the original main() used. The payload
-     * and manifest are APK assets, which SDL_RWFromFile resolves through its
-     * Android asset path rather than the working directory, so extraction does
-     * not need to be inside the tree. Swapping these two ran the extraction
-     * from the wrong directory and the engine then failed to open
-     * data/mugen.cfg.
-     */
-    extract_assets();
-    if (chdir(cwd) != 0) {
-        __android_log_print(ANDROID_LOG_ERROR, ALOG_TAG, "chdir(%s) failed", cwd);
-    } else {
-        __android_log_print(ANDROID_LOG_INFO, ALOG_TAG, "working directory: %s", cwd);
-    }
+    open_folder(dir, "startup");
 }
 
 /*
- * Called from Java (via JNI) after the player picked a new folder.
+ * A live folder switch requested from the UI thread.
  *
- * Only sets a flag and moves the process into the new tree: the engine may be
- * several frames deep in a gameflow at this point, so tearing it down here from
- * a UI thread would free state the SDL thread is still using. main.c notices the
- * flag when the gameflow returns and re-runs the engine from the top.
+ * Android_RequestFolderRestart only records the request. It deliberately does
+ * not chdir: the engine thread is still running a gameflow in the tree being
+ * left, and the working directory is process-wide, so moving it there means
+ * every relative load or save until the engine notices resolves against the new
+ * tree -- a save from the options screen in that window would land in the pack
+ * the player just selected. The engine thread takes the request with
+ * Android_TakeFolderRequest after teardown and opens it with
+ * Android_OpenRequestedFolder, when nothing is reading the old tree.
  */
-void Android_RequestFolderRestart(void)
-{
-    const char *cwd;
+static SDL_mutex *g_folder_lock;
+static char g_folder_request[1024];
 
-    chosen_game_folder_forget();
-    g_assets_buf[0] = '\0';
-    cwd = assets_dir();
-    if (chdir(cwd) != 0) {
-        __android_log_print(ANDROID_LOG_ERROR, ALOG_TAG,
-                            "folder switch: chdir(%s) failed", cwd);
+static SDL_mutex *folder_lock(void)
+{
+    if (g_folder_lock == NULL) {
+        g_folder_lock = SDL_CreateMutex();
+    }
+    return g_folder_lock;
+}
+
+void Android_RequestFolderRestart(const char *path)
+{
+    SDL_mutex *lock = folder_lock();
+
+    if (path == NULL || path[0] == '\0') {
         return;
     }
-    __android_log_print(ANDROID_LOG_INFO, ALOG_TAG,
-                        "folder switch requested; engine restarting in %s", cwd);
+    if (lock == NULL) {
+        return;
+    }
+    SDL_LockMutex(lock);
+    snprintf(g_folder_request, sizeof(g_folder_request), "%s", path);
+    SDL_UnlockMutex(lock);
     g_folderReloadRequested = 1;
+    __android_log_print(ANDROID_LOG_INFO, ALOG_TAG, "folder switch requested: %s", path);
+}
+
+int Android_TakeFolderRequest(char *out, size_t out_size)
+{
+    SDL_mutex *lock = folder_lock();
+    int have = 0;
+
+    if (lock == NULL) {
+        return 0;
+    }
+    SDL_LockMutex(lock);
+    if (g_folder_request[0] != '\0') {
+        have = 1;
+        if (out != NULL && out_size > 0) {
+            snprintf(out, out_size, "%s", g_folder_request);
+        }
+        g_folder_request[0] = '\0';
+    }
+    SDL_UnlockMutex(lock);
+    return have;
+}
+
+void Android_OpenRequestedFolder(const char *path)
+{
+    if (path == NULL || path[0] == '\0') {
+        return;
+    }
+    /* The requested tree may not be the one the marker names any more, so pin
+     * the cache to it and clear the marker-derived answers. */
+    chosen_game_folder_forget();
+    g_assets_buf[0] = '\0';
+    open_folder(path, "switch");
 }
 
 /*
@@ -673,16 +727,20 @@ int main(int argc, char *argv[])
 
     /*
      * The engine's own command line. It parses -nosound, -rounds, -p1 ... exactly
-     * as on desktop; passing none is the normal case. A file called "cmdline" in
-     * the data directory lets a user add options without rebuilding -- useful on
-     * a device, where there is no shell.
+     * as on desktop; passing none is the normal case.
+     *
+     * A file called "cmdline" in the data directory lets a user add options
+     * without rebuilding -- useful on a device, where there is no shell. It is
+     * NO LONGER read here: this runs before the chosen folder is opened, so the
+     * handle resolved against whatever directory the process started in and the
+     * selected tree's cmdline was silently ignored. The engine reads it in
+     * Mugen_Main, immediately after the tree is open, and re-reads it on every
+     * folder switch.
      */
     {
         static char *android_argv[32];
-        static char cmdline[512];
         int android_argc = 0;
         int i;
-        FILE *f;
 
         /* SDL's arguments first (argc includes argv[0]). */
         for (i = 0; i < argc && android_argc < 30; i++) {
@@ -692,17 +750,6 @@ int main(int argc, char *argv[])
         }
         if (android_argc == 0) {
             android_argv[android_argc++] = argv[0] != NULL ? argv[0] : (char *)"mugen";
-        }
-        f = fopen("cmdline", "rb");
-        if (f != NULL) {
-            if (fgets(cmdline, sizeof(cmdline), f) != NULL) {
-                char *tok = strtok(cmdline, " \t\r\n");
-                while (tok != NULL && android_argc < 31) {
-                    android_argv[android_argc++] = tok;
-                    tok = strtok(NULL, " \t\r\n");
-                }
-            }
-            fclose(f);
         }
         android_argv[android_argc] = NULL;
         __android_log_print(ANDROID_LOG_INFO, ALOG_TAG, "engine starting, %d argument(s)", android_argc);
@@ -724,10 +771,16 @@ int main(int argc, char *argv[])
  * past the point where its working directory was decided.
  */
 JNIEXPORT void JNICALL
-Java_org_libsdl_app_SDLActivity_nativeApplyGameFolder(JNIEnv *env, jclass cls)
+Java_org_libsdl_app_SDLActivity_nativeApplyGameFolder(JNIEnv *env, jclass cls, jstring path)
 {
-    (void)env;
-    (void)cls;
-    Android_RequestFolderRestart();
+    const char *chars = NULL;
+
+    if (path != NULL) {
+        chars = (*env)->GetStringUTFChars(env, path, NULL);
+    }
+    if (chars != NULL) {
+        Android_RequestFolderRestart(chars);
+        (*env)->ReleaseStringUTFChars(env, path, chars);
+    }
 }
 #endif /* __ANDROID__ */

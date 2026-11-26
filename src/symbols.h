@@ -510,6 +510,9 @@ extern ExprValue g_exprStackValue[128]; /* 0x00505500 */
 /* 0x0040af90 */ void __cdecl PalReserve_Release(int char_index, int pal);
 /* 0x0040b010 */ void __cdecl PalReserve_ResetAll(void);
 /* 0x0040b070 */ void __cdecl CmdLine_Parse(int argc, char **argv);
+/* Port addition (Android): appends "<tree>/cmdline" options; returns the new argc. */
+int __cdecl CmdLine_AppendFile(char **argv, int argc, int argv_max,
+                               char *store, size_t store_size, const char *path);
 /* 0x0040b960 */ __declspec(noreturn) void __cdecl CmdLine_Help(void);
 /* 0x0040b9d0 */ void __cdecl Video_HandleFullscreenKey(int *key);
 /* 0x0040baa0 */ void __cdecl Player_Warn(Player *p, const char *msg);
