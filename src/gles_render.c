@@ -2090,9 +2090,31 @@ static int gles_quad_is_culled(const float *mvp16, const float *pos8)
         float px2 = (maxx * 0.5f + 0.5f) * vw;
         float py1 = (y_down ? (miny * 0.5f + 0.5f) : (0.5f - maxy * 0.5f)) * vh;
         float py2 = (y_down ? (maxy * 0.5f + 0.5f) : (0.5f - miny * 0.5f)) * vh;
+        float cx1, cx2, cy1, cy2;
 
-        if (px2 < (float)g_clipX1 || px1 > (float)g_clipX2 ||
-            py2 < (float)g_clipY1 || py1 > (float)g_clipY2) {
+        /*
+         * The clip rectangle is kept in logical video coordinates, but px/py
+         * above are framebuffer pixels. When the render target is scaled
+         * (Stage3DRenderScale) the two are not the same space, and comparing
+         * them directly dropped sprites that were on screen: at scale 0.5 a
+         * sprite at logical x 450..550 inside a clip of 400..600 became
+         * 225..275 and was rejected as "outside 400..600". Convert the clip
+         * into framebuffer pixels exactly as Gl_ApplyClipRect does for the
+         * scissor, so the cull and the GPU clip can never disagree.
+         */
+        if (vw > 0.0f && vh > 0.0f && g_targetWidth > 0 && g_targetHeight > 0) {
+            cx1 = (float)g_clipX1 * vw / (float)g_targetWidth;
+            cx2 = (float)g_clipX2 * vw / (float)g_targetWidth;
+            cy1 = (float)g_clipY1 * vh / (float)g_targetHeight;
+            cy2 = (float)g_clipY2 * vh / (float)g_targetHeight;
+        } else {
+            cx1 = (float)g_clipX1;
+            cx2 = (float)g_clipX2;
+            cy1 = (float)g_clipY1;
+            cy2 = (float)g_clipY2;
+        }
+
+        if (px2 < cx1 || px1 > cx2 || py2 < cy1 || py1 > cy2) {
             return 2;               /* outside the clip rectangle */
         }
         if ((px2 - px1) < 0.01f || (py2 - py1) < 0.01f) {
@@ -2723,6 +2745,9 @@ void *Gl_Capture(void)
 int GlTex_AllocDepth(GlTex *tex)
 {
     GLuint depth = 0;
+    GLint depth_bits = 0;
+    const GLenum formats[2] = { GL_DEPTH_COMPONENT24, GL_DEPTH_COMPONENT16 };
+    int i;
 
     if (tex == NULL || !gles_texture_size(tex->w, tex->h)) {
         return 0;
@@ -2740,10 +2765,38 @@ int GlTex_AllocDepth(GlTex *tex)
         return 0;
     }
     glBindRenderbuffer(GL_RENDERBUFFER, depth);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, tex->w, tex->h);
+    /*
+     * Ask for 24-bit depth first and keep 16 only as a fallback. The old copy
+     * was fixed at 16, so the game framebuffer depth-tested the 3D stage at 16
+     * bits no matter what depth the Android window was created with: the
+     * 24-bit request in android_video.c covers the window, not this attachment,
+     * and logging the window's depth made it look as though the stage had it.
+     *
+     * A driver may refuse a 24-bit renderbuffer, so verify what was actually
+     * allocated with GL_RENDERBUFFER_DEPTH_SIZE rather than trusting the
+     * request, and fall back to 16 when the result is not wider than 16.
+     */
+    for (i = 0; i < 2; i++) {
+        gles_clear_errors();
+        glRenderbufferStorage(GL_RENDERBUFFER, formats[i], tex->w, tex->h);
+        if (!gles_ok()) {
+            continue;
+        }
+        depth_bits = 0;
+        glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_DEPTH_SIZE, &depth_bits);
+        if (gles_ok() && depth_bits > 16) {
+            break;
+        }
+        if (i == 0 && depth_bits <= 16) {
+            /* Allocated, but not wider: the 16-bit pass below is the real one. */
+            Log_Printf("GLES: 24-bit depth refused (%d bits), falling back to 16\n", (int)depth_bits);
+        }
+    }
     glBindRenderbuffer(GL_RENDERBUFFER, 0);
-    if (!gles_ok()) { glDeleteRenderbuffers(1, &depth); return 0; }
+    if (!gles_ok() || depth_bits <= 0) { glDeleteRenderbuffers(1, &depth); return 0; }
     tex->depth = (unsigned int)depth;
+    Log_Printf("GLES: render target %dx%d depth buffer: %d bits\n",
+               tex->w, tex->h, (int)depth_bits);
     return 1;
 }
 

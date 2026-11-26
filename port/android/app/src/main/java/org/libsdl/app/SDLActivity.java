@@ -779,10 +779,10 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
 
         /*
          * The engine opens files by path and writes into the tree (mugen.log,
-         * data/mugen.cfg), so a folder it cannot list *or* cannot write is
-         * useless to it -- and choosing one makes the engine exit on a missing
-         * config. Check both here rather than after a restart that lands on an
-         * error dialog.
+         * data/mugen.cfg, and its config into data/), so a folder it cannot
+         * list *or* cannot write is useless to it -- and choosing one makes the
+         * engine exit on a missing config. Check both here rather than after a
+         * restart that lands on an error dialog.
          */
         File dir = new File(path);
         if (!dir.isDirectory() || dir.listFiles() == null) {
@@ -791,26 +791,40 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
             Log.e(TAG, "chosen folder is not readable: " + path);
             return;
         }
-        File probe = new File(dir, ".mugen_write_test");
+        /*
+         * Probe with createTempFile, which both proves a file can be created and
+         * returns one this app just made. An earlier version used a fixed name
+         * and treated an existing file as success, so picking a folder that
+         * already held a file of that name deleted the player's file. Only ever
+         * delete what createTempFile returned.
+         */
+        File probe = null;
         try {
-            if (!probe.createNewFile() && !probe.exists()) {
-                throw new java.io.IOException("createNewFile refused");
-            }
-            probe.delete();
+            probe = File.createTempFile(".mugen_write", ".tmp", dir);
         } catch (Exception e) {
             Toast.makeText(this, "Cannot write to " + path + "\nChoose a folder this app may modify",
                     Toast.LENGTH_LONG).show();
             Log.e(TAG, "chosen folder is not writable: " + path + " (" + e + ")");
             return;
+        } finally {
+            if (probe != null) {
+                probe.delete();
+            }
+        }
+        /* The engine writes data/mugen.cfg, so data/ must be writable too. */
+        File dataDir = new File(dir, "data");
+        if (dataDir.isDirectory() && !dataDir.canWrite()) {
+            Toast.makeText(this, "Cannot write to " + path + "/data\nChoose a folder this app may modify",
+                    Toast.LENGTH_LONG).show();
+            Log.e(TAG, "chosen data/ is not writable: " + dataDir);
+            return;
         }
 
-        setGameFolder(path);
-        /*
-         * The working directory is chosen once, before the engine starts, so a
-         * new folder only takes effect on a fresh process. Relaunch instead of
-         * telling the player to do it themselves.
-         */
-        restartApp();
+        if (!setGameFolder(path)) {
+            Toast.makeText(this, "Could not save the folder choice", Toast.LENGTH_LONG).show();
+            return;
+        }
+        promptRestart();
     }
 
     /**
@@ -860,39 +874,70 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
      * this is reachable. It is written next to the default tree, in the app's
      * external files directory, which needs no permission.
      */
-    private void setGameFolder(String path) {
-        getSharedPreferences("mugen", MODE_PRIVATE).edit()
-                .putString(getString(R.string.game_folder_key), path).apply();
-
+    private boolean setGameFolder(String path) {
         File base = getExternalFilesDir(null);
         if (base == null) {
             Log.e(TAG, "no external files dir; the chosen folder will not reach the engine");
-            return;
+            return false;
         }
         File marker = new File(base, GAME_FOLDER_FILE);
+        File tmp = new File(base, GAME_FOLDER_FILE + ".part");
         try {
-            java.io.FileOutputStream out = new java.io.FileOutputStream(marker);
+            /*
+             * The marker is the single source of truth for the engine, so it is
+             * written whole or not at all: a half-written file would name a path
+             * the engine cannot parse, and the engine would sit on the wrong
+             * folder with no sign of why.
+             */
+            java.io.FileOutputStream out = new java.io.FileOutputStream(tmp);
             try {
                 out.write(path.getBytes("UTF-8"));
                 out.write('\n');
+                out.getFD().sync();
             } finally {
                 out.close();
             }
-            Log.i(TAG, "game folder set to " + path);
+            if (!tmp.renameTo(marker)) {
+                tmp.delete();
+                Log.e(TAG, "cannot replace " + marker);
+                return false;
+            }
         } catch (Exception e) {
+            tmp.delete();
             Log.e(TAG, "cannot write " + marker + ": " + e);
+            return false;
         }
+
+        /* The preference mirrors the marker for display; failing to store it is
+         * not fatal, because the marker is what the engine reads. */
+        getSharedPreferences("mugen", MODE_PRIVATE).edit()
+                .putString(getString(R.string.game_folder_key), path).apply();
+        Log.i(TAG, "game folder set to " + path);
+        return true;
     }
 
-    /** Relaunches the activity in a fresh process, so the new folder is picked up. */
-    private void restartApp() {
-        Intent intent = getPackageManager().getLaunchIntentForPackage(getPackageName());
-        if (intent != null) {
-            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
-            startActivity(intent);
-        }
-        android.os.Process.killProcess(android.os.Process.myPid());
-        Runtime.getRuntime().exit(0);
+    /**
+     * Asks the player to reopen the game so the new folder takes effect.
+     *
+     * The working directory is resolved once, in C, before this class can hand
+     * anything over, so there is no way to switch folders inside a running
+     * process. The old version started the launcher intent and immediately
+     * killed the process, which is unreliable: the activity is singleInstance,
+     * so the intent can be delivered back to the instance that is still alive
+     * instead of starting a fresh process. Say so plainly and let the player
+     * restart it, rather than leaving them unsure whether the choice was saved.
+     */
+    private void promptRestart() {
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.game_folder_str)
+                .setMessage(R.string.game_folder_saved)
+                .setPositiveButton(android.R.string.ok, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        dialog.dismiss();
+                    }
+                })
+                .show();
     }
 
     @Override

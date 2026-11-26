@@ -209,15 +209,33 @@ public class TouchControllerOverlay extends RelativeLayout {
              */
             releaseAll();
         }
+        /*
+         * Visibility is a UI concern only. The overlay keeps its virtual pad
+         * registered while a physical pad is in use, so player 1 does not move
+         * to the physical device and leave the hidden pad owning slot 0 --
+         * hiding the view looks like releasing it, but only the second changes
+         * engine state, and doing both broke the handover.
+         */
         setVisibility(hide ? View.INVISIBLE : View.VISIBLE);
     }
 
     /** Releases every held button, the d-pad and the analog stick. */
     private void releaseAll() {
-        for (Integer pointerId : new HashSet<>(mPointerButtons.keySet())) {
-            releasePointerButtons(pointerId);
+        /*
+         * Release per button, not per pointer. Replaying a two-finger hold as
+         * two separate pointer releases left the button stuck down: the first
+         * pointer to go still saw the second holding it and skipped the up
+         * event, and the map was cleared before the second was visited. Collect
+         * the union of held buttons first, then send one up for each.
+         */
+        Set<Integer> held = new HashSet<>();
+        for (Set<Integer> codes : mPointerButtons.values()) {
+            held.addAll(codes);
         }
         mPointerButtons.clear();
+        for (Integer code : held) {
+            dispatchButton(code, false);
+        }
 
         AnalogStickView leftStick = findViewById(R.id.vctrl_left_stick);
         if (leftStick != null && mLeftStickPointerId != -1) {
@@ -383,9 +401,18 @@ public class TouchControllerOverlay extends RelativeLayout {
 
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_POINTER_UP:
-            case MotionEvent.ACTION_CANCEL:
                 handlePointerUp(pId);
                 break;
+
+            case MotionEvent.ACTION_CANCEL:
+                /*
+                 * The system took the gesture away (a notification shade
+                 * pull-down, the window losing focus). Every pointer is gone, so
+                 * reset everything -- releasing only the pointer named by the
+                 * cancel event left the other fingers' buttons held down.
+                 */
+                releaseAll();
+                return true;
         }
 
         // D-pad hat is recalculated on every event (all pointers, any action).
@@ -466,20 +493,47 @@ public class TouchControllerOverlay extends RelativeLayout {
         Set<Integer> oldCodes = mPointerButtons.get(pointerId);
         if (oldCodes == null) oldCodes = new HashSet<>();
 
+        /*
+         * Two fingers resting on the same button are two pointers but one
+         * button. Sending a release as soon as either finger lifts cut the
+         * press short, so a button is held down while any pointer still covers
+         * it and only released when the last one leaves.
+         */
         for (Integer code : oldCodes) {
-            if (!newCodes.contains(code)) dispatchButton(code, false);
+            if (!newCodes.contains(code) && !isHeldByOther(code, pointerId)) {
+                dispatchButton(code, false);
+            }
         }
         for (Integer code : newCodes) {
-            if (!oldCodes.contains(code)) dispatchButton(code, true);
+            if (!oldCodes.contains(code) && !isHeldByOther(code, pointerId)) {
+                dispatchButton(code, true);
+            }
         }
 
-        mPointerButtons.put(pointerId, newCodes);
+        if (newCodes.isEmpty()) {
+            mPointerButtons.remove(pointerId);
+        } else {
+            mPointerButtons.put(pointerId, newCodes);
+        }
+    }
+
+    /** Whether a pointer other than {@code except} is still holding {@code code}. */
+    private boolean isHeldByOther(int code, int except) {
+        for (Map.Entry<Integer, Set<Integer>> e : mPointerButtons.entrySet()) {
+            if (e.getKey() != except && e.getValue().contains(code)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void releasePointerButtons(int pointerId) {
         Set<Integer> codes = mPointerButtons.remove(pointerId);
         if (codes == null) return;
-        for (Integer code : codes) dispatchButton(code, false);
+        for (Integer code : codes) {
+            /* Another finger may still be on it; its release will send the up. */
+            if (!isHeldByOther(code, pointerId)) dispatchButton(code, false);
+        }
     }
 
     // -------------------------------------------------------------------------

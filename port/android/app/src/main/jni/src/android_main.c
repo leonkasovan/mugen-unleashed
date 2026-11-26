@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <dirent.h>
 #include <unistd.h>
 
 /*
@@ -114,6 +115,34 @@ static const char *chosen_game_folder(void)
     }
     g_game_folder_chosen = 1;
     return path;
+}
+
+/*
+ * Whether a folder the player picked must never be written into.
+ *
+ * tree_present() above catches a folder that holds a game, but a pack can be
+ * missing all three markers and still be full of the player's files -- a
+ * half-copied install, or a tree whose mugen.cfg was deleted. Extracting into
+ * that would silently replace files they own, so any non-empty folder is
+ * treated as theirs. They can still choose an empty folder to bootstrap into.
+ */
+static int folder_holds_files(const char *dir)
+{
+    DIR *d;
+    struct dirent *ent;
+
+    d = opendir(dir);
+    if (d == NULL) {
+        return 0;
+    }
+    while ((ent = readdir(d)) != NULL) {
+        if (strcmp(ent->d_name, ".") != 0 && strcmp(ent->d_name, "..") != 0) {
+            closedir(d);
+            return 1;
+        }
+    }
+    closedir(d);
+    return 0;
 }
 
 /* Whether dir already holds a game tree, so extracting into it would be wrong. */
@@ -378,14 +407,16 @@ static void extract_assets(void)
 
     /*
      * A tree the player picked is theirs: extract into it only when it is empty
-     * of a game (a folder they created for this purpose). Otherwise the bundled
-     * assets would be copied on top of a pack they installed themselves, adding
-     * the sample characters and stages they did not ask for. The default folder
-     * keeps the old behaviour, where extracting is what bootstraps it.
+     * (a folder they created for this purpose). Otherwise the bundled assets
+     * would be copied on top of a pack they installed themselves, adding the
+     * sample characters and stages they did not ask for -- and, when the pack
+     * lacks the marker files, overwriting their own files in place. The default
+     * folder keeps the old behaviour, where extracting is what bootstraps it.
      */
-    if (g_game_folder_chosen && tree_present(assets_dir())) {
+    if (g_game_folder_chosen &&
+        (tree_present(assets_dir()) || folder_holds_files(assets_dir()))) {
         __android_log_print(ANDROID_LOG_INFO, ALOG_TAG,
-                            "assets: %s already holds a game tree; not extracting",
+                            "assets: %s is not empty; leaving it untouched",
                             assets_dir());
         return;
     }

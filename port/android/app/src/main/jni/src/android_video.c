@@ -1,6 +1,9 @@
 /* Native Android SDL2 window, renderer and streaming texture. */
 #include "android_platform.h"
+#include <android/log.h>
 #include <stdio.h>
+
+#define ALOG_TAG "mugen"
 
 /*
  * Engine global (src/globals.c). This file deliberately does not include
@@ -170,6 +173,22 @@ SDL_Surface *Android_CreateDisplayGL(int width, int height, int depth, int keep_
         display_window = SDL_CreateWindow("M.U.G.E.N", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, width,
                                           height, SDL_WINDOW_OPENGL | SDL_WINDOW_FULLSCREEN_DESKTOP |
                                                       SDL_WINDOW_ALLOW_HIGHDPI);
+        if (display_window == NULL) {
+            /*
+             * 24-bit depth is a request, not a guarantee. A driver that can
+             * only give a 16-bit-deep window would otherwise cost GLES
+             * entirely and drop the player to the software renderer, which is
+             * a far worse outcome than the shimmer this depth request was
+             * meant to fix. Retry once with 16 and let the log say which won.
+             */
+            __android_log_print(ANDROID_LOG_WARN, ALOG_TAG,
+                                "24-bit depth window unavailable (%s); retrying with 16",
+                                SDL_GetError());
+            SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 16);
+            display_window = SDL_CreateWindow("M.U.G.E.N", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, width,
+                                              height, SDL_WINDOW_OPENGL | SDL_WINDOW_FULLSCREEN_DESKTOP |
+                                                          SDL_WINDOW_ALLOW_HIGHDPI);
+        }
         if (display_window == NULL) {
             return NULL;
         }

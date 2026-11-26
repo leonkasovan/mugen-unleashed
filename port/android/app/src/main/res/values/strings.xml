@@ -5,4 +5,7 @@
     <string name="game_folder_key" translatable="false">game_folder</string>
     <!-- Label of the overlay button that lets the player pick the game tree. -->
     <string name="game_folder_str">Select Game Folder</string>
+    <!-- Shown after the folder is saved: the working directory is resolved once,
+         before the engine starts, so the change needs a fresh launch. -->
+    <string name="game_folder_saved">Folder saved. Quit and reopen M.U.G.E.N to use it.</string>
 </resources>
