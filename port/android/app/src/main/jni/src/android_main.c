@@ -55,12 +55,103 @@ int Mugen_Main(int argc, char *argv[]);
 #define ASSET_PAYLOAD  "payload.txt"
 #define ASSET_STAMP    "mugen_assets.stamp"
 
+/*
+ * Written by SDLActivity.setGameFolder() when the player picks a folder with the
+ * "Select Game Folder" button. It sits in the app's external files directory
+ * (no permission needed) and holds the absolute path of the game tree. It has to
+ * be a file rather than a JNI call because the working directory is resolved
+ * here, in C, before any Java code could hand it over.
+ */
+#define GAME_FOLDER_MARKER "mugen_gamedir.txt"
+
+/* Whether the tree came from the player's picker rather than the default. */
+static int g_game_folder_chosen;
+
+/*
+ * The folder named by GAME_FOLDER_MARKER, or NULL when there is none.
+ * Only an existing directory is accepted: a stale marker must not send the
+ * engine to a path that was deleted or unmounted.
+ */
+static const char *chosen_game_folder(void)
+{
+    static char path[1024];
+    static int checked;
+    const char *base;
+    char marker[1200];
+    FILE *f;
+
+    if (checked) {
+        return g_game_folder_chosen ? path : NULL;
+    }
+    checked = 1;
+
+    base = SDL_AndroidGetExternalStoragePath();
+    if (base == NULL || base[0] == '\0') {
+        return NULL;
+    }
+    snprintf(marker, sizeof(marker), "%s/%s", base, GAME_FOLDER_MARKER);
+    f = fopen(marker, "rb");
+    if (f == NULL) {
+        return NULL;
+    }
+    if (fgets(path, sizeof(path), f) == NULL) {
+        fclose(f);
+        return NULL;
+    }
+    fclose(f);
+    {
+        size_t n = strlen(path);
+        struct stat st;
+
+        while (n > 0 && (path[n - 1] == '\n' || path[n - 1] == '\r')) {
+            path[--n] = '\0';
+        }
+        if (n == 0 || stat(path, &st) != 0 || !S_ISDIR(st.st_mode)) {
+            __android_log_print(ANDROID_LOG_WARN, ALOG_TAG,
+                                "chosen game folder is missing: %s", path);
+            return NULL;
+        }
+    }
+    g_game_folder_chosen = 1;
+    return path;
+}
+
+/* Whether dir already holds a game tree, so extracting into it would be wrong. */
+static int tree_present(const char *dir)
+{
+    static const char *const marks[] = {
+        "data/mugen.cfg", "data/system.def", "mugen.cfg", NULL
+    };
+    char probe[1200];
+    int i;
+
+    for (i = 0; marks[i] != NULL; i++) {
+        struct stat st;
+        snprintf(probe, sizeof(probe), "%s/%s", dir, marks[i]);
+        if (stat(probe, &st) == 0 && S_ISREG(st.st_mode)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static const char *assets_dir(void)
 {
     static char buf[1024];
     const char *base;
+    const char *chosen;
 
     if (buf[0] != '\0') {
+        return buf;
+    }
+    /*
+     * A folder the player picked wins over the default. This is what makes
+     * "Select Game Folder" take effect: the engine resolves every path against
+     * the working directory, so pointing it at their tree is the whole feature.
+     */
+    chosen = chosen_game_folder();
+    if (chosen != NULL) {
+        snprintf(buf, sizeof(buf), "%s", chosen);
         return buf;
     }
     /*
@@ -284,6 +375,20 @@ static void extract_assets(void)
     int skipped = 0;
 
     mkdir_p(assets_dir());
+
+    /*
+     * A tree the player picked is theirs: extract into it only when it is empty
+     * of a game (a folder they created for this purpose). Otherwise the bundled
+     * assets would be copied on top of a pack they installed themselves, adding
+     * the sample characters and stages they did not ask for. The default folder
+     * keeps the old behaviour, where extracting is what bootstraps it.
+     */
+    if (g_game_folder_chosen && tree_present(assets_dir())) {
+        __android_log_print(ANDROID_LOG_INFO, ALOG_TAG,
+                            "assets: %s already holds a game tree; not extracting",
+                            assets_dir());
+        return;
+    }
 
     /* Read the payload generation first: it decides whether work is needed. */
     payload = SDL_RWFromFile(ASSET_PAYLOAD, "rb");

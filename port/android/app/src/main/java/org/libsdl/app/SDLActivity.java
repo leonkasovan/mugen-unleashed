@@ -21,8 +21,11 @@ import android.hardware.Sensor;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Message;
+import android.provider.DocumentsContract;
+import android.provider.Settings;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.Selection;
@@ -50,6 +53,9 @@ import android.widget.RelativeLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import org.mugen_unleashed.mugen.R;
+
+import java.io.File;
 import java.util.Hashtable;
 import java.util.Locale;
 
@@ -226,6 +232,29 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
      * Null when the overlay could not be created.
      */
     protected static TouchControllerOverlay mTouchController;
+
+    /*
+     * "Select Game Folder" button (R.string.game_folder_str).
+     *
+     * The game tree is read from a folder the player chooses, so a pack can live
+     * anywhere on shared storage instead of only under Android/data/<pkg>/files
+     * -- where file managers can no longer reach it. The choice is written to
+     * SharedPreferences and to a small file the native side reads at start-up
+     * (GAME_FOLDER_FILE), because the working directory is fixed before the
+     * engine starts. Null when the button could not be created.
+     */
+    protected static Button mGameFolderButton;
+    /* Path handed to the native side; see writeGameFolderFile(). */
+    private static final String GAME_FOLDER_FILE = "mugen_gamedir.txt";
+    /* Request code of the folder picker, kept clear of SDL's own message ids. */
+    private static final int FOLDER_PICKER_CODE = 0x5D01;
+    /* Guards against a second picker while one is already up. */
+    private static boolean mIsPickerActive;
+    /*
+     * Set while the storage-permission screen is up, so onResume knows to carry
+     * on to the folder picker when the player comes back.
+     */
+    private static boolean mWaitingForStoragePermission;
 
     // This is what SDL runs in. It invokes SDL_main(), eventually
     protected static Thread mSDLThread;
@@ -426,6 +455,33 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
             Log.e(TAG, "virtual controller overlay unavailable: " + t);
         }
 
+        /*
+         * "Select Game Folder", top-right. Added after the virtual controller
+         * on purpose: that overlay absorbs every touch, so anything added
+         * before it would never receive one. A failure here is not fatal -- the
+         * game still runs from the default folder under Android/data.
+         */
+        try {
+            mGameFolderButton = new Button(this);
+            mGameFolderButton.setText(R.string.game_folder_str);
+            mGameFolderButton.setAlpha(0.5f);
+            mGameFolderButton.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    checkAndPickFolder();
+                }
+            });
+            RelativeLayout.LayoutParams folderParams = new RelativeLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+            folderParams.addRule(RelativeLayout.ALIGN_PARENT_TOP);
+            folderParams.addRule(RelativeLayout.ALIGN_PARENT_RIGHT);
+            mLayout.addView(mGameFolderButton, folderParams);
+        } catch (Throwable t) {
+            mGameFolderButton = null;
+            Log.e(TAG, "game folder button unavailable: " + t);
+        }
+
         // Get our current screen orientation and pass it down.
         mCurrentOrientation = SDLActivity.getCurrentOrientation();
         // Only record current orientation
@@ -497,6 +553,21 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
     protected void onResume() {
         Log.v(TAG, "onResume()");
         super.onResume();
+
+        /*
+         * Coming back from the All-files-access screen: carry on to the folder
+         * picker if the permission was granted. Without this the player grants
+         * access and is left staring at the game with nothing else happening.
+         */
+        if (mWaitingForStoragePermission) {
+            mWaitingForStoragePermission = false;
+            if (needsAllFilesAccess()) {
+                Toast.makeText(this, "Storage access is required to read a game folder",
+                        Toast.LENGTH_LONG).show();
+            } else {
+                openDirectoryPicker();
+            }
+        }
 
         if (mHIDDeviceManager != null) {
             mHIDDeviceManager.setFrozen(false);
@@ -605,6 +676,223 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
             mCurrentLocale = newConfig.locale;
             SDLActivity.onNativeLocaleChanged();
         }
+    }
+
+    // =========================================================================
+    // Select Game Folder
+    // =========================================================================
+
+    /**
+     * Whether this app needs the "All files access" grant to read a game folder.
+     *
+     * From Android 11 (API 30) an app is confined to scoped storage unless the
+     * user grants MANAGE_EXTERNAL_STORAGE, and this app needs ordinary file
+     * access because the engine opens the tree by path and writes into it
+     * (data/mugen.cfg, mugen.log).
+     *
+     * The targetSdk exemption was tried and is wrong: with targetSdkVersion 29
+     * and requestLegacyExternalStorage the engine still got "could not create
+     * data/mugen.cfg: Permission denied" on a real Android 12 device when it was
+     * pointed at /sdcard/TestMugen, and wrote there normally once the grant was
+     * given. So ask on API 30+ regardless of the target.
+     */
+    private boolean needsAllFilesAccess() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return false;
+        }
+        return !Environment.isExternalStorageManager();
+    }
+
+    /**
+     * Start the folder selection, asking for the storage permission it needs
+     * first.
+     *
+     * Reading a game tree outside Android/data means ordinary file access to
+     * shared storage. When that is not already allowed, the flow is: request the
+     * grant, come back through onResume, then open the picker.
+     */
+    public void checkAndPickFolder() {
+        if (needsAllFilesAccess()) {
+            mWaitingForStoragePermission = true;
+            try {
+                Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
+                intent.addCategory("android.intent.category.DEFAULT");
+                intent.setData(Uri.parse(String.format("package:%s", getPackageName())));
+                startActivity(intent);
+            } catch (Exception e) {
+                /* Some builds have no per-app screen; the list-wide one still works. */
+                try {
+                    Intent intent = new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION);
+                    startActivity(intent);
+                } catch (Exception e2) {
+                    mWaitingForStoragePermission = false;
+                    Toast.makeText(this, "Storage permission unavailable on this device",
+                            Toast.LENGTH_LONG).show();
+                }
+            }
+            return;
+        }
+        openDirectoryPicker();
+    }
+
+    /** Opens the system directory picker. */
+    public void openDirectoryPicker() {
+        if (mIsPickerActive) {
+            return;
+        }
+        mIsPickerActive = true;
+        try {
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+            startActivityForResult(intent, FOLDER_PICKER_CODE);
+        } catch (Exception e) {
+            mIsPickerActive = false;
+            Log.e(TAG, "no directory picker available: " + e);
+            Toast.makeText(this, "No file manager can pick a folder", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != FOLDER_PICKER_CODE) {
+            return;
+        }
+        mIsPickerActive = false;
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+            return;                 /* cancelled: keep whatever was in use */
+        }
+
+        Uri treeUri = data.getData();
+        try {
+            getContentResolver().takePersistableUriPermission(treeUri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        } catch (Exception e) {
+            /* Not fatal: the path is still usable while the grant lasts. */
+            Log.w(TAG, "could not persist access to " + treeUri + ": " + e);
+        }
+
+        String path = getFullPathFromTreeUri(treeUri);
+        if (path == null || path.isEmpty()) {
+            Toast.makeText(this, "That folder has no filesystem path", Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        /*
+         * The engine opens files by path and writes into the tree (mugen.log,
+         * data/mugen.cfg), so a folder it cannot list *or* cannot write is
+         * useless to it -- and choosing one makes the engine exit on a missing
+         * config. Check both here rather than after a restart that lands on an
+         * error dialog.
+         */
+        File dir = new File(path);
+        if (!dir.isDirectory() || dir.listFiles() == null) {
+            Toast.makeText(this, "Cannot read " + path + "\nGrant storage access and try again",
+                    Toast.LENGTH_LONG).show();
+            Log.e(TAG, "chosen folder is not readable: " + path);
+            return;
+        }
+        File probe = new File(dir, ".mugen_write_test");
+        try {
+            if (!probe.createNewFile() && !probe.exists()) {
+                throw new java.io.IOException("createNewFile refused");
+            }
+            probe.delete();
+        } catch (Exception e) {
+            Toast.makeText(this, "Cannot write to " + path + "\nChoose a folder this app may modify",
+                    Toast.LENGTH_LONG).show();
+            Log.e(TAG, "chosen folder is not writable: " + path + " (" + e + ")");
+            return;
+        }
+
+        setGameFolder(path);
+        /*
+         * The working directory is chosen once, before the engine starts, so a
+         * new folder only takes effect on a fresh process. Relaunch instead of
+         * telling the player to do it themselves.
+         */
+        restartApp();
+    }
+
+    /**
+     * Filesystem path of a SAF tree URI, or null when it has none.
+     *
+     * The document id of a tree is "<volume>:<relative path>"; the volume is
+     * "primary" for internal shared storage and a UUID for a card. Only real
+     * paths are accepted, because the engine opens files by path.
+     */
+    public String getFullPathFromTreeUri(Uri treeUri) {
+        if (treeUri == null) {
+            return null;
+        }
+        try {
+            String treeId = DocumentsContract.getTreeDocumentId(treeUri);
+            String[] split = treeId.split(":");
+            String type = split[0];
+            String path = (split.length > 1) ? split[1] : "";
+
+            if ("primary".equalsIgnoreCase(type)) {
+                return Environment.getExternalStorageDirectory() + "/" + path;
+            }
+            File[] externalDirs = getExternalFilesDirs(null);
+            if (externalDirs != null) {
+                for (File f : externalDirs) {
+                    if (f == null) {
+                        continue;
+                    }
+                    String absPath = f.getAbsolutePath();
+                    int cut = absPath.indexOf("/Android/");
+                    if (cut > 0 && absPath.contains(type)) {
+                        return absPath.substring(0, cut) + "/" + path;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "cannot resolve " + treeUri + ": " + e);
+        }
+        return null;
+    }
+
+    /**
+     * Records the chosen folder for both sides.
+     *
+     * The preference is what this class reads back; the file is what the native
+     * side reads, because it resolves its working directory in C before any of
+     * this is reachable. It is written next to the default tree, in the app's
+     * external files directory, which needs no permission.
+     */
+    private void setGameFolder(String path) {
+        getSharedPreferences("mugen", MODE_PRIVATE).edit()
+                .putString(getString(R.string.game_folder_key), path).apply();
+
+        File base = getExternalFilesDir(null);
+        if (base == null) {
+            Log.e(TAG, "no external files dir; the chosen folder will not reach the engine");
+            return;
+        }
+        File marker = new File(base, GAME_FOLDER_FILE);
+        try {
+            java.io.FileOutputStream out = new java.io.FileOutputStream(marker);
+            try {
+                out.write(path.getBytes("UTF-8"));
+                out.write('\n');
+            } finally {
+                out.close();
+            }
+            Log.i(TAG, "game folder set to " + path);
+        } catch (Exception e) {
+            Log.e(TAG, "cannot write " + marker + ": " + e);
+        }
+    }
+
+    /** Relaunches the activity in a fresh process, so the new folder is picked up. */
+    private void restartApp() {
+        Intent intent = getPackageManager().getLaunchIntentForPackage(getPackageName());
+        if (intent != null) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+        }
+        android.os.Process.killProcess(android.os.Process.myPid());
+        Runtime.getRuntime().exit(0);
     }
 
     @Override

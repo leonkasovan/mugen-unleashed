@@ -474,6 +474,28 @@ was laid out at the panel's 2700 px width and clipped to one pixel by the
 2464 px the notch leaves usable. The layout is landscape, assumes no safe area
 beyond those insets, and does not scale its buttons with screen size.
 
+**Select Game Folder** (`R.string.game_folder_str`, top-right) points the engine
+at a game tree anywhere on shared storage instead of the default
+`Android/data/<pkg>/files/mugen`. The choice is written to SharedPreferences and
+to `mugen_gamedir.txt` in the app's external files directory; the native side
+reads that file in `android_main.c` because the working directory is resolved in
+C before any Java could hand it over. A marker naming a path that no longer
+exists is ignored, so an uninstalled card cannot strand the engine. When the
+chosen folder already holds a game (`data/mugen.cfg`, `data/system.def` or
+`mugen.cfg`), the bundled assets are **not** extracted into it -- a pack the
+player installed is theirs, and adding the sample characters on top of it is
+not what the button promises.
+
+On Android 11+ the folder is only usable with the **All files access** grant, so
+the button asks for it first and opens the picker on return. `targetSdkVersion`
+is still 29, but that exemption does **not** hold: with legacy storage the engine
+reported `could not create data/mugen.cfg: Permission denied` when pointed at
+`/sdcard/TestMugen` on an Android 12 device, and wrote there normally once the
+grant was given. The check is therefore on the platform version, not the target.
+A chosen folder must also be writable, not just listable -- the engine writes
+`mugen.log` and its config into the tree -- so the picker rejects one that fails
+a write probe instead of restarting into an error dialog.
+
 Android BGM uses one built-in SDL2_mixer backend for **WAV, OGG/Vorbis and MP3**.
 Windows `[Music]` plugin DLL selections are replaced by that Android backend;
 the desktop configuration file is not rewritten. Native SDL2 RWops are owned

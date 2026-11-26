@@ -8,6 +8,7 @@
   It loads libmain.so and calls the engine's main().
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     android:versionCode="1"
     android:versionName="1.1.0"
     android:installLocation="auto">
@@ -30,6 +31,15 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="29" />
     <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!--
+      Needed only by "Select Game Folder" (SDLActivity.checkAndPickFolder) and
+      only once the target SDK reaches 30: below that, requestLegacyExternalStorage
+      already gives broad file access, so the grant is never requested. Declared
+      now so raising the target does not silently break folder selection.
+    -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
 
     <application
         android:label="@string/app_name"

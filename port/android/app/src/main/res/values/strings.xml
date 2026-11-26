@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">mugen-unleashed</string>
+    <!-- Key under which the chosen game folder is remembered (SharedPreferences). -->
+    <string name="game_folder_key" translatable="false">game_folder</string>
+    <!-- Label of the overlay button that lets the player pick the game tree. -->
+    <string name="game_folder_str">Select Game Folder</string>
 </resources>
