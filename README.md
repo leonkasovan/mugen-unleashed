@@ -88,6 +88,8 @@ has to be copied in by hand. `tools/fetch_game_data.sh` can populate an empty
 installation. Keyboard/gamepad binding numbers and resolution settings are
 unchanged by the SDL2-only transition.
 
+See [ShaderSet](docs/SHADERSET.md) to add per-sprite shaders to characters and stages.
+
 ## Validation and migration record
 
 [SDL2_ONLY_PLAN.md](docs/SDL2_ONLY_PLAN.md) records the implementation order,

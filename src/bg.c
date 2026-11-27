@@ -37,6 +37,7 @@
  *   element processed (or 0, 0 when there is none yet).
  */
 #include "mugen.h"
+#include "sprite_shader.h"
 #ifdef MUGEN_VIDEO_BG
 #include "video_bg_render.h"
 #endif
@@ -127,6 +128,7 @@ Bg *Bg_Load(const char *name, Ini *ini, const char *dir, SpriteSet *sprites, Ani
     if (bg == NULL) {
         return NULL;
     }
+    SpriteShader_Load(bg, ini, dir, NULL);
     strcpy(group, name);
     strcat(group, "def");
     has_definition = Ini_SelectGroup(ini, group) != -1;
@@ -358,6 +360,7 @@ Bg *Bg_Load(const char *name, Ini *ini, const char *dir, SpriteSet *sprites, Ani
         }
 
         e = KeyedArray_Get(bg->elems, 0, i);
+        SpriteShader_ReadStage(e, bg, ini, "shader.", 1);
         e->layer = layer;
 #ifdef MUGEN_VIDEO_BG
         if (type == BG_TYPE_VIDEO) {
@@ -568,6 +571,9 @@ int BgCtrl_Load(const char *name, Bg *bg, Ini *ini)
             c->type = BGCTRL_SINY;
         } else if (_stricmp(s, "null") == 0) {
             c->type = BGCTRL_NULL;
+        } else if (_stricmp(s, "shaderset") == 0) {
+            c->type = BGCTRL_SHADERSET;
+            SpriteShader_ReadStage(c, bg, ini, "", 0);
         } else if (_stricmp(s, "dummy") == 0) {
             c->type = BGCTRL_DUMMY;
         } else {
@@ -646,10 +652,12 @@ void Bg_Free(Bg *bg)
     if (bg == NULL) {
         return;
     }
+    SpriteShader_FreeAssets(bg);
     Bg3D_Detach(bg);    /* mugen-unleashed */
     list = bg->elems;
     if (list != NULL) {
         for (e = KeyedArray_First(list); e != NULL; e = KeyedArray_Next(list)) {
+            SpriteShader_Clear(e);
 #ifdef MUGEN_VIDEO_BG
             if (e->type == BG_TYPE_VIDEO)
                 VideoBgLayer_Close(e->video);
@@ -691,6 +699,8 @@ void Bg_Free(Bg *bg)
         SpriteSet_Free(bg->sprites);
     }
     if (bg->ctrls != NULL) {
+        for (int i = 0; i < bg->ctrl_count; ++i)
+            SpriteShader_Clear(&bg->ctrls[i]);
         free(bg->ctrls);
     }
     free(bg);
@@ -932,6 +942,7 @@ void Bg_Tick(Bg *bg)
     bg->clear_cur[2] = bg->clear_color[2];
     BgCtrl_Run(bg);
     for (e = KeyedArray_First(list); e != NULL; e = KeyedArray_Next(list)) {
+        SpriteShader_StageTick(e, e->enabled);
         if (e->enabled) {
             if (e->anim != NULL && e->action != -1) {
                 Anim_Step(e->anim);
@@ -982,6 +993,9 @@ void BgCtrl_Run(Bg *bg)
                     continue;
                 }
                 switch (c->type) {
+                case BGCTRL_SHADERSET:
+                    SpriteShader_StageOverride(e, c);
+                    break;
                 case BGCTRL_VISIBLE:
                     e->visible = c->value;
                     break;
@@ -1063,6 +1077,7 @@ void Bg_Reset(Bg *bg)
         bg->ctrls[i].timer = 0;
     }
     for (e = KeyedArray_First(list); e != NULL; e = KeyedArray_Next(list)) {
+        SpriteShader_StageReset(e);
 #ifdef MUGEN_VIDEO_BG
         if (e->type == BG_TYPE_VIDEO)
             VideoBgLayer_Reset(e->video);
@@ -1249,7 +1264,7 @@ void BgElem_Draw(BgElem *e, Bg *bg)
 #endif
     case BG_TYPE_NORMAL:
         if (e->tile_x == 0 && e->tile_y == 0) {
-            Sprite_Draw(bg->sprites, e->sprite, &dp);
+            SpriteShader_Draw(bg->sprites, e->sprite, &dp, SpriteShader_Get(e));
         } else {
             DrawParams_FoldScales(&dp);
             BgElem_DrawTiled(e, &dp, bg);
@@ -1261,7 +1276,7 @@ void BgElem_Draw(BgElem *e, Bg *bg)
         break;
     case BG_TYPE_ANIM:
         if (e->tile_x == 0 && e->tile_y == 0) {
-            Anim_Draw(e->anim, &dp, 1.0f, 1.0f);
+            Anim_DrawEffect(e->anim, &dp, 1.0f, 1.0f, SpriteShader_Get(e));
         } else {
             DrawParams_FoldScales(&dp);
             BgElem_DrawTiled(e, &dp, bg);
@@ -1347,14 +1362,14 @@ void BgElem_DrawTiled(BgElem *e, const DrawParams *dp, Bg *bg)
 #if !defined(ANDROID_PORT) || defined(MUGEN_GLES)
         /* M8: with the GLES backend the GL drawer exists on Android too. */
                 if (g_renderMode == RENDER_MODE_GL) {
-                    Sprite_DrawGL(bg->sprites, e->sprite, &local);
+                    SpriteShader_Draw(bg->sprites, e->sprite, &local, SpriteShader_Get(e));
                 } else
 #endif
                 {
                     Sprite_DrawSoft(bg->sprites, e->sprite, &local);
                 }
             } else if (e->type == BG_TYPE_ANIM) {
-                Anim_Draw(e->anim, &local, 1.0f, 1.0f);
+                Anim_DrawEffect(e->anim, &local, 1.0f, 1.0f, SpriteShader_Get(e));
             }
             x = (float)(x + (double)step_x);
             if (cx > 0) {
@@ -1517,7 +1532,7 @@ void BgElem_DrawParallaxGL(BgElem *e, Bg *bg, const DrawParams *dp)
 #if !defined(ANDROID_PORT) || defined(MUGEN_GLES)
         /* M8: with the GLES backend the GL drawer exists on Android too. */
     if (g_renderMode == RENDER_MODE_GL) {
-        Sprite_DrawGL(bg->sprites, sprite, &local);
+        SpriteShader_Draw(bg->sprites, sprite, &local, SpriteShader_Get(e));
     } else
 #endif
     {

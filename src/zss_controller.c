@@ -7,10 +7,34 @@
 #include "zss_controller.h"
 #include <limits.h>
 
+static int shader_key(const char *key, int object)
+{
+    static const char *const fields[] = {
+        "name", "time", "tex1.spr", "tex2.spr", "tex1.anim", "tex2.anim",
+        "shadow", "reflection", "afterimage"
+    };
+    if (object) {
+        if (_strnicmp(key, "shader.", 7) != 0)
+            return 0;
+        key += 7;
+    } else if (!_stricmp(key, "redirectid") || !_stricmp(key, "playerno")) {
+        return 1;
+    }
+    for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); ++i)
+        if (!_stricmp(key, fields[i]))
+            return 1;
+    if (_strnicmp(key, "param", 5) != 0)
+        return 0;
+    key += 5;
+    if (key[0] < '0' || key[0] > '9')
+        return 0;
+    return key[1] == 0 || (key[0] == '1' && key[1] >= '0' && key[1] <= '5' && key[2] == 0);
+}
 
 /* Initial leaf schemas; block attributes belong to the future block parser. */
 static int allowed_key(const char *type, const char *key)
 {
+    if (!_stricmp(type,"shaderset")) return shader_key(key, 0);
     if (!_stricmp(type,"velset") || !_stricmp(type,"veladd") ||
         !_stricmp(type,"posset") || !_stricmp(type,"posadd"))
         return !_stricmp(key,"x") || !_stricmp(key,"y") || !_stricmp(key,"z");
@@ -40,7 +64,7 @@ static int allowed_key(const char *type, const char *key)
     if (!_stricmp(type,"defencemulset")) return !_stricmp(key,"value");
     if (!_stricmp(type,"dialogue")) return !_stricmp(key,"text1") || !_stricmp(key,"text2") || !_stricmp(key,"text3");
     if (!_stricmp(type,"envshake")) return !_stricmp(key,"ampl") || !_stricmp(key,"freq") || !_stricmp(key,"time");
-    if (!_stricmp(type,"explod")) return !_stricmp(key,"accel") || !_stricmp(key,"anim") || !_stricmp(key,"facing") || !_stricmp(key,"pos") || !_stricmp(key,"postype") || !_stricmp(key,"removetime") || !_stricmp(key,"sprpriority") || !_stricmp(key,"velocity");
+    if (!_stricmp(type,"explod")) return shader_key(key, 1) || !_stricmp(key,"accel") || !_stricmp(key,"anim") || !_stricmp(key,"facing") || !_stricmp(key,"pos") || !_stricmp(key,"postype") || !_stricmp(key,"removetime") || !_stricmp(key,"sprpriority") || !_stricmp(key,"velocity");
     if (!_stricmp(type,"forcefeedback")) return !_stricmp(key,"ampl") || !_stricmp(key,"time") || !_stricmp(key,"waveform");
     if (!_stricmp(type,"gamemakeanim")) return !_stricmp(key,"pos") || !_stricmp(key,"under") || !_stricmp(key,"value");
     if (!_stricmp(type,"hitdef")) return !_stricmp(key,"air.fall") || !_stricmp(key,"air.hittime") || !_stricmp(key,"air.type") || !_stricmp(key,"air.velocity") || !_stricmp(key,"airguard.velocity") || !_stricmp(key,"animtype") || !_stricmp(key,"attr") || !_stricmp(key,"damage") || !_stricmp(key,"down.hittime") || !_stricmp(key,"down.velocity") || !_stricmp(key,"envshake.ampl") || !_stricmp(key,"envshake.freq") || !_stricmp(key,"envshake.time") || !_stricmp(key,"fall") || !_stricmp(key,"fall.animtype") || !_stricmp(key,"fall.damage") || !_stricmp(key,"fall.envshake.ampl") || !_stricmp(key,"fall.envshake.freq") || !_stricmp(key,"fall.envshake.time") || !_stricmp(key,"fall.recover") || !_stricmp(key,"fall.recovertime") || !_stricmp(key,"forcenofall") || !_stricmp(key,"forcestand") || !_stricmp(key,"getpower") || !_stricmp(key,"ground.cornerpush.veloff") || !_stricmp(key,"ground.hittime") || !_stricmp(key,"ground.slidetime") || !_stricmp(key,"ground.type") || !_stricmp(key,"ground.velocity") || !_stricmp(key,"guard.ctrltime") || !_stricmp(key,"guard.dist") || !_stricmp(key,"guard.velocity") || !_stricmp(key,"guardflag") || !_stricmp(key,"guardsound") || !_stricmp(key,"hitflag") || !_stricmp(key,"hitsound") || !_stricmp(key,"maxdist") || !_stricmp(key,"mindist") || !_stricmp(key,"p1facing") || !_stricmp(key,"p1sprpriority") || !_stricmp(key,"p1stateno") || !_stricmp(key,"p2facing") || !_stricmp(key,"p2stateno") || !_stricmp(key,"pausetime") || !_stricmp(key,"priority") || !_stricmp(key,"sparkno") || !_stricmp(key,"sparkxy") || !_stricmp(key,"yaccel");

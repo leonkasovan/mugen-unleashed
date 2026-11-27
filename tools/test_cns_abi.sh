@@ -51,7 +51,7 @@ $CC $FLAGS $SAN $ZSS_LEAF -c src/zss_program.c -o "$OUT/zss_program.o"
 # shellcheck disable=SC2086
 $CC $FLAGS $SAN -Dmain=Test_UnusedEngineMain -c src/main.c -o "$OUT/main.o"
 # shellcheck disable=SC2086
-$CC $FLAGS $SAN tools/test_cns_abi.c $ZSS_SOURCES src/zss_assert.c src/zss_map.c src/cnsparse.c src/keyedarray.c src/compat_linux.c src/anim.c \
+$CC $FLAGS $SAN tools/test_cns_abi.c $ZSS_SOURCES src/zss_assert.c src/zss_map.c src/cnsparse.c src/sprite_shader.c src/keyedarray.c src/compat_linux.c src/anim.c \
     "$OUT/globals.o" "$OUT/util.o" "$OUT/zss_program.o" "$OUT/main.o" -Wl,--gc-sections ${LDFLAGS:-} -lm -o "$OUT/test_cns_abi"
 # shellcheck disable=SC2086
 ${RUNNER:-} "$OUT/test_cns_abi"

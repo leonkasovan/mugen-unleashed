@@ -36,6 +36,7 @@
  */
 #include "mugen.h"
 #include "sffatlas.h"
+#include "sprite_shader.h"
 
 #ifdef MUGEN_GLES
 
@@ -1089,15 +1090,137 @@ static int gles_load_es_program(GlesProgram *prog, const char *name, int atlas)
     return ok;
 }
 
+/* A ShaderSet effect compiled for this renderer. The stock program cannot be
+ * reused because the asset replaces the fragment body, so each (asset,
+ * indexed/rgba) pair owns a program; the table is a small FIFO cache. */
+#define GLES_EFFECT_PROGRAM_SLOTS 32
+
+typedef struct GlesEffectProgram {
+    unsigned id;
+    int indexed;
+    GlesProgram program;
+    GLint params, time, elapsed, resolution, aspect, textures[2], grab;
+} GlesEffectProgram;
+
+static GlesEffectProgram effect_programs[GLES_EFFECT_PROGRAM_SLOTS];
+static unsigned effect_cursor;
+
+/*
+ * The program for the effect the current draw carries, compiled on first use,
+ * or NULL to draw with the stock program.
+ *
+ * Port integration: gles_read_shader returns the *static embedded literal*
+ * (src/shaders/gles/, compiled in), so the two base sources are borrowed and
+ * only SpriteShader_Fragment's result is owned. The branch this came from
+ * freed all three, which on this tree is a free() of static storage the moment
+ * an effect is used.
+ */
+static const GlesEffectProgram *Gles_SelectEffect(int indexed)
+{
+    const SpriteShaderAsset *asset;
+    const char *vert;
+    const char *base;
+    char *frag;
+    char defines[256];
+    GLuint program;
+    GlesEffectProgram *entry;
+    unsigned id;
+    int i, ok;
+
+    if (!g_spriteShaderDraw) {
+        return NULL;
+    }
+    asset = SpriteShader_DrawAsset();
+    if (asset == NULL) {
+        return NULL;
+    }
+    id = SpriteShader_ProgramId(asset);
+    for (i = 0; i < GLES_EFFECT_PROGRAM_SLOTS; ++i) {
+        entry = &effect_programs[i];
+        if (entry->id == id && entry->indexed == indexed) {
+            return entry->program.program != 0 ? entry : NULL;
+        }
+    }
+
+    entry = &effect_programs[effect_cursor++ % GLES_EFFECT_PROGRAM_SLOTS];
+    GlesDraw_FreeProgram(&entry->program);
+    entry->id = id;
+    entry->indexed = indexed;
+    vert = gles_read_shader(indexed ? "indexed.vert" : "rgba.vert");
+    base = gles_read_shader(indexed ? "indexed.frag" : "rgba.frag");
+    frag = base != NULL ? SpriteShader_Fragment(base, asset, "v_texcoord") : NULL;
+    if (vert == NULL || frag == NULL) {
+        /* Not a compile failure: the asset is unusable, so it never becomes a
+         * cache entry. Report it as such rather than as a shader error. */
+        Log_Printf("ShaderSet: %s cannot extend this renderer's sprite shader\n",
+                   SpriteShader_AssetPath(asset));
+        free(frag);
+        entry->id = 0;
+        return NULL;
+    }
+    gles_build_defines(defines, sizeof(defines));
+    ok = GlesDraw_LoadProgram(&entry->program, vert, frag, SpriteShader_AssetPath(asset), defines);
+    free(frag);
+    if (!ok) {
+        Log_Printf("ShaderSet: GLES effect failed for %s, using stock shader\n", SpriteShader_AssetPath(asset));
+        entry->id = 0;
+        return NULL;
+    }
+    program = entry->program.program;
+    entry->params = glGetUniformLocation(program, "param[0]");
+    entry->textures[0] = glGetUniformLocation(program, "tex1");
+    entry->textures[1] = glGetUniformLocation(program, "tex2");
+    entry->grab = glGetUniformLocation(program, "bgl_RenderedTexture");
+    entry->time = glGetUniformLocation(program, "iTime");
+    entry->elapsed = glGetUniformLocation(program, "sTime");
+    entry->resolution = glGetUniformLocation(program, "iResolution");
+    entry->aspect = glGetUniformLocation(program, "aspectRatio");
+    Log_Printf("ShaderSet: GLES effect ready for %s\n", SpriteShader_AssetPath(asset));
+    return entry;
+}
+
+/* Sends the effect's own uniforms. Every location is -1 when the shader does
+ * not use it, and glUniform* on -1 is a GL error rather than a no-op. */
+static void Gles_EffectUniforms(const GlesEffectProgram *effect)
+{
+    const SpriteShaderState *state = g_spriteShaderDraw;
+
+    glUseProgram(effect->program.program);
+    /* This program is not the one the redundant-state cache believes is bound. */
+    GlesDraw_InvalidateState();
+    if (effect->params >= 0) {
+        glUniform1fv(effect->params, 16, state->params);
+    }
+    SpriteShader_BindResources(effect->textures, effect->grab);
+    if (effect->time >= 0) {
+        glUniform1f(effect->time, (float)g_game->frames / 60.0f);
+    }
+    if (effect->elapsed >= 0) {
+        glUniform1f(effect->elapsed, (float)state->elapsed);
+    }
+    if (effect->resolution >= 0) {
+        glUniform2f(effect->resolution, (float)g_targetWidth, (float)g_targetHeight);
+    }
+    if (effect->aspect >= 0) {
+        glUniform1f(effect->aspect, SpriteShader_Aspect());
+    }
+}
+
 /* Deletes the sprite textures and the programs. */
 static void gles_free_programs(void)
 {
+    int i;
+
+    for (i = 0; i < GLES_EFFECT_PROGRAM_SLOTS; ++i)
+        GlesDraw_FreeProgram(&effect_programs[i].program);
+    memset(effect_programs, 0, sizeof(effect_programs));
     GlesDraw_FreeProgram(&g_glesProgramAtlas);
     GlesDraw_FreeProgram(&g_glesProgramAtlasRgba);
     GlesDraw_FreeProgram(&g_glesProgramIndexed);
     GlesDraw_FreeProgram(&g_glesProgramRgba);
     GlesDraw_FreeProgram(&g_glesProgramSolid);
     GlesDraw_FreeBuffer(&g_glesBuffer);
+    SpriteShader_FreeTextures();
 }
 
 int Gl_Deinit(void)
@@ -1138,6 +1261,7 @@ void Gles_OnContextLost(void)
      * event that did not happen, and it lands on the end of the "video: vsync"
      * line, which does not end with a newline.
      */
+    memset(effect_programs, 0, sizeof(effect_programs));
     int was_ready = g_glesReady;
     int tracked = g_glesTextureCount;
 #ifdef MUGEN_MODEL3D
@@ -2138,7 +2262,9 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
     int special;
     PalFx *fx;
     GlMvp mvp;
-    GlesProgram *prog;
+    const GlesProgram *prog;
+    const GlesEffectProgram *effect = NULL;
+    const GlesProgram *atlas_program;
     int paletted, atlased = 0, instanced = 0, defer;
     float atlas_rect[4];
     int blend_enabled = 0;
@@ -2263,11 +2389,26 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
             return;
         }
     }
-    GlesProgram *atlas_program = paletted ? &g_glesProgramAtlas : &g_glesProgramAtlasRgba;
-    if (spr->format == SPRITE_FORMAT_ATLAS && !special && atlas_program->program) {
+    /*
+     * A ShaderSet effect replaces the stock fragment body and samples the
+     * sprite itself through it, so it needs the sprite's own texture and plain
+     * UVs. An atlased sprite would hand it a shared page addressed through the
+     * instance attributes (a_instance_mvp / a_atlas_rect), which the effect
+     * program does not declare -- so an effect draw bypasses the atlas and
+     * takes the standalone or streamed texture instead. Same reasoning as the
+     * special-quad path above.
+     */
+    effect = g_spriteShaderDraw != NULL ? Gles_SelectEffect(paletted) : NULL;
+    if (effect != NULL) {
+        GlesBatch_Flush();
+    }
+    atlas_program = paletted ? &g_glesProgramAtlas : &g_glesProgramAtlasRgba;
+    if (spr->format == SPRITE_FORMAT_ATLAS && !special && effect == NULL && atlas_program->program) {
         tex = Sff3_Texture(spr, atlas_rect);
         atlased = tex != NULL;
-    } else if (paletted) tex = gles_atlas_texture(set, sprite, spr, !special, atlas_rect, &atlased);
+    } else if (paletted) {
+        tex = gles_atlas_texture(set, sprite, spr, !special && effect == NULL, atlas_rect, &atlased);
+    }
     if (!atlased && spr->format == SPRITE_FORMAT_TEXTURE) tex = spr->pixels;
     if (tex != NULL && tex->id == 0) {
         /*
@@ -2418,7 +2559,9 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
         }
     }
     fx = PalFx_GetApplied();
-    prog = instanced ? atlas_program : (paletted ? &g_glesProgramIndexed : &g_glesProgramRgba);
+    prog = effect != NULL ? &effect->program
+                          : instanced ? atlas_program
+                                      : (paletted ? &g_glesProgramIndexed : &g_glesProgramRgba);
     defer = gles_batch_enabled(instanced);
     if (!defer && !instanced) GlesBatch_Flush();
 
@@ -2447,7 +2590,9 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
      * merge neighbours into one instanced draw. Same values either way; with
      * batching off this is exactly the old straight-through submission.
      */
-    if (defer || instanced) {
+    /* An effect draw has its own program and uniforms, so it is never merged
+     * into a shared instanced batch: it is submitted immediately below. */
+    if (effect == NULL && (defer || instanced)) {
         /* PalFX scalars exactly as Glr_FxTerms computes them: add is 0..255 and
          * mul / color are fixed point with 256 = 1.0. */
         gles_batch_record(prog, blend_enabled, blend_src, blend_dst, blend_eq, dp->masked,
@@ -2481,6 +2626,7 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
         glActiveTexture(GL_TEXTURE0);
     }
 
+    if (effect) Gles_EffectUniforms(effect);
     GlesDraw_Quad(&g_glesBuffer, prog, mvp.m, positions, texcoords, paletted, dp->masked, (float)fx->add[0] / 255.0f,
                   (float)fx->add[1] / 255.0f, (float)fx->add[2] / 255.0f, (float)fx->mul[0] * (1.0f / 256.0f),
                   (float)fx->mul[1] * (1.0f / 256.0f), (float)fx->mul[2] * (1.0f / 256.0f), fx->invertall,

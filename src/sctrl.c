@@ -37,6 +37,7 @@
  *   name every parameter "zoom.<name>".
  */
 #include "mugen.h"
+#include "sprite_shader.h"
 #include "zss_assert.h"
 #include "zss_map.h"
 #include "zss_binding.h"
@@ -198,6 +199,7 @@ static const struct {const char *name;int type;} script_controllers[]={
     {"changeanim",SCTRL_CHANGEANIM},{"turn",SCTRL_TURN},{"null",SCTRL_NULL},
     {"displaytoclipboard",SCTRL_DISPLAYTOCLIPBOARD},{"printtoconsole",SCTRL_ZSS_PRINT},
     {"appendtoclipboard",SCTRL_APPENDTOCLIPBOARD},{"clearclipboard",SCTRL_CLEARCLIPBOARD},
+    {"shaderset",SCTRL_SHADERSET},
     {"playsnd",SCTRL_PLAYSND},{"palfx",SCTRL_PALFX},
     {"bgpalfx",SCTRL_PALFX},{"allpalfx",SCTRL_PALFX},
     {"mapset",SCTRL_ZSS_MAP},{"mapadd",SCTRL_ZSS_MAP},{"mapreset",SCTRL_ZSS_MAP},
@@ -509,6 +511,19 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
         if (sc->params==NULL) return 0;
         strcpy(sc->params,key);
         return compile_required_ctx(ini,"value",&sc->arg[0],owner,EXPR_WANT_ANY,ctx);
+    }
+    if (strcmp(name, "shaderset") == 0) {
+        sc->type = SCTRL_SHADERSET;
+        for (i = 0; i < 6; i++)
+            Expr_SetInt(&sc->arg[i], i == 1 || i == 2 ? INT_MIN : 1);
+        sc->params = SpriteShader_Parse(ini, owner, ctx, "");
+        return sc->params &&
+               compile_key_ctx(ini, "time", &sc->arg[0], owner, EXPR_WANT_INT, ctx) &&
+               compile_key_ctx(ini, "redirectid", &sc->arg[1], owner, EXPR_WANT_INT, ctx) &&
+               compile_key_ctx(ini, "playerno", &sc->arg[2], owner, EXPR_WANT_INT, ctx) &&
+               compile_key_ctx(ini, "shadow", &sc->arg[3], owner, EXPR_WANT_INT, ctx) &&
+               compile_key_ctx(ini, "reflection", &sc->arg[4], owner, EXPR_WANT_INT, ctx) &&
+               compile_key_ctx(ini, "afterimage", &sc->arg[5], owner, EXPR_WANT_INT, ctx);
     }
     if (strcmp(name, "changestate") == 0 || strcmp(name, "selfstate") == 0) {
         sc->type = name[0] == 'c' ? SCTRL_CHANGESTATE : SCTRL_SELFSTATE;
@@ -824,7 +839,7 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
         }
         ok = compile_key_ctx(ini, "lag", &sc->arg[4], owner, EXPR_WANT_FLOAT, ctx);
     } else if (strcmp(name, "projectile") == 0) {
-        ProjectileParams *pp = Mem_Calloc(1, sizeof(ProjectileParams));
+        ProjectileParams *pp = Mem_Calloc(1, sizeof(ProjectileShaderParams));
         if (pp == NULL) {
             return 0;
         }
@@ -832,6 +847,12 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
         if (!Projectile_ParseParamsCtx(pp, owner, ini, ctx)) {
             ProjectileParams_Free(pp);free(pp);
             Error_Printf("Error parsing Projectile\n");
+            return 0;
+        }
+        ((ProjectileShaderParams *)pp)->effect = SpriteShader_Parse(ini, owner, ctx, "shader.");
+        if (!((ProjectileShaderParams *)pp)->effect) {
+            ProjectileParams_Free(pp);
+            free(pp);
             return 0;
         }
         sc->params = pp;
@@ -1236,7 +1257,7 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
         Cns_ParseValuesCtx(s, "ii", owner, &end, ctx, &sc->arg[3], &sc->arg[4]);
         ok = *end == '\0';
     } else if (strcmp(name, "explod") == 0 || strcmp(name, "modifyexplod") == 0) {
-        ExplodParams *ep = Mem_Calloc(1, sizeof(ExplodParams));
+        ExplodParams *ep = Mem_Calloc(1, sizeof(ExplodShaderParams));
         if (ep == NULL) {
             return 0;
         }
@@ -1244,6 +1265,12 @@ int StateCtrl_ParseParamsCtx(Ini *ini, StateCtrl *sc, CharData *owner, ExprCompi
         if (!Explod_ParseParamsCtx(ep, ini, owner, name[0] != 'e', ctx)) {
             /* Port fix: rejected construction owns its partial payload. */
             ExplodParams_Free(ep);free(ep);return 0;
+        }
+        ((ExplodShaderParams *)ep)->effect = SpriteShader_Parse(ini, owner, ctx, "shader.");
+        if (!((ExplodShaderParams *)ep)->effect) {
+            ExplodParams_Free(ep);
+            free(ep);
+            return 0;
         }
         sc->params = ep;
         ok = 1;
@@ -2219,6 +2246,31 @@ int StateCtrl_ApplyCtx(Player *p, StateCtrl *sc, StateRunCtx *ctx, ExprEvalCtx *
     switch (sc->type) {
     case SCTRL_ZSS_DIALOGUE:
         return 0; /* explicit disabled-motif behavior, as documented above */
+    case SCTRL_SHADERSET: {
+        Player *target = p;
+        const CharData *owner = p->data;
+        int id = Expr_EvalIntCtx(p, &sc->arg[1], 0, frame);
+        int player = Expr_EvalIntCtx(p, &sc->arg[2], 0, frame);
+        if (id != INT_MIN) {
+            int slot = Player_FindIndexById(id);
+            if (slot < 0 || !(target = g_game->players[slot]))
+                return 0;
+        }
+        if (target->custom_states && target->custom_owner >= 1 &&
+            target->custom_owner <= g_game->player_slots && g_game->players[target->custom_owner])
+            owner = g_game->players[target->custom_owner]->data;
+        if (player != INT_MIN) {
+            if (player < 1 || player > 4 || !g_game->players[player])
+                return 0;
+            owner = g_game->players[player]->data;
+        }
+        unsigned inherit = (Expr_EvalIntCtx(p, &sc->arg[3], 0, frame) != 0) |
+                           ((Expr_EvalIntCtx(p, &sc->arg[4], 0, frame) != 0) << 1) |
+                           ((Expr_EvalIntCtx(p, &sc->arg[5], 0, frame) != 0) << 2);
+        SpriteShader_Apply(target, owner, p, sc->params, frame,
+                           Expr_EvalIntCtx(p, &sc->arg[0], 0, frame), inherit);
+        return 0;
+    }
     case SCTRL_ZSS_MAP:
         return ZssMap_Apply(p,sc,frame);
     case SCTRL_NULL:
@@ -3323,6 +3375,8 @@ int Explod_ParseParamsCtx(ExplodParams *ep, Ini *ini, CharData *owner, int modif
 /* 0x0044DD70 */
 void ExplodParams_Free(ExplodParams *ep)
 {
+    if (!ep) return;
+    SpriteShader_FreeParams(((ExplodShaderParams *)ep)->effect);
     if (ep==NULL) return;
     Expr_Free(&ep->id);
     Expr_Free(&ep->anim);
@@ -4789,6 +4843,7 @@ int Projectile_Fire(ProjectileParams *pp, Player *p, StateRunCtx *ctx, Player *o
     }
     pl = owner->projectiles;
     e = (Projectile *)(pl->list->data + pl->list->elem_size * slot);
+    SpriteShader_ApplyObject(e, p, ((const ProjectileShaderParams *)pp)->effect, NULL);
     if (pp->afterimage != NULL) {
         if (e->afterimage == NULL) {
             e->afterimage = AfterImages_FindFree(g_game->afterimages);
@@ -4836,6 +4891,8 @@ int Projectile_Fire(ProjectileParams *pp, Player *p, StateRunCtx *ctx, Player *o
 /* 0x00452AB0 */
 void ProjectileParams_Free(ProjectileParams *pp)
 {
+    if (!pp) return;
+    SpriteShader_FreeParams(((ProjectileShaderParams *)pp)->effect);
     Expr_Free(&pp->projid);
     Expr_Free(&pp->offset[0]);
     Expr_Free(&pp->offset[1]);
@@ -5141,6 +5198,10 @@ void StateCtrl_Free(StateCtrl *sc)
         Expr_Free(&sc->arg[i]);
     }
     switch (sc->type) {
+    case SCTRL_SHADERSET:
+        SpriteShader_FreeParams(sc->params);
+        sc->params = NULL;
+        break;
     case SCTRL_ZSS_BODY:
         Zss_FreeBoundBody(sc->params);sc->params=NULL;
         break;

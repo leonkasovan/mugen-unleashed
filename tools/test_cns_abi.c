@@ -1114,6 +1114,34 @@ static void test_zss_controller(void)
 #include "test_zss_functions.inc"
 #include "test_zss_playsnd.inc"
 #include "test_zss_palfx.inc"
+
+static void test_zss_shaderset(void)
+{
+    const char *source =
+        "ShaderSet{name:\"tint\";time:$x;param0:$y;param15:$x+1;tex1.spr:0,0;shadow:0}";
+    StateCtrl controller = {0};
+    ZssDiagnostic diagnostic;
+    ExprCompileCtx compile = {&owner, context_slot, 0};
+    ExprValue values[2] = {{0}, {0}};
+    char types[2] = {EXPR_INT, EXPR_FLOAT};
+    ExprEvalCtx frame = {values, types, 2};
+
+    values[0].i = 3;
+    values[1].f = 0.5f;
+    assert(Zss_CompileControllerCtx(source, strlen(source), &owner, &controller, &diagnostic, &compile));
+    assert(controller.type == SCTRL_SHADERSET);
+    const SpriteShaderParams *params = controller.params;
+    assert(strcmp(params->name, "tint") == 0);
+    assert(params->used == ((1u << 15) | 1u));
+    assert(params->texture_kind[0] == 1);
+    assert(Expr_EvalIntCtx(&player, &controller.arg[0], 0, &frame) == 3);
+    assert(Expr_EvalIntCtx(&player, &controller.arg[3], 0, &frame) == 0);
+    assert(Expr_EvalFloatCtx(&player, &params->params[0], &frame) == 0.5f);
+    assert(Expr_EvalFloatCtx(&player, &params->params[15], &frame) == 4.0f);
+    StateCtrl_Free(&controller);
+    zss_no_allocs();
+    puts("ok: ShaderSet uses ZSS frame locals and releases controller expressions");
+}
 #include "test_zss_ai_map.inc"
 #include "test_zss_assertspecial.inc"
 #include "test_zss_nocrouch.inc"
@@ -1142,6 +1170,7 @@ int main(void)
     test_zss_function_limits();
     test_zss_playsnd();
     test_zss_palfx();
+    test_zss_shaderset();
     test_zss_ai_map();
     test_zss_assertspecial();
     test_zss_nocrouch();

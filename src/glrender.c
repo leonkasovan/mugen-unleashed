@@ -34,6 +34,7 @@
  */
 
 #include "mugen.h"
+#include "sprite_shader.h"
 #ifdef MUGEN_VITA_GL
 #include "vita_diagnostics.h"
 #include "vita_vertex_interface.h"
@@ -91,6 +92,126 @@ static void Glr_ForgetFormat(const GlTex *tex);
 static int *Glr_FormatSlot(const GlTex *tex);
 static void Glr_FreeProgram(GlProgram *prog);
 static int Glr_LogObject(unsigned int obj, int is_shader);
+static int Glr_LoadShader(const char **defines, GlProgram *prog, const char *name, int atlas,
+                          const SpriteShaderAsset *asset);
+typedef struct GlrEffectProgram {
+    unsigned id;
+    unsigned variant;
+    GlProgram program;
+    int params[16], time, elapsed, resolution, aspect, textures[2], grab;
+} GlrEffectProgram;
+static GlrEffectProgram effect_programs[32];
+static unsigned effect_cursor;
+
+/*
+ * The effect program for the draw in flight (indexed/rgba x special quad), or
+ * NULL to draw with the stock program. Programs are compiled on first use and
+ * cached by asset; the table is a small FIFO, so a pack that cycles through
+ * more effects than slots recompiles rather than growing without bound.
+ *
+ * Port integration: Glr_LoadShader takes the asset, so the effect body is
+ * spliced into whichever texture source this build prefers (the game's data/
+ * file on desktop, the embedded dialect on Vita).
+ */
+#define GLR_EFFECT_PROGRAM_SLOTS 32
+
+static const GlrEffectProgram *Glr_SelectEffect(int variant, int indexed, const SpriteShaderAsset *asset)
+{
+    GlrEffectProgram *entry;
+    unsigned id, program;
+    int i;
+
+    if (!g_spriteShaderDraw || asset == NULL || variant < 0 || variant >= GL_PROGRAM_COUNT) {
+        return NULL;
+    }
+    id = SpriteShader_ProgramId(asset);
+    for (i = 0; i < GLR_EFFECT_PROGRAM_SLOTS; ++i) {
+        entry = &effect_programs[i];
+        if (entry->id == id && entry->variant == (unsigned)variant) {
+            return entry->program.program != 0 ? entry : NULL;
+        }
+    }
+
+    entry = &effect_programs[effect_cursor++ % GLR_EFFECT_PROGRAM_SLOTS];
+    Glr_FreeProgram(&entry->program);
+    entry->id = id;
+    entry->variant = (unsigned)variant;
+    /*
+     * The effect wraps the stock colour function, so it takes the stock
+     * variant's own define set: the same index mode, perspective mode and
+     * PalFX disables the program it replaces would have used.
+     */
+    if (!Glr_LoadShader(g_glShaderDefines[variant], &entry->program, indexed ? "indexed" : "rgba", 0, asset)) {
+        Log_Printf("ShaderSet: GL effect failed for %s, using stock shader\n", SpriteShader_AssetPath(asset));
+        entry->id = 0;
+        return NULL;
+    }
+    program = entry->program.program;
+#ifdef MUGEN_VITA_GL
+    for (i = 0; i < 4; ++i) {
+        char name[24];
+        snprintf(name, sizeof(name), "mugenParams%d", i);
+        entry->params[i] = g_glewGetUniformLocation(program, name);
+    }
+#else
+    for (i = 0; i < 16; ++i) {
+        char name[24];
+        snprintf(name, sizeof(name), "param[%d]", i);
+        entry->params[i] = g_glewGetUniformLocation(program, name);
+    }
+#endif
+    entry->textures[0] = g_glewGetUniformLocation(program, "tex1");
+    entry->textures[1] = g_glewGetUniformLocation(program, "tex2");
+    entry->grab = g_glewGetUniformLocation(program, "bgl_RenderedTexture");
+#ifdef MUGEN_VITA_GL
+    if (entry->grab != -1) {
+        Glr_FreeProgram(&entry->program);
+        entry->id = 0;
+        Log_Printf("ShaderSet: framebuffer sampling is disabled on VitaGL\n");
+        return NULL;
+    }
+#endif
+    entry->time = g_glewGetUniformLocation(program, "iTime");
+    entry->elapsed = g_glewGetUniformLocation(program, "sTime");
+    entry->resolution = g_glewGetUniformLocation(program, "iResolution");
+    entry->aspect = g_glewGetUniformLocation(program, "aspectRatio");
+    Log_Printf("ShaderSet: GL effect ready for %s\n", SpriteShader_AssetPath(asset));
+    return entry;
+}
+
+static void Glr_EffectUniforms(const GlrEffectProgram *effect)
+{
+    const SpriteShaderState *state = g_spriteShaderDraw;
+    int i;
+
+#ifdef MUGEN_VITA_GL
+    for (i = 0; i < 4; ++i) {
+        if (effect->params[i] != -1) {
+            glUniform4fv(effect->params[i], 1, state->params + i * 4);
+        }
+    }
+#else
+    for (i = 0; i < 16; ++i) {
+        if (effect->params[i] >= 0) {
+            g_glewUniform1f(effect->params[i], state->params[i]);
+        }
+    }
+#endif
+    SpriteShader_BindResources(effect->textures, effect->grab);
+    if (effect->time >= 0) {
+        g_glewUniform1f(effect->time, (float)g_game->frames / 60.0f);
+    }
+    if (effect->elapsed >= 0) {
+        g_glewUniform1f(effect->elapsed, (float)state->elapsed);
+    }
+    if (effect->resolution >= 0) {
+        g_glewUniform2f(effect->resolution, (float)g_targetWidth, (float)g_targetHeight);
+    }
+    if (effect->aspect >= 0) {
+        g_glewUniform1f(effect->aspect, SpriteShader_Aspect());
+    }
+}
+
 /* Streaming sprite texture cache (defined with Gl_DrawSprite below). */
 static size_t Glr_StreamBudget(void);
 static void Glr_StreamDropAll(int delete_gl);
@@ -1175,14 +1296,21 @@ void Gl_DrawQuadRgba(const PalFx *fx, GlTex *tex, float x0, float y0, float x1, 
     int special = Glr_QuadSpecial(dp, &c0, &c1);
     GlrFx t;
     const GlProgram *prog;
+    const GlrEffectProgram *effect = NULL;
     unsigned long long bp_start = BATCHPROF_NOW();
 #ifdef MUGEN_VITA_GL
     unsigned long long vq;
 #endif
 
     Glr_FxTerms(fx, &t);
-    prog = &g_glProgramsRgba[Glr_Variant(fx, &t, special)];
+    {
+        const SpriteShaderAsset *asset = g_spriteShaderDraw != NULL ? SpriteShader_DrawAsset() : NULL;
+
+        effect = Glr_SelectEffect(Glr_Variant(fx, &t, special), 0, asset);
+    }
+    prog = effect != NULL ? &effect->program : &g_glProgramsRgba[Glr_Variant(fx, &t, special)];
     Glr_UseProgram(prog->program);
+    if (effect != NULL) Glr_EffectUniforms(effect);
     g_glewActiveTexture(GLR_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tex->id);
     GlTex_SetParameter(tex, GL_TEXTURE_WRAP_S, special ? GL_REPEAT : GLR_CLAMP_TO_EDGE);
@@ -1228,14 +1356,21 @@ void Gl_DrawQuadIndexed(const PalFx *fx, GlTex *tex, GlTex *pal, float x0, float
     int special = Glr_QuadSpecial(dp, &c0, &c1);
     GlrFx t;
     const GlProgram *prog;
+    const GlrEffectProgram *effect = NULL;
     unsigned long long bp_start = BATCHPROF_NOW();
 #ifdef MUGEN_VITA_GL
     unsigned long long vq;
 #endif
 
     Glr_FxTerms(fx, &t);
-    prog = &g_glProgramsIndexed[Glr_Variant(fx, &t, special)];
+    {
+        const SpriteShaderAsset *asset = g_spriteShaderDraw != NULL ? SpriteShader_DrawAsset() : NULL;
+
+        effect = Glr_SelectEffect(Glr_Variant(fx, &t, special), 1, asset);
+    }
+    prog = effect != NULL ? &effect->program : &g_glProgramsIndexed[Glr_Variant(fx, &t, special)];
     Glr_UseProgram(prog->program);
+    if (effect != NULL) Glr_EffectUniforms(effect);
     g_glewActiveTexture(GLR_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tex->id);
     GlTex_SetParameter(tex, GL_TEXTURE_WRAP_S, special ? GL_REPEAT : GL_CLAMP);
@@ -1773,7 +1908,7 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
     int blended = blend != 0;
     int paletted = spr->bpp <= 8;
     int rgba32 = spr->bpp == 32;
-    int w, h;
+    int w, h, special;
     float fw, fh, left, right;
     PalFx *fx;
 
@@ -1785,8 +1920,16 @@ void Gl_DrawSprite(int sprite, const DrawParams *dp, SpriteSet *set)
 #ifndef MUGEN_VITA_GL
     float rect[4], c0, c1;
     GlTex *page = NULL;
-    if (spr->format == SPRITE_FORMAT_ATLAS && (paletted ? atlas_indexed.program : atlas_rgba.program) &&
-        !Glr_QuadSpecial(dp, &c0, &c1))
+    special = Glr_QuadSpecial(dp, &c0, &c1);
+    /*
+     * Port integration: a ShaderSet effect replaces the stock fragment body and
+     * samples the sprite itself, so it needs the sprite's own texture and plain
+     * UVs. An atlased sprite is addressed through the queued rectangle and the
+     * shared page, which the effect program does not read -- so an effect draw
+     * bypasses the atlas and streams the sprite instead.
+     */
+    if (g_spriteShaderDraw == NULL && spr->format == SPRITE_FORMAT_ATLAS &&
+        (paletted ? atlas_indexed.program : atlas_rgba.program) && !special)
         page = Sff3_Texture(spr, rect);
     if (page) tex = page;
     else
@@ -1977,7 +2120,10 @@ void Sprite_DrawGL(SpriteSet *set, int sprite, const DrawParams *dp)
         spr->scale_x = 1.0f;
         first.x = (float)spr->x;
         first.y = (float)spr->y;
+        const SpriteShaderState *effect = g_spriteShaderDraw;
+        g_spriteShaderDraw = NULL;
         Gl_DrawSprite(sprite, &first, set);
+        g_spriteShaderDraw = effect;
         Gfx_SetRenderTarget(target, target_sprite);
         Gfx_SetClipRect(cx1, cy1, cx2, cy2);
         spr->scale_x = saved_sx;
@@ -2439,7 +2585,8 @@ static char *Glr_ShaderText(const char *name, const char *ext, int atlas, int *e
 }
 
 /* 0x0047C580: port fix: transactional read/compile/link, including cleanup. */
-static int Glr_LoadShader(const char **defines, GlProgram *prog, const char *name, int atlas)
+static int Glr_LoadShader(const char **defines, GlProgram *prog, const char *name, int atlas,
+                          const SpriteShaderAsset *asset)
 {
     char defs[GLR_DEFINES_SIZE];
 #ifdef MUGEN_VITA_GL
@@ -2491,8 +2638,28 @@ static int Glr_LoadShader(const char **defines, GlProgram *prog, const char *nam
     if (built.vert == 0) goto fail;
     text = Glr_ShaderText(name, ".frag", atlas, &embedded);
     if (text == NULL) goto fail;
+    /*
+     * Two rewrites of the stock fragment source, and they are alternatives.
+     * A ShaderSet asset supplies its own body, which samples the sprite itself
+     * through the stock colour function; an atlas load replaces the texture
+     * read with the rectangle-addressed one. An effect draw never takes the
+     * atlas path -- Gl_DrawSprite clears `instanced` for it -- so they cannot
+     * both apply, and the atlas rewrite additionally has to fingerprint the
+     * stock text, which a rewritten body would no longer match.
+     */
+    if (asset != NULL) {
+#ifdef MUGEN_VITA_GL
+        const char *coord = "vTexCoord";
+#else
+        const char *coord = "gl_TexCoord[0]";
+#endif
+        char *fragment = SpriteShader_Fragment(text, asset, coord);
+        free(text);
+        text = fragment;
+        if (!text) goto fail;
+    }
 #ifndef MUGEN_VITA_GL
-    if (atlas) {
+    else if (atlas) {
         int indexed = strcmp(name, "indexed") == 0;
         if (shader_fingerprint(text) != (indexed ? 0x2642cb61u : 0xf82838a0u)) { free(text); goto fail; }
         char *adapted = atlas_fragment(text, indexed);
@@ -2567,7 +2734,7 @@ fail:
 
 int Gl_LoadShader(const char **defines, GlProgram *prog, const char *name)
 {
-    return Glr_LoadShader(defines, prog, name, 0);
+    return Glr_LoadShader(defines, prog, name, 0, NULL);
 }
 
 /*
@@ -2601,8 +2768,8 @@ int Gl_LoadShaders(void)
     memcpy(g_glProgramsRgba, rgba, sizeof(rgba));
 #ifndef MUGEN_VITA_GL
     const char *atlas_defs[] = {mode, "PERSPECTIVE_NONE", NULL};
-    Glr_LoadShader(atlas_defs, &atlas_indexed, "indexed", 1);
-    Glr_LoadShader(atlas_defs, &atlas_rgba, "rgba", 1);
+    Glr_LoadShader(atlas_defs, &atlas_indexed, "indexed", 1, NULL);
+    Glr_LoadShader(atlas_defs, &atlas_rgba, "rgba", 1, NULL);
 #endif
 #ifdef MUGEN_VITA_GL
     VitaDiag_Log("GAME SHADERS PASS %i/%i programs loaded by the real renderer\n",2*GL_PROGRAM_COUNT,2*GL_PROGRAM_COUNT);
@@ -2644,6 +2811,11 @@ int Gl_FreeShaders(void)
 #endif
     if (g_glCurrentProgram != 0) g_glewUseProgram(0);
     g_glCurrentProgram = 0;
+
+    for (unsigned slot = 0; slot < sizeof(effect_programs) / sizeof(*effect_programs); ++slot)
+        Glr_FreeProgram(&effect_programs[slot].program);
+    memset(effect_programs, 0, sizeof(effect_programs));
+    SpriteShader_FreeTextures();
 
     for (i = 0; i < GL_PROGRAM_COUNT; i++) {
         Glr_FreeProgram(&g_glProgramsIndexed[i]);

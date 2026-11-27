@@ -14,6 +14,7 @@
 #include <pthread.h>
 
 #include "mugen.h"
+#include "sprite_shader.h"
 #include "memprof.h"
 #ifdef MUGEN_GLES
 #include "gles_render.h"
@@ -528,7 +529,8 @@ int Game_Draw(ScreenLoop *screen)
 #if !defined(ANDROID_PORT) || defined(MUGEN_GLES)
         /* M8: the GL drawer exists on Android when the GLES backend is built. */
                         if (g_renderMode == 2) {
-                            Sprite_DrawGL(it->sprites, it->sprite, &it->dp);
+                            const SpriteShaderState *effect = &((SpriteShaderQueueItem *)it)->effect;
+                            SpriteShader_Draw(it->sprites, it->sprite, &it->dp, effect->asset ? effect : NULL);
                         } else
 #endif
                         {

@@ -23,6 +23,7 @@
 #include <pthread.h>
 
 #include "mugen.h"
+#include "sprite_shader.h"
 
 /* Timer_GetTicks as the original inlines it (Timer_Count included). */
 static int Ml_TimerTicks(void)
@@ -1817,6 +1818,12 @@ unsigned int Match_SeedRng(unsigned int seed)
 void Shadow_Draw(AnimState *st, const DrawParams *dp, float y, float offset, float sx, float sy,
                  const int *shadow, const int *reflection)
 {
+    Shadow_DrawEffect(st, dp, y, offset, sx, sy, shadow, reflection, NULL);
+}
+
+void Shadow_DrawEffect(AnimState *st, const DrawParams *dp, float y, float offset, float sx, float sy,
+                 const int *shadow, const int *reflection, const void *actor)
+{
     GameVars *g = g_game;
     SpriteSet *sprites = st->sprites;
     float xshear, top, ty, s;
@@ -1867,7 +1874,7 @@ void Shadow_Draw(AnimState *st, const DrawParams *dp, float y, float offset, flo
             bd = refl.alpha_dst;
             refl.alpha_dst = (float)(bd + (1.0 - bd) * a.alpha_dst);
         }
-        Sprite_Draw(sprites, sprite, &refl);
+        SpriteShader_Draw(sprites, sprite, &refl, SpriteShader_Pass(actor, SPRITE_SHADER_REFLECTION));
     }
     lo = shadow[4];
     hi = shadow[5];
@@ -1898,7 +1905,7 @@ void Shadow_Draw(AnimState *st, const DrawParams *dp, float y, float offset, flo
     g_palFxCur = &g_shadowPalFx;
     shad.blend = 1;
     shad.shear_x = (float)(hdir * (double)xshear);
-    Sprite_Draw(sprites, sprite, &shad);
+    SpriteShader_Draw(sprites, sprite, &shad, SpriteShader_Pass(actor, SPRITE_SHADER_SHADOW));
     g_palFxCur = NULL;
 }
 

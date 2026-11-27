@@ -18,6 +18,7 @@
 #include <pthread.h>
 
 #include "mugen.h"
+#include "sprite_shader.h"
 #include "zss_binding.h"
 
 /* The state list a player runs: the custom states of another player, or its own. */
@@ -278,6 +279,8 @@ void Player_Update(Player *p)
         frozen = 1;
     }
     p->paused = frozen;
+    if (!frozen)
+        SpriteShader_Tick(p);
     for (i = 0; i < 8; i++) {
         HitOverride *o = &p->hit_override[i];
         if (o->active != 0 && o->time != -1) {
@@ -2401,7 +2404,7 @@ void Player_Draw(Player *p)
     p->anim->layer = p->sprpriority;
     g_palRemapCur = p->remap;
     g_palFxCur = p->palfx;
-    Anim_Draw(p->anim, &dp, sx, sy);
+    Anim_DrawEffect(p->anim, &dp, sx, sy, SpriteShader_Get(p));
     g_palFxCur = NULL;
     g_palRemapCur = NULL;
 }
@@ -2437,7 +2440,7 @@ void Player_DrawShadow(Player *p, const int *a, const int *b)
     sx = (float)((double)num / den);
     off = (float)(r * p->consts.shadowoffset);
     y = (float)p->pos.y;
-    Shadow_Draw(p->anim, &p->draw, y, off, sx, sy, a, b);
+    Shadow_DrawEffect(p->anim, &p->draw, y, off, sx, sy, a, b, p);
     g_palFxCur = NULL;
     g_palRemapCur = NULL;
 }
@@ -3328,6 +3331,7 @@ void Projectiles_Free(ProjectileList *pl)
     }
     if (pl->list->count != 0) {
         for (e = KeyedArray_First(pl->list); e != NULL; e = KeyedArray_Next(pl->list)) {
+            SpriteShader_Clear(e);
             memset(&e->remap_own, 0, sizeof(e->remap_own));
         }
     }
@@ -3396,6 +3400,7 @@ void Projectiles_Remove(int slot, ProjectileList *pl)
         e->afterimage->anim = 0;
         e->afterimage = NULL;
     }
+    SpriteShader_Clear(e);
     KeyedArray_Remove(slot, pl->list);
 }
 
@@ -3542,6 +3547,7 @@ void Projectiles_Update(ProjectileList *pl)
                     x->afterimage->anim = 0;
                     x->afterimage = NULL;
                 }
+                SpriteShader_Clear(x);
                 KeyedArray_Remove(list->iter, pl->list);
             }
         }
@@ -3551,6 +3557,7 @@ void Projectiles_Update(ProjectileList *pl)
         if (e->hitpause_time > 0) {
             e->hitpause_time--;
         } else {
+            if (e->ticks > 0) SpriteShader_Tick(e);
             e->ticks += 1;
             e->time += 1;
         }
@@ -3637,7 +3644,7 @@ void Projectiles_Draw(ProjectileList *pl)
         if ((unsigned int)(e->state - 1) <= 3) {
             g_palRemapCur = e->remap;
             g_palFxCur = e->palfx;
-            Anim_Draw(&e->anim, &e->draw, 1.0f, 1.0f);
+            Anim_DrawEffect(&e->anim, &e->draw, 1.0f, 1.0f, SpriteShader_Get(e));
         }
     }
     g_palRemapCur = saved_remap;
@@ -3657,7 +3664,7 @@ void Projectiles_DrawShadow(ProjectileList *pl)
             GameVars *g = g_game;
             g_palRemapCur = e->remap;
             g_palFxCur = e->palfx;
-            Shadow_Draw(&e->anim, &e->draw, (float)e->pos.y, 0.0f, 1.0f, 1.0f, g->stage.shadow, &g->stage.reflection_intensity);
+            Shadow_DrawEffect(&e->anim, &e->draw, (float)e->pos.y, 0.0f, 1.0f, 1.0f, g->stage.shadow, &g->stage.reflection_intensity, e);
         }
     }
     g_palRemapCur = saved_remap;
