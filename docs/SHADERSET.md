@@ -113,3 +113,43 @@ For Vita, build with `port\psvita\build.bat --gl-selftest` and follow the Vita
 port instructions for the runtime shader compiler. Check the tint on indexed
 and RGBA sprites, then test a stage override and an auxiliary texture on the
 device.
+
+## Port integration notes
+
+The feature was written against an older tree and merged back; four things
+differ here and are worth knowing before changing this code again.
+
+- **The sprite atlas.** `src/sdl2`'s GLES renderer packs eligible indexed
+  sprites into shared pages and addresses them through the per-instance
+  attributes (`a_instance_mvp`, `a_atlas_rect`, seven texture/palette slots).
+  An effect program does not declare those, and it samples the sprite through
+  its own UVs, so **an effect draw bypasses the atlas**: `gles_atlas_texture` is
+  asked for the standalone texture, an SFF v3 page sprite streams its own
+  region, and the quad is submitted immediately instead of being queued. The
+  desktop renderer skips its own atlas queue for the same reason
+  (`Gl_DrawSprite` checks `g_spriteShaderDraw` before `Sff3_Texture`). The cost
+  is one draw call per shader-affected sprite rather than a merged batch.
+- **Shader source.** The stock bodies are the embedded literals in
+  `src/shaders/` (desktop prefers the game's `data/` file first, for fidelity
+  validation; GLES and Vita always use the embedded dialect). The asset is
+  spliced in by `SpriteShader_Fragment`, which rewrites the stock body into a
+  callable `mugenStockColor()` and leaves the `////*EB_DEFINES*////` marker in
+  place so the variant defines are still inserted afterwards. On GLES the two
+  base sources are **static literals** and must not be freed -- only
+  `SpriteShader_Fragment`'s result is owned.
+- **Variant defines.** A desktop effect inherits `g_glShaderDefines[variant]`,
+  so it gets the same index mode, perspective mode and `PALFX_DISABLE*` set as
+  the stock program it replaces. GLES builds them with `gles_build_defines`.
+- **Parameter delivery.** Desktop and GLES fetch `param[0]` and `glUniform1fv`
+  all 16; VitaGL has no `param[16]` array and takes four `vec4 mugenParamsN`
+  instead. A shader that indexes `param` with a computed index works on desktop
+  and GLES but not on Vita -- use literal indices there.
+
+### Device status
+
+Verified on a Retroid Pocket Flip 2 (Adreno, GLES 3.0, Android 13): a
+`ShaderSet` in `[Statedef -1]` tinting the character, on a 2D stage and on a
+glTF 3D stage (`KOFXI_Esaka_1`), with the sprite atlas both off (default) and
+on (`SpriteAtlas = 1`). `param0 = 0` renders identically to no effect, so the
+uniform path is confirmed rather than the shader merely being always-on. VitaGL
+remains unverified.
