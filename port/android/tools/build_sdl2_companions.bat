@@ -205,6 +205,7 @@ if errorlevel 1 (
 if exist "%DL_DEST%" del /q "%DL_DEST%"
 :sdl2_source_ready
 if not exist "%SDL2_DEPS_DIR%" mkdir "%SDL2_DEPS_DIR%"
+call :reset_stale_build_dir "%WORK%\build-sdl2" "%SDL2_SRC%"
 echo.
 echo ==^> Configuring SDL2
 "%CMAKE%" -S "%SDL2_SRC%" -B "%WORK%\build-sdl2" -G Ninja ^
@@ -285,6 +286,7 @@ rem has no sed, so PowerShell does the single substitution. Best-effort, like
 rem the .sh's `|| true`: with the SDK's pinned CMake 3.22.1 it changes nothing.
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$p='%TTF_SRC%\external\freetype\CMakeLists.txt'; if (Test-Path -LiteralPath $p) { $t=Get-Content -LiteralPath $p -Raw; $t=$t -replace 'cmake_minimum_required\(VERSION 3\.[0-4]\)','cmake_minimum_required(VERSION 3.5...3.27)'; [IO.File]::WriteAllText($p,$t) }" >nul 2>&1
 
+call :reset_stale_build_dir "%WORK%\build-ttf" "%TTF_SRC%"
 echo.
 echo ==^> Configuring SDL2_ttf
 "%CMAKE%" -S "%TTF_SRC%" -B "%WORK%\build-ttf" -G Ninja ^
@@ -330,6 +332,7 @@ if errorlevel 1 (
 if exist "%WORK%\mixer.tar.gz" del /q "%WORK%\mixer.tar.gz"
 :mixer_source_ready
 
+call :reset_stale_build_dir "%WORK%\build-mixer" "%MIX_SRC%"
 echo.
 echo ==^> Configuring SDL2_mixer
 "%CMAKE%" -S "%MIX_SRC%" -B "%WORK%\build-mixer" -G Ninja ^
@@ -374,6 +377,25 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\download.p
 if errorlevel 1 (
     echo error: download failed: %DL_URL%
     exit /b 1
+)
+exit /b 0
+
+rem :reset_stale_build_dir BUILD_DIR SOURCE_DIR -- a CMake cache records the source
+rem tree it was generated from and refuses a different one outright ("does not
+rem match the source ... used to generate cache"). The source directory names
+rem here are derived from the release version, so a version bump or a naming
+rem change leaves an old cache pointing at the previous tree. Drop it instead of
+rem failing; the configure that follows regenerates it against the current one.
+rem Paths are compared with forward slashes because that is how CMake writes
+rem CMAKE_HOME_DIRECTORY.
+:reset_stale_build_dir
+if not exist "%~1\CMakeCache.txt" exit /b 0
+set "_SD=%~2"
+set "_SD=%_SD:\=/%"
+findstr /c:"CMAKE_HOME_DIRECTORY:INTERNAL=%_SD%" "%~1\CMakeCache.txt" >nul 2>&1
+if errorlevel 1 (
+    echo     stale CMake cache in %~1 for another source tree; removing it
+    rmdir /s /q "%~1"
 )
 exit /b 0
 
