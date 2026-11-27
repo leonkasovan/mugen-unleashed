@@ -368,10 +368,21 @@ void main()
 
     if (useTexture) {
         color = MODEL_TEXTURE2D(tex, vec2(texTransform * vec3(texcoord, 1.0)));
+    }
+    float alpha = (color.a * baseColorFactor.a) * vColor.a;
+    // GLES workaround: late discard on the P50 Pro's Adreno 660 leaves
+    // black rectangles around unlit cutouts. Keep discard late for lit
+    // materials, whose additional texture lookups can need derivatives.
+#ifdef GL_ES
+    if (unlit && ((!enableAlpha && alpha < alphaThreshold) || (enableAlpha && alpha <= 0.0))) {
+        discard;
+    }
+#endif
+    if (useTexture) {
         color.rgb = pow(color.rgb, vec3(2.2));
     }
-    color *= baseColorFactor;
-    color *= vColor;
+    color.rgb *= baseColorFactor.rgb;
+    color.rgb *= vColor.rgb;
     if (meshOutline > 0.0) {
         color.rgb = vec3(0.0);
     } else if (!unlit) {
@@ -397,18 +408,18 @@ void main()
             color.rgb += emission;
         }
     }
-    color.rgb *= color.a;
-    if (!enableAlpha) {
-        if (color.a < alphaThreshold) {
+    color.rgb *= alpha;
+#ifdef GL_ES
+    if (!unlit)
+#endif
+    {
+        if ((!enableAlpha && alpha < alphaThreshold) || (enableAlpha && alpha <= 0.0)) {
             discard;
         }
-        color.a = 1.0;
-    } else if (color.a <= 0.0) {
-        discard;
     }
 
     vec3 c = pow(color.rgb, vec3(1.0 / 2.2));
-    float a = color.a;
+    float a = enableAlpha ? alpha : 1.0;
     if (a > 0.0) {
         c = clamp(c / a, 0.0, 1.0);
     }
