@@ -839,7 +839,7 @@ static void Bgm_LogRequest(const BgmInfo *info, const char *what)
     if (info == NULL || info->path[0] == '\0') {
         return;
     }
-    f = fopen(info->path, "rb");
+    f = Compat_Fopen(info->path, "rb");
     if (f == NULL) {
         Log_Printf("bgm: cannot open %s\n", info->path);
         return;

@@ -113,7 +113,7 @@ static int list_directory(const char *path, int directories, UpdateList *list)
 }
 static char *read_file(const char *path, size_t *length)
 {
-    FILE *fp = fopen(path, "rb");
+    FILE *fp = Compat_Fopen(path, "rb");
     char *data = NULL;
     long size;
     int saved;

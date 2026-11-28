@@ -112,7 +112,7 @@ Stream *Stream_OpenFile(const char *path, const char *mode)
         return NULL;
     }
     s->type = STREAM_FILE;
-    s->fp = fopen(path, mode);
+    s->fp = Compat_Fopen(path, mode);
     if (s->fp == NULL) {
         g_streamError = STREAM_ERR_OPEN;
         free(s);

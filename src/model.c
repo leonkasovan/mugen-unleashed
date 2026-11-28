@@ -1416,7 +1416,7 @@ Model *Model_LoadAsset(const char *path)
 
     if (path == NULL) return NULL;
     {
-        FILE *source = fopen(path, "rb");
+        FILE *source = Compat_Fopen(path, "rb");
         long bytes;
         if (source == NULL) return NULL;
         if (fseek(source, 0, SEEK_END) != 0) { fclose(source); return NULL; }
@@ -2896,7 +2896,7 @@ static float *Model_LoadHdr(const char *path, int *w_out, int *h_out)
     long size;
     int w, h, x, y, c;
 
-    fp = fopen(path, "rb");
+    fp = Compat_Fopen(path, "rb");
     if (fp == NULL) {
         return NULL;
     }

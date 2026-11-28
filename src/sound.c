@@ -635,7 +635,7 @@ Snd *Snd_Load(const char *path)
             return NULL;
         }
     } else {
-        FILE *fp = fopen(path, "rb");
+        FILE *fp = Compat_Fopen(path, "rb");
         long pos, size;
         void *buf;
 

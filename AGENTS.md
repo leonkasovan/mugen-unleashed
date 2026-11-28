@@ -686,9 +686,11 @@ There are two kinds of check, and they answer different questions.
 
 `tools/validate.c` checks that a pack's asset paths resolve on **this**
 filesystem, which is not the same question Windows answers: Windows compares
-filenames case-insensitively and accepts `\` as a separator, Linux does neither.
-A pack built on Windows routinely carries `chars\KFM\KFM.def` or
-`states\constants.cns` and then fails on a handheld with nothing but
+filenames case-insensitively, Linux does not. A pack built on Windows routinely
+carries `chars\KFM\KFM.def` or `states\constants.cns`; `\` is accepted as a
+separator on every target now (`Compat_Fopen`, `src/file.c`, converts it on the
+non-Windows builds), so those open, but a name whose case differs from the file
+on disk still fails on a handheld with nothing but
 `Error reading character file` to show for it.
 
 ```sh

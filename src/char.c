@@ -1079,7 +1079,7 @@ CharData *Char_LoadDef(const char *dir, Stream *s)
         Log_Printf("  Loading learned AI %s...", buf);
         Path_Join(buf, dir, path);
         if (!Ai_Load(path, &c->ai)) {
-            FILE *fp = fopen(path, "rb");
+            FILE *fp = Compat_Fopen(path, "rb");
             if (fp != NULL) {
                 Log_Printf("Ignoring invalid AI file: %s\n", buf);
                 fclose(fp);

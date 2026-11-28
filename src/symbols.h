@@ -526,6 +526,9 @@ int __cdecl CmdLine_AppendFile(char **argv, int argc, int argv_max,
 /* 0x0040c140 */ void __cdecl Error_Printf(const char *fmt, ...);
 /* 0x0040c190 */ void __cdecl Error_OutOfMemory(void);
 /* 0x0040c1d0 */ int __cdecl File_Exists(const char *path);
+/* Port addition: fopen that treats '\' as a separator on non-Windows targets,
+ * where the original (a Windows program) and every pack it loads do. */
+FILE *__cdecl Compat_Fopen(const char *path, const char *mode);
 /* 0x0040c200 */ int __cdecl File_Find(const char *path, char *out, char *dir_out, const char *base_dir);
 /* 0x0040c360 */ int __cdecl Ini_ReadString(Ini *ini, const char *key, unsigned int size, char *out);
 /* 0x0040c3f0 */ int __cdecl Log_Init(void);

@@ -117,7 +117,7 @@ int Ai_Load(const char *path, AiData *ai)
     if (!Ai_Alloc(ai)) {
         return 0;
     }
-    f = fopen(path, "rb");
+    f = Compat_Fopen(path, "rb");
     if (f == NULL) {
         return 0;
     }
@@ -181,7 +181,7 @@ int Ai_Save(const char *path, const AiData *ai)
             return 0;
         }
     }
-    f = fopen(path, "wb");
+    f = Compat_Fopen(path, "wb");
     if (f == NULL) {
         return 0;
     }

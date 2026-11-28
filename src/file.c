@@ -19,10 +19,38 @@ int Sff_AtlasSibling(const char *path, char *out, size_t capacity)
     return 1;
 }
 
+/*
+ * Port addition: the original is a Windows program, so it and every pack it
+ * loads treat '\' as a directory separator. POSIX does not, and a Linux,
+ * Android or Vita build given a .def line such as `cmd = files\freeza.mfg`
+ * fails to open a file that is present. Convert the separators before opening
+ * on those targets; on Windows this is exactly fopen. Centralised here because
+ * a path can arrive from a .def, .cns, .sff entry, config value or the command
+ * line, and every one of them then flows through this or Stream_OpenFile.
+ */
+FILE *Compat_Fopen(const char *path, const char *mode)
+{
+#ifdef _WIN32
+    return fopen(path, mode);
+#else
+    char buf[0x800];
+    size_t i;
+
+    if (strchr(path, '\\') == NULL || strlen(path) >= sizeof(buf)) {
+        return fopen(path, mode);
+    }
+    for (i = 0; path[i] != '\0'; i++) {
+        buf[i] = (path[i] == '\\') ? '/' : path[i];
+    }
+    buf[i] = '\0';
+    return fopen(buf, mode);
+#endif
+}
+
 /* 0x0040C1D0 */
 int File_Exists(const char *path)
 {
-    FILE *fp = fopen(path, "rb");
+    FILE *fp = Compat_Fopen(path, "rb");
 
     if (fp != NULL) {
         fclose(fp);
@@ -86,8 +114,8 @@ static int find_file(const char *path, char *out, char *dir_out, const char *bas
             continue;
         }
         char sibling[sizeof(full)+6];
-        fp = sprites && Sff_AtlasSibling(full, sibling, sizeof(sibling)) ? fopen(sibling, "rb") : NULL;
-        if (!fp) fp = fopen(full, "rb");
+        fp = sprites && Sff_AtlasSibling(full, sibling, sizeof(sibling)) ? Compat_Fopen(sibling, "rb") : NULL;
+        if (!fp) fp = Compat_Fopen(full, "rb");
         if (fp != NULL) {
             fclose(fp);
             if (sprites && !(*sprites = Sff_Load(full))) continue;

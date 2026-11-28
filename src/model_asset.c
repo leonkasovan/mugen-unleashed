@@ -124,7 +124,7 @@ static unsigned char *Model_ReadImage(const cgltf_image *img, const cgltf_option
         if (!File_Find(rel, path, NULL, dir)) {
             return NULL;
         }
-        fp = fopen(path, "rb");
+        fp = Compat_Fopen(path, "rb");
         if (fp == NULL) {
             return NULL;
         }

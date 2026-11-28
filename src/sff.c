@@ -951,7 +951,7 @@ static SpriteSet *Sff_LoadFileExact(const char *path, const int *select, int req
             return NULL;
         }
     } else {
-        FILE *fp = fopen(path, "rb");
+        FILE *fp = Compat_Fopen(path, "rb");
         long pos, size;
         void *buf;
 

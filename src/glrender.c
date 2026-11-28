@@ -2423,7 +2423,7 @@ static char *Glr_ShaderText(const char *name, const char *ext, int atlas, int *e
     *embedded = 0;
 #ifndef MUGEN_VITA_GL
     Glr_ShaderPath(path, name, ext);
-    f = fopen(path, "rb");
+    f = Compat_Fopen(path, "rb");
     if (f != NULL) {
         return Gl_ReadFile(f);
     }
