@@ -136,6 +136,15 @@ void Memprof_Free(void *);
 #define free(p) Memprof_Free(p)
 #endif
 
+/*
+ * Port addition: suspend/resume the heap side table around a match (see
+ * memprof.h). Declared here, not only in memprof.h, because every source file
+ * includes this header and the call site is src/gameflow.c.
+ */
+void Memprof_Suspend(void);
+void Memprof_Resume(void);
+int  Memprof_Suspended(void);
+
 /* Version reported by the original build. */
 #define MUGEN_VERSION_MAJOR 1
 #define MUGEN_VERSION_MINOR 1

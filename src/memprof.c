@@ -35,6 +35,42 @@ typedef struct MemprofEntry {
 static MemprofEntry *memprof_buckets[MEMPROF_BUCKETS];
 static volatile int memprof_lock; /* 0 free, 1 held */
 
+/*
+ * Port addition: the pointer side table costs a spin lock and a hash-chain walk
+ * on EVERY engine malloc/free. A profile of an explod-heavy pack put
+ * Memprof_FindEntryLocked at 12.5% of all samples, and 92% of that was teardown
+ * (tools/test_memprof_buckets.sh measures the same thing: 2263 ms to free
+ * 99k pointers at 1024 buckets, 105 ms at 114688).
+ *
+ * The table's only consumers run at a match boundary: Memprof_Stats (the once-a-
+ * second "mem:" line) and Memprof_Tick/Dump (call-site dumps, and those already
+ * require MUGEN_MEMPROF=1). So tracking is suspended while a match runs and
+ * restored when it ends: the analytics still see load, a real snapshot between
+ * matches and teardown, and gameplay stops paying for the table.
+ *
+ * Allocations made while suspended are simply untracked, exactly like those made
+ * before Memprof_Start; only the live/peak/allocation counters keep running, so
+ * heap_live would UNDER-REPORT during a match. Rather than print a number that
+ * is quietly wrong, Memprof_Stats reports peak and live as 0 while suspended and
+ * Memprof_Log says so in the line.
+ */
+static volatile int memprof_suspended;
+
+void Memprof_Suspend(void)
+{
+    memprof_suspended = 1;
+}
+
+void Memprof_Resume(void)
+{
+    memprof_suspended = 0;
+}
+
+int Memprof_Suspended(void)
+{
+    return memprof_suspended;
+}
+
 static uint64_t memprof_heap_live, memprof_heap_peak;
 static uint64_t memprof_heap_allocs, memprof_heap_frees, memprof_heap_fails;
 static uint64_t memprof_lua_live, memprof_lua_peak;
@@ -624,6 +660,13 @@ static void *Memprof_MallocWithPC(size_t size, void *pc)
         __sync_fetch_and_add(&memprof_heap_fails, 1);
         return NULL;
     }
+    /* Suspended: the table is not maintained, so there is nothing to record.
+     * The counters stay live because they are a handful of atomics. */
+    if (memprof_suspended) {
+        __sync_fetch_and_add(&memprof_heap_allocs, 1);
+        Memprof_Add(&memprof_heap_live, &memprof_heap_peak, (int64_t)size, 1);
+        return p;
+    }
     Memprof_Lock();
     entry = Memprof_EntryNewLocked(p, size, NULL);
     if (entry != NULL) Memprof_CreditEntryLocked(entry, pc);
@@ -663,6 +706,11 @@ void *Memprof_Calloc(size_t count, size_t size)
         __sync_fetch_and_add(&memprof_heap_fails, 1);
         return NULL;
     }
+    if (memprof_suspended) {
+        __sync_fetch_and_add(&memprof_heap_allocs, 1);
+        Memprof_Add(&memprof_heap_live, &memprof_heap_peak, (int64_t)total, 1);
+        return p;
+    }
     Memprof_Lock();
     entry = Memprof_EntryNewLocked(p, total, NULL);
     if (entry != NULL) Memprof_CreditEntryLocked(entry, pc);
@@ -690,6 +738,23 @@ void *Memprof_Realloc(void *ptr, size_t size)
 
     if (ptr == NULL) {
         return Memprof_MallocWithPC(size, pc);
+    }
+    /* Suspended: no entry to reuse. A resize of a block that was tracked before
+     * the suspension still cannot corrupt anything -- it is just no longer
+     * accounted for afterwards. */
+    if (memprof_suspended) {
+        if (size == 0) {
+            free(ptr);
+            __sync_fetch_and_add(&memprof_heap_frees, 1);
+            return NULL;
+        }
+        fresh = realloc(ptr, size);
+        if (fresh == NULL) {
+            __sync_fetch_and_add(&memprof_heap_fails, 1);
+            return NULL;
+        }
+        __sync_fetch_and_add(&memprof_heap_allocs, 1);
+        return fresh;
     }
     Memprof_Lock();
     entry = Memprof_EntryDetachLocked(ptr);
@@ -744,6 +809,19 @@ void Memprof_Free(void *ptr)
     size_t size;
 
     if (ptr == NULL) return;
+    /*
+     * Suspended: a block allocated while suspended has no entry, and one
+     * allocated before it still does. Freeing without consulting the table is
+     * still correct -- the entry would be leaked, not the memory -- but the
+     * table would then hold a pointer the CRT has reused, so entries are
+     * dropped while suspended. The live/peak counters cannot know which case
+     * this is, so they are left as they are; Memprof_Stats reports the gap.
+     */
+    if (memprof_suspended) {
+        free(ptr);
+        __sync_fetch_and_add(&memprof_heap_frees, 1);
+        return;
+    }
     Memprof_Lock();
     entry = Memprof_EntryDetachLocked(ptr);
     if (entry != NULL) {
@@ -814,12 +892,20 @@ void Memprof_Stats(MemprofStats *out)
         return;
     }
     memset(out, 0, sizeof(*out));
-    out->heap_live = Memprof_AtomicRead(&memprof_heap_live);
+    /*
+     * Suspended: blocks allocated and freed meanwhile were not put in the table,
+     * so heap_live/lua_live are no longer a live total -- they are an allocation
+     * balance. Print them as 0 rather than let a wrong number look authoritative,
+     * and still report the counters that stay exact (allocs, frees, fails, peak).
+     */
+    if (!memprof_suspended) {
+        out->heap_live = Memprof_AtomicRead(&memprof_heap_live);
+        out->lua_live = Memprof_AtomicRead(&memprof_lua_live);
+    }
     out->heap_peak = Memprof_AtomicRead(&memprof_heap_peak);
     out->heap_allocs = Memprof_AtomicRead(&memprof_heap_allocs);
     out->heap_frees = Memprof_AtomicRead(&memprof_heap_frees);
     out->heap_fails = Memprof_AtomicRead(&memprof_heap_fails);
-    out->lua_live = Memprof_AtomicRead(&memprof_lua_live);
     out->lua_peak = Memprof_AtomicRead(&memprof_lua_peak);
     out->lua_allocs = Memprof_AtomicRead(&memprof_lua_allocs);
     out->lua_frees = Memprof_AtomicRead(&memprof_lua_frees);
@@ -845,7 +931,7 @@ void Memprof_Log(const char *tag)
      */
     Log_Printf("mem: %s heap_live=%llu heap_peak=%llu heap_allocs=%llu heap_frees=%llu heap_fails=%llu "
                "lua_live=%llu lua_peak=%llu lua_allocs=%llu lua_frees=%llu lua_fails=%llu "
-               "sites=%llu sites_dropped=%llu unattributed=%llu tracking=%llu\n",
+               "sites=%llu sites_dropped=%llu unattributed=%llu tracking=%llu%s\n",
                tag != NULL ? tag : "",
                (unsigned long long)s.heap_live, (unsigned long long)s.heap_peak,
                (unsigned long long)s.heap_allocs, (unsigned long long)s.heap_frees,
@@ -855,5 +941,7 @@ void Memprof_Log(const char *tag)
                (unsigned long long)s.lua_fails,
                (unsigned long long)s.sites_tracked, (unsigned long long)s.sites_dropped,
                (unsigned long long)s.unattributed_bytes,
-               (unsigned long long)s.tracking_overhead_bytes);
+               (unsigned long long)s.tracking_overhead_bytes,
+               /* Says why the live totals read 0; see Memprof_Stats. */
+               memprof_suspended ? " tracking=suspended" : "");
 }

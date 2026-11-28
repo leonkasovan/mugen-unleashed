@@ -84,4 +84,21 @@ void Memprof_Dump(void);
 
 void Memprof_Stop(const char *path);
 
+/*
+ * Port addition: stop/restart maintaining the pointer side table.
+ *
+ * The side table costs a spin lock and a hash-chain walk on every malloc and
+ * free, and its only consumers (Memprof_Stats' "mem:" line, Memprof_Tick/Dump)
+ * run at a match boundary. Suspending it around the match loop removes that cost
+ * from gameplay; Memprof_Resume() restores full accounting for load, teardown
+ * and whatever follows.
+ *
+ * While suspended, allocations are untracked: heap_live and lua_live cannot be
+ * reported correctly, so Memprof_Stats zeroes them and Memprof_Log appends
+ * " tracking=suspended". Allocation/free/peak counters stay exact.
+ */
+void Memprof_Suspend(void);
+void Memprof_Resume(void);
+int  Memprof_Suspended(void);
+
 #endif /* MUGEN_MEMPROF_H */

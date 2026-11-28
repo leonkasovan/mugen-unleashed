@@ -549,9 +549,16 @@ int Match_Run(void)
     int done, next;
 
     Match_Setup(&screen);
+    /*
+     * Port addition: the heap side table costs a hash-chain walk per malloc and
+     * free, and its consumers run at a match boundary. Suspend it for the match
+     * loop only; everything either side of here keeps full accounting.
+     */
+    Memprof_Suspend();
     if (!Screen_Run(&screen)) {
         Error_Exit();
     }
+    Memprof_Resume();
     done = screen.done;
     screen.result = done;
     if (screen.state != NULL) {

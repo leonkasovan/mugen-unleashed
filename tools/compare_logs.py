@@ -29,6 +29,10 @@ IGNORE_PATTERNS = (
     r"^Command line:",          # argv[0] differs (mugen.exe vs mugen-msvc-win32-sdl1.exe)
     r"^Session RNG seed is",    # seeded from the clock unless -sessionseed is given
     r"^Log file successfully closed",
+    # Heap accounting is instrumentation, not behaviour: engine allocation
+    # totals differ between the two binaries and depend on which tracking was
+    # enabled. src/memprof.c also appends " tracking=suspended" during a match.
+    r"^mem: ",
 )
 
 
