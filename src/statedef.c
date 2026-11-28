@@ -238,6 +238,19 @@ int StateDef_Parse(const char *header, StateDef *sd, Ini *ini, CharData *owner)
         while (Char_IsSpace(*num_end)) {
             num_end++;
         }
+        /*
+         * FIX for a stricter-than-original check: the original read the number
+         * with atoi() and ignored whatever followed it, so "[Statedef n, name]"
+         * loads (real packs such as Hyper DBZ name their states this way; the
+         * name is only a comment and group selection still uses the whole
+         * header). Accept that form, and keep rejecting other trailing text so
+         * a malformed number cannot silently select a different state.
+         */
+        if (*num_end == ',') {
+            while (*num_end != ']' && *num_end != '\0') {
+                num_end++;
+            }
+        }
         if (*num_end != ']' || num_end[1] != '\0') {
             Error_Printf("Invalid statedef number: %s\n", header);
             return 0;

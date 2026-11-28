@@ -291,7 +291,8 @@ static void test_state_headers(void)
         assert(!sd.ctrls && !sd.source && ini_reads == 0);
     }
     {
-        static const char *valid[] = { "[Statedef 0]", "[Statedef 2147483647]", "[Statedef -2147483648]" };
+        static const char *valid[] = { "[Statedef 0]", "[Statedef 2147483647]", "[Statedef -2147483648]",
+                                       "[Statedef 1704, Toriyama]", "[Statedef 3219, Landing, pose]" };
         for (i = 0; i < sizeof(valid)/sizeof(valid[0]); i++) {
             ini_reads = 0;
             /* The empty INI fixture then rejects the missing controller. */
