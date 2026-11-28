@@ -452,11 +452,26 @@ It reports SELF (leaf frame: where the CPU was) and INCLUSIVE (anywhere on the
 stack: who caused it). `ITIMER_PROF` counts CPU time, so a thread parked in a
 swap contributes nothing — which is what you want when the question is CPU work.
 
+The dump also carries the process's `/proc/self/maps` (as `# map:` lines) and the
+executable's own path (as `# exe:`), so a sample in a shared library is named
+after its module instead of `??` — `libmali-…so`, `libc-2.30.so` — and `--lib
+NAME=PATH` gives such a module its own symbols by rebasing the pc:
+`--lib libmali-bifrost-g31-rxp0-gbm.so=/path/to/unstripped.so`.
+
+The map is snapshotted in `Prof_Start`, not read in `Prof_Stop`: stop runs after
+`System_Deinit` has `SDL_Quit` and unloaded the GL driver, so a map taken there
+had no mapping for the addresses most of those samples were in. The executable's
+path comes from the dump rather than the local file's name, because the binary is
+normally copied to the device under another name and a basename that matches no
+mapping would send every library pc to `addr2line`, which cannot name it.
+
 Limits to know before trusting a number:
 
-- the dump records raw PCs, so anything in a **shared library** symbolizes as
-  `??`. On the reference device that was 78% of samples; naming them needs the
-  process's `/proc/self/maps` captured alongside the dump, which is not done yet.
+- samples inside a library are attributed to the module but keep `+??` for the
+  function unless `--lib` supplies that library's file. Samples in the Mali
+  driver in particular come back as **depth-1 stacks with no engine frame**: that
+  CPU is on the driver's own thread, so the inclusive report cannot say who
+  submitted the work.
 - the handler unwinds with `backtrace()`, which needs `.eh_frame` — present in
   the `-O2 -g` build — and glibc's first call may allocate, so the profiler warms
   the unwinder up before arming the timer.

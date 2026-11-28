@@ -36,6 +36,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>     /* readlink("/proc/self/exe") */
 
 #define PROF_MAX_DEPTH 24
 #define PROF_SLOTS 4096
@@ -51,6 +52,96 @@ static ProfSlot g_prof[PROF_SLOTS];
 static unsigned long g_prof_samples;
 static volatile int g_prof_active;
 static void *g_prof_buffer[PROF_MAX_DEPTH];
+
+/*
+ * Port addition: the process's own memory map, recorded in the dump.
+ *
+ * Without it the host symbolizer can only name program counters inside this
+ * executable; a sample in libc's memcpy or the GL driver's swap had no path to a
+ * name and came out as "??", which looks the same as a symbolization failure.
+ * With the map a pc is attributed to a module (libmali, libc, libm), and gets a
+ * rebased symbol when that module's own file is supplied.
+ *
+ * It has to be captured while the libraries are loaded. Prof_Stop runs after
+ * System_Deinit, which SDL_Quits and unloads the GL driver: reading the map
+ * there left every pc sampled inside libmali/libEGL in address space no mapping
+ * covered any more. So Prof_Start snapshots it and Prof_Stop only writes it.
+ * Neither runs in the signal handler, which is what makes stdio and allocation
+ * acceptable here.
+ */
+static char *g_prof_maps;
+
+static void prof_capture_maps(void)
+{
+    FILE *maps = fopen("/proc/self/maps", "r");
+    char *buf;
+    size_t used = 0;
+    size_t room = 65536;
+    size_t n;
+
+    if (maps == NULL || g_prof_maps != NULL) {
+        if (maps != NULL) {
+            fclose(maps);
+        }
+        return;
+    }
+    /* /proc files report a length of 0, so ask for nothing and start with room
+     * for a few hundred mappings, growing if a target maps more. */
+    buf = malloc(room);
+    if (buf == NULL) {
+        fclose(maps);
+        return;
+    }
+    while ((n = fread(buf + used, 1, room - used - 1, maps)) > 0) {
+        used += n;
+        if (used + 1 >= room) {
+            char *bigger = realloc(buf, room * 2);
+
+            if (bigger == NULL) {
+                break;
+            }
+            buf = bigger;
+            room *= 2;
+        }
+    }
+    fclose(maps);
+    buf[used] = '\0';
+    g_prof_maps = buf;
+}
+
+/* Writes the snapshot as "# exe:" and "# map:" comment lines. */
+static void prof_write_maps(FILE *fp)
+{
+    char exe[512];
+    ssize_t n;
+
+    /*
+     * The executable's own path, so the host knows which mapping is the program
+     * rather than a library. It must not be guessed from the basename of the
+     * file the symbolizer is given: the binary is routinely copied to the target
+     * under another name (mugen-p2), and a basename matching no mapping sends
+     * every library pc to addr2line, which cannot name it.
+     */
+    n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+    if (n > 0) {
+        exe[n] = '\0';
+        fprintf(fp, "# exe: %s\n", exe);
+    }
+    if (g_prof_maps != NULL) {
+        const char *line = g_prof_maps;
+
+        while (*line != '\0') {
+            const char *end = strchr(line, '\n');
+            int len = end != NULL ? (int)(end - line) : (int)strlen(line);
+
+            while (len > 0 && line[len - 1] == '\r') {
+                len--;
+            }
+            fprintf(fp, "# map: %.*s\n", len, line);
+            line = end != NULL ? end + 1 : line + len;
+        }
+    }
+}
 
 /* FNV-1a over the stack, so equal stacks land in the same slot. */
 static unsigned long prof_hash(void *const *pc, int depth)
@@ -151,6 +242,8 @@ void Prof_Start(void)
         return;
     }
     g_prof_active = 1;
+    /* Snapshot the map while the libraries are loaded; Prof_Stop writes it out. */
+    prof_capture_maps();
     Log_Printf("prof: sampling at %d Hz into %d slots (ITIMER_PROF, CPU time)\n", PROF_HZ, PROF_SLOTS);
 }
 
@@ -192,6 +285,7 @@ void Prof_Stop(const char *path)
      */
     fprintf(fp, "# mugen sampling profile: %d Hz, %lu samples\n", PROF_HZ, g_prof_samples);
     fprintf(fp, "# format: count pc1 pc2 ... (leaf first)\n");
+    prof_write_maps(fp);
     for (i = 0; i < PROF_SLOTS; i++) {
         int k;
 
@@ -206,6 +300,8 @@ void Prof_Stop(const char *path)
     }
     fclose(fp);
     Log_Printf("prof: %lu samples written to %s\n", g_prof_samples, path);
+    free(g_prof_maps);
+    g_prof_maps = NULL;
 }
 
 #else /* !(__linux__ && !ANDROID_PORT) */
